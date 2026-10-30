@@ -31,6 +31,11 @@ public sealed class EnvironmentProbeEnvironmentBlockTests
         {
             var windowsApps = Path.Combine(root, "profile", "AppData", "Local", "Microsoft", "WindowsApps");
             var toolPath = Path.Combine(root, "tools");
+            Directory.CreateDirectory(toolPath);
+            // Sandbox setup resolves these shim targets but does not execute them.
+            // Keep resolution inside the fixture instead of depending on installed tools.
+            foreach (var tool in new[] { "git", "dotnet" })
+                File.WriteAllText(Path.Combine(toolPath, tool + ".exe"), string.Empty);
             var inherited = new ConductorChildEnvironment(new Dictionary<string, string?>
             {
                 ["PATH"] = string.Join(Path.PathSeparator, windowsApps, toolPath),
@@ -70,6 +75,9 @@ public sealed class EnvironmentProbeEnvironmentBlockTests
                 Assert.DoesNotContain(windowsApps, observed["PATH"]!);
                 Assert.StartsWith(Path.Combine(root, ".mcg-sandbox", "bin"), observed["PATH"]!);
                 Assert.Equal(Path.Combine(root, ".mcg-sandbox", "temp"), observed["TEMP"]);
+                foreach (var tool in new[] { "git", "dotnet" })
+                    Assert.Contains(Path.Combine(toolPath, tool + ".exe"),
+                        File.ReadAllText(Path.Combine(root, ".mcg-sandbox", "bin", tool + ".cmd")));
             }
             else
             {
