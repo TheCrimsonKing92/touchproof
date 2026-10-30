@@ -533,7 +533,10 @@ internal static class SourceSizeRatchet
             // Goal 7139117b: the focused runner binds the attribution occupancy heartbeat (+2 lines).
             // Goal 3abf245e: optional reproduction runner and one multi-member attribution call site.
             // Measured 14593 total lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14459, 70),
+            // Goal f608f29b adds environment-gate construction and admission calls before dispatch,
+            // solo/cohort/train gates and held-goal recovery. Probe/cache/hold behavior stays in
+            // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
+            new SourceClassCeiling("ConductorDriver", 14474, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -566,7 +569,9 @@ internal static class SourceSizeRatchet
             // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
             // Goal 568eb0fe reports the retained lifecycle outcome after committed unpark instead
             // of promising Active; this belongs with the existing command outcome rendering.
-            new SourceClassCeiling("CliCommandHandlers", 11061, 30),
+            // Goal f608f29b adds six conductor-start probe and operator-attention wiring lines;
+            // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
+            new SourceClassCeiling("CliCommandHandlers", 11067, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -644,7 +649,9 @@ internal static class SourceSizeRatchet
             // merged-tree measurement is recorded below, with no additional headroom.
             // b596bd5a: probe completion/admission/backoff adds 32 lines; partial count unchanged, no headroom.
             // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
-            new SourceClassCeiling("ConductorBatchLoop", 8975, 56),
+            // Goal f608f29b adds one hold-tracking guard so generic watchdog handling preserves
+            // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
+            new SourceClassCeiling("ConductorBatchLoop", 8976, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
