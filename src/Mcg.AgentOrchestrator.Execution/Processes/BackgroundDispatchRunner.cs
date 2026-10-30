@@ -946,7 +946,7 @@ public sealed partial class BackgroundDispatchRunner
                 task.Status == WorkTaskStatus.Failed &&
                 verification is { Succeeded: false } &&
                 outcome.ProviderFailureKind == ProviderFailureKind.Connectivity &&
-                DispatchFailureClassifier.IsRecoverableProviderConnectivityFailure(verification);
+                ProviderFailureSignals.IsRecoverableProviderConnectivityFailure(verification);
             var checkpointAlreadyApplied =
                 disposition.Checkpoint is { } candidateCheckpoint &&
                 task.PendingInterruptedWorkCheckpoint is { } pendingCheckpoint &&
@@ -1241,7 +1241,7 @@ public sealed partial class BackgroundDispatchRunner
             ? WorkerResultBlockers.AssessTerminalVerificationOutput(task.RequiredRole,
                 fullStandardOutput.Content is null ? null : authoritativeStandardOutput)
             : new VerificationTerminalContractAssessment(VerificationTerminalContractStatus.NotApplicable, string.Empty);
-        var providerCancelled = requiresTerminalContract && DispatchFailureClassifier.IsProviderInterruptionFailure(
+        var providerCancelled = requiresTerminalContract && ProviderFailureSignals.IsProviderInterruptionFailure(
             new TaskVerificationRecord(processRecord.Command, processRecord.WorkingDirectory, observedExitCode,
                 authoritativeStandardOutput, decisionStandardError, _clock.UtcNow,
                 StandardOutputPath: processRecord.StandardOutputPath, EvidenceSource: VerificationEvidenceSource.Dispatch,
@@ -2051,7 +2051,7 @@ public sealed partial class BackgroundDispatchRunner
             var capturedOutput = complete.Content is null ? null : ProcessLogReader.NormalizeCompleteDecisionText(complete.Content);
             if (!WorkerResultBlockers.AssessTerminalVerificationOutput(task.RequiredRole,
                     capturedOutput).AllowsCompletion ||
-                DispatchFailureClassifier.IsProviderInterruptionFailure(new TaskVerificationRecord(
+                ProviderFailureSignals.IsProviderInterruptionFailure(new TaskVerificationRecord(
                     processRecord.Command, processRecord.WorkingDirectory, 0, capturedOutput ?? "", standardError, _clock.UtcNow,
                     StandardOutputPath: processRecord.StandardOutputPath, EvidenceSource: VerificationEvidenceSource.Dispatch,
                     DispatchAttemptAt: task.LastDispatch?.DispatchedAt)))
