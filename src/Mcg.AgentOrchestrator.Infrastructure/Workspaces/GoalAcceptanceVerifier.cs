@@ -505,9 +505,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private string AppendTestTelemetryInvocationSuffix(string stem) =>
         AppendTestTelemetryInvocationSuffix(stem, _invocationContext?.Ordinal ?? 0);
     private static string AppendTestTelemetryInvocationSuffix(string stem, int ordinal) =>
-        ordinal > 0
-            ? $"{stem}-run-{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
-            : stem;
+        AcceptanceTestTelemetryResolver.AppendInvocationSuffix(stem, ordinal);
     private string? AcceptanceAttemptResultsPrefix => _executionContext is AcceptanceAttemptExecutionOwner attemptOwner
         ? attemptOwner.ArtifactResultsPrefix
         : _executionContext?.ResultsPrefix;
@@ -3838,26 +3836,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironment environment,
         string? attemptPrefix,
         int invocationOrdinal,
-        string? resultsDirectoryOverride = null)
-    {
-        var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
-            ? resultsDirectoryOverride
-            : string.IsNullOrWhiteSpace(attemptPrefix)
-                ? Path.Combine(environment.ArtifactsPath, "TestResults")
-                : Path.GetDirectoryName(attemptPrefix);
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            directory = Path.Combine(environment.ArtifactsPath, "TestResults");
-        }
-
-        var filePrefix = string.IsNullOrWhiteSpace(attemptPrefix)
-            ? $"{environment.LeaseId}.{AcceptanceArtifactFileNames.Slug(check.Name)}"
-            : $"{Path.GetFileName(attemptPrefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}";
-        filePrefix = AppendTestTelemetryInvocationSuffix(filePrefix, invocationOrdinal);
-        var fileName = AcceptanceArtifactFileNames.BoundFileName(AcceptanceArtifactFileNames.SanitizeFileName(filePrefix), ".trx");
-        var path = Path.Combine(directory, fileName);
-        return new DotnetTestTelemetry([path], []);
-    }
+        string? resultsDirectoryOverride = null) =>
+        AcceptanceTestTelemetryResolver.Resolve(check, environment, attemptPrefix, invocationOrdinal, resultsDirectoryOverride);
 
     internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
         IReadOnlyList<string>? sourcePaths,
