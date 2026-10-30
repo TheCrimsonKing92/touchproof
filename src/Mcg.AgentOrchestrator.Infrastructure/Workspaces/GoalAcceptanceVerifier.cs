@@ -485,7 +485,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
         var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory,
-            ResolveInfrastructureIdentityLanes(engineSettings, worktreePath));
+            AcceptanceInfrastructureLaneResolver.ResolveIdentity(engineSettings, worktreePath));
         return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks, engineSettings);
     }
 
@@ -1835,7 +1835,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
-        var laneExpansion = infrastructureLaneExpansion ?? ResolveInfrastructureLanes(engineSettings, worktreePath);
+        var laneExpansion = infrastructureLaneExpansion ?? AcceptanceInfrastructureLaneResolver.ResolveExecution(engineSettings, worktreePath);
         var candidateLanes = laneExpansion.Lanes;
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
             candidateLanes,
