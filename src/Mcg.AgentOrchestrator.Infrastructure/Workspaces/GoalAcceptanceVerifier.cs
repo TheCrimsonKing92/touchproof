@@ -484,7 +484,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
-        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory);
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory,
+            ResolveInfrastructureIdentityLanes(engineSettings, worktreePath));
         return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks, engineSettings);
     }
 
@@ -618,7 +619,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
             executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, effectivePlan.CandidateLanes), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
-            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
+            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner,
+            engineSettings.BalancedLanePool is null ? null : ComputeEffectiveAcceptancePlanIdentity(
+                worktreePath, changedFiles, executionOwner.ProjectHomeDirectory));
         using var remoteLaneScope = remoteLanes;
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
@@ -1809,7 +1812,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
         AcceptanceGateEngineSettings engineSettings,
-        string? projectHomeDirectory = null)
+        string? projectHomeDirectory = null,
+        AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1831,14 +1835,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
-        var laneExpansion = ResolveInfrastructureLanes(engineSettings, worktreePath);
+        var laneExpansion = infrastructureLaneExpansion ?? ResolveInfrastructureLanes(engineSettings, worktreePath);
         var candidateLanes = laneExpansion.Lanes;
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
             candidateLanes,
             changedFiles,
             policyShardPlan);
-        // This is the single owner of the environment- and scope-expanded gate plan. Cohort
-        // identity, partition-cache identity, and execution all hash or consume this exact plan.
+        // This owns environment and scope expansion for both execution and identity.
+        // Identity supplies a flattened pool; execution retains its measured lane layout.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
@@ -2131,6 +2135,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 settings.EnforceStructuralCoverage,
                 settings.PartitionVerdictFullRerunEveryN,
                 settings.OutputCaptureLimitBytes,
+                settings.BalancedLanePool,
                 Timeouts = new
                 {
                     settings.Timeouts.DefaultMinutes,

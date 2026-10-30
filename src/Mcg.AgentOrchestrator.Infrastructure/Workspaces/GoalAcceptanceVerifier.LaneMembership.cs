@@ -25,6 +25,25 @@ public sealed partial class GoalAcceptanceVerifier
         return expansion with { Layout = expansion.Layout! with { HistoryReadFailure = failureReason } };
     }
 
+    private static AcceptanceBalancedLaneExpansion ResolveInfrastructureIdentityLanes(
+        AcceptanceGateEngineSettings settings, string worktreePath)
+    {
+        if (settings.BalancedLanePool is not { } pool)
+            return ResolveInfrastructureLanes(settings, worktreePath);
+
+        // Identity describes the coverage contract, not the measured scheduling layout.
+        // Reuse constrained membership and the scanner complement, but flatten the pool
+        // so neither duration history nor the number of occupied lanes can change it.
+        var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
+            AcceptanceTestClassSourceScanner.Scan(worktreePath), new Dictionary<string, double>(), pool);
+        var members = expansion.Layout!.Lanes.SelectMany(lane => lane.Members)
+            .Order(StringComparer.Ordinal).ToArray();
+        AcceptanceTestLane[] identityPool = members.Length == 0 ? [] :
+            [new($"{pool.LaneNamePrefix} 1", string.Join('|', members.Select(name => "FullyQualifiedName=" + name)))];
+        return new([.. expansion.Lanes.Where(AcceptanceBalancedLaneExpander.IsConstrained),
+            .. identityPool, expansion.Lanes[^1]], null);
+    }
+
     private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
         AcceptanceManifestCheck check,
         AcceptanceTestLane lane) =>
