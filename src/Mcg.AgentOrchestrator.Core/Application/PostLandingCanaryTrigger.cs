@@ -23,7 +23,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
-            // Expansion and packing are reached through the infrastructure lane resolver.
+            // Membership, expansion and packing are reached through the infrastructure lane resolver.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
             // Class history is reached through the lane resolver and balanced lane plan writer.
@@ -89,7 +90,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInvocationEvidenceProvenance",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",

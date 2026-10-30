@@ -59,6 +59,7 @@ public class CanaryEngineSurfaceCoverageTests
     [InlineData("AcceptanceBalancedLanePacker")]
     [InlineData("AcceptanceBalancedLanePoolSettings")]
     [InlineData("AcceptanceClassDurationHistoryStore")]
+    [InlineData("AcceptanceLaneMembership")]
     public void Indirect_balanced_lane_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
@@ -67,6 +68,8 @@ public class CanaryEngineSurfaceCoverageTests
 
         Assert.True(result.ShouldRun);
         Assert.Equal([path], result.TriggeringPaths);
+        Assert.DoesNotContain(prefix, Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
         Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
