@@ -20,7 +20,7 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
                 "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],
                 "balancedLanePool": { "laneCount": 2, "historyWindow": 2 },
                 "infrastructureTestLanes": [{
-                  "name": "Constrained", "filter": "FullyQualifiedName=Tests.Key",
+                  "name": "Constrained", "filter": "FullyQualifiedName~Tests.Key",
                   "exclusiveResourceKeys": ["machine:test-resource"]
                 }]
               },
@@ -90,7 +90,7 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
     }
 
     [Theory]
-    [InlineData("filter", "\"FullyQualifiedName=Tests.Key|FullyQualifiedName=Tests.A\"")]
+    [InlineData("filter", "\"FullyQualifiedName~Tests.Key|FullyQualifiedName~Tests.A\"")]
     [InlineData("exclusiveResourceKeys", "[\"machine:other-resource\"]")]
     public void ConstrainedLaneChange_ChangesPlanIdentity(string setting, string value)
     {

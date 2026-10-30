@@ -23,7 +23,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
-            // Packing is reached through the balanced lane expander.
+            // Expansion and packing are reached through the infrastructure lane resolver.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
@@ -63,7 +64,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttributionLaneScope",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneLayout",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePoolSettings",
@@ -81,6 +81,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInfrastructureLaneResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInvocationEvidenceProvenance",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",

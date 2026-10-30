@@ -54,11 +54,12 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
-    [Fact]
-    public void Indirect_balanced_lane_packer_triggers_canary()
+    [Theory]
+    [InlineData("AcceptanceBalancedLaneExpander")]
+    [InlineData("AcceptanceBalancedLanePacker")]
+    public void Indirect_balanced_lane_helpers_trigger_canary(string helper)
     {
-        const string prefix =
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker";
+        var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
         var path = prefix + ".cs";
         var result = PostLandingCanaryTrigger.Evaluate([path]);
 
