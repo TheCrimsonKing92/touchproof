@@ -954,6 +954,7 @@ internal sealed partial class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
+        EnvironmentGate = EnvironmentContractGate.ForWorkspace(kernel, workspace);
         SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
             () => kernel.Goals,
             goal =>
@@ -1320,6 +1321,8 @@ internal sealed partial class ConductorDriver
         return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
     }
 
+    internal EnvironmentContractGate? EnvironmentGate { get; set; }
+
     public ConductorAdvanceResult AdvanceOnce(
         Goal goal,
         ConductorAutonomyPolicy policy,
@@ -1348,6 +1351,9 @@ internal sealed partial class ConductorDriver
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
+
+        if (goal.CurrentHold?.State == EnvironmentHold.State && EnvironmentGate?.Check(goal, policy, state,
+                state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified) is { } environmentHold) return environmentHold;
 
         if (AcceptanceAttributionPendingHandler.TryHoldRetained(goal, goalPrefix, policy, RecordEscalation) is { } pendingAttribution) return pendingAttribution;
 
@@ -1584,6 +1590,7 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState, startDecision.Reason) { Decision = startDecision.ToRecord() });
         }
 
+        if (EnvironmentGate?.Check(goal, policy, fromState) is { } environmentHold) return environmentHold;
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {

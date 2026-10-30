@@ -149,6 +149,8 @@ public static class LearnedAcceptanceManifest
                 manifest["engine"]!["mtpInvocations"] = mtpInvocations;
         }
 
+        using var checksDocument = JsonDocument.Parse(emittedChecks.ToJsonString());
+        manifest["environmentContract"] = EnvironmentContractDeriver.Derive(checksDocument.RootElement, model, applied).ToJson();
         var json = manifest.ToJsonString(new JsonSerializerOptions
         {
             WriteIndented = true, IndentSize = 2, NewLine = "\n"

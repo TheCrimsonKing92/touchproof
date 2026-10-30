@@ -370,6 +370,7 @@ internal static partial class CliCommandHandlers
                     if (goalPrefix is null)
                     {
                         PostLandingDutiesTextView.Print(context.Kernel.Goals);
+                        var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
@@ -392,6 +393,7 @@ internal static partial class CliCommandHandlers
                             ? store.ListAsync().GetAwaiter().GetResult()
                             : store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                         var globalQueue = CollaborationItemsForAttention(globalItems, context.Kernel, null, includeHistory);
+                        if (environmentHeld && globalQueue.Count == 0) return changed;
                         var allClarifications = AllClarifications(store);
                         CollaborationItemsTextView.Print(
                             globalQueue,
@@ -402,6 +404,7 @@ internal static partial class CliCommandHandlers
 
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
                     PostLandingDutiesTextView.Print([goal]);
+                    var environmentHeldForGoal = EnvironmentHoldAttentionView.Print([goal]);
                     var clarificationIdentityUniverse = AllClarifications(store)
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
@@ -440,7 +443,7 @@ internal static partial class CliCommandHandlers
                         .ToList();
                     if (scopedItems.Count == 0)
                     {
-                        if (waitsForGoal.Count == 0)
+                        if (waitsForGoal.Count == 0 && !environmentHeldForGoal)
                             Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
                         return changed;
                     }
@@ -479,6 +482,7 @@ internal static partial class CliCommandHandlers
                 var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
+                EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {

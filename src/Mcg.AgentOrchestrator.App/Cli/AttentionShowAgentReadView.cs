@@ -11,7 +11,7 @@ internal static class AttentionShowAgentReadView
         IReadOnlyList<CollaborationItem> items, Func<CollaborationItem, string?> clarificationId,
         TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
-            AttentionAgentReadView.WithPostLandingDuties(new Dictionary<string, object?>
+            EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(new Dictionary<string, object?>
             {
                 ["goalId"] = goalId,
                 ["waits"] = waits.Select(wait => new
@@ -67,5 +67,6 @@ internal static class AttentionShowAgentReadView
                     }).ToArray()
             }, AttentionAgentReadView.DutyRows(null,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
+                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)),
             new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

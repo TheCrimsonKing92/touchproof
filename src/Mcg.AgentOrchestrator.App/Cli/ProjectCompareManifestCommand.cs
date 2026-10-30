@@ -73,7 +73,11 @@ internal static class ProjectCompareManifestCommand
         if (answerError is not null)
             output.WriteLine($"Owner answers unreadable: {answerError}");
 
-        return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) ? 0 : 1;
+        var toolComparisons = EnvironmentContractComparer.Compare(
+            EnvironmentContractDeriver.ForModel(model, applied ?? OwnerAnswerApplier.Apply(model, [])), EnvironmentContract.FromManifest(manifestJson));
+        foreach (var comparison in toolComparisons) output.WriteLine(comparison);
+        return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) &&
+            toolComparisons.All(comparison => comparison.StartsWith("Match ", StringComparison.Ordinal)) ? 0 : 1;
     }
 
     private static (string? Root, string Manifest) ParseOptions(IReadOnlyList<string> parts)

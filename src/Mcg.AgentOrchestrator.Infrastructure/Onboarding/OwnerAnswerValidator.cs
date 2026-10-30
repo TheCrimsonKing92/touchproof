@@ -19,6 +19,7 @@ public static class OwnerAnswerValidator
     public static string Validate(string factKey, string value)
     {
         value ??= "";
+        if (OwnerAnsweredEnvironmentTools.IsKey(factKey)) return OwnerAnsweredEnvironmentTools.Validate(factKey, value);
         if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||
             (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
              factKey.EndsWith("/timeoutMinutes", StringComparison.Ordinal) &&

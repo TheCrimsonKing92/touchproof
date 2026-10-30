@@ -20,6 +20,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         var gates = new List<AttentionGateEvidence>();
         var duties = new List<AttentionPostLandingDuty>();
         var questions = new List<AttentionOwnerQuestionEvidence>();
+        var environmentHolds = new List<AttentionEnvironmentHoldEvidence>();
         var providers = new List<ProviderUsageGoalEvidence>();
         var archiveReads = 0;
         var archiveDecodes = 0;
@@ -89,6 +90,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 }
 
                 var hold = ReadAttentionField<GoalHoldSnapshot>(root, "CurrentHold");
+                if (hold?.State == EnvironmentHold.State && status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                    environmentHolds.Add(new(id, hold));
                 var needsQuestion = status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded) &&
                     hold?.State is "steward-owner-question" or "author-owner-question";
                 var taskIds = new List<string>();
@@ -126,7 +129,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             finally { archive?.Dispose(); }
         }
         return new(facts, gates, questions, providers, new(facts.Count, archiveReads, archiveDecodes,
-            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)), duties);
+            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)), duties, environmentHolds);
     }
 
     private static T? ReadAttentionField<T>(JsonElement element, string name) =>
