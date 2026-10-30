@@ -23,6 +23,27 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
     }
 
     [Fact]
+    public void SharedUnownedCollection_KeepsConstrainedFilters_AndGroupsRemainingPoolMembers()
+    {
+        AcceptanceTestLane[] lanes = [
+            new("key", "FullyQualifiedName=Tests.Key") { ExclusiveResourceKeys = ["machine:resource"] },
+            new("local", "FullyQualifiedName=Tests.Local&Category!=HostIntegration")];
+        AcceptanceTestClassDescriptor[] classes = [new("Tests.Key", "shared"), new("Tests.Local", "shared"),
+            new("Tests.PoolA", "shared"), new("Tests.PoolB", "shared"), new("Tests.Other", null)];
+
+        var expanded = AcceptanceBalancedLaneExpander.Expand(lanes, classes, new Dictionary<string, double>(),
+            new() { LaneCount = 2 });
+
+        Assert.Equal(lanes, expanded.Lanes.Take(2));
+        foreach (var item in classes)
+            Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName));
+        var sharedLane = Assert.Single(expanded.Layout!.Lanes, lane => lane.Members.Contains("Tests.PoolA"));
+        Assert.Equal(["Tests.PoolA", "Tests.PoolB"], sharedLane.Members);
+        Assert.DoesNotContain(expanded.Layout.Lanes.SelectMany(lane => lane.Members), name =>
+            name is "Tests.Key" or "Tests.Local");
+    }
+
+    [Fact]
     public void ShippedManifest_EveryScannedClass_HasExactlyOneExpandedLane()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();

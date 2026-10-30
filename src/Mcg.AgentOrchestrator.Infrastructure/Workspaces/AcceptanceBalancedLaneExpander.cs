@@ -19,13 +19,9 @@ internal static class AcceptanceBalancedLaneExpander
             if (owners.Count > 1) throw new InvalidDataException($"Test class '{item.FullName}' has multiple constrained lanes.");
             if (owners.Count == 0) pool.Add(item);
         }
-        foreach (var group in classes.Where(item => item.Collection is not null).GroupBy(item => item.Collection))
-        {
-            var owners = group.SelectMany(item => AcceptanceLaneMembership.LanesIncluding(constrained, item.FullName))
-                .Select(lane => lane.Name).Distinct(StringComparer.Ordinal).ToArray();
-            if (owners.Length > 0 && group.Any(item => pool.Contains(item)))
-                throw new InvalidDataException($"Test collection '{group.Key}' needs a single constrained lane owner.");
-        }
+        // Collection grouping applies to the remaining pool. Existing constrained filters
+        // may split a process-local collection across lanes; only OwnedCollections declares
+        // a lane owner, and that membership was resolved above.
         var layout = AcceptanceBalancedLanePacker.Pack(pool, medians, settings);
         var balanced = layout.Lanes.Select(lane => new AcceptanceTestLane(lane.Name,
             string.Join('|', lane.Members.Select(name => "FullyQualifiedName=" + name)), lane.PredictedSeconds));

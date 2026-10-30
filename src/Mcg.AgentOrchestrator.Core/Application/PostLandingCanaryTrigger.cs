@@ -23,6 +23,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
+            // Packing is reached through the balanced lane expander.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
@@ -61,8 +63,13 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttributionLaneScope",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneLayout",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePoolSettings",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner",
@@ -101,6 +108,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestTelemetryResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceVerificationResult",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
