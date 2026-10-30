@@ -346,6 +346,7 @@ public sealed partial class GoalAcceptanceVerifier
                     if (outcome.Accepted is { } accepted)
                     {
                         cacheContext?.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
+                        AcceptanceGatePhaseAccountant.RecordCurrentClassResults(completedRemote.Shard.Check, accepted);
                         outcomes[completedRemote.Shard.Index] = new ShardRunOutcome(accepted, false);
                         if (outcome.RemoteDuration is { } remoteDuration)
                         {

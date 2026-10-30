@@ -308,6 +308,12 @@ internal static class AcceptanceCheckCommandBuilder
             args.Add("Category=HostIntegration");
         }
 
+        if (check.AllowsEmptySelection)
+        {
+            for (var index = args.Count - 2; index >= 0; index--)
+                if (args[index] == "--minimum-expected-tests") args.RemoveRange(index, 2);
+            args.AddRange(["--ignore-exit-code", "8"]);
+        }
         return UseDotnetHostForManagedExecutable(args);
     }
 

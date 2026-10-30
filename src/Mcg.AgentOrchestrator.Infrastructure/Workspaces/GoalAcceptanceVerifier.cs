@@ -652,7 +652,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyShardPlan = effectivePlan.PolicyShardPlan;
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
         var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
-            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, ResolveOwnedCollectionLanes(engineSettings, worktreePath)), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
+            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, effectivePlan.CandidateLanes), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
             goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
         using var remoteLaneScope = remoteLanes;
@@ -700,13 +700,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
             : [];
 
-        AcceptanceGateLanePlanPublisher.Publish(AcceptanceGateLanePlanPublisher.Classify(
+        phaseAccountant.BalancedPlan = AcceptanceBalancedLanePlanWriter.Publish(AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray()),
-            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider);
+            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
         {
@@ -911,12 +911,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks[index] = attributedChecks[index];
         }
 
+        phaseAccountant.BalancedPlan?.AddResidualSummary(checks);
         if (ownerProtectedDecision.Pass is { } ownerProtectedPass) checks.Add(ownerProtectedPass);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
-
         var verification = new AcceptanceVerificationResult(
             Passed: failedCheck is null,
             Skipped: false,
@@ -1867,12 +1867,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
-        var candidateLanes = ResolveOwnedCollectionLanes(engineSettings, worktreePath);
+        var laneExpansion = ResolveInfrastructureLanes(engineSettings, worktreePath);
+        var candidateLanes = laneExpansion.Lanes;
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
             candidateLanes,
             changedFiles,
             policyShardPlan);
-
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));
@@ -1905,7 +1905,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             structuralCoverageDeclarations.UndeclaredProjects,
             structuralCoverageApplies,
             dotnetShardDisposition,
-            semanticDeduplication.Receipts);
+            semanticDeduplication.Receipts, laneExpansion.Layout);
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -2394,7 +2394,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
             return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
 
-        return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
+        return AcceptanceGatePhaseAccountant.RecordCurrentClassRun(check, check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
             ? await RunDotnetTestCheckAsync(
                 check,
                 worktreePath,
@@ -2404,7 +2404,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 dotnetTestBuildPhase,
                 cancellationToken,
                 testResultsDirectoryOverride).ConfigureAwait(false)
-            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
+            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false));
         }
         catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
         {
@@ -2689,7 +2689,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             result,
             trxEvidence,
             policyFailure,
-            requireTrxEvidence: _requiresTestTelemetryReceipt);
+            requireTrxEvidence: _requiresTestTelemetryReceipt, allowEmptySelection: check.AllowsEmptySelection);
         var passed = completionDecision.Passed;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
@@ -4351,7 +4351,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> UndeclaredTestProjects,
         bool StructuralCoverageApplies,
         DotnetShardDisposition DotnetShardDisposition,
-        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications);
+        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications, AcceptanceBalancedLaneLayout? BalancedLayout);
 
     internal sealed record SemanticExecutionDeduplicationReceipt(
         string PartitionId,
