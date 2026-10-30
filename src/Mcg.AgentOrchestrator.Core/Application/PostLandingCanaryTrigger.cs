@@ -83,6 +83,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateLanePlanPublisher",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateLaneProgress",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGatePhaseAccounting",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateShardCancellation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
