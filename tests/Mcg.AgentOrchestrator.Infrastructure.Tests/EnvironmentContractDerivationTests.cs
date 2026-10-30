@@ -47,4 +47,73 @@ public sealed class EnvironmentContractDerivationTests
         Assert.Equal(["dotnet", "git"], contract.Tools.Select(tool => tool.Name));
         Assert.All(contract.Tools, tool => Assert.Equal(["--version"], tool.Arguments));
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void NodeProject_EmitsRuntimeAndManagerWithoutMetadataProbes(bool hasTsconfig)
+    {
+        using var fixture = new NodeProjectDiscoveryAdapterTests.Fixture(hasTsconfig: hasTsconfig);
+        var emitted = LearnedAcceptanceManifest.Build(fixture.Discover(), NodeProjectDiscoveryAdapterTests.Fixture.Answers());
+
+        Assert.Empty(emitted.Blockers);
+        var tools = EnvironmentContract.FromManifest(emitted.Json!).Tools;
+        Assert.Equal(hasTsconfig ? ["crosswalk", "node", "npm", "npx"] : ["crosswalk", "node", "npm"],
+            tools.Select(tool => tool.Name));
+        Assert.All(tools, tool =>
+        {
+            Assert.Equal(tool.Name, tool.Command);
+            Assert.Equal(["--version"], tool.Arguments);
+        });
+    }
+
+    [Theory]
+    [InlineData("npm")]
+    [InlineData("pnpm")]
+    [InlineData("yarn")]
+    public void PackageManagerNeed_UsesItsToolValue(string manager)
+    {
+        var model = EnvironmentContractTestFixture.Model(ProjectStack.Node,
+            [new(NodeVerificationChecks.PackageManagerFact,
+                new(manager, new FactSource("package.json", 1), FactConfidence.High))]);
+        var tools = EnvironmentContractDeriver.Derive(JsonSerializer.SerializeToElement(Array.Empty<object>()), model).Tools;
+
+        var tool = Assert.Single(tools);
+        Assert.Equal(manager, tool.Name);
+        Assert.Equal(manager, tool.Command);
+        Assert.Equal(["--version"], tool.Arguments);
+    }
+
+    [Theory]
+    [InlineData(".config/dotnet-tools.json")]
+    [InlineData("dotnet-tools.json")]
+    public void DotnetToolManifest_PackageIdsAreNotPathExecutables(string manifest)
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        if (manifest == "dotnet-tools.json")
+            File.Move(Path.Combine(fixture.Root, ".config", "dotnet-tools.json"), Path.Combine(fixture.Root, manifest));
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
+        var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
+        Assert.Contains(model.EnvironmentNeeds, need => need.Name == "dotnet-ef" && need.Value.Source.Path == manifest);
+        Assert.Contains(model.EnvironmentNeeds, need => need.Name == "sample-tool");
+
+        var emitted = LearnedAcceptanceManifest.Build(model, EnvironmentContractTestFixture.Answers());
+
+        Assert.Empty(emitted.Blockers);
+        var tool = Assert.Single(EnvironmentContract.FromManifest(emitted.Json!).Tools);
+        Assert.Equal("dotnet", tool.Name);
+        Assert.Equal("dotnet", tool.Command);
+        Assert.Equal(["--version"], tool.Arguments);
+    }
+
+    [Fact]
+    public void UnknownNeed_RemainsMetadataUntilOwnerDeclaresATool()
+    {
+        var model = EnvironmentContractTestFixture.Model(needs:
+            [new("deployment-region", new("somewhere", new FactSource("project.json", 1), FactConfidence.High))]);
+
+        var contract = EnvironmentContractDeriver.Derive(JsonSerializer.SerializeToElement(Array.Empty<object>()), model);
+
+        Assert.Empty(contract.Tools);
+    }
 }

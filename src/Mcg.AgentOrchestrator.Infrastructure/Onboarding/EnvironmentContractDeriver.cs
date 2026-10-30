@@ -64,10 +64,12 @@ public static class EnvironmentContractDeriver
             {
                 "dotnet-sdk" => "dotnet",
                 "go-toolchain" or "go-toolchain-pin" => "go",
+                NodeVerificationChecks.PackageManagerFact => need.Value.Value is "npm" or "pnpm" or "yarn" ? need.Value.Value : null,
+                NodeVerificationChecks.FrameworkFact => need.Value.Value is "vitest" or "jest" or "mocha" ? "node" : null,
                 "lua-test-framework" or "crosswalk-test-framework" => StackTool(need.Value.Value),
-                "crosswalk-stack" or "crosswalk-list-outcome" or "crosswalk-evidence" or "crosswalk-test-count" or "crosswalk-test-command" or
-                "lua-test-command" or "lua-install-command" or "tool-manifest" => null,
-                _ => need.Name
+                // Needs also describe configuration, evidence and local .NET package IDs. None of
+                // those names establishes a PATH executable; owners can declare additional tools.
+                _ => null
             };
             if (!string.IsNullOrWhiteSpace(command)) Add(command, "environment-need:" + need.Name);
         }
