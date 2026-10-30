@@ -18,7 +18,9 @@ public sealed class EnvironmentHoldAttentionTests
                 new EnvironmentContractTestFixture.Runner(), _ => EnvironmentContractTestFixture.Environment());
             gate.ProbeAtStart([goal]);
             Assert.Empty(kernel.ExportSnapshot().HumanInputRequests);
-            var repository = new SqliteOrchestratorStateRepository(Path.Combine(directory.FullName, "state.db"));
+            var dbPath = Path.Combine(directory.FullName, "state.db");
+            StateDbMigrations.EnsureUpToDate(dbPath);
+            var repository = new SqliteOrchestratorStateRepository(dbPath);
             await repository.SaveAsync(kernel);
             var projection = Assert.IsType<AttentionReadProjection>(await repository.ReadAttentionProjectionAsync());
             var row = Assert.Single(projection.EnvironmentHolds!);
