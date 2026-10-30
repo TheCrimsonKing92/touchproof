@@ -86,6 +86,8 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
     [InlineData("defaultClassSecondsWhenNoHistory", "2")]
     [InlineData("laneNamePrefix", "\"Pool\"")]
     [InlineData("residualLaneName", "\"Residual\"")]
+    [InlineData("traitExclusions", "[\"Category!=HostIntegration\"]")]
+    [InlineData("exclusiveResourceKeys", "[\"machine:pool-resource\"]")]
     public void PoolContractChange_ChangesPlanIdentity(string setting, string value)
     {
         var before = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root);
@@ -94,6 +96,32 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
         File.WriteAllText(ManifestPath, manifest.ToJsonString());
 
         Assert.NotEqual(before, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
+    }
+
+    [Fact]
+    public void PoolConstraints_HistoryChanges_PreserveIdentityAndUniqueLaneNames()
+    {
+        var manifest = JsonNode.Parse(File.ReadAllText(ManifestPath))!;
+        manifest["engine"]!["balancedLanePool"]!["traitExclusions"] = JsonNode.Parse("[\"Category!=HostIntegration\"]");
+        manifest["engine"]!["balancedLanePool"]!["exclusiveResourceKeys"] = JsonNode.Parse("[\"machine:pool-resource\"]");
+        File.WriteAllText(ManifestPath, manifest.ToJsonString());
+        var original = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root);
+        var before = ExecutionSignature();
+
+        Record("first", 100, 1, 80);
+
+        Assert.NotEqual(before, ExecutionSignature());
+        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
+        Record("second", 2, 300, 1);
+        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
+        var identity = AcceptanceInfrastructureLaneResolver.ResolveIdentity(AcceptanceGateEngineSettings.Load(_root), _root);
+        Assert.Equal(["Constrained", "Balanced 1", "Infrastructure residual"], identity.Lanes.Select(lane => lane.Name));
+        Assert.All(identity.Lanes.Skip(1), lane =>
+        {
+            Assert.Equal(["machine:pool-resource"], lane.ExclusiveResourceKeys);
+            Assert.True(AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(
+                AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray(), "Category=HostIntegration"));
+        });
     }
 
     [Fact]

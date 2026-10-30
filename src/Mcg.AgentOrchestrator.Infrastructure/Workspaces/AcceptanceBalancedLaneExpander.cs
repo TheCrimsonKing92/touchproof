@@ -23,15 +23,21 @@ internal static class AcceptanceBalancedLaneExpander
         // may split a process-local collection across lanes; only OwnedCollections declares
         // a lane owner, and that membership was resolved above.
         var layout = AcceptanceBalancedLanePacker.Pack(pool, medians, settings);
-        var balanced = layout.Lanes.Select(lane => new AcceptanceTestLane(lane.Name,
-            string.Join('|', lane.Members.Select(name => "FullyQualifiedName=" + name)), lane.PredictedSeconds));
+        var balanced = layout.Lanes.Select(lane => CreatePoolLane(lane.Name,
+            string.Join('|', lane.Members.Select(name => "FullyQualifiedName=" + name)), settings, lane.PredictedSeconds));
         // Complement the scanner, not hand-maintained fragments: every missed class runs,
         // including a class missed inside a constrained lane's explicit exclusions.
         var residual = string.Join('&', classes.Select(item => "FullyQualifiedName!=" + item.FullName)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         // A sentinel exclusion selects everything when there are no scanned or constrained classes.
         if (residual.Length == 0) residual = "FullyQualifiedName!=Mcg.NoScannedInfrastructureClasses";
-        return new([.. constrained, .. balanced, new AcceptanceTestLane(settings.ResidualLaneName, residual)
+        return new([.. constrained, .. balanced, CreatePoolLane(settings.ResidualLaneName, residual, settings) with
             { AllowsEmptySelection = true }], layout);
     }
+
+    internal static AcceptanceTestLane CreatePoolLane(string name, string filter,
+        AcceptanceBalancedLanePoolSettings settings, double predictedSeconds = 0) =>
+        new(name, settings.TraitExclusions.Count == 0 ? filter :
+            $"({filter})&{string.Join('&', settings.TraitExclusions)}", predictedSeconds)
+        { ExclusiveResourceKeys = settings.ExclusiveResourceKeys };
 }

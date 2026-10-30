@@ -28,8 +28,12 @@ internal static class AcceptanceInfrastructureLaneResolver
         var members = expansion.Layout!.Lanes.SelectMany(lane => lane.Members)
             .Order(StringComparer.Ordinal).ToArray();
         AcceptanceTestLane[] identityPool = members.Length == 0 ? [] :
-            [new($"{pool.LaneNamePrefix} 1", string.Join('|', members.Select(name => "FullyQualifiedName=" + name)))];
-        return new([.. expansion.Lanes.Where(AcceptanceBalancedLaneExpander.IsConstrained),
+            [AcceptanceBalancedLaneExpander.CreatePoolLane($"{pool.LaneNamePrefix} 1",
+                string.Join('|', members.Select(name => "FullyQualifiedName=" + name)), pool)];
+        // Expansion orders hand-written constraints first, then generated lanes and residual.
+        // Generated pool keys/traits must not turn the measured layout into identity inputs.
+        var constrainedCount = expansion.Lanes.Count - expansion.Layout.Lanes.Count - 1;
+        return new([.. expansion.Lanes.Take(constrainedCount),
             .. identityPool, expansion.Lanes[^1]], null);
     }
 }

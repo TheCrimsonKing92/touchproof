@@ -21,10 +21,11 @@ plan before publication; malformed history is preserved for diagnosis.
 Measurements include summed test
 durations, subtracting recorded slot wait when its sidecar is available.
 
-The pool has four lanes and a five-observation window. Following the Planner's
-explicit migration decision, the old catch-all Remainder loses its lane-wide
-GitHeavy key and joins the pool. Balance A and the merge-train/ratchet lane keep
-their filters and GitHeavy keys. All other constrained filters and keys remain.
+The pool has four lanes and a five-observation window. The old catch-all Remainder
+joins the pool; its `Category!=HostIntegration` exclusion and
+`machine:GitHeavyLanes` key are configured on the pool and inherited by every
+generated balanced lane and the residual. Balance A and the merge-train/ratchet
+lane keep their filters and GitHeavy keys. All other constrained filters and keys remain.
 This changes layout, not the host's slot capacity or remote offer policy.
 Non-owned collections remain indivisible packing units. A collection spanning
 a constrained lane and the pool fails planning until its ownership is resolved.
