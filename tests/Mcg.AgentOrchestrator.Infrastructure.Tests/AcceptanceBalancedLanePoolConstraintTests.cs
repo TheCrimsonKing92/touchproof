@@ -46,15 +46,22 @@ public sealed class AcceptanceBalancedLanePoolConstraintTests
             .Where(test => test.Traits.Any(trait => trait.Key == "Category" && trait.Value == "HostIntegration"))
             .ToArray();
         Assert.Equal(2, hostMethods.Length);
-        Assert.All(hostMethods, test => Assert.Contains(scanned, item => item.FullName == test.TypeName));
 
         var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, scanned,
             new Dictionary<string, double>(), settings.BalancedLanePool!);
+        var selectedWithoutTraitExclusions = new List<TestDescriptor>();
         foreach (var lane in expansion.Lanes)
         {
             var arguments = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
             Assert.Empty(MtpFilterArgumentSemantics.Select(arguments, hostMethods));
+            var withoutTraits = arguments.Chunk(2).Where(pair => pair[0] != "--filter-not-trait")
+                .SelectMany(pair => pair).ToArray();
+            selectedWithoutTraitExclusions.AddRange(MtpFilterArgumentSemantics.Select(withoutTraits, hostMethods));
         }
+        // Custom Fact attributes can reach the residual instead of the scanner's class list.
+        // Both methods must be selected exactly once when only the trait guard is removed.
+        Assert.Equal(hostMethods.OrderBy(test => test.TypeName, StringComparer.Ordinal),
+            selectedWithoutTraitExclusions.OrderBy(test => test.TypeName, StringComparer.Ordinal));
         var generated = expansion.Lanes.Where(lane => expansion.Layout!.Lanes.Any(item => item.Name == lane.Name) ||
             lane.Name == settings.BalancedLanePool!.ResidualLaneName).ToArray();
         Assert.Equal(expansion.Layout!.Lanes.Count + 1, generated.Length);
