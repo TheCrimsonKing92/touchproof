@@ -13,8 +13,12 @@ These are the supplied before figures, not a new host-ledger query. The worker
 context prohibits reaching orchestrator state. The current-history prediction
 therefore remains unavailable to this worker. Each attempt's `balancedLayout`
 records the actual prediction, members, default estimate and history window.
-The first completed gate supplies the first per-class observations; missing or
-corrupt history uses the configured fallback. Measurements include summed test
+The first completed gate supplies the first per-class observations; missing
+history uses the configured fallback. Unreadable or corrupt history also uses
+the fallback, with `historyReadFailure` in `balancedLayout` distinguishing it
+from an empty store. A failed write records `historyWriteFailure` in the final
+plan before publication; malformed history is preserved for diagnosis.
+Measurements include summed test
 durations, subtracting recorded slot wait when its sidecar is available.
 
 The pool has four lanes and a five-observation window. Following the Planner's
@@ -50,6 +54,33 @@ and lossless spill; Acceptance owns execution. Actual local launch lengths,
 response-file usage and the 8,191-character limit are recorded in
 `balancedLayout.commands`. The existing launch guard still rejects overlong
 commands after spilling. Remote launches are not reported as locally measured.
+
+The remote job carries filters in JSON. `Invoke-ExecutorLane.ps1` writes the
+filter into its result directory and passes `-FilterFile` to the candidate's
+`Invoke-TestSummary.ps1`. That wrapper reads it in process. `New-MtpRunnerArguments`
+then spills managed MTP filter arguments over the 4,096-character budget into a
+UTF-8 response file. Exact class includes/exclusions retain their full symbols
+without substring wildcards. This preserves the remote offer policy.
+
+For the same 1,200-class fixture, composing the actual PowerShell runner arguments
+with `C:\gate\Tests.dll`, a 111-character scratch results-directory path, `lane.trx`,
+minimum count 1 and timeout 780 s gives these lengths (including `dotnet `):
+
+| Remote managed launch | Inline | After response-file spill | Windows CreateProcess limit |
+| --- | ---: | ---: | ---: |
+| Largest balanced lane, 300 classes | 22,129 chars | 386 chars | 32,767 chars including terminator |
+| Residual, 1,200 exclusions | 92,629 chars | 386 chars | 32,767 chars including terminator |
+
+The wrapper launch is 423 characters for `balanced-1`, or 449 for
+`infrastructure-residual`, using `C:\mcg-executor`, candidate prefix `123456789`,
+the infrastructure test project and `C:\Users\mcgrunner\AppData\Local\Temp\Low\mcg-tests`
+for results. Its limit is also 32,767 characters including the terminator; no
+`cmd.exe` shell is involved. These are composition measurements, with no tests
+launched. The executor must receive the updated deployed `Invoke-ExecutorLane.ps1`
+before using this transport; keep the existing executor-tools reconciliation and
+digest preconditions when rolling it out. The new exact-selector regression class
+checks argument translation, lossless spill and filter-file error handling;
+Acceptance owns executing it.
 
 Only the residual removes `--minimum-expected-tests` and uses
 `--ignore-exit-code 8`, following the

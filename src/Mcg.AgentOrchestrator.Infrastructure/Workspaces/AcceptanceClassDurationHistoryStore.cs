@@ -14,15 +14,24 @@ internal static class AcceptanceClassDurationHistoryStore
 
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), FileName);
 
-    internal static IReadOnlyDictionary<string, double> ReadMedians(string worktreePath, int window)
+    internal static IReadOnlyDictionary<string, double> ReadMedians(string worktreePath, int window) =>
+        ReadMedians(worktreePath, window, out _);
+
+    internal static IReadOnlyDictionary<string, double> ReadMedians(string worktreePath, int window,
+        out string? failureReason)
     {
+        failureReason = null;
         try
         {
             return Read(ResolveStorePath(worktreePath)).Classes.Where(pair => pair.Value.Count > 0)
                 .ToDictionary(pair => pair.Key, pair => AcceptanceBalancedLanePacker.Median(
                     pair.Value.TakeLast(window).Select(sample => sample.Seconds)), StringComparer.Ordinal);
         }
-        catch (Exception) { return new Dictionary<string, double>(StringComparer.Ordinal); }
+        catch (Exception error)
+        {
+            failureReason = "class-history-read:" + error.GetType().Name;
+            return new Dictionary<string, double>(StringComparer.Ordinal);
+        }
     }
 
     internal static string? RecordAttempt(string worktreePath, string attemptId, IReadOnlyList<Sample> samples,
@@ -79,10 +88,10 @@ internal static class AcceptanceClassDurationHistoryStore
                     pair.Value is null || pair.Value.Any(sample => sample is null || sample.ClassName != pair.Key ||
                         string.IsNullOrWhiteSpace(sample.AttemptId) || string.IsNullOrWhiteSpace(sample.Lane) ||
                         !double.IsFinite(sample.Seconds) || sample.Seconds < 0)))
-                return new(1, new(StringComparer.Ordinal));
+                throw new InvalidDataException("Invalid class duration history store.");
             return store;
         }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or JsonException)
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         { return new(1, new(StringComparer.Ordinal)); }
     }
 }

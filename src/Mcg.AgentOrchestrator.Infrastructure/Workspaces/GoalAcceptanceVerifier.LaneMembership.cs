@@ -15,11 +15,15 @@ public sealed partial class GoalAcceptanceVerifier
     }
 
     private static AcceptanceBalancedLaneExpansion ResolveInfrastructureLanes(
-        AcceptanceGateEngineSettings settings, string worktreePath) => settings.BalancedLanePool is { } pool
-        ? AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
-            AcceptanceTestClassSourceScanner.Scan(worktreePath),
-            AcceptanceClassDurationHistoryStore.ReadMedians(worktreePath, pool.HistoryWindow), pool)
-        : new(AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, worktreePath), null);
+        AcceptanceGateEngineSettings settings, string worktreePath)
+    {
+        if (settings.BalancedLanePool is not { } pool)
+            return new(AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, worktreePath), null);
+        var medians = AcceptanceClassDurationHistoryStore.ReadMedians(worktreePath, pool.HistoryWindow, out var failureReason);
+        var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
+            AcceptanceTestClassSourceScanner.Scan(worktreePath), medians, pool);
+        return expansion with { Layout = expansion.Layout! with { HistoryReadFailure = failureReason } };
+    }
 
     private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
         AcceptanceManifestCheck check,

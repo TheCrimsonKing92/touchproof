@@ -48,8 +48,10 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var settings = AcceptanceGateEngineSettings.Load(root);
-        var classes = AcceptanceTestClassSourceScanner.Scan(root);
-        Assert.NotEmpty(classes);
+        var scanned = AcceptanceTestClassSourceScanner.Scan(root);
+        Assert.NotEmpty(scanned);
+        const string newClass = "Synthetic.UnlistedInfrastructureTests";
+        AcceptanceTestClassDescriptor[] classes = [.. scanned, new(newClass, null)];
         var expanded = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, classes,
             new Dictionary<string, double>(), settings.BalancedLanePool!);
         foreach (var item in classes)
@@ -59,6 +61,11 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
         }
         Assert.NotEmpty(expanded.Layout!.Lanes.SelectMany(lane => lane.Members));
         var constrained = settings.InfrastructureTestLanes.Where(AcceptanceBalancedLaneExpander.IsConstrained).ToArray();
+        Assert.All(constrained, lane => Assert.Contains("--filter-class",
+            AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter)));
+        var newClassLane = Assert.Single(expanded.Layout.Lanes, lane => lane.Members.Contains(newClass));
+        Assert.Equal(newClassLane.Name,
+            Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, newClass)).Name);
         Assert.All(expanded.Layout.Lanes.SelectMany(lane => lane.Members),
             name => Assert.Empty(AcceptanceLaneMembership.LanesIncluding(constrained, name)));
     }

@@ -82,10 +82,14 @@ internal sealed class AcceptanceBalancedLanePlanWriter
         lock (_sync)
         {
             if (_plan.BalancedLayout is not { } layout) return;
-            _plan = _plan with { BalancedLayout = layout with { Commands = _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray() } };
-            AcceptanceGateLanePlanPublisher.Publish(_plan, _attemptPrefix, _goalId, _emit, _clock);
-            AcceptanceClassDurationHistoryStore.RecordAttempt(_worktreePath, _plan.AttemptId, _samples,
+            var failureReason = AcceptanceClassDurationHistoryStore.RecordAttempt(_worktreePath, _plan.AttemptId, _samples,
                 layout.HistoryWindow, outcome == "completed", outcome == "completed");
+            _plan = _plan with { BalancedLayout = layout with
+            {
+                Commands = _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray(),
+                HistoryWriteFailure = failureReason
+            } };
+            AcceptanceGateLanePlanPublisher.Publish(_plan, _attemptPrefix, _goalId, _emit, _clock);
         }
     }
 }

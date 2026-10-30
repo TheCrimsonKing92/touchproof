@@ -7,6 +7,36 @@ public sealed class AcceptanceClassDurationHistoryStoreTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "class-history-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void MissingStore_ReturnsNoHistory_WithoutAReadFailure()
+    {
+        Assert.Empty(AcceptanceClassDurationHistoryStore.ReadMedians(_root, 5, out var reason));
+        Assert.Null(reason);
+    }
+
+    [Theory]
+    [InlineData("{broken", "JsonException")]
+    [InlineData("{\"version\":99,\"classes\":{}}", "InvalidDataException")]
+    public void CorruptStore_ReportsReadAndWriteFailures_AndPreservesData(string text, string error)
+    {
+        var path = AcceptanceClassDurationHistoryStore.ResolveStorePath(_root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, text);
+        Assert.Empty(AcceptanceClassDurationHistoryStore.ReadMedians(_root, 5, out var reason));
+        Assert.Equal("class-history-read:" + error, reason);
+        Assert.Equal("class-history-write:" + error, AcceptanceClassDurationHistoryStore.RecordAttempt(
+            _root, "attempt", [new("attempt", "Balanced 1", "Tests.A", 1)], 5, true, true));
+        Assert.Equal(text, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void UnreadableStore_ReportsReadFailure_InsteadOfMissingHistory()
+    {
+        Directory.CreateDirectory(AcceptanceClassDurationHistoryStore.ResolveStorePath(_root));
+        Assert.Empty(AcceptanceClassDurationHistoryStore.ReadMedians(_root, 5, out var reason));
+        Assert.StartsWith("class-history-read:", reason);
+    }
+
+    [Fact]
     public void CompletedAttempts_KeepBoundedMedians_AndIgnoreFailedOrIncomplete()
     {
         Record("first", 10, 20);

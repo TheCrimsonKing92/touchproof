@@ -5,6 +5,8 @@ internal sealed record AcceptanceBalancedLaneLayout(int HistoryWindow, double De
     IReadOnlyList<string> ResidualClasses, bool ResidualObserved = false)
 {
     public int ResidualCount => ResidualClasses.Count;
+    public string? HistoryReadFailure { get; init; }
+    public string? HistoryWriteFailure { get; init; }
     public IReadOnlyList<AcceptanceBalancedLaneCommand> Commands { get; init; } = [];
 }
 
