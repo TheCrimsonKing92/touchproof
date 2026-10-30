@@ -51,7 +51,11 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout"
         ]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
-        new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),
+        new("gate-settings", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings",
+            // Pool settings are reached indirectly through the engine settings contract.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePoolSettings"
+        ]),
         new("test-coverage-invariant", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant"]),
         new("base-build-cache", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache"]),
         new("gate-heartbeats", [
@@ -66,7 +70,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttributionLaneScope",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneLayout",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePoolSettings",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",

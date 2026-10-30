@@ -33,33 +33,50 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
         WriteClasses("A", "B", "C", "Key");
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CompletedHistory_ChangesExecutionLayout_ButPreservesPlanIdentity(bool scoped)
+    [Fact]
+    public void CompletedHistory_ChangesExecutionLayout_ButPreservesPlanIdentity()
     {
-        string[]? changedFiles = scoped ? [SourceRoot + "/Fixture.cs"] : null;
         Assert.Equal(["Tests.A", "Tests.B", "Tests.C", "Tests.Key"],
             AcceptanceTestClassSourceScanner.Scan(_root).Select(item => item.FullName));
-        var original = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root, changedFiles);
-        var before = ExecutionSignature(changedFiles);
+        var original = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root);
+        var before = ExecutionSignature();
 
         Record("first", 100, 1, 80);
 
-        var after = ExecutionSignature(changedFiles);
+        var after = ExecutionSignature();
         Assert.NotEqual(before, after);
-        var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(_root, changedFiles);
+        var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(_root);
         var first = Assert.Single(checks, check => check.Name == "infrastructure tests: Balanced 1");
         Assert.Equal("FullyQualifiedName=Tests.A", first.Arguments.Last());
         Assert.Equal(100d, first.EstimatedSerialSeconds);
         var second = Assert.Single(checks, check => check.Name == "infrastructure tests: Balanced 2");
         Assert.Equal("FullyQualifiedName=Tests.C|FullyQualifiedName=Tests.B", second.Arguments.Last());
         Assert.Equal(81d, second.EstimatedSerialSeconds);
-        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root, changedFiles));
+        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
 
         Record("second", 2, 300, 1);
 
-        Assert.NotEqual(after, ExecutionSignature(changedFiles));
+        Assert.NotEqual(after, ExecutionSignature());
+        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
+    }
+
+    [Fact]
+    public void ChangedTests_HistoryPreservesFocusedSelectionAndPlanIdentity()
+    {
+        string[] changedFiles = [SourceRoot + "/Fixture.cs"];
+        var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(_root, changedFiles);
+        Assert.Single(checks, check => check.Name == "focused changed infrastructure tests");
+        Assert.DoesNotContain(checks, check => check.Name.StartsWith("infrastructure tests: Balanced", StringComparison.Ordinal));
+        var original = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root, changedFiles);
+        var before = ExecutionSignature(changedFiles);
+
+        // Focused checks select the changed declarations directly, bypassing lane packing.
+        Record("first", 100, 1, 80);
+        Assert.Equal(before, ExecutionSignature(changedFiles));
+        Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root, changedFiles));
+
+        Record("second", 2, 300, 1);
+        Assert.Equal(before, ExecutionSignature(changedFiles));
         Assert.Equal(original, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root, changedFiles));
     }
 
@@ -102,7 +119,7 @@ public sealed class AcceptanceBalancedLanePlanIdentityTests : IDisposable
         Assert.NotEqual(before, GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_root));
     }
 
-    private string ExecutionSignature(string[]? changedFiles) => JsonSerializer.Serialize(
+    private string ExecutionSignature(string[]? changedFiles = null) => JsonSerializer.Serialize(
         GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(_root, changedFiles)
             .Select(check => new { check.Name, check.Arguments, check.EstimatedSerialSeconds }));
 
