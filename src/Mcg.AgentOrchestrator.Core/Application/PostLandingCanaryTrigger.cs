@@ -26,6 +26,8 @@ public static class AcceptanceEngineSurfaceRegistry
             // Expansion and packing are reached through the infrastructure lane resolver.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
+            // Class history is reached through the lane resolver and balanced lane plan writer.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
@@ -72,7 +74,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner",
