@@ -954,7 +954,7 @@ internal sealed partial class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
-        EnvironmentGate = EnvironmentContractGate.ForWorkspace(kernel, workspace);
+        EnvironmentGate = EnvironmentContractGate.ForWorkspace(kernel, workspace, agents, profiles);
         SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
             () => kernel.Goals,
             goal =>

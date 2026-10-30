@@ -324,7 +324,7 @@ public static class DispatchProcessHost
         if (!parameters.SandboxLowIntegrity)
         {
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
-            GoToolCacheEnvironment.Apply(startInfo.Environment, sandboxRoot);
+            WorkerToolEnvironment.ApplySandbox(startInfo.Environment, sandboxRoot, lowIntegrity: false);
             ExcludeSandboxFromGit(parameters.WorkingDirectory);
             return new WorkerSandboxPreparationResult(false, false);
         }
@@ -428,7 +428,6 @@ public static class DispatchProcessHost
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
-            GoToolCacheEnvironment.Apply(startInfo.Environment, sandboxRoot);
             TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
             // The credential source this dispatch actually seeded, carried to the setup artifact so an
@@ -450,12 +449,10 @@ public static class DispatchProcessHost
             // the worktree must read as clean after the orchestrator commits the worker's real edits.
             TrackAction("materialize-git-exclude", () => ExcludeSandboxFromGit(parameters.WorkingDirectory));
 
-            startInfo.Environment["TEMP"] = tempDir;
-            startInfo.Environment["TMP"] = tempDir;
             // PowerShell otherwise derives this cache from inherited profile locations. Keep only
             // its disposable module-analysis cache inside the ignored worker sandbox; relocating
             // LOCALAPPDATA/APPDATA breaks unrelated per-user tool and PowerShell resolution.
-            startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
+            WorkerToolEnvironment.ApplySandbox(startInfo.Environment, sandboxRoot, lowIntegrity: true);
             var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
             TrackAction("materialize-artifacts", () =>
             {

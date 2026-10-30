@@ -13,6 +13,7 @@ internal sealed class EnvironmentContractGate
     private readonly string _directory;
     private readonly Func<EnvironmentContract?> _loadContract;
     private readonly Func<bool, ConductorChildEnvironment> _environment;
+    private readonly Func<Goal, ConductorAutonomyPolicy?, IReadOnlyList<EnvironmentProbeContext>>? _workerEnvironments;
     private readonly EnvironmentProbeCache _cache;
     private readonly Action<string, string?, string> _writeEvent;
     private readonly TimeProvider _time;
@@ -21,25 +22,29 @@ internal sealed class EnvironmentContractGate
     internal EnvironmentContractGate(AgentOrchestratorKernel kernel, string project, string directory,
         Func<EnvironmentContract?> loadContract, IEnvironmentProbeRunner? runner = null,
         Func<bool, ConductorChildEnvironment>? environment = null, Action<string, string?, string>? writeEvent = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<Goal, ConductorAutonomyPolicy?, IReadOnlyList<EnvironmentProbeContext>>? workerEnvironments = null)
     {
         _kernel = kernel;
         _project = project;
         _directory = directory;
         _loadContract = loadContract;
         _environment = environment ?? CaptureEnvironment;
+        _workerEnvironments = workerEnvironments;
         _time = timeProvider ?? TimeProvider.System;
         _cache = new(runner ?? new ProcessEnvironmentProbeRunner(), _time);
         _writeEvent = writeEvent ?? ((_, _, _) => { });
         _buildIdentity = typeof(ConductorDriver).Module.ModuleVersionId.ToString("N");
     }
 
-    internal static EnvironmentContractGate ForWorkspace(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
+    internal static EnvironmentContractGate ForWorkspace(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
+        IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)
     {
         var writer = new ConductEventLogWriter(workspace.ConductEventsLogPath);
         return new(kernel, workspace.ProjectHomeDirectoryOrNull ?? workspace.ExecutionDirectory, workspace.ExecutionDirectory,
             () => LoadWorkspaceContract(workspace),
-            writeEvent: (kind, goal, detail) => writer.AppendRequired(kind, goal, detail));
+            writeEvent: (kind, goal, detail) => writer.AppendRequired(kind, goal, detail),
+            workerEnvironments: (goal, policy) => WorkerEnvironmentProbeContexts.Capture(workspace, goal, agents, profiles, policy));
     }
 
     private static EnvironmentContract? LoadWorkspaceContract(OrchestratorWorkspace workspace)
@@ -53,16 +58,20 @@ internal sealed class EnvironmentContractGate
 
     internal void ProbeAtStart(IEnumerable<Goal> goals)
     {
-        var (results, fingerprint) = Probe(false);
+        var members = goals.Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Parked)).ToArray();
+        var (results, fingerprint) = Probe(false, members.FirstOrDefault());
         foreach (var pass in results.Where(result => result.Passed))
             Emit("environment-probe-pass", null, pass.Tool.Name, fingerprint, "pass");
-        foreach (var goal in goals.Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Parked)))
-            Observe(goal, results, fingerprint);
+        foreach (var goal in members)
+        {
+            var observation = goal == members[0] ? (results, fingerprint) : Probe(false, goal);
+            Observe(goal, observation.Item1, observation.Item2);
+        }
     }
 
     internal ConductorAdvanceResult? Check(Goal goal, ConductorAutonomyPolicy policy, GoalLifecycleState state, bool forGate = false)
     {
-        var (results, fingerprint) = Probe(forGate);
+        var (results, fingerprint) = Probe(forGate, goal, policy);
         var hold = Observe(goal, results, fingerprint);
         if (hold is null) return null;
         var reason = $"Environment hold: {hold.Tool}; probe={hold.Command}; rule={hold.Rule}; exit={hold.ExitCode?.ToString() ?? hold.Outcome}; output={hold.OutputTail}";
@@ -85,15 +94,25 @@ internal sealed class EnvironmentContractGate
                     Decision = new EnvironmentContractDecision(_project, "group", "group", "Environment hold prevents grouped gate start.").ToRecord() }));
     }
 
-    private (IReadOnlyList<EnvironmentProbeResult> Results, string Fingerprint) Probe(bool forGate)
+    private (IReadOnlyList<EnvironmentProbeResult> Results, string Fingerprint) Probe(bool forGate,
+        Goal? goal = null, ConductorAutonomyPolicy? policy = null)
     {
         try
         {
             var contract = _loadContract() ?? new EnvironmentContract(1, []);
             contract.Validate();
-            var environment = _environment(forGate);
-            var fingerprint = EnvironmentFingerprint.Create(_buildIdentity, contract, environment, _directory);
-            return (_cache.Probe(contract, fingerprint, environment, _directory), fingerprint);
+            var contexts = !forGate && goal is not null && _workerEnvironments is not null
+                ? _workerEnvironments(goal, policy)
+                : [new EnvironmentProbeContext(_directory, _environment(forGate))];
+            (IReadOnlyList<EnvironmentProbeResult>, string) last = ([], "empty-contract");
+            foreach (var context in contexts)
+            {
+                var fingerprint = EnvironmentFingerprint.Create(_buildIdentity, contract, context.Environment, context.WorkingDirectory);
+                var results = _cache.Probe(contract, fingerprint, context.Environment, context.WorkingDirectory);
+                last = (results, fingerprint);
+                if (results.Any(result => !result.Passed)) return last;
+            }
+            return last;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException)
         {
