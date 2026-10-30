@@ -60,6 +60,7 @@ public class CanaryEngineSurfaceCoverageTests
     [InlineData("AcceptanceBalancedLanePoolSettings")]
     [InlineData("AcceptanceClassDurationHistoryStore")]
     [InlineData("AcceptanceLaneMembership")]
+    [InlineData("AcceptanceTestClassSourceScanner")]
     public void Indirect_balanced_lane_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;

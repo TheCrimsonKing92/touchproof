@@ -27,6 +27,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
+            // Class discovery is reached through the independently owned test inventory source.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
             // Class history is reached through the lane resolver and balanced lane plan writer.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
             // Process helpers are reached through the independently owned acceptance process invoker.
@@ -115,7 +117,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestTelemetryResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceVerificationResult",
