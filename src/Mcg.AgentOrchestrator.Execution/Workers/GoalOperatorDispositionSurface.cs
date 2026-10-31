@@ -93,6 +93,14 @@ public sealed class GoalOperatorDispositionSurface
                 hold.NextAction, blockers, evidence, dispatches);
         }
 
+        if (!operationallyTerminal && goal.CurrentHold?.State == EnvironmentHold.State)
+        {
+            blockers.Add(EnvironmentHold.State);
+            evidence.Add(new("goal-hold", goal.CurrentHold.Identity, goal.CurrentHold.Blocker));
+            return Build(goal, OperatorDispositionState.Blocked, OperatorDispositionConfidence.High,
+                goal.CurrentHold.Blocker, "Restore the contracted tool; the conductor retries automatically.", blockers, evidence, dispatches);
+        }
+
         if (TryFindCleanupDebt(goal, executionDirectory, operationallyTerminal, out var cleanupReason, out var cleanupEvidence))
         {
             blockers.Add("goal-worktree-cleanup-debt");

@@ -59,9 +59,9 @@ public sealed class LearnedAcceptanceManifestCheckNameTests
     }
 
     [Fact]
-    public void Build_UniqueFileNames_MatchesPreMtpJsonBytes()
+    public void Build_UniqueFileNames_MatchesJsonBytesWithEnvironmentContract()
     {
-        // Expected text copied unchanged from LearnedAcceptanceManifestTests' pre-MTP baseline.
+        // Expected text matches LearnedAcceptanceManifestTests' VSTest and tool-contract baseline.
         const string expected = """
             {
               "version": 1,
@@ -90,7 +90,22 @@ public sealed class LearnedAcceptanceManifestCheckNameTests
                   "arguments": []
                 }
               ],
-              "forbiddenChangedPathGlobs": []
+              "forbiddenChangedPathGlobs": [],
+              "environmentContract": {
+                "version": 1,
+                "tools": [
+                  {
+                    "name": "dotnet",
+                    "command": "dotnet",
+                    "arguments": [
+                      "--version"
+                    ],
+                    "outputPattern": null,
+                    "variables": [],
+                    "source": "check"
+                  }
+                ]
+              }
             }
             """;
         const string a = "tests\\A.Tests\\A.Tests.csproj";

@@ -485,7 +485,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
         var copy = template.Copy("receipt-hold", 3, (preparedRepo, ids) =>
         {
             Directory.CreateDirectory(Path.Combine(preparedRepo, "config"));
-            File.WriteAllText(Path.Combine(preparedRepo, "config", "acceptance-manifest.json"), "{}");
+            File.WriteAllText(Path.Combine(preparedRepo, "config", "acceptance-manifest.json"), FakeAcceptanceManifest);
             RunGit(preparedRepo, "add", "config/acceptance-manifest.json");
             // Keep the common fixture setup in the seed commit, before any member branches exist.
             RunGit(preparedRepo, "commit", "--amend", "--no-edit");
