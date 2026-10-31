@@ -25,7 +25,7 @@ public sealed class DispatchEmptyOutputFlakeTests
                 DateTimeOffset.UtcNow,
                 StandardOutputPath: outLog);
 
-            var isFlake = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification);
+            var isFlake = EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification);
 
             Xunit.Assert.False(isFlake);
         }
@@ -47,7 +47,7 @@ public sealed class DispatchEmptyOutputFlakeTests
             string.Empty,
             DateTimeOffset.UtcNow);
 
-        var isFlake = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification);
+        var isFlake = EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification);
 
         Xunit.Assert.True(isFlake);
     }
@@ -68,7 +68,7 @@ public sealed class DispatchEmptyOutputFlakeTests
             DateTimeOffset.UtcNow,
             HeartbeatStandardOutputBytes: 4228);
 
-        var isFlake = DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification);
+        var isFlake = EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification);
 
         Xunit.Assert.False(isFlake);
     }

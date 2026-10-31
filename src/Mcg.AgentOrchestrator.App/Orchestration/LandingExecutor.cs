@@ -1243,6 +1243,6 @@ internal static partial class LandingExecutor
         }
 
         return task.LastVerification?.Succeeded is not true ||
-            failedVerifications.Any(verification => !DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification));
+            failedVerifications.Any(verification => !EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification));
     }
 }
