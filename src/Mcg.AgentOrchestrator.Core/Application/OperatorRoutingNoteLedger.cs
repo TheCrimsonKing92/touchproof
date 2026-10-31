@@ -47,7 +47,8 @@ public static class OperatorRoutingNoteLedger
         task.OperatorRoutingNotes.Where(note => note.DeliveredAt is null).ToArray();
 
     public static string ComposeBlock(IReadOnlyList<OperatorRoutingNote> notes,
-        IReadOnlyList<string> automaticFeedback, string? attemptId)
+        IReadOnlyList<string> automaticFeedback, string? attemptId,
+        IReadOnlyList<string>? authoritativeRetryFeedback = null)
     {
         var block = new StringBuilder("Later operator notes override earlier ones where they conflict.");
         foreach (var note in notes)
@@ -56,7 +57,13 @@ public static class OperatorRoutingNoteLedger
                 $"intent={note.IntentId} cause={note.Cause} evidence={string.Join(",", note.EvidenceReferences)}:");
             block.AppendLine(note.Text);
         }
-        block.AppendLine().AppendLine("Automatic failure facts (not instructions):");
+        if (authoritativeRetryFeedback is { Count: > 0 })
+        {
+            block.AppendLine().AppendLine("Authoritative feedback for this retry (overrides earlier queued notes where they conflict):");
+            foreach (var instruction in authoritativeRetryFeedback) block.AppendLine(instruction);
+        }
+        if (automaticFeedback.Count > 0 || attemptId is not null)
+            block.AppendLine().AppendLine("Automatic failure facts (not instructions):");
         foreach (var fact in automaticFeedback) block.AppendLine(fact);
         if (attemptId is not null) block.AppendLine($"Acceptance attempt id: {attemptId}");
         return block.ToString().Trim();
@@ -68,12 +75,18 @@ public static class OperatorRoutingNoteLedger
         if (notes.Count == 0 || task.Status != WorkTaskStatus.Assigned) return;
         var round = task.LatestRetryAt ?? throw new InvalidOperationException("Routing notes require an independently authorized retry round.");
         var hold = IsCurrentRoundAutomaticAcceptanceRetry(task) ? task.AcceptanceRetryRoutingHold : null;
-        // Repeated preparations use original facts, not an already composed instruction block.
-        var facts = hold?.AutomaticFeedback ?? task.OperatorRoutingAutomaticFeedback ?? task.CriterionRetryFeedback;
-        task.OperatorRoutingAutomaticFeedback = facts.ToArray();
-        var block = ComposeBlock(notes, facts, hold?.AttemptId);
+        // Cache the original feedback across preparation/recovery, never a composed block.
+        // Only the automatic acceptance hold identifies failure facts; other retries keep
+        // their independently authorized instructions after the older queued notes.
+        var original = hold?.AutomaticFeedback ?? task.OperatorRoutingAutomaticFeedback ?? task.CriterionRetryFeedback;
+        task.OperatorRoutingAutomaticFeedback = original.ToArray();
+        var acceptedAt = notes[^1].AcceptedAt;
+        if (hold is null && task.AcceptedRetryFeedback is { } accepted && accepted.AcceptedAt > acceptedAt)
+            acceptedAt = accepted.AcceptedAt;
+        var block = ComposeBlock(notes, hold is null ? [] : original, hold?.AttemptId,
+            authoritativeRetryFeedback: hold is null ? original : null);
         task.RecordCriterionRetryFeedback([block], task.CriterionRetryFeedbackRoundAt);
-        task.RecordAcceptedRetryFeedback(block, notes[^1].AcceptedAt);
+        task.RecordAcceptedRetryFeedback(block, acceptedAt);
         task.OperatorRoutingNotes = task.OperatorRoutingNotes.Select(note => note.DeliveredAt is null
             ? note with { TargetRoundRetryAt = round } : note).ToArray();
     }
