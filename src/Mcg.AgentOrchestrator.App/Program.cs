@@ -161,17 +161,8 @@ catch (Exception ex)
     return 1;
 }
 
-OrchestratorWorkspace ResolveSelectedWorkspace(OrchestratorProject project) => project.Name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
-    ? OrchestratorWorkspace.ForDirectory(
-        project.RootDirectory,
-        string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
-        tenantSelection.TenantName, projectRegistry)
-    : OrchestratorWorkspace.ForProject(
-        project.Name,
-        project.RootDirectory,
-        tenantName: tenantSelection.TenantName,
-        integrationBranch: project.IntegrationBranch,
-        dataRootDirectory: project.DataRootDirectory);
+OrchestratorWorkspace ResolveSelectedWorkspace(OrchestratorProject project) =>
+    SelectedProjectWorkspaceResolver.Resolve(project, executionDirectory, tenantSelection.TenantName, projectRegistry);
 OrchestratorWorkspace workspace;
 try
 {

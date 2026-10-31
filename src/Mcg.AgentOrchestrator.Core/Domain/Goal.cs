@@ -210,6 +210,28 @@ public sealed class Goal
     public string? MetadataResultCommit { get; private set; }
 
     public GoalHoldState? CurrentHold { get; private set; }
+    public GoalDeliveredForReview? DeliveredForReview { get; private set; }
+
+    internal void RecordDeliveredForReview(GoalDeliveredForReview delivery, Action<ProgressEvent> writeEvent)
+    {
+        if (Status != GoalStatus.Verified)
+            throw new InvalidOperationException("Only a verified goal can be delivered for review.");
+        var previousDelivery = DeliveredForReview;
+        var previousHold = CurrentHold;
+        var reason = $"delivered for review: {delivery.Url}";
+        var progress = new ProgressEvent(Id, null, ProgressKind.GoalPolicyDecision, reason, delivery.DeliveredAt);
+        DeliveredForReview = delivery;
+        CurrentHold = new GoalHoldState(GoalHoldState.BuildIdentity("Verified", reason), "Verified", reason, delivery.DeliveredAt);
+        _timeline.Add(progress);
+        try { writeEvent(progress); }
+        catch
+        {
+            DeliveredForReview = previousDelivery;
+            CurrentHold = previousHold;
+            _timeline.RemoveAt(_timeline.Count - 1);
+            throw;
+        }
+    }
     public GoalLandingBlocker? LandingBlocker { get; private set; }
 
     public bool ObserveLandingBlocker(GoalLandingBlocker observed)
@@ -1384,7 +1406,8 @@ public sealed class Goal
             Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation),
             ExplicitDisposition: ExplicitDisposition,
             ParkedLifecycleStatus: ParkedLifecycleStatus,
-            LandingBlocker: LandingBlocker);
+            LandingBlocker: LandingBlocker,
+            DeliveredForReview: DeliveredForReview);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1510,6 +1533,7 @@ public sealed class Goal
         goal.PriorityScheduling = snapshot.PriorityScheduling;
         goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
+        goal.DeliveredForReview = snapshot.DeliveredForReview;
         goal.LandingBlocker = IsTerminalMetadataStatus(snapshot.Status) ? null : snapshot.LandingBlocker;
 
         return goal;
