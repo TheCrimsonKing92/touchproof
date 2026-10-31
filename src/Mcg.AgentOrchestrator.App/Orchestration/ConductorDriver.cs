@@ -1497,19 +1497,8 @@ internal sealed partial class ConductorDriver
             $"summary={TrimForConductorMessage(evidence.Summary)}; {checks}";
     }
 
-    private static string FormatFocusedEvidenceCheck(AcceptanceCheckResult check)
-    {
-        var receipt = string.IsNullOrWhiteSpace(check.ArtifactsPath)
-            ? "receipt=none"
-            : $"receipt={check.ArtifactsPath}";
-        var summary = string.IsNullOrWhiteSpace(check.ResultSummary)
-            ? string.Empty
-            : $"; summary={TrimForConductorMessage(check.ResultSummary)}";
-        var executed = check.ExecutedTestCount is null
-            ? string.Empty
-            : $" executed={check.ExecutedTestCount}";
-        return $"{check.Name} passed={check.Passed} exit={check.ExitCode}{executed} {receipt}{summary}";
-    }
+    private static string FormatFocusedEvidenceCheck(AcceptanceCheckResult check) =>
+        FocusedEvidenceCheckDescription.Format(check, TrimForConductorMessage);
 
     private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state)
     {

@@ -2173,20 +2173,8 @@ internal sealed partial class ConductorBatchLoop
         return sanitized.Length > maxReasonLength ? sanitized[..maxReasonLength] : sanitized;
     }
 
-    private static string SanitizeHeartbeatDetail(string value)
-    {
-        const int maxDetailLength = 160;
-        var sanitized = value
-            .Replace(' ', '_')
-            .Replace('\t', '_')
-            .Replace('\n', '_')
-            .Replace('\r', '_')
-            .Replace(',', '_')
-            .Replace('|', '_')
-            .Replace('[', '_')
-            .Replace(']', '_');
-        return sanitized.Length > maxDetailLength ? sanitized[..maxDetailLength] : sanitized;
-    }
+    private static string SanitizeHeartbeatDetail(string value) =>
+        ConductorHeartbeatDetail.Sanitize(value);
 
     private static string SanitizeHandoffDetail(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
