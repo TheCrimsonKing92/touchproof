@@ -12,6 +12,7 @@ internal static class OwnerConsoleStageDescriber
         OwnerConsoleGateProgress? gate = null,
         Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null)
     {
+        if (OwnerConsoleRoutingHold.Describe(goal, now) is { } routingHold) return routingHold;
         if (key.Rank is OwnerConsoleAttention.GateRunning or OwnerConsoleAttention.WaitingForGate &&
             gate?.ForMember(goal.Id.Value) is { } live)
             return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :

@@ -1529,6 +1529,9 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         GoalLifecycleState fromState)
     {
+        goal = GetCurrentGoal(goal);
+        if (AcceptanceRetryRoutingHoldGate.Check(goal, _utcNow(), fromState) is { } routingHold)
+            return MakeResult(goal.Id.Value, goalPrefix, policy, routingHold);
         var running = _getRunningPaidWorkerCount();
         var workerAdmission = GetWorkerAdmissionSnapshot(policy);
         var workerCap = workerAdmission.EffectiveWorkerCap;

@@ -162,6 +162,7 @@ internal sealed partial class ConductorDriver
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
+                var failureRecordedAt = _utcNow();
                 IReadOnlyList<string> retryFeedback =
                     [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines];
                 var retryCount = _recordCriterionRetryFeedback(
@@ -171,6 +172,12 @@ internal sealed partial class ConductorDriver
                 var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
                     string.Join(Environment.NewLine, retryFeedback);
                 _retryTask(goal.Id, task.Id, retryMessage, null, RetryCause.CriterionEvidenceOwnerMismatch);
+                var retryGoal = GetCurrentGoal(goal);
+                var retryTask = retryGoal.FindTask(task.Id);
+                OperatorRoutingNoteLedger.OpenHold(retryTask, failureRecordedAt,
+                    policy.AutomaticRetryOperatorRoutingHoldSeconds, acceptance.AttemptId, retryFeedback);
+                if (policy.AutomaticRetryOperatorRoutingHoldSeconds > 0)
+                    _recordTaskNote(goal.Id, task.Id, AcceptanceRetryRoutingHoldGate.Describe(retryTask, _utcNow()));
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }

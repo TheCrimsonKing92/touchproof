@@ -154,7 +154,10 @@ public sealed record TaskSnapshot(
     DateTimeOffset? SubscriptionDeferralReleasedAt = null,
     CompletionBuildEvidenceOperation? CompletionBuildEvidence = null,
     IReadOnlyList<WorkerBuildInvocation>? WorkerBuildInvocations = null,
-    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
+    AcceptanceRetryRoutingHold? AcceptanceRetryRoutingHold = null,
+    IReadOnlyList<OperatorRoutingNote>? OperatorRoutingNotes = null,
+    IReadOnlyList<string>? OperatorRoutingAutomaticFeedback = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
