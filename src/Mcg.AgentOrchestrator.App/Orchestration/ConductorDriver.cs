@@ -1517,12 +1517,9 @@ internal sealed partial class ConductorDriver
     }
 
     internal bool AcceptanceCohortsEnabled =>
-        !PullRequestLandingDelivery.Applies(_cohortWorkspace) &&
-        (_runAcceptanceCohortOverride is not null ||
-        (_cohortKernel is not null &&
-         _cohortWorkspace is not null &&
-         _cohortAcceptanceVerifier is not null &&
-         _cohortAcceptanceStore is not null));
+        GroupedAcceptanceAdmission.IsEnabled(_cohortWorkspace, _runAcceptanceCohortOverride is not null,
+            _cohortKernel is not null && _cohortWorkspace is not null &&
+            _cohortAcceptanceVerifier is not null && _cohortAcceptanceStore is not null);
 
     private ConductorAdvanceResult ExecuteDispatchAndStart(
         Goal goal,
