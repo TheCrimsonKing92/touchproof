@@ -3443,7 +3443,7 @@ private static string StructuredReviewerResult(
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.EmptyOutputRetryCount);
-    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+    Assert.True(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_counts_sandbox_preflight_failure_on_shared_empty_output_retry_budget")]
@@ -3467,7 +3467,7 @@ private static string StructuredReviewerResult(
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.EmptyOutputRetryCount);
     Assert.Equal(DispatchOutcomeKind.PreflightFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
-    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+    Assert.False(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_resets_empty_output_retry_on_nonempty_stdout")]
@@ -3500,7 +3500,7 @@ private static string StructuredReviewerResult(
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(0, task.EmptyOutputRetryCount);
-    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
+    Assert.False(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_when_exit_code_0_but_whitespace_only_output")]

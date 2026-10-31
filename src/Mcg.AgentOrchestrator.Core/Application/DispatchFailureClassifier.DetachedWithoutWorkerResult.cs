@@ -9,7 +9,7 @@ public static partial class DispatchFailureClassifier
         BuildOutcome(TaskOutcomeRules.DetachedWithoutWorkerResult, task, verification,
             workerResultPresent, hasCommittedChanges,
             new DispatchOutcome(DispatchOutcomeKind.ProviderInterruption, verification.ExitCode,
-                HasZeroByteStandardOutput(verification), null, null, RecoveryRecommendation.AutoRetry,
+                EmptyOutputDispatchEvidence.HasZeroByteStandardOutput(verification), null, null, RecoveryRecommendation.AutoRetry,
                 $"detached-without-worker-result: process {task.LastProcess!.ProcessId} was gracefully detached and exited 0 without a WORKER_RESULT block"));
 
     private static bool IsDetachedWithoutWorkerResult(

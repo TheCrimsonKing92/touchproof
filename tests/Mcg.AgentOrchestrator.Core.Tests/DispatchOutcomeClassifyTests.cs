@@ -1553,7 +1553,7 @@ public sealed class DispatchOutcomeClassifyTests
             string.Empty,
             string.Empty,
             completedAt,
-            DispatchStartedAt: completedAt - DispatchFailureClassifier.SilentLaunchFailureMaxDuration - TimeSpan.FromSeconds(1));
+            DispatchStartedAt: completedAt - EmptyOutputDispatchEvidence.SilentLaunchFailureMaxDuration - TimeSpan.FromSeconds(1));
 
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
@@ -1597,7 +1597,7 @@ public sealed class DispatchOutcomeClassifyTests
                 StandardErrorPath: stderrPath,
                 DispatchStartedAt: completedAt - TimeSpan.FromSeconds(27));
 
-            Xunit.Assert.False(DispatchFailureClassifier.IsSilentLaunchFailure(verification));
+            Xunit.Assert.False(EmptyOutputDispatchEvidence.IsSilentLaunchFailure(verification));
         }
         finally
         {
