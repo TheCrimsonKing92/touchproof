@@ -200,7 +200,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
     }
 
     [Fact]
-    public void CohortWorkspace_MediumGrove_AllowsLowScratchAndProtectsGit()
+    public void CohortWorkspace_MediumGrove_KeepsChecksMediumAndProtectsGit()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -237,18 +237,19 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                 ? Path.GetFullPath(commonDirRaw)
                 : Path.GetFullPath(Path.Combine(workspace.Path, commonDirRaw));
 
-            Assert.False(labeler.WouldDenyLowWrite(scratchWrite));
+            Assert.True(labeler.WouldDenyLowWrite(scratchWrite));
             Assert.True(labeler.WouldDenyLowWrite(gitFile));
             Assert.True(labeler.WouldDenyLowWrite(commonDir));
-            var workspaceLowIndex = labeler.FindSetIndex(
+            var workspaceMediumIndex = labeler.FindSetIndex(
                 workspace.Path,
-                WorkerSandboxPreparer.LowInheritableLevel,
-                recursive: true);
+                AcceptanceGateIntegrityNormalizer.MediumInheritableLevel,
+                recursive: false);
             var gitMediumIndex = labeler.FindSetIndex(gitFile, "M", recursive: false);
             var commonDirMediumIndex = labeler.FindSetIndex(commonDir, "(OI)(CI)M", recursive: false);
-            Assert.True(workspaceLowIndex >= 0);
-            Assert.True(gitMediumIndex > workspaceLowIndex);
-            Assert.True(commonDirMediumIndex > workspaceLowIndex);
+            Assert.True(workspaceMediumIndex >= 0);
+            Assert.True(gitMediumIndex > workspaceMediumIndex);
+            Assert.True(commonDirMediumIndex > workspaceMediumIndex);
+            Assert.DoesNotContain(labeler.SetCalls, call => call.Level.EndsWith('L'));
         }
         finally
         {
@@ -257,7 +258,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
     }
 
     [Fact]
-    public void CohortWorkspace_AlreadyLowGrove_SkipsRelabeling()
+    public void CohortWorkspace_AlreadyLowGrove_NormalizesWorkspaceToMedium()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -285,13 +286,11 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                     Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
                 ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
-            Assert.False(labeler.WouldDenyLowWrite(
+            Assert.True(labeler.WouldDenyLowWrite(
                 Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"))));
-            Assert.Empty(labeler.SetCalls);
-            Assert.Contains(
-                labeler.Operations,
-                operation => operation.Kind == "query" &&
-                    string.Equals(operation.Path, workspaceGrove, StringComparison.OrdinalIgnoreCase));
+            Assert.True(labeler.FindSetIndex(workspace.Path,
+                AcceptanceGateIntegrityNormalizer.MediumInheritableLevel, recursive: false) >= 0);
+            Assert.DoesNotContain(labeler.SetCalls, call => call.Level.EndsWith('L'));
         }
         finally
         {
@@ -308,7 +307,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
         }
 
         var repo = CreateAcceptanceCohortRepository();
-        var labeler = new ModeledIntegrityLabeler(failLowSet: true);
+        var labeler = new ModeledIntegrityLabeler(failMediumSet: true);
         labeler.Seed(
             Path.Combine(repo, GoalWorktrees.DirectoryName),
             new IntegrityLabelState(Exists: true, Low: false, Inheritable: true, Medium: true));
@@ -329,7 +328,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                     ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
-            Assert.Contains("Low-integrity gate writes", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("Medium-integrity gate checks", failure.Message, StringComparison.Ordinal);
             AssertNoCohortWorkspaces(repo);
             Assert.Single(labeler.SetCalls);
         }

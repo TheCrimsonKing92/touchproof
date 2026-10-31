@@ -2626,6 +2626,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             attemptName,
             stableSlotIndex,
             stableSlotLease);
+        AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, _executionContext);
         ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(stableSlotLease);
 
         var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveTestTelemetry(
@@ -3355,6 +3356,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, _executionContext);
         var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveDotnetTestTelemetry(arguments, check, environment, AcceptanceAttemptResultsPrefix, _invocationContext);
         var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
