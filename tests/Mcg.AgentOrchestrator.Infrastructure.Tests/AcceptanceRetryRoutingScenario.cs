@@ -78,7 +78,8 @@ internal sealed class AcceptanceRetryRoutingScenario : IDisposable, IClock
             Goal.Id.Value, Task.Id.Value, JsonSerializer.Serialize(payload, JsonSerializerOptions.Web), [],
             "operator", "cli", "local-process", Now, ActorKind: OperatorActorKind.Human));
         Coordinator.ExecutePending(Kernel, Goal);
-        await new SqliteOrchestratorStateRepository(Path.Combine(_root, "state.db")).SaveAsync(Kernel);
+        await InfrastructureTestSupport.CreateMigratedStateRepository(Path.Combine(_root, "state.db"))
+            .SaveAsync(Kernel);
         Coordinator.CompletePersisted([Goal.Id]);
         return (await Store.GetAsync(intent.Id))!;
     }
@@ -92,9 +93,9 @@ internal sealed class AcceptanceRetryRoutingScenario : IDisposable, IClock
 
     internal async Task Recover()
     {
-        var path = Path.Combine(_root, "state.db");
-        await new SqliteOrchestratorStateRepository(path).SaveAsync(Kernel);
-        var loaded = await new SqliteOrchestratorStateRepository(path).LoadGoalsAsync([Goal.Id]);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(Path.Combine(_root, "state.db"));
+        await repository.SaveAsync(Kernel);
+        var loaded = await repository.LoadGoalsAsync([Goal.Id]);
         Kernel = AgentOrchestratorKernel.FromSnapshot(loaded.ExportSnapshot(), this);
         Driver = CreateDriver();
     }
