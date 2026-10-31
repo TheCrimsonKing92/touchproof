@@ -1202,7 +1202,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Subscription limit review note cannot be empty.", nameof(note));
         }
 
-        var failureCount = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        var failureCount = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
         if (failureCount < DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold)
         {
             throw new InvalidOperationException($"Task '{taskId}' does not have repeated recoverable subscription usage-limit failures to review.");
@@ -1211,7 +1211,7 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordSubscriptionLimitReview(reviewNote, _clock.UtcNow, failureCount);
         if (task.Status == WorkTaskStatus.Failed &&
             task.VerificationHistory.LastOrDefault() is { Succeeded: false } latest &&
-            DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(latest))
+            SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(latest))
         {
             task.ClearLatestVerification();
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);

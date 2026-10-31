@@ -165,7 +165,10 @@ internal static partial class LandingExecutor
             }
 
             var decision = EvaluateLanding(2);
-            var acceptanceDecision = new LandingDecision.Escalate(decision.Reason) { Decision = decision.ToRecord() };
+            var acceptanceDecision = new LandingDecision.Escalate(decision.Reason)
+            {
+                Decision = PassedGateHoldEvidence.Attach(decision.ToRecord(), prospectiveEvidence.HoldDescription)
+            };
             OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, acceptanceDecision, IntegrationBranchName,

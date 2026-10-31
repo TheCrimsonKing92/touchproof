@@ -101,8 +101,12 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             foreach (var (goal, key) in ranked)
             {
                 var stage = OwnerConsoleStageDescriber.Describe(goal, key,
-                    key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? ++queuePosition : null,
+                    key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? queuePosition + 1 : null,
                     now, gate, candidateGate);
+                var passedHeld = stage.StartsWith("passed gate, held:", StringComparison.Ordinal) ||
+                    stage.StartsWith("gate passed, landing held:", StringComparison.Ordinal);
+                if (key.Rank == OwnerConsoleAttention.WaitingForGate && !passedHeld &&
+                    gate?.ForMember(goal.Id.Value) is null) queuePosition++;
                 if (key.Rank == OwnerConsoleAttention.GateRunning && (gate is null || gate.ForMember(goal.Id.Value) is not null) &&
                     gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
@@ -110,7 +114,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
                     key.Rank == OwnerConsoleAttention.RecentTerminal, OwnerConsolePriorityText.Column(goal),
-                    OwnerConsolePriorityText.Warning(goal, [])) { SortKey = key, StageWithoutQuestion = stage });
+                    OwnerConsolePriorityText.Warning(goal, []))
+                    { SortKey = key, StageWithoutQuestion = stage, IsPassedGateHeld = passedHeld });
             }
         }
         DateTimeOffset? tick = null;
@@ -123,11 +128,12 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,
         ImmutableArray<OwnerConsoleDecision> decisions, int hidden)
     {
-        var questionGoals = decisions.Select(item => item.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var questionGoals = decisions.Where(item => item.Kind != OwnerQuestionKind.PassedGateHold)
+            .Select(item => item.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var rows = model.Board.Select(row => row.IsForeign || row.IsDiagnostic ? row : row with
         {
             StageWithoutQuestion = row.StageWithoutQuestion ?? row.Stage,
-            Stage = !row.Dimmed && questionGoals.Contains(row.GoalId) ? OwnerConsoleStageDescriber.OwnerQuestion :
+            Stage = !row.Dimmed && !row.IsPassedGateHeld && questionGoals.Contains(row.GoalId) ? OwnerConsoleStageDescriber.OwnerQuestion :
                 row.StageWithoutQuestion ?? row.Stage
         }).OrderBy(row => row.IsDiagnostic)
             .ThenBy(row => row.SortKey.WithOwnerQuestion(!row.IsForeign && questionGoals.Contains(row.GoalId)))

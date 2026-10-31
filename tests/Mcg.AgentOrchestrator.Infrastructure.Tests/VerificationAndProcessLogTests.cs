@@ -1156,7 +1156,7 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(0, secondSwept);
     Assert.Null(workTask.LastVerification);
     Assert.Single(workTask.VerificationHistory);
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(workTask));
+    Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(workTask));
 }
 
     [Xunit.Fact(DisplayName = "SweepExitedProcesses_reconciles_verified_task_with_dead_heartbeat_pids_and_exit_artifact")]

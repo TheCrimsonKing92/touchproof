@@ -40,7 +40,7 @@ public static partial class WorkerResultBlockers
             return verification.EvidenceSource == VerificationEvidenceSource.Dispatch
                 ? new(VerificationTerminalContractStatus.Stale, "Originating dispatch is unavailable.")
                 : new(VerificationTerminalContractStatus.NotApplicable, string.Empty);
-        if (!DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(dispatch))
+        if (!SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(dispatch))
             return new(VerificationTerminalContractStatus.NotApplicable, string.Empty);
 
         if (verification.DispatchStartedAt is not { } startedAt ||

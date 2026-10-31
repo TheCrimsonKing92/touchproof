@@ -15,7 +15,7 @@ public sealed class OwnerConsolePassedGateHoldTests
     public async Task Board_CurrentCandidatePassed_ShowsFirstLineAndRetainsFullDetail(string kind, string newline, string outcome)
     {
         const string firstLine = "acceptance passed at 62f41de0; landing held";
-        const string secondLine = "gate test obligation: selector-not-found";
+        const string secondLine = "gate test obligation 12345678 selector-not-found: MissingTests; source gate.result.json";
         var harness = Fixture(kind, firstLine + newline + secondLine);
         var goal = Assert.Single(harness.Kernel.Goals);
         var calls = 0;
@@ -29,9 +29,8 @@ public sealed class OwnerConsolePassedGateHoldTests
 
         Assert.Equal(1, calls);
         var stage = Assert.Single(model.Board).Stage;
-        Assert.StartsWith("gate passed, landing held:", stage);
-        Assert.Contains(firstLine, stage);
-        Assert.EndsWith(", 1h30m", stage);
+        Assert.Equal("passed gate, held: gate test obligation", stage);
+        Assert.True(Assert.Single(model.Board).IsPassedGateHeld);
         Assert.DoesNotContain(secondLine, stage);
         Assert.DoesNotContain("in queue", stage);
         Assert.DoesNotContain("waiting for gate", stage);
@@ -39,6 +38,38 @@ public sealed class OwnerConsolePassedGateHoldTests
         Assert.Contains(firstLine, detail!);
         Assert.Contains(secondLine, detail!);
         Assert.Equal(firstLine + newline + secondLine, goal.LandingBlocker!.Detail);
+    }
+
+    [Fact]
+    public async Task Board_SeparatesPassedHeldAndNeverRunGateCounts()
+    {
+        var harness = Fixture("landing/landing-held-after-pass",
+            "acceptance passed; gate test obligation 12345678 selector-not-found: MissingTests");
+        var held = Assert.Single(harness.Kernel.Goals);
+        harness.AddGoal("11223344000000000000000000000000", "gate has not run", AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = GoalStatus.Verified,
+                Tasks = goal.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray()
+            }).ToArray()
+        });
+        var model = await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness,
+            new Epics(), harness.Clock, candidateGate: goal =>
+                (Candidate, goal.Id == held.Id ? new[] { Attempt(goal, Candidate, "passed") } : []))
+            .BuildBoardAsync();
+
+        Assert.Equal(2, model.Board.Length);
+        var passed = Assert.Single(model.Board, row => row.IsPassedGateHeld);
+        Assert.Equal("passed gate, held: gate test obligation", passed.Stage);
+        var waiting = Assert.Single(model.Board, row => !row.IsPassedGateHeld);
+        Assert.StartsWith("waiting for gate", waiting.Stage);
+        var section = OwnerConsoleBoardSection.Create("project", model.Board, true, null, Now);
+        Assert.Contains("1 waiting for gate", section.Header.Title);
+        Assert.Contains("1 passed gate, held", section.Header.Title);
+        Assert.DoesNotContain("2 waiting for gate", section.Header.Title);
     }
 
     [Theory]

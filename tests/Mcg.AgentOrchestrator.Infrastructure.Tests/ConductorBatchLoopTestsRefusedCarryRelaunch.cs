@@ -17,6 +17,11 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
         var attemptRoot = CreateTempDirectory("mcg-refused-carry-attempts");
         try
         {
+            // A held receipt is compared with the effective manifest on later ticks,
+            // even though this fixture substitutes the acceptance runner.
+            AppendCommit(repository, "config/acceptance-manifest.json", """
+                { "version": 1, "checks": [{ "name": "check", "type": "command", "command": "git", "arguments": ["diff", "--check"] }] }
+                """);
             var baseSha = ReadGit(repository, "rev-parse", "main");
             ReadGit(repository, "checkout", "-b", "candidate-old");
             AppendCommit(repository, "src/goal.txt", "reviewed goal line");
@@ -41,6 +46,8 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
             ReadGit(repository, "checkout", "main");
 
             var acceptanceRuns = 0;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository, runInline: true);
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 runAcceptanceWithSlot: (_, _) =>
@@ -51,14 +58,17 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 resolveAcceptanceHeads: _ => (candidateSha, mainSha),
                 getLandingFileScopes: _ => ["src/goal.txt"],
                 executionDirectory: repository,
-                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository, runInline: true));
+                parallelAcceptanceAttemptCoordinator: coordinator);
 
             var first = new ConductorBatchLoop().Run(
                 kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
             Assert.Equal(1, acceptanceRuns);
             Assert.Equal(1, first.Held);
             Assert.Equal(GoalStatus.Verified, goal.Status);
+            var passedReceipt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, passedReceipt.Outcome);
+            Assert.Equal(GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(worktree, ["src/goal.txt"]),
+                passedReceipt.EffectiveManifestIdentity);
             var expectedDiagnostic =
                 $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {boundSha}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={boundSha}.";
             Assert.Equal(expectedDiagnostic,
@@ -74,6 +84,10 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 Assert.Equal(1, summary.Held);
                 Assert.Equal(1, acceptanceRuns);
                 Assert.Equal(GoalStatus.Verified, goal.Status);
+                var retainedReceipt = Assert.IsType<ConductorParallelAcceptanceAttempt>(coordinator.TryReadLatest(goal.Id.Value));
+                Assert.Equal(passedReceipt.AttemptId, retainedReceipt.AttemptId);
+                Assert.Equal(passedReceipt.EffectiveManifestIdentity, retainedReceipt.EffectiveManifestIdentity);
+                Assert.Null(retainedReceipt.RegateRequestedAt);
                 Assert.Contains(observed!.ProgressLines!, line =>
                     line.Contains("result=held", StringComparison.Ordinal) &&
                     line.Contains("Carry-forward_refused:_reason=range-diff-not-identical", StringComparison.Ordinal));
