@@ -11,12 +11,18 @@ internal static class DeclaredTestSegmentSelector
         for (var start = 0; start <= identitySegments.Length - selectorSegments.Length; start++)
         {
             var offset = 0;
-            while (offset < selectorSegments.Length && string.Equals(
-                selectorSegments[offset], identitySegments[start + offset], StringComparison.Ordinal))
+            while (offset < selectorSegments.Length && MatchesSegment(
+                selectorSegments[offset], identitySegments[start + offset],
+                offset == selectorSegments.Length - 1))
                 offset++;
             if (offset == selectorSegments.Length) return true;
         }
 
         return false;
     }
+
+    private static bool MatchesSegment(string selector, string identity, bool isLast) =>
+        string.Equals(selector, identity, StringComparison.Ordinal) ||
+        isLast && selector.Length > 0 && identity.Length > selector.Length &&
+        identity[selector.Length] == '.' && identity.StartsWith(selector, StringComparison.Ordinal);
 }

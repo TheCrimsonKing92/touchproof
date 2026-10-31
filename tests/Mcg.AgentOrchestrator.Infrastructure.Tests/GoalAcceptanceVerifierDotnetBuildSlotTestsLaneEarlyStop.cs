@@ -222,6 +222,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
             [{"name":"infrastructure tests","type":"dotnet-test","runner":"mtp",
               "project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj","timeoutMinutes":2}]
             """);
+        // Remote scenarios must reach execution rather than decline below the five-minute deadline floor.
+        if (remote) manifest["checks"]![0]!["timeoutMinutes"] = 5;
         manifest["engine"]!["mtpInvocations"] = JsonNode.Parse("""
             [{"project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
               "executablePathTemplate":"bin/{projectName}/{configuration}/{projectName}{executableExtension}",

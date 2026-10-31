@@ -30,7 +30,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
     [Fact]
     public async Task SmallHostBudget_Submission_CarriesMinimumBudget()
     {
-        using var scenario = CreateScenario(2);
+        using var scenario = CreateScenario(5);
         scenario.AdvanceToFetch = false;
         var result = await scenario.RunAsync();
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
@@ -82,7 +82,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
             $"public class Lane{i}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
         var scenario = new Scenario(this, root);
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = Path.Combine(root, "executors.json");
-        // A 600-second deadline keeps the 495-second phase-accounting timeline on the remote path.
+        // An 800-second fallback deadline keeps the 495-second phase timeline on the remote path.
         TestOverrides.RemoteLaneOfferHistoryPathForTests = Path.Combine(root, "offer-history.jsonl");
         RemoteLaneOfferSeeding.SeedRemote(TestOverrides.RemoteLaneOfferHistoryPathForTests,
             Lane(0), "FullyQualifiedName~Lane0Tests", 400);

@@ -72,7 +72,7 @@ internal sealed class WorkerDispatchCompletionClassifier
         string standardOutput,
         string standardError)
     {
-        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(
+        return SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(
             role,
             1,
             standardOutput,

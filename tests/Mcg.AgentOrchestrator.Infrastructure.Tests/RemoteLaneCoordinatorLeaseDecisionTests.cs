@@ -139,8 +139,8 @@ public sealed class RemoteLaneCoordinatorLeaseDecisionTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(120, false)]
-    [Xunit.InlineData(121, true)]
+    [Xunit.InlineData(300, false)]
+    [Xunit.InlineData(301, true)]
     public async Task LaneTimeout_PreservesStrictThresholdAndPrecedence(int elapsed, bool timedOut)
     {
         using var fixture = new Fixture();
@@ -229,7 +229,7 @@ public sealed class RemoteLaneCoordinatorLeaseDecisionTests
             Assert.Equal(_entry, _coordinator.TryClaimIdleExecutor());
         }
         internal Task<RemoteLaneOutcome> RunAsync() =>
-            _coordinator!.RunRemoteAsync(_check, _entry, TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(120), CancellationToken.None);
+            _coordinator!.RunRemoteAsync(_check, _entry, TimeSpan.FromSeconds(300), TimeSpan.FromSeconds(300), CancellationToken.None);
         internal RemoteExecutorHealthRecord Row() => Assert.Single(RemoteExecutorHealthLedger.ReadAll(Ledger));
         internal JsonDocument Json() => JsonDocument.Parse(Assert.Single(File.ReadAllLines(Ledger)));
         internal void AssertReleasedAndRetired()
