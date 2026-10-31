@@ -97,7 +97,7 @@ internal static class DispatchCompletionEvidence
                 HasPopulatedStandardOutput(verification);
         }
 
-        return !IsTransientEmptyOutputDispatchFlake(verification);
+        return !EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification);
     }
 
     private static bool CanCompleteWithoutChangeEvidence(TaskSpec task, TaskVerificationRecord verification) =>
@@ -115,7 +115,7 @@ internal static class DispatchCompletionEvidence
     private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
         verification.HeartbeatStandardOutputBytes > 0 ||
         !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
-        HasStandardOutputFileBytes(verification);
+        EmptyOutputDispatchEvidence.HasStandardOutputFileBytes(verification);
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;
