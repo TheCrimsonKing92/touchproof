@@ -2286,9 +2286,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ProjectName = _projectName,
             ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
             EffectiveManifestIdentity = dispatchKind == GateDispatchKind && _executionDirectory is not null
-                ? GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
-                    GoalWorktrees.TryResolve(_executionDirectory, candidate.Goal.Id) ?? _executionDirectory,
-                    candidate.ScopePaths, ProjectHomeDirectory) : null,
+                ? AcceptanceAttemptManifestIdentity.Capture(
+                    candidate, id, _executionDirectory, ProjectHomeDirectory) : null,
             FocusedExecutionBasisIdentity = requestContext?.ExecutionBasisIdentity,
             HolderContractVersion = _usesDurableHolderLease ? 1 : 0,
             HolderCandidateKey = _usesDurableHolderLease ? candidate.CandidateKey : null
