@@ -2510,14 +2510,8 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
         ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
-    private static string FormatOutcome(ConductorAdvanceOutcome outcome) => outcome switch
-    {
-        ConductorAdvanceOutcome.Executed e  => $"executed from {e.FromState} — {e.Description}",
-        ConductorAdvanceOutcome.Held h      => $"held at {h.State} — {h.Reason}",
-        ConductorAdvanceOutcome.Escalated e => $"escalated at {e.State} — {e.Reason}",
-        ConductorAdvanceOutcome.Done d      => $"done ({d.State})",
-        _                                   => outcome.ToString()!
-    };
+    private static string FormatOutcome(ConductorAdvanceOutcome outcome) =>
+        ConductorOutcomeText.Format(outcome);
 }
 
 internal enum WatchSleepResult
