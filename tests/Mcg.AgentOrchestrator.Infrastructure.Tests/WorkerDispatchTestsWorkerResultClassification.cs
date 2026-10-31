@@ -41,7 +41,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(0, first.Task.LastVerification!.ExitCode);
         Assert.True(first.Task.LastVerification.HasCommittedChanges);
         Assert.Equal(0, first.Task.EmptyOutputRetryCount);
-        Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(first.Task.LastVerification));
+        Assert.False(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(first.Task.LastVerification));
         AssertExitCode(first.Process.ExitCodePath, 0);
     }
 
@@ -104,7 +104,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(0, task.LastVerification!.ExitCode);
         Assert.True(task.LastVerification.HasCommittedChanges);
         Assert.Equal(0, task.EmptyOutputRetryCount);
-        Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+        Assert.False(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
         AssertExitCode(process.ExitCodePath, 0);
     }
 
@@ -3469,7 +3469,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(888888, verification.ChildProcessId);
     Assert.Equal(23, verification.ChildExitCode);
     Assert.Equal(1, task.EmptyOutputRetryCount);
-    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification));
+    Assert.True(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(verification));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_worker_result_file_without_passing_evidence_fails")]
@@ -3521,7 +3521,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.True(task.LastVerification.HasCommittedChanges);
     Assert.Equal(0, task.EmptyOutputRetryCount);
-    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+    Assert.False(EmptyOutputDispatchEvidence.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
     AssertExitCode(process.ExitCodePath, 0);
 }
 
