@@ -8,12 +8,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Owns its kernel, SQLite stores and attempt artifacts. The collection isolates the
 // gate census probe; gate execution, process liveness and landing are injected.
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class PassedGateHoldWorkflowTests : ConductorBatchLoopTests
+public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBatchLoopTests
 {
     private const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string Main = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    public PassedGateHoldWorkflowTests(ITestOutputHelper output) : base(output) { }
+    public ConductorBatchLoopTestsPassedGateHoldWorkflow(ITestOutputHelper output) : base(output) { }
 
     [Theory]
     [InlineData("gate test obligation", "MissingTests", "reopen-regate", "retry", "goal-amend")]
