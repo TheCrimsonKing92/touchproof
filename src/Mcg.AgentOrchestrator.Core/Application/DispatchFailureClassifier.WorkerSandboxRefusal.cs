@@ -51,7 +51,7 @@ public static partial class DispatchFailureClassifier
                 new DispatchOutcome(
                     DispatchOutcomeKind.UnknownFailure,
                     verification.ExitCode,
-                    HasZeroByteStandardOutput(verification),
+                    EmptyOutputDispatchEvidence.HasZeroByteStandardOutput(verification),
                     null,
                     null,
                     RecoveryRecommendation.OperatorNeeded,
