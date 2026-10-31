@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 
 // Serialized with the Landing lane's shared GitRunner seam; repositories are private.
 [Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsPullRequestDeliveryTrackerTests
+public sealed class PullRequestDeliveryTrackerTests
 {
     [Fact]
     public void Open_cadence_then_merge_advances_and_completes()

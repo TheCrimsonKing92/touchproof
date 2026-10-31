@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized with the Landing lane's shared GitRunner seam; repositories are private.
 [Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsPullRequestDeliveryTrackerScopeTests
+public sealed class PullRequestDeliveryTrackerScopeTests
 {
     [Theory]
     [InlineData(false)]
