@@ -1542,7 +1542,7 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        var failures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
         throw new InvalidOperationException(
             $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing before redispatch.");
     }
