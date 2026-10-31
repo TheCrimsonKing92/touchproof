@@ -13,7 +13,8 @@ internal sealed record AcceptanceVerificationSummary(
     IReadOnlyList<string>? TestResultPaths = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
     string? BaselineAttestation = null,
-    string? AttemptId = null)
+    string? AttemptId = null,
+    IReadOnlyList<string>? CheckNames = null)
 {
     internal static AcceptanceVerificationSummary FromVerification(
         AcceptanceVerificationResult verification,
@@ -25,7 +26,8 @@ internal sealed record AcceptanceVerificationSummary(
         string? baselineAttestation) =>
         new(verification.Passed, unmetCriteria, verification.Passed ? null : verification.OutputTail,
             failedChecks, branchHeadSha, mainHeadSha, testResultPaths, checkAttributions,
-            baselineAttestation, verification.AttemptId);
+            baselineAttestation, verification.AttemptId,
+            verification.Checks?.Select(check => check.Name).ToArray());
 
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 
