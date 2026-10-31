@@ -14,7 +14,7 @@ public sealed class PullRequestBodyRendererTests
             ## Acceptance criteria
             1. Run checks for C:\Users\Alice\repo\file.cs
             2. Verify Alice output and .orchestrator/private artifacts.
-            """, []);
+            """, [new TaskSpec(TaskId.New(), "Render pull request content", AgentRole.Developer)]);
 
         var rendered = PullRequestBodyRenderer.Render(goal, "gate-attempt-1", ["unit Alice", "check /home/Bob/private"],
             "unselected receipt: /home/Carol/receipt.log");
@@ -31,7 +31,8 @@ public sealed class PullRequestBodyRendererTests
     [Fact]
     public void Unsafe_attempt_identity_fails_before_a_body_can_be_published()
     {
-        var goal = new AgentOrchestratorKernel().CreateGoal("Safe title", []);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Safe title",
+            [new TaskSpec(TaskId.New(), "Render pull request content", AgentRole.Developer)]);
         Assert.Throws<InvalidOperationException>(() => PullRequestBodyRenderer.Render(goal, "C:\\Users\\Alice\\receipt", ["unit"]));
     }
 }

@@ -32,7 +32,8 @@ public sealed class GitHubPullRequestPublisherTests
             Assert.Equal("create", args[1]);
             bodyPath = args[Array.IndexOf(args, "--body-file") + 1];
             Assert.Equal("approved body", File.ReadAllText(bodyPath));
-            Assert.Equal(Path.GetFullPath(Path.GetTempPath()), Path.GetDirectoryName(bodyPath)! + Path.DirectorySeparatorChar);
+            Assert.StartsWith(Path.GetFullPath(OrchestratorTempRoot.GetParent()) + Path.DirectorySeparatorChar,
+                bodyPath, StringComparison.OrdinalIgnoreCase);
             return createFails ? new(true, 1, "", "creation failed") : Ok(Url);
         });
 

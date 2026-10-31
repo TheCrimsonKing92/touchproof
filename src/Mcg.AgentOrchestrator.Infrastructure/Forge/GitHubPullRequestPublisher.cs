@@ -75,7 +75,7 @@ public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPu
             }
             if (number is not null) return new(number, url, pushed);
 
-            var temporaryDirectory = Path.GetFullPath(Path.GetTempPath());
+            var temporaryDirectory = Path.GetFullPath(OrchestratorTempRoot.GetPurposeDirectory("pull-request-bodies"));
             if (Within(temporaryDirectory, root))
                 return Failure(failureKind, "temporary PR body directory must be outside the repository");
             var bodyPath = Path.Combine(temporaryDirectory, $"mcg-pr-{Guid.NewGuid():N}.md");
