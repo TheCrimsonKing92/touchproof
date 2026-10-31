@@ -84,7 +84,8 @@ internal static class GateTestObligationEvaluator
     private static IEnumerable<Source> ReadSources(
         string orchestratorDirectory, GoalId goalId, string? sha, string? carriedFrom = null) =>
         ProspectiveEvidenceGateResolver.ReadAttempts(orchestratorDirectory, goalId, sha)
-            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion, carriedFrom, attempt.Checks))
+            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion,
+                carriedFrom, attempt.Checks, attempt.WorktreeRoot))
             .Concat(GroupedGateReceiptTrxEvidence.ReadPassedReceipts(orchestratorDirectory, goalId, sha)
                 .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths, receipt.BriefVersion, carriedFrom)));
 
@@ -159,7 +160,7 @@ internal static class GateTestObligationEvaluator
             if (obligation.PlannerIdentity is not null && source.BriefVersion != obligation.PlannerIdentity.BriefVersion) continue;
             var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
                 obligation.Selectors, source.Paths, orchestratorDirectory).ToArray();
-            var declared = DeclaredTestReportRows.Read(source.Paths, orchestratorDirectory, source.Checks);
+            var declared = DeclaredTestReportRows.Read(source.Paths, orchestratorDirectory, source.Checks, source.WorktreeRoot);
             if (declared.Applies)
                 evidence = obligation.Selectors.Select(selector =>
                     DeclaredTestSelectorResolver.Evaluate(selector, declared.Rows)).ToArray();
@@ -220,5 +221,5 @@ internal static class GateTestObligationEvaluator
 
     internal sealed record Source(
         string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion, string? CarriedFrom = null,
-        ProspectiveEvidenceGateResolver.GateCheckOutcomes? Checks = null);
+        ProspectiveEvidenceGateResolver.GateCheckOutcomes? Checks = null, string? WorktreeRoot = null);
 }

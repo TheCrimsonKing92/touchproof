@@ -16,7 +16,7 @@ internal static class DeclaredTestReportRows
         string.Equals(check.Type, "junit-command", StringComparison.OrdinalIgnoreCase);
 
     internal static Report Read(IReadOnlyList<string> paths, string directory,
-        ProspectiveEvidenceGateResolver.GateCheckOutcomes? checks = null)
+        ProspectiveEvidenceGateResolver.GateCheckOutcomes? checks = null, string? worktreeRoot = null)
     {
         var declared = checks?.Declared.Any(IsDeclaredCheck) == true;
         if (checks is not null && !declared) return new(false, []);
@@ -42,7 +42,8 @@ internal static class DeclaredTestReportRows
                             throw new InvalidDataException("CTRF suite segments must be strings.")).ToArray()
                         : [];
                     var row = validated[index];
-                    rows.Add(new(row.FullIdentity, row.ShortIdentity, suite, row.Outcome!, path));
+                    rows.Add(new(DeclaredTestIdentityPaths.Relativize(row.FullIdentity, worktreeRoot),
+                        row.ShortIdentity, suite, row.Outcome!, path));
                 }
             }
             return new(declared, rows);
