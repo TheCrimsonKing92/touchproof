@@ -156,6 +156,8 @@ internal sealed partial class ConductorDriver
     internal readonly string? _executionDirectory;
     private readonly string _integrationBranch;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
+    internal PassedGateHoldAttention? PassedGateHoldAttention { get; set; }
+    internal Func<IEnumerable<Goal>, IReadOnlyList<string>>? RefreshHeldGateReceipts { get; set; }
     internal readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
     private readonly List<(ConductorLandingReceipt Receipt, string CohortId, string ReceiptId)>
@@ -973,6 +975,12 @@ internal sealed partial class ConductorDriver
         _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace));
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
+        _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
+        PassedGateHoldAttention = new(CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            goal => PassedGateRegateAdmission.Resolve(goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value),
+                _resolveAcceptanceHeads(goal).BranchHeadSha));
+        RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
+            _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
             FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
                 GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
@@ -1489,23 +1497,8 @@ internal sealed partial class ConductorDriver
     private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence) =>
         FocusedEvidenceResultText.Format(evidence, TrimForConductorMessage);
 
-    private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state)
-    {
-        var failedTaskIds = goal.Tasks
-            .Where(task => task.Status == WorkTaskStatus.Failed)
-            .Select(task => task.Id)
-            .ToHashSet();
-        var latestTaskFailure = state == GoalLifecycleState.Failed &&
-                                goal.Status is not (GoalStatus.Cancelled or GoalStatus.Superseded)
-            ? goal.Timeline.LastOrDefault(item =>
-                item.Kind == ProgressKind.TaskFailed &&
-                item.TaskId is { } taskId &&
-                failedTaskIds.Contains(taskId))
-            : null;
-        return latestTaskFailure is null
-            ? $"Goal is in {state} state; operator action required"
-            : $"Goal is in {state} state; TaskFailed: {TrimForConductorMessage(latestTaskFailure.Message)}; operator action required";
-    }
+    private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state) =>
+        ConductorOutcomeText.BuildTerminalEscalationReason(goal, state, TrimForConductorMessage);
 
     private static string TrimForConductorMessage(string value)
     {

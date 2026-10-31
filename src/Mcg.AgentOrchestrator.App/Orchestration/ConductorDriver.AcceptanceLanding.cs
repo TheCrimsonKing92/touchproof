@@ -16,6 +16,9 @@ internal sealed partial class ConductorDriver
     internal ConductorAdvanceResult? TryReplayPassedAcceptance(Goal suppliedGoal, ConductorAutonomyPolicy policy)
     {
         var goal = GetCurrentGoal(suppliedGoal);
+        if (_executionDirectory is not null)
+            PassedReceiptManifestInvalidation.Check(goal, _parallelAcceptanceAttemptCoordinator,
+                _executionDirectory, () => _resolveAcceptanceHeads(goal).BranchHeadSha);
         if (!_parallelAcceptanceAttemptCoordinator.HasPassedReconciledReceipt(goal.Id.Value))
             return null;
         var candidate = TryBuildParallelAcceptanceCandidate(goal, policy, 0, out _);

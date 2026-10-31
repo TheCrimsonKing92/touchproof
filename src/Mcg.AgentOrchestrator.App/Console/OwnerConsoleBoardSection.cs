@@ -15,12 +15,14 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
                 { Project = project, IsDiagnostic = true }, goals);
         var active = goals.Count(row => !row.Dimmed);
         var inGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.GateRunning);
-        var waitingForGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate);
+        var waitingForGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate && !row.IsPassedGateHeld);
+        var passedHeld = goals.Count(row => row.IsPassedGateHeld);
         var conductor = !conductorLive ? "stopped" : active > 0 ? "running" : "idle";
         var age = lastLanded is { } at ? OwnerConsoleBoardRenderer.Age(now - at) : "never";
         var parts = new List<string> { project, $"conductor {conductor}", $"{active} active" };
         if (inGate > 0) parts.Add($"{inGate} in gate");
         if (waitingForGate > 0) parts.Add($"{waitingForGate} waiting for gate");
+        if (passedHeld > 0) parts.Add($"{passedHeld} passed gate, held");
         parts.Add($"last landed {age}");
         var title = string.Join(" · ", parts);
         return new(project, new("", "", title, conductor, "", null, "") { Project = project, IsDiagnostic = true }, goals);
