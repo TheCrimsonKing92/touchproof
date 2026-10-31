@@ -61,6 +61,10 @@ public sealed class RunningRetryRoundOperatorNoteTests
         scenario.Now = scenario.Now.AddSeconds(1);
         // This independent retry is authorized separately; the note did not schedule it
         // or bypass the exhausted automatic acceptance retry cap.
+        // Model the worker's natural exit before requesting another round.
+        scenario.Kernel.RecordTaskProcessRefreshed(scenario.Goal.Id, scenario.Task.Id,
+            recoveredProcess with { CompletedAt = scenario.Now, ExitCode = 1 }, verification: null);
+        Xunit.Assert.False(scenario.Task.LastProcess!.IsRunning);
         scenario.Kernel.ReportTaskProgress(scenario.Goal.Id, scenario.Task.Id, WorkTaskStatus.Failed, "later failure");
         scenario.Kernel.RetryTask(scenario.Goal.Id, scenario.Task.Id, "Independent source correction",
             retryCause: RetryCause.NewSourceFinding);
