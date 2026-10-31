@@ -90,6 +90,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     internal readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
+    private readonly AgentOrchestratorKernel? _findingStagnationKernel;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
@@ -762,6 +763,7 @@ internal sealed partial class ConductorDriver
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
+        _findingStagnationKernel = kernel;
         _workerBuildRecoveryRetry = kernel.RetryTaskAfterWorkerBuildCheckRecovery;
         ConfigureDeveloperCompletionStructuralPreflightRetry(kernel);
         _recordTaskNote = (goalId, taskId, message) =>
@@ -1106,8 +1108,10 @@ internal sealed partial class ConductorDriver
         Func<GoalId, string>? workerBuildArtifactsPath = null,
         Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null,
         Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null,
-        Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null)
+        Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
+        AgentOrchestratorKernel? findingStagnationKernel = null)
     {
+        _findingStagnationKernel = findingStagnationKernel;
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -1331,6 +1335,10 @@ internal sealed partial class ConductorDriver
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
 
+        if ((_findingStagnationKernel ?? _conductorTickKernel) is { } stagnationKernel &&
+            !goal.IsTerminal && goal.Status != GoalStatus.Parked)
+            FindingStagnationDecisionRecorder.ReconcileResets(stagnationKernel, goal);
+
         _normalizeLifecycleState(
             goal,
             $"Conductor reconciled stale goal/task lifecycle state before lifecycle resolution for goal {goalPrefix}.");
@@ -1478,30 +1486,8 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence)
-    {
-        var checks = evidence.Checks.Count == 0
-            ? "checks: none"
-            : "checks: " + string.Join("; ", evidence.Checks.Select(FormatFocusedEvidenceCheck));
-        var outcome = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
-            evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
-        return $"request='{TrimForConductorMessage(evidence.Request)}'; accepted={evidence.Accepted}; passed={evidence.Passed}; outcome={outcome}; " +
-            $"summary={TrimForConductorMessage(evidence.Summary)}; {checks}";
-    }
-
-    private static string FormatFocusedEvidenceCheck(AcceptanceCheckResult check)
-    {
-        var receipt = string.IsNullOrWhiteSpace(check.ArtifactsPath)
-            ? "receipt=none"
-            : $"receipt={check.ArtifactsPath}";
-        var summary = string.IsNullOrWhiteSpace(check.ResultSummary)
-            ? string.Empty
-            : $"; summary={TrimForConductorMessage(check.ResultSummary)}";
-        var executed = check.ExecutedTestCount is null
-            ? string.Empty
-            : $" executed={check.ExecutedTestCount}";
-        return $"{check.Name} passed={check.Passed} exit={check.ExitCode}{executed} {receipt}{summary}";
-    }
+    private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence) =>
+        FocusedEvidenceResultText.Format(evidence, TrimForConductorMessage);
 
     private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state)
     {

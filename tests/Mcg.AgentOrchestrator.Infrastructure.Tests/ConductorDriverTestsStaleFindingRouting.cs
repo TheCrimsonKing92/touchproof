@@ -613,7 +613,11 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             reviewer,
             reaffirmed.Description,
             findings: [reaffirmed],
-            reviewedCommit: repairedCandidate);
+            reviewedCommit: repairedCandidate,
+            // This case exercises reaffirmation after a repair touched the cited file.
+            // An unchanged finding on an untouched file now requires a stagnation decision.
+            touchedAnchors: [reaffirmed.Location]);
+        Assert.Contains(reaffirmed.Location, reviewer.LastVerification!.ReviewFindingTouchedAnchors!);
         Assert.Equal(
             VerifyingFindingDisposition.Current,
             VerifyingFindingCurrency.Classify(goal, reviewer, reviewer.LastVerification!));
