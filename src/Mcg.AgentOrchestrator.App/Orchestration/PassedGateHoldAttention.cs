@@ -13,7 +13,8 @@ internal sealed class PassedGateHoldAttention(ICollaborationItemStore store, Fun
                 item.CorrelationKey?.StartsWith(Prefix, StringComparison.Ordinal) == true)
             .Select(item => item.GoalId).ToHashSet(StringComparer.Ordinal);
         foreach (var goal in goals.Where(goal => goal.Status == GoalStatus.Verified && goal.LandingBlocker is not null ||
-            open.Contains(goal.Id.Value))) Reconcile(goal);
+            open.Contains(goal.Id.Value)))
+            PassedGateHoldFaultIsolation.Run(goal, "reconcile-attention", () => Reconcile(goal));
     }
 
     internal void Reconcile(Goal goal) => Reconcile(store, goal, resolve(goal));

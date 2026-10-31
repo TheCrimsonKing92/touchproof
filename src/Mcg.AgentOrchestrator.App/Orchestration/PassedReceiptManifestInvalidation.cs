@@ -12,18 +12,15 @@ internal static class PassedReceiptManifestInvalidation
         var pending = new List<string>();
         foreach (var goal in goals.Where(goal => goal.Status == GoalStatus.Verified))
         {
-            // Once queued, neither a disappearing blocker nor a manifest revert restores the receipt.
-            if (coordinator.TryReadLatest(goal.Id.Value)?.RegateRequestedAt is not null)
-                pending.Add(goal.Id.Value);
-            else if (goal.LandingBlocker is not null)
+            PassedGateHoldFaultIsolation.Run(goal, "refresh-held-receipt", () =>
             {
-                try
-                {
-                    if (Check(goal, coordinator, executionDirectory, () => currentCandidate(goal)))
-                        pending.Add(goal.Id.Value);
-                }
-                catch (InvalidOperationException) { /* The replay path retains the hold and reports the failed comparison. */ }
-            }
+                // Once queued, neither a disappearing blocker nor a manifest revert restores the receipt.
+                if (coordinator.TryReadLatest(goal.Id.Value)?.RegateRequestedAt is not null)
+                    pending.Add(goal.Id.Value);
+                else if (goal.LandingBlocker is not null &&
+                    Check(goal, coordinator, executionDirectory, () => currentCandidate(goal)))
+                    pending.Add(goal.Id.Value);
+            });
         }
         return pending;
     }
