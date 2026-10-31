@@ -21,7 +21,8 @@
       "laneNamePrefix": "Balanced",
       "residualLaneName": "Infrastructure residual",
       "defaultClassSecondsWhenNoHistory": 1,
-      "traitExclusions": ["Category!=HostIntegration"]
+      "traitExclusions": ["Category!=HostIntegration"],
+      "exclusiveResourceKeys": ["machine:GitHeavyLanes"]
     },
     "infrastructureTestLanes": [
       {
