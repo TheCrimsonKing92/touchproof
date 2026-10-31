@@ -41,7 +41,8 @@ public enum FailedGoalFindingObservationKind
     FindingActionableRed,
     FindingEvidenceDeliveryRecorded,
     FindingResultMissing,
-    FindingRouteObserved
+    FindingRouteObserved,
+    FindingStagnationDecisionRecorded
 }
 
 public sealed record FailedGoalRecoveryIdentity(
@@ -594,7 +595,7 @@ public static class FailedGoalRecoveryPolicy
         }
 
         if (facts.ReviewContractObservation is { Kind: not FailedGoalFindingObservationKind.None } contract)
-            return DecideFindingObservation(facts, contract, "review-contract-routing");
+            return FailedGoalFindingRecoveryDecision.Decide(facts, contract, "review-contract-routing");
 
         if (!facts.VerifyingFindingObservationCompleted)
         {
@@ -607,7 +608,7 @@ public static class FailedGoalRecoveryPolicy
         }
 
         if (facts.VerifyingFindingObservation is { Kind: not FailedGoalFindingObservationKind.None } finding)
-            return DecideFindingObservation(facts, finding, "structured-finding-routing");
+            return FailedGoalFindingRecoveryDecision.Decide(facts, finding, "structured-finding-routing");
 
         return new FailedGoalRecoveryDecision(
             FailedGoalRecoveryAction.Escalate,
@@ -640,65 +641,6 @@ public static class FailedGoalRecoveryPolicy
             backoff,
             feedbackCommand,
             feedbackEvidence);
-
-    private static FailedGoalRecoveryDecision DecideFindingObservation(
-        FailedGoalRecoveryFacts facts,
-        FailedGoalFindingObservation observation,
-        string defaultAttribution)
-    {
-        var (action, cause, roundKind) = observation.Kind switch
-        {
-            FailedGoalFindingObservationKind.FindingEvidencePending =>
-                (FailedGoalRecoveryAction.Hold, (RetryCause?)null, (RetryRoundKind?)null),
-            FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable =>
-                (FailedGoalRecoveryAction.FindingRetry, RetryCause.CriterionEvidenceOwnerMismatch, RetryRoundKind.Mechanical),
-            FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded =>
-                (FailedGoalRecoveryAction.FindingRetry, RetryCause.CriterionEvidenceOwnerMismatch, RetryRoundKind.Mechanical),
-            FailedGoalFindingObservationKind.FindingResultMissing =>
-                (FailedGoalRecoveryAction.FindingRetry, RetryCause.EnvironmentApparatusFailure, RetryRoundKind.Mechanical),
-            FailedGoalFindingObservationKind.FindingActionableRed =>
-                (FailedGoalRecoveryAction.FindingRetry, RetryCause.NewSourceFinding, (RetryRoundKind?)null),
-            FailedGoalFindingObservationKind.FindingRouteObserved =>
-                (FailedGoalRecoveryAction.FindingRetry, observation.ObservedCause, observation.RoundKind),
-            FailedGoalFindingObservationKind.ReviewContractLedgerUnavailable or
-            FailedGoalFindingObservationKind.ReviewRetryCapReached or
-            FailedGoalFindingObservationKind.ReviewTouchProofUnavailable or
-            FailedGoalFindingObservationKind.ReviewContractRepairLimitReached or
-            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired or
-            FailedGoalFindingObservationKind.FindingRouteUnavailable or
-            FailedGoalFindingObservationKind.FindingRetryCapReached or
-            FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet or
-            FailedGoalFindingObservationKind.FindingConvergenceViolation or
-            FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed or
-            FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable =>
-                (FailedGoalRecoveryAction.Escalate, (RetryCause?)null, (RetryRoundKind?)null),
-            FailedGoalFindingObservationKind.None => throw new InvalidOperationException(
-                "An empty finding observation cannot select a recovery action."),
-            _ => throw new InvalidOperationException($"Unknown finding observation {observation.Kind}.")
-        };
-        if (action == FailedGoalRecoveryAction.FindingRetry &&
-            (observation.TargetTaskId is null ||
-             string.IsNullOrWhiteSpace(observation.AttemptIdentity) ||
-             cause is null))
-        {
-            throw new InvalidOperationException(
-                "A finding retry observation must carry target attempt identity and a typed retry cause.");
-        }
-
-        return new FailedGoalRecoveryDecision(
-            action,
-            new FailedGoalRecoveryIdentity(
-                facts.GoalId,
-                observation.TargetTaskId,
-                observation.AttemptIdentity,
-                facts.ContextVersion),
-            8,
-            string.IsNullOrWhiteSpace(observation.Attribution) ? defaultAttribution : observation.Attribution,
-            observation.Evidence,
-            cause,
-            roundKind,
-            WarningMessage: observation.WarningMessage, HoldOwner: observation.HoldOwner);
-    }
 
     private static string Short(TaskId taskId) => taskId.Value[..Math.Min(8, taskId.Value.Length)];
 }
