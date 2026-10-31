@@ -24,9 +24,13 @@ durations, subtracting recorded slot wait when its sidecar is available.
 The pool has four lanes and a five-observation window. The old catch-all Remainder
 joins the pool; its `Category!=HostIntegration` exclusion is configured on the
 pool and inherited by every generated balanced lane and the residual. The pool
-has no exclusive resource keys, so generated lanes can run concurrently without
-sharing a GitHeavy reservation. Balance A and the merge-train/ratchet
-lane keep their filters and GitHeavy keys. All other constrained filters and keys remain.
+declares `machine:GitHeavyLanes`, inherited by every generated balanced lane and
+the residual, as required by operator ruling `6099d9b22ee14b2cab708df6c0b1a252`.
+These lanes share the GitHeavy reservation and execute one at a time, also
+excluding concurrent execution with Balance A and the merge-train/ratchet lane.
+Those lanes keep their filters and GitHeavy keys. All other constrained filters
+and keys remain. Balanced packing alone therefore does not establish a gate-wall
+improvement; the post-landing comparison below measures the resulting gate wall.
 This changes layout, not the host's slot capacity or remote offer policy.
 Non-owned collections remain indivisible packing units. A collection spanning
 a constrained lane and the pool fails planning until its ownership is resolved.
