@@ -33,6 +33,7 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     internal string? StageWithoutQuestion { get; init; }
     internal int OwnerDecisions { get; init; }
     internal bool Collapsed { get; init; }
+    internal bool IsPassedGateHeld { get; init; }
 }
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,

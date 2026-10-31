@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Authorizes protected content for one goal; ordinary paths never enter its fingerprint.
 internal static class LandingDenylistOwnerGate
 {
+    internal const string HoldReasonPrefix = "landing-denylist owner approval required:";
     internal sealed record Result(
         IReadOnlyList<LandingDenylist.MatchResult> Matches, string Fingerprint, bool Approved, string HoldReason);
 
@@ -65,7 +66,7 @@ internal static class LandingDenylistOwnerGate
             diagnostic = $"main={mainRevision} {exception.Message.Replace('\r', ' ').Replace('\n', ' ')}";
         }
         var goalPrefix = goalId[..8];
-        var reason = $"landing-denylist owner approval required: goal={goalPrefix} candidate={candidateHeadRevision}" +
+        var reason = $"{HoldReasonPrefix} goal={goalPrefix} candidate={candidateHeadRevision}" +
             string.Concat(matches.Select(match => $" rule={match.RuleId} path={match.Path}")) +
             $" fingerprint={fingerprint} approve: approve-policy-change {goalPrefix} {candidateHeadRevision} --text-file <reason-file>";
         if (diagnostic is not null) reason += $" diagnostic={diagnostic}";

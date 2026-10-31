@@ -13,7 +13,31 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
     internal bool HasPassedReconciledReceipt(string goalId) =>
-        TryReadLatest(goalId) is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed, ReconciledAt: not null };
+        TryReadLatest(goalId) is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed,
+            ReconciledAt: not null, RegateRequestedAt: null };
+
+    internal bool TryInvalidatePassedReceipt(Goal goal, string expectedAttemptId, string expectedCandidate,
+        ConductorEvidenceSupersessionCause cause, string detail, Func<string?> currentCandidate)
+    {
+        var directory = Path.Combine(_rootDirectory, goal.Id.Value);
+        using var custody = _tryAcquireAttemptWriterLease(directory, TimeSpan.Zero);
+        if (custody is null) return false;
+        lock (MetadataWriteGate)
+        {
+            var latest = TryReadLatest(goal.Id.Value);
+            if (latest is null || latest.AttemptId != expectedAttemptId) return false;
+            var attempt = ReadCanonicalAttempt(latest.MetadataPath, goal.Id.Value);
+            if (IsCapacityReservingAttempt(attempt) ||
+                PassedGateRegateAdmission.Resolve(goal, attempt, currentCandidate()) is null ||
+                !string.Equals(attempt.BranchHeadSha, expectedCandidate, StringComparison.OrdinalIgnoreCase)) return false;
+            WriteAttemptFile(attempt with
+            {
+                RegateRequestedAt = _utcNow(), SupersessionCause = cause,
+                Detail = detail
+            });
+            return true;
+        }
+    }
 
     private static bool HasSameReplayScope(ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate) =>
@@ -156,6 +180,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         attempt.GoalId == goal.Id.Value && attempt.Kind == GateDispatchKind &&
         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Passed &&
         attempt.ReconciledAt is not null && attempt.SupersededBy is null &&
+        attempt.RegateRequestedAt is null &&
         attempt.ReplayLandedAt is null &&
         !string.IsNullOrWhiteSpace(attempt.BranchHeadSha) && !string.IsNullOrWhiteSpace(attempt.MainHeadSha) &&
         attempt.ReplayContextFingerprint is not null &&

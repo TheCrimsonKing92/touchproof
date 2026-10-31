@@ -53,7 +53,21 @@ internal static class ConductorLandingBlockerRecorder
                 var candidate = escalated.Reason.TrimStart()["acceptance passed at ".Length..]
                     .Split([';', ' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
                 changed = current.ObserveLandingBlocker(new GoalLandingBlocker(
-                    kind, escalated.Reason, kind + ":" + candidate, observedAt, "unmapped", "unmapped"));
+                    kind, PassedGateHoldEvidence.Detail(escalated.Decision, escalated.Reason),
+                    kind + ":" + candidate, observedAt, "unmapped", "unmapped"));
+            }
+            else if (current.Status == GoalStatus.Verified &&
+                (outcome is ConductorAdvanceOutcome.Escalated
+                    { Decision.DiscriminatingEvidence: "criterion-evidence-rebind-outstanding" } ||
+                 outcome is ConductorAdvanceOutcome.Escalated denylist &&
+                    denylist.Reason.Contains(LandingDenylistOwnerGate.HoldReasonPrefix, StringComparison.Ordinal)))
+            {
+                var escalation = (ConductorAdvanceOutcome.Escalated)outcome;
+                var kind = escalation.Decision?.DiscriminatingEvidence == "criterion-evidence-rebind-outstanding"
+                    ? "landing/criterion-evidence-rebind-outstanding" : "landing/landing-denylist";
+                changed = current.ObserveLandingBlocker(new GoalLandingBlocker(
+                    kind, escalation.Reason, kind, observedAt, "operator",
+                    kind.EndsWith("landing-denylist", StringComparison.Ordinal) ? "approve-policy-change" : "criterion-evidence-record"));
             }
             else
             {

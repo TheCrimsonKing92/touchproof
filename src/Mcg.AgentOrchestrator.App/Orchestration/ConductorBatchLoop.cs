@@ -840,6 +840,16 @@ internal sealed partial class ConductorBatchLoop
                     actionableIntentGoalIds, checkpointHeldGoals);
 
             _slotContentionHolds.Retain(kernel.Goals.Select(goal => goal.Id));
+            var heldReceiptGoals = kernel.Goals.Where(goal => (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
+                !intentBoundary.UnavailableGoalIds.Contains(goal.Id.Value) && !checkpointHeldGoals.ContainsKey(goal.Id.Value)).ToArray();
+            foreach (var id in driver.RefreshHeldGateReceipts?.Invoke(heldReceiptGoals) ?? [])
+            {
+                excludedGoals.Remove(id);
+                setAsideGoals.Remove(id);
+                escalatedGoals.Remove(id);
+                goalProjectionCache.Invalidate(new GoalId(id));
+            }
+            driver.PassedGateHoldAttention?.ReconcileAll(heldReceiptGoals);
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !intentBoundary.UnavailableGoalIds.Contains(g.Id.Value)

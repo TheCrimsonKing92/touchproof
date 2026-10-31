@@ -2132,6 +2132,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var canonicalPlan = new
         {
             Checks = canonicalChecks,
+            DeclaredToolHomes = settings.DeclaredToolHomes.OrderBy(home => home.Variable, StringComparer.Ordinal)
+                .ThenBy(home => home.Directory, StringComparer.Ordinal)
+                .Select(home => new { home.Variable, home.Directory }).ToArray(),
             ChangeScopedAcceptanceEnabled = AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled(),
             Engine = new
             {

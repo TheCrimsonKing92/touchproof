@@ -23,6 +23,7 @@ internal sealed partial class ConductorBatchLoop
     {
         if (goal.CurrentHold?.State == "environment-hold") { changedGoalIds.Add(goal.Id); return; }
         ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, observedAt, changedGoalIds);
+        driver.PassedGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id));
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
             if (driver.SliceBatchParentExecutionGuard?.IsSliceBatchParent(goal) == true)
