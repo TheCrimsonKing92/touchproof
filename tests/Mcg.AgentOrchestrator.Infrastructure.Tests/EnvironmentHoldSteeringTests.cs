@@ -20,6 +20,8 @@ public sealed class EnvironmentHoldSteeringTests(ITestOutputHelper output) : Con
             var task = Assert.Single(goal.Tasks);
             var dispatch = new TaskDispatchRecord("codex-cli", "codex exec -", root, now);
             kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+            // Recording enriches a copy; preserve the stored instance across the held tick.
+            var recordedDispatch = Assert.IsType<TaskDispatchRecord>(task.LastDispatch);
             var process = new TaskProcessRecord(6001, dispatch.Command, root,
                 Path.Combine(root, "out.log"), Path.Combine(root, "err.log"),
                 Path.Combine(root, "exit.txt"), now, null, null);
@@ -79,7 +81,7 @@ public sealed class EnvironmentHoldSteeringTests(ITestOutputHelper output) : Con
             Assert.Equal(0, cancellations);
             Assert.Equal(0, starts);
             Assert.Same(process, task.LastProcess);
-            Assert.Same(dispatch, task.LastDispatch);
+            Assert.Same(recordedDispatch, task.LastDispatch);
             Assert.Equal(WorkTaskStatus.Running, task.Status);
             Assert.Equal(ProgressiveReviewSteerIntentStatus.Pending, Assert.Single(store.Intents).Status);
             Assert.Empty(store.Receipts);
