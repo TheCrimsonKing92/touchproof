@@ -28,6 +28,8 @@ public static class OwnerAnswerValidator
     // Recognition and validation select the same rule, so the console cannot offer an unsupported key.
     private static Func<string, string>? FindRule(string factKey)
     {
+        if (OwnerAnsweredEnvironmentTools.IsKey(factKey))
+            return value => OwnerAnsweredEnvironmentTools.Validate(factKey, value);
         if (DeclaredToolHomeValidator.IsToolHomeKey(factKey))
             return value => DeclaredToolHomeValidator.Validate(factKey[DeclaredToolHomeValidator.KeyPrefix.Length..], value);
         if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||

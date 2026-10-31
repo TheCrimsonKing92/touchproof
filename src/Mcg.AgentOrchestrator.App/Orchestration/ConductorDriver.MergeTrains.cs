@@ -50,6 +50,8 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
+        if (EnvironmentGate?.CheckMany(orderedGoals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)), policy) is { } environmentHolds)
+            return new(null, environmentHolds, [], "Environment hold prevents merge train gate start.");
         if (_runMergeTrainOverride is not null)
             return _runMergeTrainOverride(selection, orderedGoals, policy);
         if (_cohortKernel is null || _cohortWorkspace is null ||

@@ -102,6 +102,14 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         return new ProgressiveReviewSteeringCoordinator(workspace, agents, profiles, providers);
     }
 
+    internal bool HasPendingIntent(Goal goal) =>
+        _store.HasPendingIntentAsync(goal.Id.Value).GetAwaiter().GetResult();
+
+    internal bool CanExecutePending(Goal goal, ConductorDriver driver, TimeSpan? watchInterval) =>
+        watchInterval is not null &&
+        GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)) == GoalLifecycleState.Running &&
+        HasPendingIntent(goal);
+
     public ProgressiveReviewSteeringResult ExecutePending(
         AgentOrchestratorKernel kernel,
         Goal goal,

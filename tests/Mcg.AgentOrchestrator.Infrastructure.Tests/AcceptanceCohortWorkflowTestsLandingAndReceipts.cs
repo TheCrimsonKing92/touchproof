@@ -311,7 +311,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts(CohortCandid
         try
         {
             Directory.CreateDirectory(Path.Combine(repo, "config"));
-            File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
+            File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), FakeAcceptanceManifest);
             RunGit(repo, "add", "config/acceptance-manifest.json");
             RunGit(repo, "commit", "-m", "Add manifest");
             var kernel = new AgentOrchestratorKernel();
@@ -404,7 +404,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts(CohortCandid
         try
         {
             Directory.CreateDirectory(Path.Combine(repo, "config"));
-            File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
+            File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), FakeAcceptanceManifest);
             RunGit(repo, "add", "config/acceptance-manifest.json");
             RunGit(repo, "commit", "-m", "Add manifest");
             var kernel = new AgentOrchestratorKernel();

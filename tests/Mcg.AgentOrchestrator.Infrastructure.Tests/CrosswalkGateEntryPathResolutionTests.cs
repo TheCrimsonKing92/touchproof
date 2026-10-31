@@ -87,11 +87,13 @@ public sealed class CrosswalkGateEntryPathResolutionTests
             var repo = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
             BatchLoopGitRepositoryTemplate.CopyTo(repo);
             Directory.CreateDirectory(Path.Combine(repo, "config"));
+            // These cases exercise gate executable resolution with missing or invalid tools.
+            // Pin an empty preflight contract so admission reaches that failure boundary.
             File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"),
                 AcceptanceManifestTestDefaults.WithEngine("""
                 { "version": 1, "engine": { "enforceStructuralCoverage": false, "timeouts": {} },
                   "checks": [{ "name": "entry-path crosswalk", "type": "crosswalk-test", "project": ".", "timeoutMinutes": 1 }],
-                  "forbiddenChangedPathGlobs": [] }
+                  "forbiddenChangedPathGlobs": [], "environmentContract": { "version": 1, "tools": [] } }
                 """));
             Git(repo, "add", "config/acceptance-manifest.json");
             Git(repo, "commit", "-m", "Seed crosswalk manifest");

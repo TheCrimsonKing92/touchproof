@@ -1,0 +1,16 @@
+{
+  "results": {
+    "tool": { "name": "declared-test" },
+    "summary": { "tests": 8, "passed": 8, "failed": 0, "pending": 0, "skipped": 0, "other": 0, "start": 0, "stop": 1 },
+    "tests": [
+      { "testId": "conduct-tail::follow_patterns::match_keeps_only_lines_matching_any_pattern_for_json_and_raw_lines", "name": "match_keeps_only_lines_matching_any_pattern_for_json_and_raw_lines", "suite": ["conduct-tail", "follow_patterns"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::filter::tests::pattern_and_kind_exclusion_groups_compose_with_existing_filters", "name": "pattern_and_kind_exclusion_groups_compose_with_existing_filters", "suite": ["conduct-tail", "filter", "tests"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::args::tests::parses_pattern_options_and_log_list_entries", "name": "parses_pattern_options_and_log_list_entries", "suite": ["conduct-tail", "args", "tests"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::version::version_flag_prints_package_version", "name": "version_flag_prints_package_version", "suite": ["conduct-tail", "version"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::follow_filters::filters_followed_lines", "name": "filters_followed_lines", "suite": ["conduct-tail", "follow_filters"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::follow_rotation::follows_rotated_log", "name": "follows_rotated_log", "suite": ["conduct-tail", "follow_rotation"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::follow_stop::exits_0_after_parent_pid_exits", "name": "exits_0_after_parent_pid_exits", "suite": ["conduct-tail", "follow_stop"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::tests::smoke_test_passes", "name": "smoke_test_passes", "suite": ["conduct-tail", "tests"], "status": "passed", "duration": 0 }
+    ]
+  }
+}

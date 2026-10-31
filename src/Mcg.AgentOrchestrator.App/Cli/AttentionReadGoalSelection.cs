@@ -11,7 +11,8 @@ internal static class AttentionReadGoalSelection
         IOrchestratorStateQueries queries, IReadOnlyList<GoalSummary> metadata, AttentionReadProjection? projection)
     {
         if (projection is not null)
-            return (projection.PostLandingDuties ?? []).Select(row => new GoalId(row.GoalId)).Distinct().ToArray();
+            return (projection.PostLandingDuties ?? []).Select(row => new GoalId(row.GoalId))
+                .Concat((projection.EnvironmentHolds ?? []).Select(row => new GoalId(row.GoalId))).Distinct().ToArray();
 
         // Null means unsupported, not empty. Explicit IDs hydrate archived snapshots too.
         var ids = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
@@ -19,7 +20,7 @@ internal static class AttentionReadGoalSelection
         var kernel = queries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
         if (kernel.Goals.Count != ids.Length || !ids.ToHashSet().SetEquals(kernel.Goals.Select(goal => goal.Id)))
             return null;
-        return kernel.Goals.Where(goal => goal.OutstandingPostLandingDuties.Count > 0)
+        return kernel.Goals.Where(goal => goal.OutstandingPostLandingDuties.Count > 0 || goal.CurrentHold?.State == EnvironmentHold.State)
             .Select(goal => goal.Id).ToArray();
     }
 
