@@ -25,7 +25,12 @@ public sealed class PassedGateHoldPolicyTests
         Assert.NotEmpty(hold.Rule);
         Assert.Contains(detail, hold.Evidence);
         Assert.Contains(verb, string.Join("\n", hold.ResolvingVerbs));
-        Assert.Contains(goal.Id.Value, hold.ResolvingVerbs.Single());
+        Assert.All(hold.ResolvingVerbs, command => Assert.Contains(goal.Id.Value, command));
+        if (hold.Category is PassedGateHoldCategory.GateTestObligation or PassedGateHoldCategory.CriterionEvidenceObligation)
+        {
+            Assert.Contains("retry", hold.ResolvingVerbs[1]);
+            Assert.Contains("goal-amend", hold.ResolvingVerbs[2]);
+        }
         Assert.Equal("passed-attempt", hold.AttemptId);
         Assert.Equal(Candidate, hold.Candidate);
         Assert.Equal("passed.result.json", hold.ReceiptPath);

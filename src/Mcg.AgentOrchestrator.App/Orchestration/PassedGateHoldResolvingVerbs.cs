@@ -13,8 +13,13 @@ internal static class PassedGateHoldResolvingVerbs
         return category switch
         {
             PassedGateHoldCategory.GateTestObligation =>
-                [$"adjudicate --goal {id} {number} reopen-regate --text-file <reason-file> --evidence <ref>"],
-            PassedGateHoldCategory.CriterionEvidenceObligation => [$"criterion-evidence-record --goal {id} <obligation-id> operator {candidate} <receipt-id> <scope> <passed|failed> <detail>"],
+                [$"adjudicate --goal {id} {number} reopen-regate --text-file <reason-file> --evidence <ref>",
+                 $"retry --goal {id} {number} --cause ContractClarification --text-file <reason-file>",
+                 $"goal-amend {id} --waive ... (owner only)"],
+            PassedGateHoldCategory.CriterionEvidenceObligation =>
+                [$"criterion-evidence-record --goal {id} <obligation-id> operator {candidate} <receipt-id> <scope> <passed|failed> <detail>",
+                 $"retry --goal {id} {number} --cause ContractClarification --text-file <reason-file>",
+                 $"goal-amend {id} --waive ... (owner only)"],
             PassedGateHoldCategory.LandingDenylist => [$"approve-policy-change {id} {candidate} --text-file <reason-file>"],
             PassedGateHoldCategory.PendingHumanWait => [$"attention answer {id} {requestId}"],
             _ => throw new ArgumentOutOfRangeException(nameof(category))
