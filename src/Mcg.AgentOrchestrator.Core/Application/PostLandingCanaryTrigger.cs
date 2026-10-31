@@ -130,6 +130,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetStructuralCoverageDiscovery",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetTestCheckTranslator",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/EffectiveAcceptanceManifestIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceRequestResolver.BooleanPlanning.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatContext",

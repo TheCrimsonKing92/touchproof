@@ -840,6 +840,22 @@ internal sealed partial class ConductorBatchLoop
                     actionableIntentGoalIds, checkpointHeldGoals);
 
             _slotContentionHolds.Retain(kernel.Goals.Select(goal => goal.Id));
+            var heldReceiptGoals = kernel.Goals.Where(goal => (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
+                !intentBoundary.UnavailableGoalIds.Contains(goal.Id.Value) && !checkpointHeldGoals.ContainsKey(goal.Id.Value)).ToArray();
+            var pendingHeldRegates = RunJanitorialPhase("refresh-held-gate-receipts", nextTick,
+                () => driver.RefreshHeldGateReceipts?.Invoke(heldReceiptGoals) ?? []);
+            foreach (var id in pendingHeldRegates ?? [])
+            {
+                excludedGoals.Remove(id);
+                setAsideGoals.Remove(id);
+                escalatedGoals.Remove(id);
+                goalProjectionCache.Invalidate(new GoalId(id));
+            }
+            RunJanitorialPhase("reconcile-passed-gate-holds", nextTick, () =>
+            {
+                driver.PassedGateHoldAttention?.ReconcileAll(heldReceiptGoals);
+                return true;
+            });
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !intentBoundary.UnavailableGoalIds.Contains(g.Id.Value)
@@ -2163,20 +2179,8 @@ internal sealed partial class ConductorBatchLoop
         return sanitized.Length > maxReasonLength ? sanitized[..maxReasonLength] : sanitized;
     }
 
-    private static string SanitizeHeartbeatDetail(string value)
-    {
-        const int maxDetailLength = 160;
-        var sanitized = value
-            .Replace(' ', '_')
-            .Replace('\t', '_')
-            .Replace('\n', '_')
-            .Replace('\r', '_')
-            .Replace(',', '_')
-            .Replace('|', '_')
-            .Replace('[', '_')
-            .Replace(']', '_');
-        return sanitized.Length > maxDetailLength ? sanitized[..maxDetailLength] : sanitized;
-    }
+    private static string SanitizeHeartbeatDetail(string value) =>
+        ConductorHeartbeatDetail.Sanitize(value);
 
     private static string SanitizeHandoffDetail(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
@@ -2506,14 +2510,8 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
         ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
-    private static string FormatOutcome(ConductorAdvanceOutcome outcome) => outcome switch
-    {
-        ConductorAdvanceOutcome.Executed e  => $"executed from {e.FromState} — {e.Description}",
-        ConductorAdvanceOutcome.Held h      => $"held at {h.State} — {h.Reason}",
-        ConductorAdvanceOutcome.Escalated e => $"escalated at {e.State} — {e.Reason}",
-        ConductorAdvanceOutcome.Done d      => $"done ({d.State})",
-        _                                   => outcome.ToString()!
-    };
+    private static string FormatOutcome(ConductorAdvanceOutcome outcome) =>
+        ConductorOutcomeText.Format(outcome);
 }
 
 internal enum WatchSleepResult

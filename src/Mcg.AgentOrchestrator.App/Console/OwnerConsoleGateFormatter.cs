@@ -15,7 +15,8 @@ internal static class OwnerConsoleGateFormatter
         if (!gate.Live) return "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
         var members = string.Join("+", gate.Members.Take(3).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
         if (gate.Members.Count > 3) members += "+" + (gate.Members.Count - 3);
-        return $"gate: {gate.Kind} {members} {gate.DoneCount}/{gate.TotalCount} {(gate.Failing ? "FAILING" : Remaining(gate.RemainingSeconds))}";
+        var count = OwnerConsoleGateCount.Of(gate);
+        return $"gate: {gate.Kind} {members} {count.Done}/{count.Total} {(gate.Failing ? "FAILING" : Remaining(gate.RemainingSeconds))}";
     }
 
     internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate) => OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.DefaultWidth, false);

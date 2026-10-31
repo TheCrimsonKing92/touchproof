@@ -80,6 +80,14 @@ internal sealed class OwnerQuestionReadModel(
             var items = await store.GetAttentionQueueAsync(cancellationToken);
             foreach (var item in items.Where(item => !CollaborationItemLifecycle.IsTerminal(item.Status)))
             {
+                if (item.GoalId is not null &&
+                    item.CorrelationKey?.StartsWith(PassedGateHoldAttention.Prefix, StringComparison.Ordinal) == true)
+                {
+                    if (goals.GetValueOrDefault(item.GoalId) == GoalStatus.Verified)
+                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                            OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
+                    continue;
+                }
                 if (OwnerExperimentReadingQuestion.From(item) is { } reading)
                 {
                     candidates.Add(new QuestionCandidate(reading, item.RaisedAt));

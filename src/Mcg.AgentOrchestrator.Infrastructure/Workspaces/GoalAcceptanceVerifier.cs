@@ -2115,51 +2115,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         AcceptanceGateEngineSettings? engineSettings = null)
     {
-        var canonicalChecks = effectiveChecks.Select(check => new
+        var manifestIdentity = EffectiveAcceptanceManifestIdentity.Compute(effectiveChecks, engineSettings);
+        if (engineSettings?.BalancedLanePool is null) return manifestIdentity;
+        // Bind pool settings without bringing measured execution layout into the stable identity.
+        var canonicalJson = JsonSerializer.Serialize(new
         {
-            check.Name,
-            check.Type,
-            check.Command,
-            check.Project,
-            Arguments = check.Arguments.ToArray(),
-            check.Pattern,
-            check.FilePath,
-            check.TimeoutMinutes,
-            check.Advisory,
-            check.Runner,
-            check.EstimatedSerialSeconds,
-            ExclusiveResourceKeys = check.ExclusiveResourceKeys.ToArray()
-        }).ToArray();
-        var settings = engineSettings ?? new AcceptanceGateEngineSettings();
-        var canonicalPlan = new
-        {
-            Checks = canonicalChecks,
-            ChangeScopedAcceptanceEnabled = AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled(),
-            Engine = new
-            {
-                settings.MaxConcurrentShards,
-                settings.EnforceStructuralCoverage,
-                settings.PartitionVerdictFullRerunEveryN,
-                settings.OutputCaptureLimitBytes,
-                settings.BalancedLanePool,
-                Timeouts = new
-                {
-                    settings.Timeouts.DefaultMinutes,
-                    settings.Timeouts.BuildServerShutdownMinutes,
-                    settings.Timeouts.DiscoveryMinutes
-                },
-                MtpInvocations = settings.MtpInvocations
-                    .OrderBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
-                    .Select(invocation => new
-                    {
-                        invocation.Project,
-                        invocation.ExecutablePathTemplate,
-                        Arguments = invocation.Arguments.ToArray()
-                    })
-                    .ToArray()
-            }
-        };
-        var canonicalJson = JsonSerializer.Serialize(canonicalPlan);
+            ManifestIdentity = manifestIdentity,
+            engineSettings.BalancedLanePool
+        });
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
         return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
     }
