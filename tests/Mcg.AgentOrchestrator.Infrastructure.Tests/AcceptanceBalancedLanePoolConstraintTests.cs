@@ -65,9 +65,8 @@ public sealed class AcceptanceBalancedLanePoolConstraintTests
         var generated = expansion.Lanes.Where(lane => expansion.Layout!.Lanes.Any(item => item.Name == lane.Name) ||
             lane.Name == settings.BalancedLanePool!.ResidualLaneName).ToArray();
         Assert.Equal(expansion.Layout!.Lanes.Count + 1, generated.Length);
-        Assert.Equal(["machine:GitHeavyLanes"], settings.BalancedLanePool!.ExclusiveResourceKeys);
-        Assert.All(generated, lane => Assert.Equal(settings.BalancedLanePool.ExclusiveResourceKeys,
-            lane.ExclusiveResourceKeys));
+        Assert.Empty(settings.BalancedLanePool!.ExclusiveResourceKeys);
+        Assert.All(generated, lane => Assert.Empty(lane.ExclusiveResourceKeys));
     }
 
     [Theory]

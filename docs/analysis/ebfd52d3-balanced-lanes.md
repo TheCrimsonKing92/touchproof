@@ -21,19 +21,26 @@ plan before publication; malformed history is preserved for diagnosis.
 Measurements include summed test
 durations, subtracting recorded slot wait when its sidecar is available.
 
-The pool has four lanes and a five-observation window. The old catch-all Remainder
-joins the pool; its `Category!=HostIntegration` exclusion is configured on the
-pool and inherited by every generated balanced lane and the residual. The pool
-declares `machine:GitHeavyLanes`, inherited by every generated balanced lane and
-the residual, as required by operator ruling `6099d9b22ee14b2cab708df6c0b1a252`.
-These lanes share the GitHeavy reservation and execute one at a time, also
-excluding concurrent execution with Balance A and the merge-train/ratchet lane.
-Those lanes keep their filters and GitHeavy keys. All other constrained filters
-and keys remain. Balanced packing alone therefore does not establish a gate-wall
-improvement; the post-landing comparison below measures the resulting gate wall.
+The pool has four lanes and a five-observation window. It absorbs the nine
+unconstrained lanes: Cli, Conduct watch sweep scoping, Goal lifecycle commands,
+Goal worktree cleanup cohort, Goal worktree cleanup git, Goal worktree parallel,
+Process spawning parallel, Remainder balance B and Remainder balance C. The
+`Category!=HostIntegration` exclusion is configured on the pool and inherited by
+every generated balanced lane and the residual. The pool declares no exclusive
+resource keys, so its generated lanes and residual keep the original keyless
+lanes' eligibility for parallel execution and remote offers.
+
+Operator ruling `d7eb800ab1824d31a23f2069dce8b7fb` withdraws ruling `6099d9b2`.
+Remainder retains its main-branch filter and `machine:GitHeavyLanes` key; its
+classes stay outside the pool and remain serialized with Remainder balance A
+and Remainder merge train and ratchet. All other constrained filters and keys
+remain. New unlisted classes still match Remainder's constrained catch-all;
+routing them elsewhere is follow-up backlog item `f95032ce`. Balanced packing
+alone does not establish a gate-wall improvement; the post-landing comparison
+below measures the resulting gate wall.
 This changes layout, not the host's slot capacity or remote offer policy.
-Non-owned collections remain indivisible packing units. A collection spanning
-a constrained lane and the pool fails planning until its ownership is resolved.
+Non-owned collections remain indivisible packing units within the pool;
+constrained members retain their existing lane membership.
 
 The residual complements every scanned class. A scanner-missed class still runs
 there, even if a constrained filter also selects it. Such duplicate observations

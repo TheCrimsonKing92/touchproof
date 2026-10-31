@@ -7,6 +7,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     private const string SharedKey = "machine:GitHeavyLanes";
     private static readonly string[] GitHeavyLaneNames =
     [
+        "Remainder",
         "Remainder balance A",
         "Remainder merge train and ratchet"
     ];

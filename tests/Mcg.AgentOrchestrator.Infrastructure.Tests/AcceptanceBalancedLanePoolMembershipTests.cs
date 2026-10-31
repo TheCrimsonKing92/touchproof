@@ -60,11 +60,13 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
             Assert.True(matches.Count == 1, item.FullName + ": " + string.Join(',', matches.Select(lane => lane.Name)));
         }
         Assert.NotEmpty(expanded.Layout!.Lanes.SelectMany(lane => lane.Members));
-        var constrained = settings.InfrastructureTestLanes.Where(AcceptanceBalancedLaneExpander.IsConstrained).ToArray();
-        Assert.All(constrained, lane => Assert.Contains("--filter-class",
-            AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter)));
-        var newClassLane = Assert.Single(expanded.Layout.Lanes, lane => lane.Members.Contains(newClass));
-        Assert.Equal(newClassLane.Name,
+        var constrained = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, classes)
+            .Where(AcceptanceBalancedLaneExpander.IsConstrained).ToArray();
+        Assert.Equal(constrained, expanded.Lanes.Take(constrained.Length));
+        var remainder = Assert.Single(constrained, lane => lane.Name == "Remainder");
+        Assert.Equal(["machine:GitHeavyLanes"], remainder.ExclusiveResourceKeys);
+        // The restored constrained catch-all still owns new classes under ruling d7eb800a.
+        Assert.Equal(remainder.Name,
             Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, newClass)).Name);
         Assert.All(expanded.Layout.Lanes.SelectMany(lane => lane.Members),
             name => Assert.Empty(AcceptanceLaneMembership.LanesIncluding(constrained, name)));
