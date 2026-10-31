@@ -170,7 +170,9 @@ internal sealed partial class ConductorBatchLoop
                 activeAttemptIds,
                 activeCohorts,
                 liveGates);
-            RecordActivationAdmissionCensus(census.OccupiedCount, liveGates.Count(gate => gate.CountsAsAcceptanceOccupant));
+            var tally = ActivationAdmissionPreparingAttemptCensus.Evaluate(activeAttempts, liveGates, DateTimeOffset.UtcNow);
+            RecordActivationAdmissionCensus(census.OccupiedCount, tally.Live);
+            ActivationAdmissionAccumulator.Current.Value?.Record(preparing: tally.Preparing);
             return census;
         }
         catch (Exception ex) when (ex is GateLoadContextProbe.LoadProbeUnavailableException or IOException or UnauthorizedAccessException)

@@ -13,6 +13,7 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
     private int _occupied;
     private int _live;
     private int _evidenceHeld;
+    private int _preparing;
 
     internal static IDisposable Begin(bool emit)
     {
@@ -22,7 +23,7 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
     }
 
     internal void Record(bool failed = false, int? waiting = null, int? occupied = null, int? live = null,
-        int? evidenceHeld = null)
+        int? evidenceHeld = null, int? preparing = null)
     {
         lock (_gate)
         {
@@ -32,6 +33,7 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
             if (occupied is { } o) _occupied = o;
             if (live is { } l) _live = l;
             if (evidenceHeld is { } e) _evidenceHeld = e;
+            if (preparing is { } p) _preparing = p;
         }
     }
 
@@ -39,9 +41,9 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
     {
         lock (_gate)
         {
-            var sample = new ActivationAdmissionSample(tick, _failed, _waiting, _occupied, _live, _evidenceHeld);
+            var sample = new ActivationAdmissionSample(tick, _failed, _waiting, _occupied, _live, _evidenceHeld, _preparing);
             _failed = false;
-            _waiting = _occupied = _live = _evidenceHeld = 0;
+            _waiting = _occupied = _live = _evidenceHeld = _preparing = 0;
             return sample;
         }
     }
