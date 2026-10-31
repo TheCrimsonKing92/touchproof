@@ -2,8 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class GoalAcceptanceVerifierLoadContextTests : GoalAcceptanceVerifierTestBase
-{    [Xunit.Fact]
+public sealed class GoalAcceptanceVerifierTestsLoadContext : GoalAcceptanceVerifierTestBase
+{
+    [Xunit.Fact]
     public void EmitShardTimingProgressRecordsTypedLoadContextAndPreservesExistingFields()
     {
         var progress = new List<AcceptanceGateProgress>();
