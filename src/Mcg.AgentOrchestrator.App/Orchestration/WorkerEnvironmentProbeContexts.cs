@@ -12,6 +12,11 @@ internal static class WorkerEnvironmentProbeContexts
         ConductorChildEnvironment? inherited = null, WorkerSandboxOptions? sandbox = null)
     {
         inherited ??= ConductorChildEnvironment.Capture();
+        var variables = inherited.Variables.ToDictionary(pair => pair.Key, pair => pair.Value,
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        DeclaredToolHomeEnvironment.Apply(variables, AcceptanceGateEngineSettings.Load(
+            workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes);
+        inherited = new(variables);
         sandbox ??= WorkerSandboxOptions.FromEnvironment();
         var directory = workspace.ResolveExecutionDirectory(goal.Id);
         policy ??= ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory));

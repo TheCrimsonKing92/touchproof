@@ -11,6 +11,7 @@ internal sealed class EnvironmentContractGate
     private readonly AgentOrchestratorKernel _kernel;
     private readonly string _project;
     private readonly string _directory;
+    private readonly string? _projectHomeDirectory;
     private readonly Func<EnvironmentContract?> _loadContract;
     private readonly Func<bool, ConductorChildEnvironment> _environment;
     private readonly Func<Goal, ConductorAutonomyPolicy?, IReadOnlyList<EnvironmentProbeContext>>? _workerEnvironments;
@@ -23,11 +24,13 @@ internal sealed class EnvironmentContractGate
         Func<EnvironmentContract?> loadContract, IEnvironmentProbeRunner? runner = null,
         Func<bool, ConductorChildEnvironment>? environment = null, Action<string, string?, string>? writeEvent = null,
         TimeProvider? timeProvider = null,
-        Func<Goal, ConductorAutonomyPolicy?, IReadOnlyList<EnvironmentProbeContext>>? workerEnvironments = null)
+        Func<Goal, ConductorAutonomyPolicy?, IReadOnlyList<EnvironmentProbeContext>>? workerEnvironments = null,
+        string? projectHomeDirectory = null)
     {
         _kernel = kernel;
         _project = project;
         _directory = directory;
+        _projectHomeDirectory = projectHomeDirectory;
         _loadContract = loadContract;
         _environment = environment ?? CaptureEnvironment;
         _workerEnvironments = workerEnvironments;
@@ -44,7 +47,8 @@ internal sealed class EnvironmentContractGate
         return new(kernel, workspace.ProjectHomeDirectoryOrNull ?? workspace.ExecutionDirectory, workspace.ExecutionDirectory,
             () => LoadWorkspaceContract(workspace),
             writeEvent: (kind, goal, detail) => writer.AppendRequired(kind, goal, detail),
-            workerEnvironments: (goal, policy) => WorkerEnvironmentProbeContexts.Capture(workspace, goal, agents, profiles, policy));
+            workerEnvironments: (goal, policy) => WorkerEnvironmentProbeContexts.Capture(workspace, goal, agents, profiles, policy),
+            projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
     }
 
     private static EnvironmentContract? LoadWorkspaceContract(OrchestratorWorkspace workspace)
@@ -147,7 +151,8 @@ internal sealed class EnvironmentContractGate
         var environment = ConductorChildEnvironment.Capture();
         if (!forGate) return environment;
         var variables = environment.Variables.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(variables, _directory);
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(variables, _directory,
+            toolHomes: AcceptanceGateEngineSettings.Load(_directory, _projectHomeDirectory).DeclaredToolHomes);
         return new(variables);
     }
 
