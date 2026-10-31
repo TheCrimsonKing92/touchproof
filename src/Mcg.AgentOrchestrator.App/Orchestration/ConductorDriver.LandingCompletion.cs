@@ -489,7 +489,7 @@ internal sealed partial class ConductorDriver
 
             if (testResultPaths.Length == 0)
             {
-                AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                 evidence.Add($"detail unavailable: no TRX path was recorded for partition \"{criterion.Name}\"");
                 continue;
             }
@@ -502,7 +502,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -517,7 +517,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -535,7 +535,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -573,24 +573,6 @@ internal sealed partial class ConductorDriver
         }
 
         return evidence;
-    }
-
-    private static void AddBoundedOutputEvidence(
-        ICollection<string> evidence,
-        IReadOnlyList<string> outputEvidence,
-        ref int remainingEvidenceEntries)
-    {
-        var retainedCount = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
-        for (var index = 0; index < retainedCount; index++)
-        {
-            evidence.Add(outputEvidence[index]);
-        }
-
-        remainingEvidenceEntries -= retainedCount;
-        if (retainedCount < outputEvidence.Count)
-        {
-            evidence.Add($"{outputEvidence.Count - retainedCount} more acceptance evidence entries omitted.");
-        }
     }
 
     private static string FormatTrxFailureEvidence(AcceptanceTrxFailure failure)
