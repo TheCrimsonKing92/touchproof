@@ -52,7 +52,11 @@ public sealed class RunningRetryRoundOperatorNoteTests
         Xunit.Assert.Null(scenario.Store.GetSuppression("after-note"));
 
         await scenario.Recover();
-        Xunit.Assert.Equal(process, scenario.Task.LastProcess);
+        var recoveredProcess = Xunit.Assert.IsType<TaskProcessRecord>(scenario.Task.LastProcess);
+        // Snapshots materialize the default tracked PID list; compare its contents
+        // separately so recovery still proves every process field is preserved.
+        Xunit.Assert.Equal(process.TrackedProcessIds, recoveredProcess.TrackedProcessIds);
+        Xunit.Assert.Equal(process, recoveredProcess with { OwnedProcessIds = process.OwnedProcessIds });
         Xunit.Assert.Null(Xunit.Assert.Single(scenario.Task.OperatorRoutingNotes).DeliveredAt);
         scenario.Now = scenario.Now.AddSeconds(1);
         // This independent retry is authorized separately; the note did not schedule it
