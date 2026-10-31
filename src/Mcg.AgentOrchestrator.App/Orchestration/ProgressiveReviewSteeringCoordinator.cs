@@ -102,6 +102,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         return new ProgressiveReviewSteeringCoordinator(workspace, agents, profiles, providers);
     }
 
+    internal bool HasPendingIntent(Goal goal) =>
+        _store.HasPendingIntentAsync(goal.Id.Value).GetAwaiter().GetResult();
+
     public ProgressiveReviewSteeringResult ExecutePending(
         AgentOrchestratorKernel kernel,
         Goal goal,
