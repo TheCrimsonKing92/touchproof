@@ -205,7 +205,7 @@ public sealed class ConductorDriverTestsDispatchRecovery
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Null(task.SubscriptionRetryAfter);
-        Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+        Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
 
         var retried = false;
         var dispatched = false;

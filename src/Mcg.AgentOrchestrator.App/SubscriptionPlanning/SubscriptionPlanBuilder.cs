@@ -316,7 +316,7 @@ public static class SubscriptionPlanBuilder
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var effectiveNow = now ?? DateTimeOffset.UtcNow;
             var retryDeferred = WorkerProfileDispatcher.IsTaskRetryDeferred(task, effectiveNow, out var retryAfter);
-            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             var requiresLimitReview = !retryDeferred && ProviderLimitSignals.RequiresSubscriptionLimitReview(task);
             var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
             var providerCoolingDown = ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
@@ -851,7 +851,7 @@ public static class SubscriptionPlanBuilder
             : (int?)Math.Max(0, (int)Math.Ceiling((retryAfter.Value - now).TotalSeconds));
         var recoverableFailures = goal.Tasks
             .Where(task => task.LastDispatch?.ProviderName?.Equals(providerName, StringComparison.OrdinalIgnoreCase) == true)
-            .Sum(DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures);
+            .Sum(SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures);
         var deferredCount = items.Count(item => item.RetryDelaySeconds is > 0);
         var detail = retryAfter is null
             ? "No observed provider cooldown."
