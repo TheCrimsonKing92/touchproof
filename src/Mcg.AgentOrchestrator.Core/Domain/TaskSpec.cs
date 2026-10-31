@@ -1127,8 +1127,8 @@ public sealed partial class TaskSpec
         AcceptedRetryFeedback = null;
     }
 
-    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt) =>
-        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt);
+    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt, CriteriaCorrectionSource source = CriteriaCorrectionSource.Operator) =>
+        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt, source);
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
     internal void IncrementWorkerBuildCheckRecoveryCount() => WorkerBuildCheckRecoveryCount++;

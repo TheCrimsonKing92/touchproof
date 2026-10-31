@@ -76,17 +76,19 @@ public static class OperatorRoutingNoteLedger
         var round = task.LatestRetryAt ?? throw new InvalidOperationException("Routing notes require an independently authorized retry round.");
         var hold = IsCurrentRoundAutomaticAcceptanceRetry(task) ? task.AcceptanceRetryRoutingHold : null;
         // Cache the original feedback across preparation/recovery, never a composed block.
-        // Only the automatic acceptance hold identifies failure facts; other retries keep
-        // their independently authorized instructions after the older queued notes.
+        // Delivery acceptance also guards automatic retries; only operator/agent intent
+        // provenance grants instructions precedence over the older queued notes.
         var original = hold?.AutomaticFeedback ?? task.OperatorRoutingAutomaticFeedback ?? task.CriterionRetryFeedback;
+        var source = task.AcceptedRetryFeedback?.Source ?? CriteriaCorrectionSource.Escalation;
+        var overridesNotes = hold is null && source is CriteriaCorrectionSource.Operator or CriteriaCorrectionSource.AgentIntent;
         task.OperatorRoutingAutomaticFeedback = original.ToArray();
         var acceptedAt = notes[^1].AcceptedAt;
         if (hold is null && task.AcceptedRetryFeedback is { } accepted && accepted.AcceptedAt > acceptedAt)
             acceptedAt = accepted.AcceptedAt;
-        var block = ComposeBlock(notes, hold is null ? [] : original, hold?.AttemptId,
-            authoritativeRetryFeedback: hold is null ? original : null);
+        var block = ComposeBlock(notes, overridesNotes ? [] : original, hold?.AttemptId,
+            authoritativeRetryFeedback: overridesNotes ? original : null);
         task.RecordCriterionRetryFeedback([block], task.CriterionRetryFeedbackRoundAt);
-        task.RecordAcceptedRetryFeedback(block, acceptedAt);
+        task.RecordAcceptedRetryFeedback(block, acceptedAt, source);
         task.OperatorRoutingNotes = task.OperatorRoutingNotes.Select(note => note.DeliveredAt is null
             ? note with { TargetRoundRetryAt = round } : note).ToArray();
     }
