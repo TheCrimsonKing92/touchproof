@@ -51,7 +51,10 @@ public sealed class AcceptanceGateBuildArtifactIntegrityTests
             {
                 var outputCall = Assert.Single(labeler.Calls, call => call.Path == Path.GetDirectoryName(executable));
                 Assert.Equal("(OI)(CI)M", outputCall.Level);
-                Assert.True(outputCall.Recursive);
+                Assert.False(outputCall.Recursive);
+                var executableCall = Assert.Single(labeler.Calls, call => call.Path == executable);
+                Assert.Equal("M", executableCall.Level);
+                Assert.False(executableCall.Recursive);
                 Assert.True(labeler.Query(executable).Medium);
                 Assert.False(labeler.Query(executable).Low);
             }

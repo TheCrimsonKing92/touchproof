@@ -28,14 +28,27 @@ internal static class AcceptanceGateIntegrityNormalizer
             SetAndConfirm(path, recursive: false, directory: true, labeler);
             // Existing build outputs can have explicit Low labels even after the root changes.
             // Keep worker-private scratch and Git metadata under their existing owners.
-            foreach (var child in new DirectoryInfo(path).EnumerateFileSystemInfos())
+            var root = new DirectoryInfo(path);
+            var pending = new Stack<DirectoryInfo>();
+            pending.Push(root);
+            while (pending.TryPop(out var parent))
             {
-                if (child.Name.Equals(".mcg-sandbox", StringComparison.OrdinalIgnoreCase) ||
-                    child.Name.Equals(".git", StringComparison.OrdinalIgnoreCase))
-                    continue;
+                foreach (var child in parent.EnumerateFileSystemInfos())
+                {
+                    var attributes = child.Attributes;
+                    // Never label or traverse links, including dangling junctions. Recursive
+                    // icacls calls cannot enforce this boundary, so visit each entry ourselves.
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                        (parent == root &&
+                         (child.Name.Equals(".mcg-sandbox", StringComparison.OrdinalIgnoreCase) ||
+                          child.Name.Equals(".git", StringComparison.OrdinalIgnoreCase))))
+                        continue;
 
-                var directory = (child.Attributes & FileAttributes.Directory) != 0;
-                SetAndConfirm(child.FullName, recursive: directory, directory, labeler);
+                    var directory = (attributes & FileAttributes.Directory) != 0;
+                    SetAndConfirm(child.FullName, recursive: false, directory, labeler);
+                    if (directory)
+                        pending.Push((DirectoryInfo)child);
+                }
             }
         }
         catch (AcceptanceGateIntegrityPreparationException) { throw; }
