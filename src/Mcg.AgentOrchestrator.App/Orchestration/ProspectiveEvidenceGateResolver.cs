@@ -160,7 +160,8 @@ internal static class ProspectiveEvidenceGateResolver
                     }
                     attempts.Add(new(id, completedAt, paths, results,
                         root.TryGetProperty("briefVersion", out var brief) && brief.TryGetInt32(out var version) ? version : null,
-                        ReadCheckOutcomes(root, metadataPath, orchestratorDirectory, manifests)));
+                        ReadCheckOutcomes(root, metadataPath, orchestratorDirectory, manifests),
+                        DeclaredTestIdentityPaths.CandidateRoot(GetString(root, "executionDirectory"), goalId)));
                 }
                 catch (Exception)
                 {
@@ -246,7 +247,7 @@ internal static class ProspectiveEvidenceGateResolver
 
     internal sealed record GateAttempt(
         string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results,
-        int? BriefVersion = null, GateCheckOutcomes? Checks = null);
+        int? BriefVersion = null, GateCheckOutcomes? Checks = null, string? WorktreeRoot = null);
 
     internal sealed record GateCheckOutcomes(
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> Declared,
