@@ -232,7 +232,7 @@ internal static partial class DispatchEvidenceSummaries
     }
 
     internal static IEnumerable<string> GetSubstantiveStandardErrorLines(TaskVerificationRecord verification) =>
-        GetStandardErrorEvidenceLines(verification).Where(line => !IsRunnerBookkeepingLine(line));
+        GetStandardErrorEvidenceLines(verification).Where(line => !EmptyOutputDispatchEvidence.IsRunnerBookkeepingLine(line));
 
     internal static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
@@ -290,7 +290,7 @@ internal static partial class DispatchEvidenceSummaries
     {
         if (verification.Succeeded ||
             !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
-            HasStandardOutputFileBytes(verification))
+            EmptyOutputDispatchEvidence.HasStandardOutputFileBytes(verification))
         {
             return false;
         }
