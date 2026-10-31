@@ -211,6 +211,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
     {
         var path = Path.Combine(root, "config", "acceptance-manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllText(path))!;
+        // This scheduling fixture owns fixed EarlyStop lanes. A scanner-complement
+        // residual contains every EarlyStop token as an exclusion, so LaneIndex's
+        // single positive-lane assumption cannot be applied to a balanced pool.
+        manifest["engine"]!.AsObject().Remove("balancedLanePool");
         manifest["engine"]!["maxConcurrentShards"] = concurrency;
         manifest["engine"]!["infrastructureTestLanes"] = JsonSerializer.SerializeToNode(Enumerable.Range(0, count).Select(index => new
         {
@@ -234,5 +238,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
         foreach (var index in Enumerable.Range(0, count))
             File.WriteAllText(Path.Combine(source, $"EarlyStop{index}Tests.cs"),
                 $"public class EarlyStop{index}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
+        var resolved = AcceptanceInfrastructureLaneResolver.ResolveExecution(AcceptanceGateEngineSettings.Load(root), root);
+        Assert.Null(resolved.Layout);
+        Assert.Equal(Enumerable.Range(0, count).Select(index => $"EarlyStop{index}"), resolved.Lanes.Select(lane => lane.Name));
     }
 }

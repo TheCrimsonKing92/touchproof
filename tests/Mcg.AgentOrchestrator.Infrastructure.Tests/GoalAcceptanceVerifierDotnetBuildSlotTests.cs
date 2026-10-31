@@ -299,7 +299,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         calls.Count(IsInfrastructurePartitionTestCall);
 
     private protected static int CountChangeScopedInfrastructureTestLanes(string root) =>
-        AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count(
+        AcceptanceInfrastructureLaneResolver.ResolveExecution(AcceptanceGateEngineSettings.Load(root), root).Lanes.Count(
             lane => !lane.RequiresBuildSystemChange);
 
     // A partition shard for Infrastructure.Tests appears as an initial call and optional rerun, in one of
