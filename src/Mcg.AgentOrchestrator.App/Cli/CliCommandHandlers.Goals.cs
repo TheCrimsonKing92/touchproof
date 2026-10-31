@@ -1462,6 +1462,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
                     cleanupHooks: context.CleanupHooks);
+                loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                     loopDriver.EnableOwnedGroupedGateAttempts();
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
@@ -1827,6 +1828,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                      recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
                      cleanupHooks: context.CleanupHooks);
+            conductDriver.EnvironmentGate?.ProbeAtStart([context.CurrentGoal]);
             if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                 conductDriver.EnableOwnedGroupedGateAttempts();
 

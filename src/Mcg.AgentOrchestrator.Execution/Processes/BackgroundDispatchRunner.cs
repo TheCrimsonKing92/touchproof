@@ -359,26 +359,9 @@ public sealed partial class BackgroundDispatchRunner
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
         // and writes logs/heartbeat/exit natively.
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = dispatch.WorkingDirectory
-        };
-
-        if (OperatingSystem.IsWindows())
-        {
-            startInfo.CreateNewProcessGroup = true;
-        }
-
+        var startInfo = DispatchHostStartInfoFactory.Create(dispatch.WorkingDirectory,
+            ResolveDispatchHostAssembly(), parametersPath, startGatePath, ConductorChildEnvironment.Capture());
         DeclaredToolHomeEnvironment.Apply(startInfo.Environment, toolHomes);
-        startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
-
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add(ResolveDispatchHostAssembly());
-        startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
-        startInfo.ArgumentList.Add(parametersPath);
 
         WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
         if (WorkerBuildInvocations is not null && task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&

@@ -25,7 +25,7 @@ public sealed class ProjectCompareManifestAnswersCliTests
 
         var compared = project.Compare();
         Assert.Equal(0, compared.Exit);
-        Assert.Equal($"Match {Unit} learned=vstest manifest=vstest", Assert.Single(compared.Lines));
+        Assert.Equal(new[] { $"Match {Unit} learned=vstest manifest=vstest", "Match tool dotnet" }, compared.Lines);
     }
 
     [Theory]
@@ -46,7 +46,7 @@ public sealed class ProjectCompareManifestAnswersCliTests
 
         var compared = project.Compare();
         Assert.Equal(1, compared.Exit);
-        Assert.Equal(Unresolved, Assert.Single(compared.Lines));
+        Assert.Equal(new[] { Unresolved, "Match tool dotnet" }, compared.Lines);
     }
 
     [Theory]
@@ -62,7 +62,7 @@ public sealed class ProjectCompareManifestAnswersCliTests
 
         var compared = project.Compare();
         Assert.Equal(exit, compared.Exit);
-        Assert.Equal($"{kind} {Unit} learned=mtp manifest={manifestRunner}{reason}", Assert.Single(compared.Lines));
+        Assert.Equal(new[] { $"{kind} {Unit} learned=mtp manifest={manifestRunner}{reason}", "Match tool dotnet" }, compared.Lines);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class ProjectCompareManifestAnswersCliTests
         Assert.False(File.Exists(project.AnswerPath));
         var baseline = project.Compare();
         Assert.Equal(1, baseline.Exit);
-        Assert.Equal(Unresolved, Assert.Single(baseline.Lines));
+        Assert.Equal(new[] { Unresolved, "Match tool dotnet" }, baseline.Lines);
         Assert.Equal(0, project.AnswerRunner("vstest").Exit);
         File.WriteAllText(project.AnswerPath, "not valid JSON");
 
