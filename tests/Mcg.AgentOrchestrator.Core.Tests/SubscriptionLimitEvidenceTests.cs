@@ -20,7 +20,8 @@ public sealed class SubscriptionLimitEvidenceTests
     }
 
     [Theory]
-    [InlineData(0, WeeklyLimit, true)]
+    [InlineData(0, WeeklyLimit, false)]
+    [InlineData(0, "ERROR: " + WeeklyLimit, true)]
     [InlineData(1, "error CS0103: The name 'missing' does not exist", false)]
     public void Failure_SuccessOrNoLimit_IsNotRecoverable(
         int exitCode, string stdout, bool hasEvidence)
@@ -28,7 +29,7 @@ public sealed class SubscriptionLimitEvidenceTests
         var verification = Verification(exitCode, stdout);
 
         // Baseline 6cf01770e: :343-345 rejects success; :367 requires a limit line.
-        // The evidence-only predicate at :370-373 deliberately ignores success.
+        // Bare CLI refusal evidence requires a failed invocation; provider diagnostics do not.
         Assert.False(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(verification));
         Assert.Equal(hasEvidence,
             SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitEvidence(verification));
