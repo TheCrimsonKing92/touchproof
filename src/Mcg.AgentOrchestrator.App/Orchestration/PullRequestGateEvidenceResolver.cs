@@ -33,10 +33,11 @@ internal static class PullRequestGateEvidenceResolver
         var latest = matches.OrderByDescending(match => match.Started).ThenByDescending(match => match.Id, StringComparer.Ordinal).FirstOrDefault();
         if (latest.Id is null) throw new InvalidOperationException("No accepted solo gate attempt is bound to the candidate.");
         using var result = JsonDocument.Parse(latest.Source);
-        var checks = Read(Read(result.RootElement, "acceptance"), "checks");
+        var checks = Read(Read(result.RootElement, "acceptance"), "checkNames");
         if (checks.ValueKind != JsonValueKind.Array || checks.GetArrayLength() == 0)
             throw new InvalidOperationException("Accepted gate receipt has no check names.");
-        var names = checks.EnumerateArray().Select(check => Text(check, "name")).ToArray();
+        var names = checks.EnumerateArray()
+            .Select(check => check.ValueKind == JsonValueKind.String ? check.GetString() : null).ToArray();
         if (names.Any(string.IsNullOrWhiteSpace))
             throw new InvalidOperationException("Accepted gate receipt has an unnamed check.");
         return (latest.Id, names.Select(name => name!).ToArray(), latest.Source);

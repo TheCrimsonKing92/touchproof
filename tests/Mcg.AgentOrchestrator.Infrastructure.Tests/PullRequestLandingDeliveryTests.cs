@@ -73,6 +73,10 @@ public sealed class PullRequestLandingDeliveryTests
         using var fixture = new PullRequestLandingTestFixture();
         InfrastructureTestSupport.RunGitWithCommitPostcondition(fixture.Repository, ["branch", "integration", fixture.Main]);
 
+        var evidence = PullRequestGateEvidenceResolver.Resolve(fixture.Workspace, fixture.Goal, fixture.Candidate);
+        Assert.Equal(PullRequestLandingTestFixture.Attempt, evidence.AttemptId);
+        Assert.Equal(new[] { "unit", "build" }, evidence.CheckNames);
+
         var result = fixture.Land();
 
         Assert.False(result.MainAdvanced);

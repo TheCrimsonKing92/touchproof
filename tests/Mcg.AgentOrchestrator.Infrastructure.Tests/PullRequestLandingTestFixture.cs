@@ -30,10 +30,15 @@ internal sealed class PullRequestLandingTestFixture : IDisposable
             attemptId = Attempt, goalId = Goal.Id.Value, branchHeadSha = Candidate,
             kind = "gate", startedAt = DateTimeOffset.UtcNow, executionProtocol = "in-process"
         }));
-        File.WriteAllText(Path.Combine(directory, Attempt + ".result.json"), JsonSerializer.Serialize(new
-        {
-            kind = "accepted", acceptance = new { passed = true, checks = new[] { new { name = "unit" } } }
-        }));
+        var verification = new AcceptanceVerificationResult(true, false, 0, null,
+            Checks: [new AcceptanceCheckResult("unit", true, 0, null),
+                new AcceptanceCheckResult("build", true, 0, null)]) { AttemptId = Attempt };
+        var summary = AcceptanceVerificationSummary.FromVerification(verification, [], [], Candidate, Main,
+            null, null, null);
+        var artifact = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
+            summary, Candidate, Main, null, null);
+        File.WriteAllText(Path.Combine(directory, Attempt + ".result.json"),
+            JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     public LandingResult Land() => LandingExecutor.Execute(Kernel, Goal, Workspace,
