@@ -69,7 +69,7 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds one settled-check progress call.
             // Goal a9983773 adds 11 lines binding the lane-plan observation to the existing attempt and dispatch set.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4449),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4402),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -139,7 +139,7 @@ internal static class SourceSizeRatchet
             // this guard belongs at the existing lifecycle decision boundary.
             // b596bd5a: one fault-recorded AcceptanceFailed routing arm; measured 1714 lines, no headroom.
             // Goal f608f29b: seven call-site/wiring lines for the separately owned environment gate; no new partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1707),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1700),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -206,7 +206,7 @@ internal static class SourceSizeRatchet
             // reset preserves admission isolation after batch reconciliation; measured 2698, no headroom.
             // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
             // Goal f608f29b guards progressive-review paid restarts through EnvironmentContractGate before steering.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2547),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2545),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -541,7 +541,7 @@ internal static class SourceSizeRatchet
             // solo/cohort/train gates and held-goal recovery. Probe/cache/hold behavior stays in
             // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14431, 70),
+            new SourceClassCeiling("ConductorDriver", 14427, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -596,7 +596,7 @@ internal static class SourceSizeRatchet
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
             // Goal a9983773 adds 11 lane-plan call-site lines; record, publisher and reader live in separate types.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8071, 27),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8024, 27),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
