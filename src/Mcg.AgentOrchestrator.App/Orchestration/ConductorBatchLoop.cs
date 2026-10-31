@@ -1317,6 +1317,9 @@ internal sealed partial class ConductorBatchLoop
 
                             if (_progressiveReviewSteering is not null && watchInterval is not null)
                             {
+                                if (driver.EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Running) is { } environmentHold)
+                                    return environmentHold;
+
                                 var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal, policy);
                                 foreach (var line in steerResult.ProgressLines)
                                 {
