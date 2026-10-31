@@ -4,12 +4,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ActivationAdmissionSample(
-    int Tick, bool CensusFailed, int WaitingVerified, int Occupied, int LiveGates, int EvidenceHeldPermits = 0)
+    int Tick, bool CensusFailed, int WaitingVerified, int Occupied, int LiveGates, int EvidenceHeldPermits = 0,
+    int PreparingAttempts = 0)
 {
     internal const string Prefix = "ACTIVATION_ADMISSION_HEALTH ";
 
     internal string Format() => FormattableString.Invariant(
-        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates} evidenceHeld={EvidenceHeldPermits}");
+        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates} evidenceHeld={EvidenceHeldPermits} preparing={PreparingAttempts}");
 
     internal static bool TryParse(string line, out ActivationAdmissionSample sample)
     {
@@ -24,7 +25,13 @@ internal sealed record ActivationAdmissionSample(
         var evidenceHeld = 0;
         if (parts.Length > 5 && parts[5].StartsWith("evidenceHeld=", StringComparison.Ordinal) &&
             !ReadCount(parts[5], "evidenceHeld=", out evidenceHeld)) return false;
-        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live, evidenceHeld);
+        var preparing = 0;
+        foreach (var part in parts.Skip(5))
+        {
+            if (part.StartsWith("preparing=", StringComparison.Ordinal) &&
+                !ReadCount(part, "preparing=", out preparing)) return false;
+        }
+        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live, evidenceHeld, preparing);
         return true;
     }
 
