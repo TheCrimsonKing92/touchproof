@@ -27,11 +27,9 @@ internal sealed partial class ConductorDriver
 
     internal bool MergeTrainsEnabled =>
         !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
-        (_runMergeTrainOverride is not null ||
-         (_cohortKernel is not null &&
-          _cohortWorkspace is not null &&
-          _cohortAcceptanceVerifier is not null &&
-          _mergeTrainAcceptanceStore is not null));
+        GroupedAcceptanceAdmission.IsEnabled(_cohortWorkspace, _runMergeTrainOverride is not null,
+            _cohortKernel is not null && _cohortWorkspace is not null &&
+            _cohortAcceptanceVerifier is not null && _mergeTrainAcceptanceStore is not null);
 
     internal IReadOnlySet<GoalId> ReconcileAttributedTrainFailures(ConductorAutonomyPolicy policy, ISet<GoalId>? checkpointGoalIds = null) =>
         MergeTrainAttributedFailureReconciliation.Reconcile(_cohortWorkspace, _cohortKernel, _mergeTrainAcceptanceStore,
