@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class LandingExecutor
 {
-    private static void RecordSuccessfulPromotion(OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel,
+    internal static void RecordSuccessfulPromotion(OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel,
         IReadOnlyList<(GoalId GoalId, string CandidateRevision)> members,
         string priorMainRevision, string promotedMainRevision, string provenance, IClock? clock)
     {

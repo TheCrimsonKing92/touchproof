@@ -853,6 +853,7 @@ internal sealed partial class ConductorBatchLoop
             }
             RunJanitorialPhase("reconcile-passed-gate-holds", nextTick, () =>
             {
+                hostedChangedGoalIds = hostedChangedGoalIds.Concat(driver.PullRequestDeliveryTracker?.Service(heldReceiptGoals) ?? new HashSet<GoalId>()).ToHashSet();
                 driver.PassedGateHoldAttention?.ReconcileAll(heldReceiptGoals);
                 return true;
             });
