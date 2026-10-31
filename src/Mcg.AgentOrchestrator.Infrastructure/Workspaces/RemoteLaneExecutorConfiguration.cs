@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
     string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1,
-    bool OccupancyProbe = false, bool ToolsDigestCheck = false, bool AdmissionEnabled = true);
+    bool OccupancyProbe = false, bool ToolsDigestCheck = false, bool AdmissionEnabled = true,
+    double? CostBudget = null);
 
 internal sealed record RemoteFocusedEvidenceSettings(
     string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null,
@@ -84,9 +85,18 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         slots is < MinimumSlots or > MaximumSlots)
                         return Disabled("invalid");
                 }
+                double? costBudget = null;
+                if (executor.TryGetProperty("costBudget", out var budget))
+                {
+                    if (budget.ValueKind != JsonValueKind.Number || !budget.TryGetDouble(out var value) ||
+                        !double.IsFinite(value) || value <= 0)
+                        return Disabled("invalid");
+                    costBudget = value;
+                }
                 if (!executor.TryGetProperty("transport", out var transport))
                 {
-                    entries.Add(new(id.GetString()!, seconds, Slots: slots, AdmissionEnabled: admissionEnabled));
+                    entries.Add(new(id.GetString()!, seconds, Slots: slots, AdmissionEnabled: admissionEnabled,
+                        CostBudget: costBudget));
                     continue;
                 }
                 if (transport.ValueKind != JsonValueKind.String || transport.GetString() != "ssh")
@@ -122,7 +132,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     toolsDigestCheck = digestCheck.GetBoolean();
                 }
                 entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot,
-                    pollSeconds, slots, occupancyProbe, toolsDigestCheck, admissionEnabled));
+                    pollSeconds, slots, occupancyProbe, toolsDigestCheck, admissionEnabled, costBudget));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())

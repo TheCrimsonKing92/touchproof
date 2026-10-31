@@ -295,8 +295,14 @@ public sealed class RemoteLaneOccupancyHeartbeatTests
             _stop.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _run!);
         }
-        internal Task<RemoteLaneOutcome> RunToExitAsync() => Coordinator.RunRemoteAsync(
-            Check, _entry, TimeSpan.FromHours(1), TimeSpan.FromHours(1), _stop.Token);
+        internal Task<RemoteLaneOutcome> RunToExitAsync()
+        {
+            Assert.True(Coordinator.IsEligible(Check));
+            // Refusal and pre-poll expiry must exercise an admitted lane, like StartAsync.
+            Assert.Equal(_entry, Coordinator.TryClaimIdleExecutor(Check));
+            return Coordinator.RunRemoteAsync(
+                Check, _entry, TimeSpan.FromHours(1), TimeSpan.FromHours(1), _stop.Token);
+        }
         internal GateHeartbeatSnapshot Snapshot() => JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
             File.ReadAllText(HeartbeatPath), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         internal GateHeartbeatStatus[] Running() => GateHeartbeatArtifacts.ReadStableSlots(Storage, Clock.GetUtcNow())

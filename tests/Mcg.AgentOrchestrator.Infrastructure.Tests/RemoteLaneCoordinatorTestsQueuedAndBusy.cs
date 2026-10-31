@@ -9,7 +9,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
     [Xunit.Theory]
     [Xunit.InlineData("queued")]
     [Xunit.InlineData("running")]
-    public async Task LiveHeartbeat_KeepsLeaseUntilGateEnd(string state)
+    public async Task LiveHeartbeat_KeepsLeaseUntilCancellation(string state)
     {
         await using var fixture = new Fixture();
         var run = fixture.Start();
@@ -24,10 +24,9 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
         Assert.Empty(fixture.CancelCopies());
         fixture.Stop.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Completed(run, "coordinator cancellation"));
-        Assert.Empty(fixture.CancelCopies());
-        Assert.Null(fixture.Fake.Handle!.QueuedJobCancellation);
-        fixture.Coordinator.Dispose();
         await fixture.CancellationCompleted();
+        Assert.Single(fixture.CancelCopies());
+        fixture.Coordinator.Dispose();
         Assert.Single(fixture.CancelCopies());
     }
 

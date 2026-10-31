@@ -64,8 +64,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
         Assert.Equal(RemoteLaneOutcomeCode.Accepted, row.Outcome);
         using var json = JsonDocument.Parse(Assert.Single(File.ReadAllLines(scenario.Ledger)));
         Assert.Equal(new[] { "observed_at", "executor_id", "gate_attempt_id", "lane", "outcome", "fault_owner",
-            "expected", "observed", "reason", "version", "attempt", "phases", "test_host_budget" }.Order(),
+            "expected", "observed", "reason", "version", "attempt", "phases", "test_host_budget", "admission" }.Order(),
             json.RootElement.EnumerateObject().Select(property => property.Name).Order());
+        Assert.Equal(1, json.RootElement.GetProperty("version").GetInt32());
     }
 
     [Fact]
@@ -122,7 +123,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
                     } }
                 },
                 checks = new[] { new { name = "infrastructure tests", type = "dotnet-test", runner = "mtp",
-                    project = RemoteFirstFocusedEvidenceFixture.Project, timeoutMinutes = 2 } }, forbiddenChangedPathGlobs = Array.Empty<string>()
+                    project = RemoteFirstFocusedEvidenceFixture.Project, timeoutMinutes = 5 } }, forbiddenChangedPathGlobs = Array.Empty<string>()
             }));
             var source = Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(source);

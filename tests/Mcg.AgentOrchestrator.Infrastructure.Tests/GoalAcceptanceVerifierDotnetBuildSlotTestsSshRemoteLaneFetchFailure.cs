@@ -48,7 +48,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSshRemoteLaneFetch
               },
               "checks": [{
                 "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 2
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 5
               }],
               "forbiddenChangedPathGlobs": []
             }

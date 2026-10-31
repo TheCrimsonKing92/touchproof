@@ -5,7 +5,7 @@ using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.Accept
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneOutcome(RemoteLaneRequest Request, IRemoteLaneHandle? Handle,
-    AcceptanceCheckResult? Accepted, TimeSpan? RemoteDuration = null);
+    AcceptanceCheckResult? Accepted, TimeSpan? RemoteDuration = null, RemoteLaneAdmissionRecord? Admission = null);
 
 // One attempt owns executor occupancy and handles. Faults retire an executor for this attempt;
 // retained handles exist only to diagnose a result arriving during the local fallback.
@@ -32,6 +32,15 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly HashSet<IRemoteLaneHandle> _handles = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, SortedDictionary<int, IDisposable>> _claims = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IDisposable> _keyClaims = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Executor, int Slot), (string? Lane, RemoteLaneAdmissionRecord Admission)> _reservations = new();
+    private RemoteLaneAdmissionHistory? _admissionHistory;
+    private RemoteLaneCostModel? _costModel;
+
+    internal RemoteLaneAdmissionHistory AdmissionHistory
+    {
+        get => _admissionHistory ??= RemoteLaneAdmissionHistory.Read(_ledgerPath);
+        init => _admissionHistory = value;
+    }
 
     internal IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> RemoteLaneHistory { get; init; }
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
@@ -76,12 +85,15 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal RemoteLaneExecutorEntry? TryClaimIdleExecutor() => TryClaimIdleExecutor(out _);
 
     internal RemoteLaneExecutorEntry? TryClaimIdleExecutor(out string? yieldReason)
+        => TryClaimIdleExecutor(null, out yieldReason);
+
+    private RemoteLaneExecutorEntry? TryClaimIdleExecutor(string? lane, out string? yieldReason)
     {
         lock (_gate)
         {
             yieldReason = _configuration.Executors.Any(entry => entry.AdmissionEnabled) ? null : "no-enabled-executor";
             // OrderBy is stable: equally occupied executors retain configuration order.
-            foreach (var entry in EligibleExecutors())
+            foreach (var entry in EligibleExecutors(lane))
             {
                 if (_arbiter.YieldReason(entry.Id, _configuration.FocusedEvidence) is { } reason)
                 {
@@ -89,7 +101,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         reason == "yield-to-focused-evidence" && yieldReason == "idle-only") yieldReason = reason;
                     continue;
                 }
-                if (TryClaimOn(entry.Id) is { } claimed) { yieldReason = null; return claimed; }
+                if (TryClaimOn(entry.Id, lane) is { } claimed) { yieldReason = null; return claimed; }
             }
             if (_claimClass == RemoteExecutorClaimClass.FocusedEvidence)
                 _arbiter.WriteDemand(_configuration.Executors.Where(entry => entry.AdmissionEnabled).Select(entry => entry.Id));
@@ -97,16 +109,22 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         }
     }
 
-    private IEnumerable<RemoteLaneExecutorEntry> EligibleExecutors() => _configuration.Executors
+    private IEnumerable<RemoteLaneExecutorEntry> EligibleExecutors(string? lane) => _configuration.Executors
         .Where(entry => entry.AdmissionEnabled && !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots &&
+            RemoteLaneAdmissionPolicy.Fits(HeldSlotCount(entry.Id), entry.Slots, ReservedCost(entry.Id),
+                CostModel.Estimate(lane, entry.Id).Cost, entry.CostBudget) &&
             (!_busyUntil.TryGetValue(entry.Id, out var until) || until <= _clock.GetUtcNow()))
         .OrderBy(entry => HeldSlotCount(entry.Id));
 
-    private RemoteLaneExecutorEntry? TryClaimOn(string executorId)
+    private RemoteLaneCostModel CostModel => _costModel ??= RemoteLaneCostModel.Build(AdmissionHistory.Records);
+    private double ReservedCost(string executorId) => _reservations.Where(pair => pair.Key.Executor == executorId)
+        .Sum(pair => pair.Value.Admission.ReservedCost);
+
+    private RemoteLaneExecutorEntry? TryClaimOn(string executorId, string? lane)
     {
         lock (_gate)
         {
-            var entry = EligibleExecutors().FirstOrDefault(entry => entry.Id == executorId);
+            var entry = EligibleExecutors(lane).FirstOrDefault(entry => entry.Id == executorId);
             if (entry is null) return null;
             _claims.TryGetValue(entry.Id, out var slots);
             for (var slotIndex = 0; slotIndex < entry.Slots; slotIndex++)
@@ -116,6 +134,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 if (claim is null) continue;
                 if (slots is null) _claims.Add(entry.Id, slots = new());
                 slots.Add(slotIndex, claim);
+                var estimate = CostModel.Estimate(lane, entry.Id);
+                var peers = _reservations.Where(pair => pair.Key.Executor == executorId)
+                    .Select(pair => pair.Value.Lane).OfType<string>().ToArray();
+                var admission = new RemoteLaneAdmissionRecord(entry.Id, slots.Count, Array.AsReadOnly(peers),
+                    estimate.Cost, estimate.Samples, RemoteLaneAdmissionPolicy.Classify(estimate.Cost),
+                    entry.CostBudget, ReservedCost(entry.Id) + estimate.Cost);
+                _reservations.Add((entry.Id, slotIndex), (lane, admission));
                 RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId, slotIndex, _claimClass);
                 _arbiter.Claimed(entry.Id);
                 return entry;
@@ -129,13 +154,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         if (_claimClass != RemoteExecutorClaimClass.Gate) throw new InvalidOperationException("Only Gate claims may preempt.");
         var keys = check.ExclusiveResourceKeys.Intersect(_configuration.ExecutorSerializedResourceKeys, StringComparer.Ordinal).ToArray();
         if (keys.Length > 0) return await ClaimWithSerializedKeysAsync(check, keys, cancellationToken).ConfigureAwait(false);
-        if (TryClaimIdleExecutor() is { } idle) return idle;
+        if (TryClaimIdleExecutor(check.Name, out _) is { } idle) return idle;
         RemoteExecutorSlotArbiter.Target? target = null;
         var settings = _configuration.FocusedEvidence;
         lock (_gate)
             if (settings.FaultReason is null && settings.Mode == "shadow" && settings.ShadowPreemption == "cancellable")
-                target = _arbiter.RequestPreemption(EligibleExecutors().Select(entry => entry.Id), check.Name);
-        if (target is not null && await _arbiter.WaitForGateAsync(target, _pollInterval, TryClaimOn,
+                target = _arbiter.RequestPreemption(EligibleExecutors(check.Name).Select(entry => entry.Id), check.Name);
+        if (target is not null && await _arbiter.WaitForGateAsync(target, _pollInterval, id => TryClaimOn(id, check.Name),
             (released, waited) => Record(CreateRequest(check, ""), RemoteLaneOutcomeCode.ShadowPreemptRequested,
                 reason: $"shadow_attempt={target.ShadowAttempt} executor={target.Executor} released={released.ToString().ToLowerInvariant()} waited_ms={waited}"),
             cancellationToken).ConfigureAwait(false) is { } claimed) return claimed;
@@ -150,12 +175,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         string? busyKey = null;
         lock (_gate)
         {
-            foreach (var entry in EligibleExecutors())
+            foreach (var entry in EligibleExecutors(check.Name))
             {
                 if (_arbiter.YieldReason(entry.Id, _configuration.FocusedEvidence) is not null) continue;
                 var claim = RemoteExecutorSerializedKeyClaim.TryClaim(_occupancyRoot, entry.Id, keys, out var busy);
                 if (claim is null) { busyKey ??= busy; continue; }
-                if (TryClaimOn(entry.Id) is { } claimed)
+                if (TryClaimOn(entry.Id, check.Name) is { } claimed)
                 {
                     _keyClaims.Add(check.Name, claim);
                     return claimed;
@@ -167,7 +192,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         if (settings.FaultReason is null && settings.Mode == "shadow" && settings.ShadowPreemption == "cancellable")
         {
             RemoteLaneExecutorEntry[] candidates;
-            lock (_gate) candidates = EligibleExecutors().ToArray();
+            lock (_gate) candidates = EligibleExecutors(check.Name).ToArray();
             foreach (var entry in candidates)
             {
                 IDisposable? claim = RemoteExecutorSerializedKeyClaim.TryClaim(_occupancyRoot, entry.Id, keys, out var busy);
@@ -178,7 +203,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     lock (_gate) target = _arbiter.RequestPreemption([entry.Id], check.Name);
                     if (target is null) continue;
                     // Hold the keys throughout the slot wait: a busy key never enters that wait.
-                    if (await _arbiter.WaitForGateAsync(target, _pollInterval, TryClaimOn,
+                    if (await _arbiter.WaitForGateAsync(target, _pollInterval, id => TryClaimOn(id, check.Name),
                         (released, waited) => Record(CreateRequest(check, ""), RemoteLaneOutcomeCode.ShadowPreemptRequested,
                             reason: $"shadow_attempt={target.ShadowAttempt} executor={target.Executor} released={released.ToString().ToLowerInvariant()} waited_ms={waited}"),
                         cancellationToken).ConfigureAwait(false) is { } claimed)
@@ -201,7 +226,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
     internal RemoteLaneExecutorEntry? TryClaimIdleExecutor(Check check)
     {
-        if (TryClaimIdleExecutor() is { } entry) return entry;
+        if (TryClaimIdleExecutor(check.Name, out _) is { } entry) return entry;
         RecordNoSlot(check);
         return null;
     }
@@ -229,7 +254,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         lock (_gate)
         {
             if (lane is not null && _keyClaims.Remove(lane, out var keyClaim)) keyClaim.Dispose();
-            if (TakeHighestSlot(executorId) is { } slot)
+            if (TakeSlot(executorId, lane) is { } slot)
             {
                 RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId, slot.Key);
                 slot.Value.Dispose();
@@ -239,12 +264,15 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
     private int HeldSlotCount(string executorId) => _claims.TryGetValue(executorId, out var slots) ? slots.Count : 0;
 
-    // Caller holds _gate. A lane returns one interchangeable slot, leaving its peers held.
-    private KeyValuePair<int, IDisposable>? TakeHighestSlot(string executorId)
+    // Caller holds _gate. Release the lane's frozen reservation along with its slot.
+    private KeyValuePair<int, IDisposable>? TakeSlot(string executorId, string? lane)
     {
         if (!_claims.TryGetValue(executorId, out var slots)) return null;
-        var slot = slots.Last();
+        var matching = slots.Where(slot => lane is null || _reservations[(executorId, slot.Key)].Lane == lane).ToArray();
+        if (matching.Length == 0) return null;
+        var slot = matching[^1];
         slots.Remove(slot.Key);
+        _reservations.Remove((executorId, slot.Key));
         if (slots.Count == 0) _claims.Remove(executorId);
         return slot;
     }
@@ -268,6 +296,34 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         var occupancy = Occupancy;
         var request = CreateRequest(check, entry.Id);
+        RemoteLaneAdmissionRecord admission;
+        (double? Median, int Samples) matching;
+        lock (_gate)
+        {
+            var reservation = _reservations.FirstOrDefault(pair => pair.Key.Executor == entry.Id && pair.Value.Lane == check.Name);
+            // Lane-less claims also serve focused evidence; bind legacy callers when execution supplies the name.
+            if (reservation.Value.Admission is null)
+            {
+                reservation = _reservations.FirstOrDefault(pair => pair.Key.Executor == entry.Id && pair.Value.Lane is null);
+                if (reservation.Value.Admission is null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new InvalidOperationException("Remote lane has no admission reservation.");
+                }
+                _reservations[reservation.Key] = (check.Name, reservation.Value.Admission);
+            }
+            admission = reservation.Value.Admission;
+            matching = AdmissionHistory.MatchingDuration(request.Lane, request.FilterHash, entry.Id, admission.Concurrency);
+        }
+        var admittedDeadline = RemoteLaneDeadline.ResolveAdmitted(deadline, matching.Median, matching.Samples, timeout);
+        if (admittedDeadline is null)
+        {
+            Release(entry.Id, check.Name);
+            Record(request, RemoteLaneOutcomeCode.OfferSkippedNoExecutor,
+                reason: "check-timeout-below-deadline-floor", admission: admission);
+            return new(request, null, null, Admission: admission);
+        }
+        deadline = admittedDeadline.Value;
         RemoteLaneHistory.TryGetValue((request.Lane, request.FilterHash), out var history);
         var budget = RemoteLaneTestHostBudget.Decide(timeout, history);
         request = request with { TestHostTimeoutSeconds = budget.Seconds, TestHostBudget = budget };
@@ -298,8 +354,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     _busyUntil[entry.Id] = _clock.GetUtcNow().AddSeconds(entry.LeaseSeconds);
                     Release(entry.Id, check.Name);
                 }
-                Record(request, code, reason: submission.FailureReason, attempt: Detail());
-                return new(request, null, null);
+                Record(request, code, reason: submission.FailureReason, attempt: Detail(), admission: admission);
+                return new(request, null, null, Admission: admission);
             }
             if (handle is null)
                 return await Fallback(submission.FailureReason == "transport-unavailable"
@@ -373,16 +429,21 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     inspectingTrx = false;
                     var detail = Detail();
                     var remoteDuration = ResolveRemoteDuration(detail.LastStatus, _clock.GetUtcNow() - submittedAt);
-                    Record(request, RemoteLaneOutcomeCode.Accepted, result, attempt: detail);
+                    Record(request, RemoteLaneOutcomeCode.Accepted, result, attempt: detail, admission: admission);
                     Release(entry.Id, check.Name);
                     Abandon(handle);
-                    return new(request, null, accepted, remoteDuration);
+                    return new(request, null, accepted, remoteDuration, admission);
                 }
                 // Cadence uses real time; decisions use only the injected clock.
                 await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (handle is not null) Abandon(handle, requestCancellation: true);
+            Release(entry.Id, check.Name);
+            throw;
+        }
         catch (Exception ex)
         {
             exceptionMessage = ex.Message;
@@ -401,7 +462,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             lock (_gate)
             {
                 _retired.Add(entry.Id);
-                slot = TakeHighestSlot(entry.Id);
+                slot = TakeSlot(entry.Id, check.Name);
                 _keyClaims.Remove(check.Name, out keyClaim);
             }
             if (observedResult is null && result is null && handle is IRemoteLaneQueuedJobCancellation cancellation)
@@ -427,8 +488,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId, held.Key);
                 held.Value.Dispose();
             }
-            Record(request, code, result, reason, Detail(capture));
-            return new(request, handle, null);
+            Record(request, code, result, reason, Detail(capture), admission: admission);
+            return new(request, handle, null, Admission: admission);
         }
 
         RemoteLaneHandleDiagnostics? Snapshot()
@@ -480,7 +541,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
     private void Record(RemoteLaneRequest request, RemoteLaneOutcomeCode code, RemoteLaneResult? result = null,
         string? reason = null, RemoteLaneAttemptDetail? attempt = null,
-        IReadOnlyList<RemoteExecutorOccupancyEntry>? occupancy = null)
+        IReadOnlyList<RemoteExecutorOccupancyEntry>? occupancy = null, RemoteLaneAdmissionRecord? admission = null)
     {
         var usage = RemoteLaneResourceUsage.TryRead(attempt?.LastStatus);
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
@@ -496,7 +557,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
             Phases: attempt is null ? null : RemoteLanePhaseTimings.Compute(
                 attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches),
-            TestHostBudget: request.TestHostBudget));
+            TestHostBudget: request.TestHostBudget, Admission: admission));
         try
         {
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :
@@ -515,15 +576,20 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         if (outcome.Handle is not { } handle) return;
         try
         {
-            if (handle.TryGetResult() is { } late) Record(outcome.Request, RemoteLaneOutcomeCode.LateAfterFallback, late);
+            if (handle.TryGetResult() is { } late) Record(outcome.Request, RemoteLaneOutcomeCode.LateAfterFallback, late,
+                admission: outcome.Admission);
         }
         catch (Exception) { /* Diagnostics cannot change the local verdict. */ }
         finally { Abandon(handle); }
     }
 
-    private void Abandon(IRemoteLaneHandle handle)
+    private void Abandon(IRemoteLaneHandle handle, bool requestCancellation = false)
     {
         lock (_gate) { if (!_handles.Remove(handle)) return; }
+        // Only the owner that removed the handle may cancel it; AbandonAll may already own cleanup.
+        if (requestCancellation)
+            try { (handle as IRemoteLaneQueuedJobCancellation)?.RequestQueuedJobCancellation(); }
+            catch (Exception) { /* Best effort; preserve cancellation. */ }
         try { handle.Abandon(); }
         catch (Exception) { /* Best effort; no remote fault can fail a goal. */ }
     }
@@ -562,6 +628,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 }
             }
             _claims.Clear();
+            _reservations.Clear();
             foreach (var claim in _keyClaims.Values) claim.Dispose();
             _keyClaims.Clear();
         }
