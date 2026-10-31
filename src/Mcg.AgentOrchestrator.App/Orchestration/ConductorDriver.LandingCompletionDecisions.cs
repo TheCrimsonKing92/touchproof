@@ -109,6 +109,7 @@ internal sealed partial class ConductorDriver
     {
         var escalate = landResult.Decision as LandingDecision.Escalate;
         var kind = escalate is null ? "promote"
+            : PullRequestLandingDelivery.IsDeliveredForReview(escalate.Reason) ? "delivered-for-review"
             : LandingExecutor.IsMutationHoldEscalation(escalate.Reason) ? "mutation-hold"
             : LandingExecutor.IsOwnershipHoldEscalation(escalate.Reason) ? "ownership-hold" : "escalate";
         var decision = LandingCompletionPolicy.Evaluate(ObserveLandingCompletion(acceptance) with

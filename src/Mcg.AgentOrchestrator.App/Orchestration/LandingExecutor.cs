@@ -50,7 +50,8 @@ internal static partial class LandingExecutor
         ConductorAutonomyPolicy? policy = null,
         IGoalLifecycleEventWriter? eventWriter = null,
         Func<string?>? mutationBlocker = null,
-        IClock? promotionClock = null)
+        IClock? promotionClock = null,
+        IPullRequestPublisher? pullRequestPublisher = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -62,7 +63,7 @@ internal static partial class LandingExecutor
                 $"Goal branch '{goalBranch}' does not exist. Create the workspace first with: workspace create {goalPrefix}");
         }
 
-        if (TryResolveCompletedLanding(
+        if (!PullRequestLandingDelivery.Applies(workspace) && TryResolveCompletedLanding(
                 goal,
                 workspace,
                 goalPrefix,
@@ -73,7 +74,7 @@ internal static partial class LandingExecutor
             return completedLanding;
         }
 
-        if (TryRecoverInterruptedLanding(
+        if (!PullRequestLandingDelivery.Applies(workspace) && TryRecoverInterruptedLanding(
                 kernel,
                 goal,
                 workspace,
@@ -151,7 +152,7 @@ internal static partial class LandingExecutor
             // A sibling landing path can complete after this attempt's initial journal read.
             // Re-read at the decision point so an irreversible landing is not reported as
             // a failed acceptance check.
-            if (TryResolveCompletedLanding(
+            if (!PullRequestLandingDelivery.Applies(workspace) && TryResolveCompletedLanding(
                     goal,
                     workspace,
                     goalPrefix,
@@ -233,6 +234,11 @@ internal static partial class LandingExecutor
             return new LandingResult(goal.Id.Value, goalPrefix, unknownDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {unknownReason}");
         }
+
+        if (PullRequestLandingDelivery.Applies(workspace))
+            return PullRequestLandingDelivery.Deliver(kernel, goal, workspace, evidenceCandidateSha,
+                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()),
+                channel, eventWriter, mutationBlocker, promotionClock ?? new SystemClock());
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         var integrationDiverged = previousIntegrationRevision is not null &&

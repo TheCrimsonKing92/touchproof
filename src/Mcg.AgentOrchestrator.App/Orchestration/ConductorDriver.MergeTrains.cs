@@ -26,6 +26,7 @@ internal sealed partial class ConductorDriver
     }
 
     internal bool MergeTrainsEnabled =>
+        !PullRequestLandingDelivery.Applies(_cohortWorkspace) &&
         !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
         (_runMergeTrainOverride is not null ||
          (_cohortKernel is not null &&

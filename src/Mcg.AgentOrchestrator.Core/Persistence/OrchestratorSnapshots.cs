@@ -41,7 +41,9 @@ public sealed record GoalSnapshot(
     GoalExplicitDisposition? ExplicitDisposition = null,
     GoalStatus? ParkedLifecycleStatus = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    GoalLandingBlocker? LandingBlocker = null);
+    GoalLandingBlocker? LandingBlocker = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    GoalDeliveredForReview? DeliveredForReview = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
