@@ -18,8 +18,7 @@ internal static class OwnerConsoleGateLayout
             var observed = OwnerConsoleGateConfirmation.Attach(gate.Lanes);
             var linked = observed.Select(row => row.Confirmation?.SourceName).OfType<string>().ToHashSet(StringComparer.Ordinal);
             var ordinary = observed.Where(row => Kind(row) != RowKind.Baseline && !linked.Contains(row.Name)).ToArray();
-            var counted = ordinary.Where(row => row.State != OwnerConsoleGateLaneState.Skipped &&
-                Kind(row) is RowKind.Lane or RowKind.Check).ToArray();
+            var count = OwnerConsoleGateCount.Of(gate);
             var skipped = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Skipped).ToArray();
             var failed = ordinary.Where(Failed).ToArray();
             var running = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running).ToArray();
@@ -34,7 +33,7 @@ internal static class OwnerConsoleGateLayout
                 lines.AddRange(Wrap(header + " | " + OwnerConsoleGateConfirmation.Header(failed.Where(row => !row.IsAttribution).ToArray()), width));
             else lines.Add(header);
             lines.AddRange(OwnerConsoleGateMemberLines.Lines(gate.Members));
-            lines.Add($" x {counted.Count(Failed)} failed   > {counted.Count(row => row.State == OwnerConsoleGateLaneState.Running)} running   + {counted.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed")} passed   = {counted.Count(row => row.State == OwnerConsoleGateLaneState.Cached)} cached   . {counted.Count(row => row.State == OwnerConsoleGateLaneState.Queued)} queued");
+            lines.Add($" x {count.Failed} failed   > {count.Running} running   + {count.Passed} passed   = {count.Cached} cached   . {count.Queued} queued");
             if (skipped.Length > 0) lines[^1] += $"   - {skipped.Length} skipped";
             if (gate.LanePlanAvailable == false) lines[^1] += "  (lane plan unavailable)";
             if (!gate.Failing) lines.Add(OwnerConsoleGateFormatter.ProgressLine(gate));
@@ -60,8 +59,7 @@ internal static class OwnerConsoleGateLayout
                     (passed.Count(row => Kind(row) == RowKind.Confirming), "confirmations")) + " " + toggle);
                 if (expanded) Section(null, passed);
             }
-            var unknown = ordinary.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome is not ("passed" or "failed"));
-            if (unknown > 0) lines.Add($"DONE  {unknown} without a recorded outcome");
+            if (count.Unknown > 0) lines.Add($"DONE  {count.Unknown} without a recorded outcome");
             lines.AddRange(OwnerConsoleGateWhereLine.Lines(gate, ordinary, width));
 
             void Section(string? heading, OwnerConsoleGateLane[] rows, bool sort = false, bool failureNames = false)

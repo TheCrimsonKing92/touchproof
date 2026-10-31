@@ -27,7 +27,7 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         var reset = original.SubscriptionRetryAfter!.Value;
         var sourceDispatch = original.LastDispatch!;
         var sourceVerification = Assert.Single(original.VerificationHistory);
-        Assert.True(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(sourceVerification));
+        Assert.True(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(sourceVerification));
         Assert.NotEqual(ProviderFailureKind.BudgetExhausted, sourceVerification.ProviderFailureKind);
         if (offline) scenario.Agents = [scenario.Primary with { Status = AgentStatus.Offline }, scenario.Alternate];
         if (rejectedFirst)
@@ -88,7 +88,7 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
             item.DispatchStartedAt == sourceVerification.DispatchStartedAt &&
             item.CompletedAt == sourceVerification.CompletedAt &&
             item.StandardErrorPath == sourceVerification.StandardErrorPath &&
-            DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(item));
+            SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(item));
         Assert.Contains(task.DispatchHistory, item => item.DispatchedAt == sourceDispatch.DispatchedAt &&
             item.ProviderName == sourceDispatch.ProviderName && item.AssignedAgentId == sourceDispatch.AssignedAgentId);
         var evt = Assert.Single(currentGoal.Timeline, item => item.Kind == ProgressKind.ProviderHoldSubstituted);

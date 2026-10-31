@@ -117,7 +117,7 @@ public sealed class ProviderBudgetHoldMemoTests
     {
         var all = goals.ToArray();
         foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
-            if (DispatchFailureClassifier.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName,
+            if (SubscriptionLimitEvidence.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName,
                     dispatch.ClaudeCredentialSourceDirectory).Key.Equals(bindingKey, StringComparison.OrdinalIgnoreCase)
                 && ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(all,
                     dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory, out hold))

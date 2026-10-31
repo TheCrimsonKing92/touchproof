@@ -23,6 +23,8 @@ internal static class OwnerConsolePassedGateHold
     {
         if (goal.Status != GoalStatus.Verified || goal.LandingBlocker is not { } blocker ||
             !LatestAttemptPassedFor(candidateSha, attempts)) return null;
+        if (PassedGateHoldClassifier.Classify(goal, "journal", candidateSha!) is { } classified)
+            return $"passed gate, held: {classified.CategoryText}";
         var reason = OwnerHoldReason.FirstLine(blocker.Detail) ?? OwnerConsoleHoldPhrase.For(blocker.Kind);
         return $"gate passed, landing held: {reason}, {OwnerConsoleLandingBlockerText.Age(blocker.Since, now)}";
     }

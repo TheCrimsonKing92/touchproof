@@ -792,8 +792,8 @@ public sealed class DispatchExecutionTests
     Assert.NotNull(task.LastVerification);
     Assert.Equal(ProviderFailureKind.RateLimit, task.VerificationHistory.Single().ProviderFailureKind);
     Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
-    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
-    Assert.Equal(0, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Equal(0, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
     Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out _));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
@@ -807,7 +807,7 @@ public sealed class DispatchExecutionTests
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch!.WorkerProviderKind);
     Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.LastVerification!.ProviderFailureKind);
-    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
+    Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_provider_connectivity_failure")]
@@ -2939,7 +2939,7 @@ public sealed class DispatchExecutionTests
     Assert.NotNull(task.LastVerification);
     Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
-    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
@@ -3171,7 +3171,7 @@ public sealed class DispatchExecutionTests
         verification with { CompletionVerdictRule = "unknown-failure", AcceptanceCriteriaVersionHash = "no-refined-spec", EvidenceSource = VerificationEvidenceSource.Dispatch },
         task.LastVerification);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
-    Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+    Assert.False(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(verification));
     Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
@@ -3208,7 +3208,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastVerification is null);
-    Assert.Equal(3, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.Equal(3, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(task.SubscriptionRetryAfter is not null);
     Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     Assert.Contains(goal.Timeline, evt =>
@@ -3247,7 +3247,7 @@ public sealed class DispatchExecutionTests
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 2", clock.UtcNow));
 
-    Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
 

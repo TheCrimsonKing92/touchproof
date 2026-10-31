@@ -8,7 +8,7 @@ public sealed class ProviderBudgetHoldMemo
 
     private readonly IReadOnlyCollection<Goal> _goals;
     private readonly Evaluator _evaluate;
-    private readonly Dictionary<DispatchFailureClassifier.ProviderBindingKey,
+    private readonly Dictionary<SubscriptionLimitEvidence.ProviderBindingKey,
         (bool Found, ProviderBudgetExhaustionHold Hold)> _results = new();
 
     public ProviderBudgetHoldMemo(IReadOnlyCollection<Goal> goals)
@@ -28,7 +28,7 @@ public sealed class ProviderBudgetHoldMemo
 
     public bool TryGet(string providerName, string? credentialBinding, out ProviderBudgetExhaustionHold hold)
     {
-        var key = DispatchFailureClassifier.BuildProviderBindingKey(providerName, credentialBinding);
+        var key = SubscriptionLimitEvidence.BuildProviderBindingKey(providerName, credentialBinding);
         if (!_results.TryGetValue(key, out var result))
         {
             EvaluationCount++;
