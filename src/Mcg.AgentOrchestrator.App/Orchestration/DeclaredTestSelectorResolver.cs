@@ -7,6 +7,7 @@ internal static class DeclaredTestSelectorResolver
     {
         var matches = rows.Where(row => DeclaredTestSegmentSelector.Matches(selector, row.Identity) ||
             row.Name == selector ||
+            DeclaredTestFileSelector.Matches(selector, row) ||
             // Read compatibility for persisted obligations only; never emit this form.
             row.Suite.Count > 0 && string.Join("::", row.Suite) + "." + row.Name == selector).ToArray();
         var passed = matches.Count(row => row.Outcome == "Passed");

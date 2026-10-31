@@ -121,6 +121,9 @@ internal sealed partial class ConductorDriver
                     goal,
                     candidate.TriggeringTask,
                     candidate.TriggeringTask.LastVerification!));
+        if (trigger is not null && FindingStagnationRecovery.TryObserve(goal, trigger.TriggeringTask,
+                _findingStagnationKernel ?? _conductorTickKernel, out observation))
+            return true;
         if (trigger is not null && (TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out observation) || OutsideDiffFindingRerun.TryRoute(this, goal, policy, trigger.TriggeringTask, trigger.TargetTask, trigger.DeveloperOwnedFindings, out observation) || TryDeliverGreenTesterFindingEvidence(goal, policy, trigger, out observation)))
         {
             return true;
@@ -255,6 +258,10 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
+        if (FindingStagnationRecovery.TryObserve(goal, triggeringTask,
+                _findingStagnationKernel ?? _conductorTickKernel, out observation))
+            return true;
+
         var triggerLabel = triggeringTask.RequiredRole == AgentRole.Reviewer
             ? "verdict=needs-work"
             : "WORKER_RESULT blocker";
@@ -286,6 +293,9 @@ internal sealed partial class ConductorDriver
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
             : null;
+        if (targetTask.RequiredRole == AgentRole.Developer)
+            message = FindingStagnationRetryInstruction.Append(message,
+                FindingStagnationRecovery.ReadRoutedFindings(goal, triggeringTask));
         observation = FailedGoalFindingObservation.Routed(
             FailedGoalFindingObservationKind.FindingRouteObserved,
             targetTask.Id,
@@ -375,25 +385,7 @@ internal sealed partial class ConductorDriver
     private static ReviewRetryRoute? ResolveReviewerRetryRoute(
         Goal goal,
         TaskSpec reviewerTask,
-        string blockerProse)
-    {
-        try
-        {
-            var findings = AutoReviewRetryConvergenceBriefBuilder
-                .ReadStructuredReviewFindingState(goal, reviewerTask)
-                .Where(finding => finding.State == ReviewFindingState.Open &&
-                    finding.Severity == FindingSeverity.Blocking)
-                .ToArray();
-            return reviewerTask.RequiredRole == AgentRole.Tester &&
-                (findings.Length == 0 || findings.Any(finding => finding.Category == FindingCategory.Unspecified))
-                ? null : ReviewFindingRouting.Resolve(findings, blockerProse);
-        }
-        catch (Exception ex) when (
-            ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
-        {
-            return reviewerTask.RequiredRole == AgentRole.Tester ? null : ReviewFindingRouting.Resolve([], blockerProse);
-        }
-    }
+        string blockerProse) => ReviewFindingRetryRouteResolver.Resolve(goal, reviewerTask, blockerProse);
     private static bool HasCommittedOutput(TaskSpec task) =>
         VerifyingFindingCurrency.HasCommittedOutput(task);
 

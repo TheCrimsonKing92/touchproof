@@ -272,7 +272,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
         {
             var commit = (++_reviewNumber).ToString("x40");
             FailReviewerNeedsWork(Kernel, Goal, Reviewer, "Blocking findings remain.", findings: findings,
-                reviewedCommit: commit, touchedAnchors: findings.Where(finding => finding.State == ReviewFindingState.Resolved)
+                reviewedCommit: commit, touchedAnchors: findings
                     .Select(finding => finding.Location).ToArray());
             Assert.Null(Reviewer.LastVerification!.ReviewFindingContractViolation);
             Advance();
