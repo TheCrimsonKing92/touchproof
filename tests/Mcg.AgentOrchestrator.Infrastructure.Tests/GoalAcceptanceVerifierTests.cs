@@ -1622,6 +1622,9 @@ internal static class AcceptanceManifestTestDefaults
             ?? throw new InvalidOperationException("Expected tracked acceptance manifest JSON object.");
         var engine = tracked["engine"]?.DeepClone()?.AsObject()
             ?? throw new InvalidOperationException("Tracked acceptance manifest has no engine settings.");
+        // Default fixtures exercise named hand-written partitions, often without scanner
+        // sources. Pool scenarios must supply their own engine and discovered classes.
+        engine.Remove("balancedLanePool");
         engine["enforceStructuralCoverage"] = false;
         engine["timeouts"] = new JsonObject();
         candidate["engine"] = engine;
