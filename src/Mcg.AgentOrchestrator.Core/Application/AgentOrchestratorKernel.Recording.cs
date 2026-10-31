@@ -140,7 +140,7 @@ public sealed partial class AgentOrchestratorKernel
         // An old process may finish after a retry with the identical command and directory.
         // Reject it before assigning current candidate context, recording findings or verdicts.
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
+            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) &&
             ((verification.DispatchAttemptAt is { } attemptAt && attemptAt != task.LastDispatch.DispatchedAt) ||
              (verification.DispatchStartedAt is { } startedAt && startedAt < task.LastDispatch.DispatchedAt) ||
              (task.LastProcess is { } currentProcess && verification.StandardOutputPath is not null &&
@@ -154,7 +154,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             EvidenceSource = VerificationEvidenceSource.Dispatch,
             DispatchAttemptAt = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-                DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) && verification.DispatchStartedAt is not null
+                SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) && verification.DispatchStartedAt is not null
                 ? verification.DispatchAttemptAt ?? task.LastDispatch.DispatchedAt : verification.DispatchAttemptAt,
             CompletionVerdictVerifiedSuccess = false,
             CompletionVerdictRule = null
@@ -438,7 +438,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.SetSubscriptionRetryAfter(retryAfter);
             }
 
-            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
             task.ClearLatestVerification();
             task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);

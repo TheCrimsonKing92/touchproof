@@ -545,7 +545,7 @@ private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContex
     if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task) &&
         !ProviderLimitSignals.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out _))
     {
-        var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+        var failures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
         throw new InvalidOperationException(
             $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing, then rerun subscription-dispatch with --confirm-limit-review <note> or --confirm-limit-review --text-file <path>.");
     }

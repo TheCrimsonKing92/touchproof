@@ -10,14 +10,7 @@ public static partial class DispatchFailureClassifier
             verification.ExitCode,
             DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
 
-    private static bool TryGetCliRefusalLimitLine(TaskVerificationRecord verification, out string line)
-    {
-        line = GetCliRefusalSignalLines(verification)
-            .FirstOrDefault(ProviderLimitEvidenceParser.IsCliRefusalLimitLine) ?? string.Empty;
-        return line.Length > 0;
-    }
-
-    private static bool TryGetAbsoluteResetRetryAfter(
+    internal static bool TryGetAbsoluteResetRetryAfter(
         string line,
         DateTimeOffset completedAt,
         out DateTimeOffset retryAfter)
@@ -88,7 +81,7 @@ public static partial class DispatchFailureClassifier
     private static string BuildProviderAuthenticationEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
         var hasLine = ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var line);
-        var dispatch = FindDispatchForVerification(task, verification) ?? task.LastDispatch;
+        var dispatch = SubscriptionLimitEvidence.FindDispatchForVerification(task, verification) ?? task.LastDispatch;
         var remediation = "codex login / provider re-auth";
         if (dispatch is not null &&
             dispatch.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli) &&

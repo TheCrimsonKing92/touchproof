@@ -855,7 +855,7 @@ public sealed partial class BackgroundDispatchRunner
     {
         var task = GetTaskAfterReceiptlessUsage(kernel, goalId, taskId, outcome);
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
+            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) &&
             (outcome.ProcessRecord.StartedAt < task.LastDispatch!.DispatchedAt ||
              (task.LastProcess is { } currentProcess &&
               (currentProcess.StartedAt != outcome.ProcessRecord.StartedAt ||
@@ -1193,14 +1193,14 @@ public sealed partial class BackgroundDispatchRunner
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
+            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task) &&
             dispatchAttempt?.DispatchedAt != task.LastDispatch!.DispatchedAt)
             return new DispatchRefreshOutcome(processRecord, null);
         DateTimeOffset? contextReceiptAttemptAt = dispatchAttempt?.ContextPackageReceipt is null
             ? null
             : dispatchAttempt.DispatchedAt;
         var providerUsage = ResolveDispatchProviderUsage(dispatchAttempt, processRecord.StandardOutputPath);
-        if (task.RequiredRole == AgentRole.Tester && DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task))
+        if (task.RequiredRole == AgentRole.Tester && SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task))
         {
             WorkerResultSubmissionIngestion.TryIngest(processRecord.WorkingDirectory, goalId, task,
                 dispatchAttempt!.DispatchedAt, processRecord.StandardOutputPath, out var submissionDiagnostic);
@@ -1241,7 +1241,7 @@ public sealed partial class BackgroundDispatchRunner
         var humanInputDirective = PlannerOutputContract.ParseEvidenceRequests(authoritativeStandardOutput, task.RequiredRole, fullStandardOutput.Content is not null);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var requiresTerminalContract = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task);
+            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task);
         var terminalContract = requiresTerminalContract
             ? WorkerResultBlockers.AssessTerminalVerificationOutput(task.RequiredRole,
                 fullStandardOutput.Content is null ? null : authoritativeStandardOutput)
@@ -2050,7 +2050,7 @@ public sealed partial class BackgroundDispatchRunner
         var standardOutput = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
         var standardError = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
-            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task))
+            SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task))
         {
             var complete = _processLogReader.ReadComplete(processRecord.StandardOutputPath);
             var capturedOutput = complete.Content is null ? null : ProcessLogReader.NormalizeCompleteDecisionText(complete.Content);

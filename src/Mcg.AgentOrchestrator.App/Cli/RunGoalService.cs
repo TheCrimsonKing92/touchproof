@@ -393,13 +393,13 @@ internal static class RunGoalService
         {
             evidence = new AutomaticFailoverEvidence(
                 $"recoverable subscription usage limit retry deferral until {retryAfter:u}",
-                DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+                SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
             return true;
         }
 
-        if (DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task))
+        if (SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task))
         {
-            var count = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            var count = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             evidence = new AutomaticFailoverEvidence(
                 $"recoverable subscription usage limit evidence ({count} failure(s))",
                 count);

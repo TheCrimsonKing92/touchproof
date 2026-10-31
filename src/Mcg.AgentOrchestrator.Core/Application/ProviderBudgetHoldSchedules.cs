@@ -130,7 +130,7 @@ public static class ProviderBudgetHoldSchedules
         var dispatches = tasks.SelectMany(task => task.DispatchHistory.Where(dispatch => IsBinding(dispatch, hold.BindingKey))
             .Select(dispatch => (Task: task, Dispatch: dispatch))).ToArray();
         var observations = tasks.SelectMany(task => task.VerificationHistory.Select(verification =>
-            (Task: task, Verification: verification, Dispatch: DispatchFailureClassifier.FindDispatchForVerification(task, verification))))
+            (Task: task, Verification: verification, Dispatch: SubscriptionLimitEvidence.FindDispatchForVerification(task, verification))))
             .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, hold.BindingKey)).ToArray();
         var exhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted)
             .MaxBy(item => item.Verification.CompletedAt).Verification
@@ -202,5 +202,5 @@ public static class ProviderBudgetHoldSchedules
 
     private static bool SameBinding(string left, string right) => left.Equals(right, StringComparison.OrdinalIgnoreCase);
     private static bool IsBinding(TaskDispatchRecord dispatch, string bindingKey) => SameBinding(
-        DispatchFailureClassifier.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory).Key, bindingKey);
+        SubscriptionLimitEvidence.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory).Key, bindingKey);
 }

@@ -489,7 +489,7 @@ public sealed partial class AgentOrchestratorKernel
                 BuildDirtyDispatchRecoveryMessage(recovery),
             TaskEvidenceKind.FailedVerification => $"Latest verification failed with exit {task.LastVerification!.ExitCode}: {task.LastVerification.Command}",
             TaskEvidenceKind.PassedVerification => $"Latest verification passed: {task.LastVerification!.Command}",
-            _ when DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task) => "Recoverable subscription usage limit; task is ready to retry later.",
+            _ when SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task) => "Recoverable subscription usage limit; task is ready to retry later.",
             TaskEvidenceKind.RunningProcess => $"Process running pid={task.LastProcess!.ProcessId}: {task.LastProcess.Command}",
             TaskEvidenceKind.CompletedProcess => $"Process completed exit={task.LastProcess!.ExitCode?.ToString() ?? "n/a"}: {task.LastProcess.Command}",
             TaskEvidenceKind.Process => $"Process recorded: {task.LastProcess!.Command}",
