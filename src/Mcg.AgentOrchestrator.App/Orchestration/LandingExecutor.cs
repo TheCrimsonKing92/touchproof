@@ -12,7 +12,8 @@ public sealed record LandingResult(
     bool MainAdvanced,
     string Message,
     string? MergeCommitSha = null,
-    IReadOnlyList<string>? ChangedFiles = null);
+    IReadOnlyList<string>? ChangedFiles = null,
+    bool StateChanged = false);
 
 internal enum AcceptanceCohortLandingOutcome
 {

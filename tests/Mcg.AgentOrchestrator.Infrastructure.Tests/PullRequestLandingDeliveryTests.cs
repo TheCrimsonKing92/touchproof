@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -7,6 +8,65 @@ using Xunit;
 [Collection(TestCollections.LandingGitRunner)]
 public sealed class PullRequestLandingDeliveryTests
 {
+    [Fact]
+    public void Cli_land_requests_save_and_reloaded_delivery_suppresses_forge_calls()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        repository.SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
+        Assert.Null(repository.LoadAsync().GetAwaiter().GetResult().GetGoal(fixture.Goal.Id).DeliveredForReview);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, PostLandingCanaryFactory.CreateCircuit(fixture.Workspace).Read().Health);
+        var context = CliContext(fixture, fixture.Kernel);
+
+        var shouldSave = CliCommandHandlers.Execute(["land", fixture.Goal.Id.Value[..8]], context);
+        // This is the handler contract consumed by CliPersistentStateRunner.
+        if (shouldSave) repository.SaveAsync(context.Kernel).GetAwaiter().GetResult();
+
+        Assert.True(shouldSave);
+        var restored = repository.LoadAsync().GetAwaiter().GetResult();
+        var goal = restored.GetGoal(fixture.Goal.Id);
+        var delivery = Assert.IsType<GoalDeliveredForReview>(goal.DeliveredForReview);
+        Assert.Equal(fixture.Candidate, delivery.PushedCommit);
+        Assert.Equal("delivered for review: " + PullRequestLandingTestFixture.Url, goal.CurrentHold!.Blocker);
+        Assert.Contains(goal.Timeline, item => item.Message == goal.CurrentHold.Blocker);
+        Assert.Equal(1, fixture.Forge.Creates);
+        var calls = fixture.Forge.Calls.Count;
+
+        Assert.False(CliCommandHandlers.Execute(["land", goal.Id.Value[..8]], CliContext(fixture, restored)));
+
+        Assert.Equal(calls, fixture.Forge.Calls.Count);
+        Assert.Equal(fixture.Main, LandingExecutorTests.ReadGit(fixture.Repository, "rev-parse", "main"));
+        Assert.Null(repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public void Cli_land_failure_requests_save_of_pushed_commit_provenance()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        fixture.Forge.Failure = "lookup";
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        repository.SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
+        Assert.Equal(AcceptanceEngineHealth.Healthy, PostLandingCanaryFactory.CreateCircuit(fixture.Workspace).Read().Health);
+        var context = CliContext(fixture, fixture.Kernel);
+
+        var shouldSave = CliCommandHandlers.Execute(["land", fixture.Goal.Id.Value[..8]], context);
+        if (shouldSave) repository.SaveAsync(context.Kernel).GetAwaiter().GetResult();
+
+        Assert.True(shouldSave);
+        Assert.Single(fixture.Forge.Calls.Where(call => call.Command == "git" && call.Arguments[0] == "push"));
+        var goal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(fixture.Goal.Id);
+        Assert.Null(goal.DeliveredForReview);
+        Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains($"pushed branch {GoalWorktreeLayout.BranchName(goal.Id)} commit {fixture.Candidate}"));
+    }
+
+    private static CliExecutionContext CliContext(PullRequestLandingTestFixture fixture, AgentOrchestratorKernel kernel) =>
+        new(kernel, fixture.Workspace, new InMemoryModelProviderRegistry([]), AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(), kernel.GetGoal(fixture.Goal.Id))
+        {
+            PullRequestPublisher = new GitHubPullRequestPublisher(fixture.Forge)
+        };
+
     [Fact]
     public void Solo_delivery_publishes_gate_candidate_and_holds_without_promoting_or_writing_refs()
     {

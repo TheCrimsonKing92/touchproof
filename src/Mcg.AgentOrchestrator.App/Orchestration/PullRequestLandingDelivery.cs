@@ -14,13 +14,14 @@ internal static class PullRequestLandingDelivery
         string candidate, IPullRequestPublisher publisher, IOperatorChannel? channel,
         IGoalLifecycleEventWriter? eventWriter, Func<string?>? mutationBlocker, IClock clock)
     {
-        LandingResult Result(string reason) => new(goal.Id.Value, goal.Id.Value[..8],
-            new LandingDecision.Escalate(reason), LandingExecutor.IntegrationBranchName, false, reason);
+        LandingResult Result(string reason, bool stateChanged = false) => new(goal.Id.Value, goal.Id.Value[..8],
+            new LandingDecision.Escalate(reason), LandingExecutor.IntegrationBranchName, false, reason,
+            StateChanged: stateChanged);
         LandingResult Fail(string reason)
         {
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, LandingExecutor.IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, LandingExecutor.IntegrationBranchName);
-            return Result(reason);
+            return Result(reason, stateChanged: true);
         }
 
         if (goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
@@ -73,6 +74,6 @@ internal static class PullRequestLandingDelivery
             // The remote publication can be reconciled on the next tick; do not escalate or roll it back.
             return Result($"landing mutation blocked: delivered-for-review record write failed ({exception.GetType().Name})");
         }
-        return Result($"delivered for review: {publication.Url}");
+        return Result($"delivered for review: {publication.Url}", stateChanged: true);
     }
 }

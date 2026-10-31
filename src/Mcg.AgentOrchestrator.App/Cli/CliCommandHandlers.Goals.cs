@@ -1362,7 +1362,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace,
                 context.Channel,
                 eventWriter: context.EventWriter,
-                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace),
+                pullRequestPublisher: context.PullRequestPublisher);
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");
@@ -1380,7 +1381,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         landResult.MergeCommitSha),
                     Console.WriteLine);
             }
-            return landResult.MainAdvanced;
+            return landResult.MainAdvanced || landResult.StateChanged;
 
         case "goals-prune":
             return HandleGoalsPrune(context, parts);
