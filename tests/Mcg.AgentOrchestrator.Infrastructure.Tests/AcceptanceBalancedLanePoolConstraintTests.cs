@@ -58,10 +58,11 @@ public sealed class AcceptanceBalancedLanePoolConstraintTests
                 .SelectMany(pair => pair).ToArray();
             selectedWithoutTraitExclusions.AddRange(MtpFilterArgumentSemantics.Select(withoutTraits, hostMethods));
         }
-        // Custom Fact attributes can reach the residual instead of the scanner's class list.
-        // Both methods must be selected exactly once when only the trait guard is removed.
+        // Scanner-missed custom Facts can match both a constrained lane and the residual.
+        // Removing only the trait guards must expose both methods, regardless of that overlap.
         Assert.Equal(hostMethods.OrderBy(test => test.TypeName, StringComparer.Ordinal),
-            selectedWithoutTraitExclusions.OrderBy(test => test.TypeName, StringComparer.Ordinal));
+            selectedWithoutTraitExclusions.DistinctBy(test => (test.TypeName, test.MethodName))
+                .OrderBy(test => test.TypeName, StringComparer.Ordinal));
         var generated = expansion.Lanes.Where(lane => expansion.Layout!.Lanes.Any(item => item.Name == lane.Name) ||
             lane.Name == settings.BalancedLanePool!.ResidualLaneName).ToArray();
         Assert.Equal(expansion.Layout!.Lanes.Count + 1, generated.Length);
