@@ -72,8 +72,7 @@ internal sealed partial class ConductorBatchLoop
     private static bool HasRunningDispatch(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals.Any(goal =>
             (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
-            goal.Tasks.Any(task => task.LastProcess is { IsRunning: true } ||
-                task.CompletionBuildEvidence is { IsPending: true }));
+            GoalLiveDispatchPredicate.HasLiveDispatch(goal));
 
     private static int CountRunningDispatches(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals

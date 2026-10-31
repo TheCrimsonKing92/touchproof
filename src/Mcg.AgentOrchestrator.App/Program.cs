@@ -301,6 +301,9 @@ if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArg
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 
+if (CliGoalBranchCommitCommand.IsCommand(startupArgs))
+    return ExitCompletedStartupCommand(CliGoalBranchCommitCommand.Run(startupArgs, workspace));
+
 if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
 {
     CliGateStatusJsonQueryCommand.Execute(workspace: workspace);
