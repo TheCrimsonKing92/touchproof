@@ -3,7 +3,7 @@ using System.Diagnostics;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Runs read-only forge queries directly with redirected input and a bounded lifetime.</summary>
+/// <summary>Runs forge commands directly with redirected input and a bounded lifetime.</summary>
 public sealed class ForgeProcessRunner : IForgeProcessRunner
 {
     public ForgeProcessResult Run(string fileName, IReadOnlyList<string> arguments, string workingDirectory,

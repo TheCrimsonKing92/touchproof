@@ -181,6 +181,51 @@ public sealed class PullRequestLandingDeliveryTests
         Assert.Single(fixture.Forge.Calls.Where(call => call.Command == "git" && call.Arguments[0] == "push"));
     }
 
+    [Fact]
+    public void Record_failure_preserves_lease_for_changed_candidate_after_reload()
+    {
+        using var fixture = new PullRequestLandingTestFixture();
+        fixture.Kernel.SetEventWriter(new FailDeliveryEventWriter());
+        var context = CliContext(fixture, fixture.Kernel);
+
+        var shouldSave = CliCommandHandlers.Execute(["land", fixture.Goal.Id.Value[..8]], context);
+
+        Assert.True(shouldSave);
+        Assert.Null(fixture.Goal.DeliveredForReview);
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        repository.SaveAsync(context.Kernel).GetAwaiter().GetResult();
+        var restored = repository.LoadAsync().GetAwaiter().GetResult();
+        var goal = restored.GetGoal(fixture.Goal.Id);
+        Assert.Null(goal.DeliveredForReview);
+        Assert.DoesNotContain(goal.Timeline, item => item.Message.StartsWith("delivered for review:", StringComparison.Ordinal));
+
+        // Re-gate an actual new commit before retrying the interrupted local record write.
+        var branch = GoalWorktreeLayout.BranchName(goal.Id);
+        var worktree = GoalWorktrees.WorktreePath(fixture.Repository, goal.Id);
+        LandingExecutorTests.AppendCommit(worktree, "src/delivery.txt", "updated candidate");
+        var candidate = LandingExecutorTests.ReadGit(worktree, "rev-parse", "HEAD");
+        Assert.NotEqual(fixture.Candidate, candidate);
+        var metadataPath = Path.Combine(fixture.Workspace.OrchestratorDirectory,
+            "acceptance-gate-attempts", goal.Id.Value, PullRequestLandingTestFixture.Attempt + ".attempt.json");
+        File.WriteAllText(metadataPath, File.ReadAllText(metadataPath).Replace(fixture.Candidate, candidate, StringComparison.Ordinal));
+        GoalOperationJournal.AcceptancePassed(fixture.Repository, goal, "conductor:acceptance", candidate,
+            fixture.Main, "passing acceptance for the updated candidate", DateTimeOffset.UtcNow);
+
+        var result = LandingExecutor.Execute(restored, goal, fixture.Workspace,
+            pullRequestPublisher: new GitHubPullRequestPublisher(fixture.Forge));
+
+        Assert.Equal("delivered for review: " + PullRequestLandingTestFixture.Url, result.Message);
+        Assert.Equal(candidate, goal.DeliveredForReview!.PushedCommit);
+        var pushes = fixture.Forge.Calls.Where(call => call.Command == "git" && call.Arguments[0] == "push").ToArray();
+        Assert.Equal(2, pushes.Length);
+        Assert.Contains($"--force-with-lease=refs/heads/{branch}:{fixture.Candidate}", pushes[1].Arguments);
+        Assert.Contains($"{candidate}:refs/heads/{branch}", pushes[1].Arguments);
+        Assert.Equal(1, fixture.Forge.Creates);
+        Assert.Equal(fixture.Main, LandingExecutorTests.ReadGit(fixture.Repository, "rev-parse", "main"));
+        Assert.Null(repository.ReadPromotionFactAsync(goal.Id).GetAwaiter().GetResult());
+    }
+
     private sealed class FailDeliveryEventWriter : IGoalLifecycleEventWriter
     {
         private bool _failed;
