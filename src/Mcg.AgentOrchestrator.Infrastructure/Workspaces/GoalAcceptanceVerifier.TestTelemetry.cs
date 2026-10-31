@@ -131,7 +131,7 @@ internal static class GoalAcceptanceVerifierTestTelemetry
         }
 
         var missing = telemetry.Paths
-            .Where(path => GoalAcceptanceVerifier.TryGetFileLength(path) <= 0)
+            .Where(path => AcceptanceBestEffortFileOperations.TryGetFileLength(path) <= 0)
             .ToArray();
         if (missing.Length == 0)
         {

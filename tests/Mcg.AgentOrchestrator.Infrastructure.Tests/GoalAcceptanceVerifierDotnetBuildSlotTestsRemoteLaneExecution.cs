@@ -309,7 +309,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneExecutio
         try
         {
             await Event(handle.Polled.Task, "remote polled before timeout");
-            scenario.Clock.Advance(TimeSpan.FromSeconds(121));
+            scenario.Clock.Advance(TimeSpan.FromSeconds(301));
             var result = await Event(gate, "gate completed after remote timeout");
             Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
             Assert.Contains(0, scenario.LocalStarts);
@@ -443,7 +443,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneExecutio
               },
               "checks": [{
                 "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 2
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 5
               }],
               "forbiddenChangedPathGlobs": []
             }

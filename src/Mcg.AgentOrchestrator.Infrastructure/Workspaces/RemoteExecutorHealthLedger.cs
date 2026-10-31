@@ -38,7 +38,8 @@ internal sealed record RemoteExecutorHealthRecord(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneTestHostBudgetDecision? TestHostBudget = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? LocalFailingTests = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Agreement = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AgreementReason = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AgreementReason = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneAdmissionRecord? Admission = null);
 
 internal static class RemoteExecutorHealthLedger
 {
@@ -62,4 +63,10 @@ internal static class RemoteExecutorHealthLedger
     internal static IReadOnlyList<RemoteExecutorHealthRecord> ReadAll(string path) =>
         SharedJsonlFile.ReadLines(path).Select(line => JsonSerializer.Deserialize<RemoteExecutorHealthRecord>(line, JsonOptions))
             .OfType<RemoteExecutorHealthRecord>().ToArray();
+
+    internal static RemoteExecutorHealthRecord? TryParse(string line)
+    {
+        try { return JsonSerializer.Deserialize<RemoteExecutorHealthRecord>(line, JsonOptions); }
+        catch (JsonException) { return null; }
+    }
 }

@@ -265,7 +265,7 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             GateReadyMergeStatus.Clean.ToString(),
              GateReadyMergeReason.NoConflictsDetected.ToString());
 
-    private protected sealed class ModeledIntegrityLabeler(bool failLowSet = false) : IWorkerIntegrityLabeler
+    private protected sealed class ModeledIntegrityLabeler(bool failMediumSet = false) : IWorkerIntegrityLabeler
     {
         private readonly Dictionary<string, IntegrityLabelState> _states =
             new(StringComparer.OrdinalIgnoreCase);
@@ -288,7 +288,7 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Operations.Add(("set", normalized));
             SetCalls.Add((normalized, level, recursive));
             var low = level.EndsWith('L');
-            if (low && failLowSet)
+            if (!low && failMediumSet)
             {
                 return false;
             }

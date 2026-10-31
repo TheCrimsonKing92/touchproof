@@ -319,7 +319,7 @@ public sealed class PartialNegativeControlResumeTests
 
     private sealed class Labeler : IWorkerIntegrityLabeler
     {
-        public IntegrityLabelState Query(string path) => new(true, true, true);
+        public IntegrityLabelState Query(string path) => new(Exists: true, Low: false, Inheritable: true, Medium: true);
         public bool SetIntegrity(string path, string level, bool recursive) => true;
     }
 }

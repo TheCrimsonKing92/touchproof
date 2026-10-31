@@ -39,7 +39,7 @@ public sealed class SandboxCommitBlockedFailureTests
             WorkerResultStdout,
             "fatal: Unable to create '.../.git/worktrees/abc/index.lock': Permission denied");
 
-        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.True(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_for_blocked_on_committing_phrase")]
@@ -47,7 +47,7 @@ public sealed class SandboxCommitBlockedFailureTests
     {
         var verification = Verification(1, WorkerResultStdout, "external ACL prevented commit");
 
-        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.True(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_for_low_integrity_1312_logon_session_evidence")]
@@ -58,7 +58,7 @@ public sealed class SandboxCommitBlockedFailureTests
             CompletedWorkerResultStdout,
             "dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_for_low_integrity_git_1312_evidence")]
@@ -69,7 +69,7 @@ public sealed class SandboxCommitBlockedFailureTests
             CompletedWorkerResultStdout,
             "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_when_1312_and_positive_commit_block_evidence_overlap")]
@@ -80,7 +80,7 @@ public sealed class SandboxCommitBlockedFailureTests
             WorkerResultStdout,
             "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
 
-        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.True(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_reads_log_paths_for_evidence_outside_retained_excerpt")]
@@ -114,7 +114,7 @@ public sealed class SandboxCommitBlockedFailureTests
 
             Assert.DoesNotContain("WORKER_RESULT", verification.StandardOutput, StringComparison.Ordinal);
             Assert.DoesNotContain("index.lock", verification.StandardError, StringComparison.Ordinal);
-            Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+            Assert.True(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
         }
         finally
         {
@@ -130,7 +130,7 @@ public sealed class SandboxCommitBlockedFailureTests
     {
         var verification = Verification(0, WorkerResultStdout, "index.lock: Permission denied");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_without_useful_work")]
@@ -142,7 +142,7 @@ public sealed class SandboxCommitBlockedFailureTests
             "Starting up...",
             "fatal: Unable to create '.git/index.lock': Permission denied");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_for_real_failure_without_commit_block")]
@@ -155,7 +155,7 @@ public sealed class SandboxCommitBlockedFailureTests
             "WORKER_RESULT:\nfiles: src/Foo.cs\nmodel_fit: adequate\nEND_WORKER_RESULT",
             "error CS0103: The name 'Foo' does not exist in the current context");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Theory(DisplayName = "IsSandboxCommitBlockedFailure_false_for_read_only_and_unknown_roles")]
@@ -170,7 +170,7 @@ public sealed class SandboxCommitBlockedFailureTests
             WorkerResultStdout,
             "fatal: Unable to create '.../.git/worktrees/abc/index.lock': Permission denied");
 
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(role), verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(Task(role), verification));
         Assert.NotEqual(
             DispatchOutcomeKind.SandboxCommitBlocked,
             DispatchFailureClassifier.Classify(Task(role), verification).Kind);
@@ -188,7 +188,7 @@ public sealed class SandboxCommitBlockedFailureTests
         var task = TaskWithRecordedDispatch(role);
 
         Assert.NotNull(task.LastDispatch);
-        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(task, verification));
+        Assert.True(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(task, verification));
         Assert.Equal(
             DispatchOutcomeKind.SandboxCommitBlocked,
             DispatchFailureClassifier.Classify(task, verification).Kind);
@@ -207,7 +207,7 @@ public sealed class SandboxCommitBlockedFailureTests
         var task = TaskWithRecordedDispatch(role);
 
         Assert.NotNull(task.LastDispatch);
-        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(task, verification));
+        Assert.False(SandboxCommitBlockedEvidence.IsSandboxCommitBlockedFailure(task, verification));
         Assert.NotEqual(
             DispatchOutcomeKind.SandboxCommitBlocked,
             DispatchFailureClassifier.Classify(task, verification).Kind);

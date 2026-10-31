@@ -175,7 +175,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotCla
                         firewallExecutablePathTemplate = "bin/{projectName}/{configuration}/{projectName}.exe",
                         arguments = new[] { "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}" } } }
                 },
-                checks = new[] { new { name = "infrastructure tests", type = "dotnet-test", runner = "mtp", project = Project, timeoutMinutes = 2 } },
+                checks = new[] { new { name = "infrastructure tests", type = "dotnet-test", runner = "mtp", project = Project, timeoutMinutes = 5 } },
                 forbiddenChangedPathGlobs = Array.Empty<string>()
             }));
             var source = Path.Combine(Root, Path.GetDirectoryName(Project)!);

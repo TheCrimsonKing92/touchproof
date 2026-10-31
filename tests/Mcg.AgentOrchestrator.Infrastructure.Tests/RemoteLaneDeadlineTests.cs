@@ -10,9 +10,9 @@ public sealed class RemoteLaneDeadlineTests
 
     [Theory]
     [InlineData(2000, 2400)]
-    [InlineData(600, 900)]
+    [InlineData(600, 1200)]
     [InlineData(100, 300)]
-    [InlineData(600.125, 900.1875)]
+    [InlineData(600.125, 1200.25)]
     public void Resolve_MeasuredEstimate_UsesCapMultiplierAndFloor(double remote, double expected)
     {
         Assert.Equal(TimeSpan.FromSeconds(expected), RemoteLaneDeadline.Resolve(Decision(remote), CheckTimeout));
@@ -21,8 +21,8 @@ public sealed class RemoteLaneDeadlineTests
     [Theory]
     [InlineData(0, 0, 2400)]
     [InlineData(2, 2, 2400)]
-    [InlineData(3, 2, 900)]
-    [InlineData(2, 3, 900)]
+    [InlineData(3, 2, 1200)]
+    [InlineData(2, 3, 1200)]
     public void Resolve_EitherSampleThresholdPermitsShortening(int local, int remote, double expected)
     {
         Assert.Equal(TimeSpan.FromSeconds(expected),
@@ -82,7 +82,7 @@ public sealed class RemoteLaneDeadlineTests
             Assert.Null(outcome.Accepted);
             Assert.Equal(RemoteLaneOutcomeCode.LaneTimeout,
                 Assert.Single(RemoteExecutorHealthLedger.ReadAll(fixture.Ledger)).Outcome);
-            Assert.Equal(TimeSpan.FromSeconds(901), fixture.Clock.GetUtcNow() - started);
+            Assert.Equal(TimeSpan.FromSeconds(1201), fixture.Clock.GetUtcNow() - started);
             Assert.True(fixture.Clock.GetUtcNow() - started < CheckTimeout);
             Assert.Same(handle, outcome.Handle);
             Assert.False(handle.IsAbandoned);
@@ -104,15 +104,15 @@ public sealed class RemoteLaneDeadlineTests
         var deadline = RemoteLaneDeadline.Resolve(Decision(600), CheckTimeout);
         await fixture.RunAsync(deadline, CancellationToken.None);
         var request = Assert.Single(fixture.Executor.Requests);
-        Assert.Equal(TimeSpan.FromSeconds(900), deadline);
+        Assert.Equal(TimeSpan.FromSeconds(1200), deadline);
         Assert.Equal(RemoteLaneTestHostBudget.Resolve(CheckTimeout), request.TestHostTimeoutSeconds);
         Assert.Equal(2100, request.TestHostTimeoutSeconds);
         Assert.NotEqual(RemoteLaneTestHostBudget.Resolve(deadline), request.TestHostTimeoutSeconds);
     }
 
     [Theory]
-    [InlineData(600, "900")]
-    [InlineData(600.125, "900.1875")]
+    [InlineData(600, "1200")]
+    [InlineData(600.125, "1200.25")]
     public async Task PolicyLine_ReportsSeparateDeadlineAndCheckTimeout(double remote, string deadline)
     {
         using var scenario = new GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrumentation.Scenario(1);

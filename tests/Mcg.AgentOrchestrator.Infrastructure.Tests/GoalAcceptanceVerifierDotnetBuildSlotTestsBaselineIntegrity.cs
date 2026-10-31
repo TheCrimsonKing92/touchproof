@@ -5,17 +5,18 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsBaselineIntegrity : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Fact]
-    public async Task BaselineWorktreeIsLabeledLowInheritableBeforeBaselineChecksRun()
+    public async Task BaselineWorktreeIsLabeledMediumInheritableBeforeBaselineChecksRun()
     {
         var labeler = new RecordingLabeler(setResult: true);
         var (result, baselineRunnerCalls, baselineTestsBeforeLabel) = await RunProbeAsync(labeler);
 
-        Assert.Single(labeler.Calls);
+        Assert.NotEmpty(labeler.Calls);
         var call = labeler.Calls[0];
         Assert.StartsWith(Path.Combine(Path.GetTempPath(), "mcg-focused-evidence-baselines"),
             call.Path, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(WorkerSandboxPreparer.LowInheritableLevel, call.Level);
-        Assert.True(call.Recursive);
+        Assert.Equal(AcceptanceGateIntegrityNormalizer.MediumInheritableLevel, call.Level);
+        Assert.False(call.Recursive);
+        Assert.DoesNotContain(labeler.Calls, entry => entry.Level.EndsWith('L'));
         Assert.True(call.GitMetadataExisted);
         Assert.True(baselineRunnerCalls > 0);
         Assert.False(baselineTestsBeforeLabel);
@@ -43,15 +44,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsBaselineIntegrity 
     }
 
     [Xunit.Fact]
-    public async Task BaselineAlreadyLowInheritableCountsAsLabeled()
+    public async Task BaselineAlreadyLowInheritableDoesNotHideLabelingFailure()
     {
         var labeler = new RecordingLabeler(setResult: false, alreadyLow: true);
         var (result, baselineRunnerCalls, baselineTestsBeforeLabel) = await RunProbeAsync(labeler);
 
         Assert.Single(labeler.Calls);
-        Assert.True(baselineRunnerCalls > 0);
+        Assert.Equal(0, baselineRunnerCalls);
         Assert.False(baselineTestsBeforeLabel);
-        Assert.Equal(FindingEvidenceArmDisposition.Green,
+        Assert.Equal(FindingEvidenceArmDisposition.Inconclusive,
             Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline).Disposition);
     }
 
@@ -106,7 +107,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsBaselineIntegrity 
         internal List<(string Path, string Level, bool Recursive, bool GitMetadataExisted)> Calls { get; } = [];
 
         public IntegrityLabelState Query(string path) =>
-            new(Exists: true, Low: alreadyLow, Inheritable: alreadyLow);
+            new(Exists: true, Low: alreadyLow && !setResult, Inheritable: true, Medium: setResult);
 
         public bool SetIntegrity(string path, string level, bool recursive)
         {
