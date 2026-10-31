@@ -51,7 +51,7 @@ public sealed class EnvironmentHoldSteeringTests(ITestOutputHelper output) : Con
         }
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
@@ -111,7 +111,10 @@ public sealed class EnvironmentHoldSteeringTests(ITestOutputHelper output) : Con
             var retainedHold = Assert.IsType<GoalHoldState>(goal.CurrentHold);
             Assert.Equal(initialHold.Identity, retainedHold.Identity);
             Assert.Equal(initialHold.StartedAt, retainedHold.StartedAt);
-            Assert.Equal(decisions, goal.Timeline.Count);
+            // The loop records its initial held disposition once; subsequent ticks must stay quiet.
+            var disposition = Assert.Single(goal.Timeline.Skip(decisions));
+            Assert.Equal(ProgressKind.GoalPolicyDecision, disposition.Kind);
+            Assert.StartsWith("Batch loop tick 1: held at Verified", disposition.Message);
             Assert.Single(events, kind => kind == "environment-hold");
             Assert.DoesNotContain("environment-hold-cleared", events);
             Assert.Empty(store.Receipts);
