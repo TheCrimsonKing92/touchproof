@@ -260,7 +260,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
                 },
                 checks = new[]
                 {
-                    new { name = "infrastructure tests", type = "dotnet-test", runner = "mtp", project = $"tests/{Project}/{Project}.csproj", timeoutMinutes = 2 }
+                    new { name = "infrastructure tests", type = "dotnet-test", runner = "mtp", project = $"tests/{Project}/{Project}.csproj", timeoutMinutes = 5 }
                 },
                 forbiddenChangedPathGlobs = Array.Empty<string>()
             }));

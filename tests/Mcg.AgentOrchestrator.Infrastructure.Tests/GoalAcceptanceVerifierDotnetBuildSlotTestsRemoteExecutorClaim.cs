@@ -142,6 +142,35 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClai
         finally { await cancellation.CancelAsync(); await Drain(gate); }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task CancellationCleanup_HasOneOwnerAndReleasesReservation(bool abandonFirst)
+    {
+        using var fixture = new RemoteLaneCostTestFixture(costBudget: 2);
+        using var stop = new CancellationTokenSource();
+        var handle = new CancelHandle(fixture.Clock.GetUtcNow())
+        {
+            OnPolled = () =>
+            {
+                if (abandonFirst) fixture.Coordinator.AbandonAll();
+                stop.Cancel();
+            }
+        };
+        fixture.Executor.Submit = (_, _) => Task.FromResult(new RemoteLaneSubmission(handle));
+        Assert.NotNull(await fixture.Claim("A"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Event(fixture.Run("A", stop.Token), "cancelled lane cleanup"));
+
+        Assert.Equal(1, handle.CancelRequestsAtAbandon);
+        Assert.Equal(1, handle.CancelRequests);
+        Assert.NotNull(await fixture.Claim("B"));
+        Assert.Null(await fixture.Claim("C"));
+        fixture.Coordinator.AbandonAll();
+        Assert.Equal(1, handle.CancelRequests);
+    }
+
     private Scenario CreateScenario()
     {
         SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
@@ -183,11 +212,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClai
         private int _cancelRequests;
         internal int CancelRequests => Volatile.Read(ref _cancelRequests);
         internal int CancelRequestsAtAbandon { get; private set; }
+        internal Action? OnPolled { get; init; }
         internal TaskCompletionSource Polled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Abandoned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public DateTimeOffset? NewestHeartbeat => heartbeat;
         internal void Publish(RemoteLaneResult result) => Volatile.Write(ref _result, result);
-        public RemoteLaneResult? TryGetResult() { Polled.TrySetResult(); return Volatile.Read(ref _result); }
+        public RemoteLaneResult? TryGetResult() { Polled.TrySetResult(); OnPolled?.Invoke(); return Volatile.Read(ref _result); }
         public void RequestQueuedJobCancellation() => Interlocked.Increment(ref _cancelRequests);
         public void Abandon() { CancelRequestsAtAbandon = CancelRequests; Abandoned.TrySetResult(); }
     }
@@ -221,7 +251,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClai
                   "checks":[{
                     "name":"infrastructure tests","type":"dotnet-test","runner":"mtp",
                     "project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-                    "timeoutMinutes":2
+                    "timeoutMinutes":5
                   }],
                   "forbiddenChangedPathGlobs":[]
                 }

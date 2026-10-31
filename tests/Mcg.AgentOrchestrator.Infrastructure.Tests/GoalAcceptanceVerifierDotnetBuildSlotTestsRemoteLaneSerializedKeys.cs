@@ -121,7 +121,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneSerializ
               },
               "checks": [{
                 "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 2
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 5
               }],
               "forbiddenChangedPathGlobs": []
             }
@@ -147,7 +147,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneSerializ
         {
             var configuration = new Dictionary<string, object>
             {
-                ["executors"] = new[] { new { id = "fixture-executor", leaseSeconds = 60, slots = 3 } },
+                ["executors"] = new[] { new { id = "fixture-executor", leaseSeconds = 60, slots = 3, costBudget = 6.0 } },
                 ["lanes"] = Enumerable.Range(0, 3).Select(Lane).ToArray()
             };
             if (machineLocalKeys is not null) configuration["machineLocalResourceKeys"] = machineLocalKeys;
