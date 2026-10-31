@@ -48,6 +48,8 @@ internal static class AcceptanceGateIntegrityNormalizer
     internal static void PrepareBuildArtifacts(
         DotnetBuildEnvironment environment, IAcceptanceRunExecutionContext? context)
     {
+        // Derived baseline artifact paths are allocated lazily, before their first build.
+        Directory.CreateDirectory(environment.ArtifactsPath);
         while (context is AcceptanceRunExecutionContextView view)
             context = view.Owner;
         if (context is AcceptanceRunExecutionOwner owner)
