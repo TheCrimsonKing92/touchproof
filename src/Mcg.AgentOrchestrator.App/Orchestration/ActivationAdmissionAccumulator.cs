@@ -37,6 +37,10 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
         }
     }
 
+    internal void RecordCensus(int occupied, ActivationAdmissionLiveGateTally tally) =>
+        Record(occupied: occupied, live: tally.Live, preparing: tally.Preparing,
+            evidenceHeld: occupied >= 1 && tally.Live == 0 ? ActivationAdmissionPermitHolders.CountEvidenceHeld() : 0);
+
     internal ActivationAdmissionSample Take(int tick)
     {
         lock (_gate)
