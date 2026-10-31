@@ -15,12 +15,13 @@ internal sealed class AcceptanceBalancedLanePlanWriter
     private readonly TimeProvider _clock;
     private readonly List<AcceptanceClassDurationHistoryStore.Sample> _samples = [];
     private readonly Dictionary<string, AcceptanceBalancedLaneCommand> _commands = new(StringComparer.Ordinal);
+    private AcceptanceGateLanePlan _publishedPlan;
     private AcceptanceGateLanePlan _plan;
 
     private AcceptanceBalancedLanePlanWriter(AcceptanceGateLanePlan plan, string worktreePath,
         string? attemptPrefix, GoalId? goalId, Action<AcceptanceGateProgress> emit, TimeProvider clock)
     {
-        _plan = plan;
+        _plan = _publishedPlan = plan;
         _worktreePath = worktreePath;
         _attemptPrefix = attemptPrefix;
         _goalId = goalId;
@@ -86,10 +87,15 @@ internal sealed class AcceptanceBalancedLanePlanWriter
                 layout.HistoryWindow, outcome == "completed", outcome == "completed");
             _plan = _plan with { BalancedLayout = layout with
             {
-                Commands = _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray(),
+                Commands = _commands.Count == 0 ? layout.Commands :
+                    _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray(),
                 HistoryWriteFailure = failureReason
             } };
+            // Faults before lane execution have no new observations to publish.
+            // Preserve the original selection event while still publishing real updates.
+            if (_plan == _publishedPlan) return;
             AcceptanceGateLanePlanPublisher.Publish(_plan, _attemptPrefix, _goalId, _emit, _clock);
+            _publishedPlan = _plan;
         }
     }
 }
