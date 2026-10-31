@@ -10,9 +10,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBatchLoopTests
 {
-    private const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private const string Main = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
     public ConductorBatchLoopTestsPassedGateHoldWorkflow(ITestOutputHelper output) : base(output) { }
 
     [Theory]
@@ -35,12 +32,13 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         var receipt = fixture.Latest;
         Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, receipt.Outcome);
         Assert.NotNull(receipt.ReconciledAt);
+        fixture.AssertReceiptCandidate();
         var first = await fixture.Decision();
         Assert.Contains("passed gate, held: " + category, first.Body);
         Assert.Contains(rule, first.Body);
         Assert.Contains(receipt.AttemptId, first.Body);
         Assert.Contains(receipt.ResultPath, first.Body);
-        Assert.Contains(Candidate, first.Body);
+        Assert.Contains(fixture.Candidate, first.Body);
         Assert.Contains(verb, first.Body);
         if (alternative is not null) Assert.Contains(alternative, first.Body);
         if (waiver is not null) Assert.Contains(waiver, first.Body);
@@ -99,7 +97,7 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         Assert.Contains("MissingTests", fixture.Latest.Detail!);
         Assert.Contains(prior.AttemptId, fixture.Latest.Detail!);
         Assert.Contains(prior.ResultPath, fixture.Latest.Detail!);
-        Assert.Contains(Candidate, fixture.Latest.Detail!);
+        Assert.Contains(fixture.Candidate, fixture.Latest.Detail!);
         var decision = await fixture.Decisions.GetDecisionStateAsync("adjudicate-" + intent.Id);
         Assert.NotNull(decision?.Receipt);
         Assert.Equal(EffectReceiptStatus.Applied, decision!.Effect!.Status);
@@ -108,7 +106,7 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         fixture.Tick();
         Assert.Equal(2, fixture.GateRuns);
         Assert.NotEqual(prior.AttemptId, fixture.Latest.AttemptId);
-        Assert.Equal(Candidate, fixture.Latest.BranchHeadSha);
+        Assert.Equal(fixture.Candidate, fixture.Latest.BranchHeadSha);
         Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, fixture.Latest.Outcome);
         Assert.Equal(retryAt, task.LatestRetryAt);
         Assert.Equal(dispatch, task.LastDispatch);
@@ -151,6 +149,7 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         using var fixture = new Fixture("gate test obligation");
         fixture.Tick();
         var prior = fixture.Latest;
+        fixture.AssertReceiptCandidate();
         Assert.Equal(fixture.ManifestIdentity, prior.EffectiveManifestIdentity);
         fixture.ChangeManifest(change);
         Assert.Equal(change == "unchanged", fixture.ManifestIdentity == prior.EffectiveManifestIdentity);
@@ -168,7 +167,7 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
                 entry => entry.Operation == "conductor:manifest-regate" &&
                     entry.Detail?.Contains(prior.AttemptId, StringComparison.Ordinal) == true);
         }
-        Assert.Equal(Candidate, fixture.Latest.BranchHeadSha);
+        Assert.Equal(fixture.Candidate, fixture.Latest.BranchHeadSha);
         Assert.Equal(0, fixture.Landings);
         Assert.Equal(0, fixture.WorkerDispatches);
         fixture.Tick();
@@ -180,9 +179,12 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         private readonly IDisposable _census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
         private readonly string _attemptRoot;
         private readonly string _manifest;
-        internal string Root { get; } = CreateTempDirectory("mcg-passed-hold-workflow");
+        private readonly string _worktree;
+        internal string Root { get; } = LandingExecutorTests.CreateGitRepository();
         internal AgentOrchestratorKernel Kernel { get; } = new();
         internal Goal Goal { get; }
+        internal string Candidate { get; }
+        private string Main { get; }
         internal CollaborationItemStore Decisions { get; }
         internal ConductorParallelAcceptanceAttemptCoordinator Coordinator { get; }
         internal ConductorDriver Driver { get; }
@@ -195,18 +197,26 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         internal ConductorParallelAcceptanceAttempt Latest => Coordinator.TryReadLatest(Goal.Id.Value)!;
         internal int AttemptCount => Directory.Exists(Path.Combine(_attemptRoot, Goal.Id.Value))
             ? Directory.GetFiles(Path.Combine(_attemptRoot, Goal.Id.Value), "*.attempt.json").Length : 0;
-        internal string ManifestIdentity => GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(Root, ["docs/workflow.md"]);
+        internal string ManifestIdentity => GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(_worktree, ["docs/workflow.md"]);
 
         internal Fixture(string category)
         {
             Category = category;
             _attemptRoot = Path.Combine(Root, "attempts");
-            Directory.CreateDirectory(Path.Combine(Root, "config"));
-            _manifest = Path.Combine(Root, "config", "acceptance-manifest.json");
+            Goal = CreateVerifiedSimpleGoal(Kernel, "Passed gate workflow");
+            // The gate refreshes revisions from Git after rebasing. A synthetic pair
+            // in a plain directory produces an unbound result that cannot be replayed.
+            LandingExecutorTests.AddGoalBranchCommit(Root, GoalWorktrees.BranchName(Goal.Id),
+                "docs/workflow.md", "held candidate");
+            _worktree = GoalWorktrees.Ensure(Root, Goal.Id);
+            Candidate = LandingExecutorTests.ReadGit(_worktree, "rev-parse", "HEAD");
+            Main = LandingExecutorTests.ReadGit(Root, "rev-parse", "HEAD");
+            Assert.NotEqual(Candidate, Main);
+            Directory.CreateDirectory(Path.Combine(_worktree, "config"));
+            _manifest = Path.Combine(_worktree, "config", "acceptance-manifest.json");
             File.WriteAllText(_manifest, """
                 { "version": 1, "checks": [{ "name": "check", "type": "command", "command": "git", "arguments": ["diff", "--check"] }] }
                 """);
-            Goal = CreateVerifiedSimpleGoal(Kernel, "Passed gate workflow");
             var operatorEvidence = category == "criterion evidence obligation";
             var criterion = operatorEvidence ? "Owner observes behavior" : "Full gate passes";
             Kernel.RecordGoalRefinement(Goal.Id, new RefinedSpec(Goal.Objective,
@@ -244,6 +254,19 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
             new ConductorBatchLoop().Run(Kernel, Driver,
                 ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 }, NoStopPath(),
                 maxIterations: 1, onlyGoalId: Goal.Id.Value);
+        }
+
+        internal void AssertReceiptCandidate()
+        {
+            var receipt = Latest;
+            Assert.Equal(Candidate, receipt.BranchHeadSha);
+            Assert.Equal(Main, receipt.MainHeadSha);
+            using var result = JsonDocument.Parse(File.ReadAllText(receipt.ResultPath));
+            Assert.Equal(Candidate, result.RootElement.GetProperty("branchHeadSha").GetString());
+            Assert.Equal(Main, result.RootElement.GetProperty("mainHeadSha").GetString());
+            var acceptance = result.RootElement.GetProperty("acceptance");
+            Assert.Equal(Candidate, acceptance.GetProperty("branchHeadSha").GetString());
+            Assert.Equal(Main, acceptance.GetProperty("mainHeadSha").GetString());
         }
 
         internal async Task<CollaborationItem> Decision()
@@ -330,7 +353,7 @@ public sealed class ConductorBatchLoopTestsPassedGateHoldWorkflow : ConductorBat
         public void Dispose()
         {
             _census.Dispose();
-            Directory.Delete(Root, recursive: true);
+            TryDeleteDirectory(Root);
         }
     }
 }
