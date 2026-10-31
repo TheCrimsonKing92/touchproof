@@ -307,8 +307,8 @@ internal static class AcceptanceCheckProcessInvoker
             var stderr = await ReadCapturedFileWithRetryAsync(
                 stderrPath,
                 cappedPaths.Contains(stderrPath)).ConfigureAwait(false);
-            var stdoutBytes = TryGetFileLength(stdoutPath);
-            var stderrBytes = TryGetFileLength(stderrPath);
+            var stdoutBytes = AcceptanceBestEffortFileOperations.TryGetFileLength(stdoutPath);
+            var stderrBytes = AcceptanceBestEffortFileOperations.TryGetFileLength(stderrPath);
             elapsed.Stop();
             var captureLimited = captureLimitStop.Stopped;
             timedOut &= !captureLimited;
@@ -458,8 +458,8 @@ internal static class AcceptanceCheckProcessInvoker
 
             if (!keepOutputFiles)
             {
-                TryDeleteFile(stdoutPath);
-                TryDeleteFile(stderrPath);
+                AcceptanceBestEffortFileOperations.TryDeleteFile(stdoutPath);
+                AcceptanceBestEffortFileOperations.TryDeleteFile(stderrPath);
             }
         }
     }

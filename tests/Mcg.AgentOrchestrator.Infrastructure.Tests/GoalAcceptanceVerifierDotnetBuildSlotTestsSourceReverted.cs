@@ -267,7 +267,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
 
     private sealed class SuccessfulLabeler : IWorkerIntegrityLabeler
     {
-        public IntegrityLabelState Query(string path) => new(true, true, true);
+        public IntegrityLabelState Query(string path) => new(Exists: true, Low: false, Inheritable: true, Medium: true);
         public bool SetIntegrity(string path, string level, bool recursive) => true;
     }
 

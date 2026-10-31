@@ -2585,6 +2585,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             attemptName,
             stableSlotIndex,
             stableSlotLease);
+        AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, _executionContext);
         ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(stableSlotLease);
 
         var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveTestTelemetry(
@@ -3314,6 +3315,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, _executionContext);
         var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveDotnetTestTelemetry(arguments, check, environment, AcceptanceAttemptResultsPrefix, _invocationContext);
         var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
@@ -4255,17 +4257,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes) =>
         GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(bytes);
-
-    internal static void TryDeleteFile(string path)
-    {
-        try { File.Delete(path); } catch { /* best effort; lives under the temp dir */ }
-    }
-
-    internal static long TryGetFileLength(string path)
-    {
-        try { return File.Exists(path) ? new FileInfo(path).Length : 0L; }
-        catch { return 0L; }
-    }
 
     private sealed record EffectiveGatePlan(
         AcceptanceManifest Manifest,

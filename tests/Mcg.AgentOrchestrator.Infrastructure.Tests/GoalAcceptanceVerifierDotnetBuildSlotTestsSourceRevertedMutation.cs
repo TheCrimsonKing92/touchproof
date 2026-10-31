@@ -237,7 +237,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedMuta
     private static string Read(string root, string path) => File.ReadAllText(Path.Combine(root, path));
     private sealed class SuccessfulLabeler : IWorkerIntegrityLabeler
     {
-        public IntegrityLabelState Query(string path) => new(true, true, true);
+        public IntegrityLabelState Query(string path) => new(Exists: true, Low: false, Inheritable: true, Medium: true);
         public bool SetIntegrity(string path, string level, bool recursive) => true;
     }
 }
