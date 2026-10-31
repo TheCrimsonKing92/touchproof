@@ -55,7 +55,7 @@ internal static class GoalAcceptanceVerifierBuildArtifactLock
                 {
                 }
 
-                GoalAcceptanceVerifier.TryDeleteFile(probePath);
+                AcceptanceBestEffortFileOperations.TryDeleteFile(probePath);
                 return true;
             }
 

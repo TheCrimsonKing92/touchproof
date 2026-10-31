@@ -4309,17 +4309,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes) =>
         GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(bytes);
 
-    internal static void TryDeleteFile(string path)
-    {
-        try { File.Delete(path); } catch { /* best effort; lives under the temp dir */ }
-    }
-
-    internal static long TryGetFileLength(string path)
-    {
-        try { return File.Exists(path) ? new FileInfo(path).Length : 0L; }
-        catch { return 0L; }
-    }
-
     private sealed record EffectiveGatePlan(
         AcceptanceManifest Manifest,
         IReadOnlyList<AcceptanceManifestCheck> Checks,
