@@ -538,7 +538,8 @@ internal static class SourceSizeRatchet
             // Goal f608f29b adds environment-gate construction and admission calls before dispatch,
             // solo/cohort/train gates and held-goal recovery. Probe/cache/hold behavior stays in
             // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
-            new SourceClassCeiling("ConductorDriver", 14474, 70),
+            // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14460, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
