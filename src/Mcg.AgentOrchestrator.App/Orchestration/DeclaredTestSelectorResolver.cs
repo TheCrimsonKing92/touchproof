@@ -5,8 +5,8 @@ internal static class DeclaredTestSelectorResolver
     internal static GroupedGateReceiptTrxEvidence.SelectorEvidence Evaluate(
         string selector, IReadOnlyList<DeclaredTestReportRows.Row> rows)
     {
-        var matches = rows.Where(row => row.Identity == selector || row.Name == selector ||
-            row.Identity.StartsWith(selector + "::", StringComparison.Ordinal) ||
+        var matches = rows.Where(row => DeclaredTestSegmentSelector.Matches(selector, row.Identity) ||
+            row.Name == selector ||
             // Read compatibility for persisted obligations only; never emit this form.
             row.Suite.Count > 0 && string.Join("::", row.Suite) + "." + row.Name == selector).ToArray();
         var passed = matches.Count(row => row.Outcome == "Passed");
