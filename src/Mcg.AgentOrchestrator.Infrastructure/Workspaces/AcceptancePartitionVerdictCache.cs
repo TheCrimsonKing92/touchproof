@@ -1098,7 +1098,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private bool HasReusableStructuralCoverageEvidence(PartitionVerdictRecord cached) =>
         !_enforceStructuralCoverage() ||
         cached.TestResultPaths is { Count: > 0 } &&
-        cached.TestResultPaths.All(path => GoalAcceptanceVerifier.TryGetFileLength(path) > 0);
+        cached.TestResultPaths.All(path => AcceptanceBestEffortFileOperations.TryGetFileLength(path) > 0);
 
     private static string FormatPartitionReuseReceipt(IReadOnlyList<PartitionVerdictReuseReceipt> reused) =>
         reused.Count == 0

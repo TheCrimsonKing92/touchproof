@@ -99,6 +99,8 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DotnetBuildEnvironment> _ownedRootEnvironments =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<bool>> _preparedArtifactRoots =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime;
     private readonly AcceptanceRunExecutionOptions _options;
     private long _nextChildId;
@@ -200,6 +202,13 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         if (environment.OwnedRootRegistrar is not null)
             _ownedRootEnvironments.TryAdd(environment.RootPath, environment);
     }
+
+    internal void PrepareBuildArtifactIntegrity(string artifactsPath) =>
+        _ = _preparedArtifactRoots.GetOrAdd(Path.GetFullPath(artifactsPath), path => new Lazy<bool>(() =>
+        {
+            AcceptanceGateIntegrityNormalizer.PrepareBuildArtifactRoot(path);
+            return true;
+        }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     public void MarkSuccessful()
     {
@@ -358,6 +367,9 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         var scopedVerifier = new GoalAcceptanceVerifier(verifier, this);
         try
         {
+            AcceptanceGateIntegrityNormalizer.Normalize(worktreePath);
+            if (stableSlotLease is not null)
+                PrepareBuildArtifactIntegrity(stableSlotLease.Environment.ArtifactsPath);
             var result = await scopedVerifier.RunOwnedAcceptanceAsync(
                 worktreePath,
                 goalId,
@@ -462,6 +474,9 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
         var scopedVerifier = new GoalAcceptanceVerifier(verifier, this);
         try
         {
+            AcceptanceGateIntegrityNormalizer.Normalize(worktreePath);
+            if (stableSlotLease is not null)
+                PrepareBuildArtifactIntegrity(stableSlotLease.Environment.ArtifactsPath);
             var result = await scopedVerifier.RunOwnedFocusedEvidenceAsync(
                 worktreePath,
                 goalId,
