@@ -66,6 +66,7 @@ public sealed partial class BackgroundDispatchRunner
     private readonly ICompletionBuildEvidenceOperation? _completionBuildEvidence;
     public IWorkerBuildInvocationOperations? WorkerBuildInvocations { get; init; }
     public Func<bool>? ExecutionThrottlingOptOut { get; init; }
+    public Func<IReadOnlyList<DeclaredToolHome>>? DeclaredToolHomes { get; init; }
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -246,6 +247,9 @@ public sealed partial class BackgroundDispatchRunner
                 $"Background dispatch process start is disabled in this environment ({DisableDispatchStartVariable}); refusing to launch the worker command. Test-spawned orchestrators must never start real subscription CLIs.");
         }
 
+        var toolHomes = DeclaredToolHomes?.Invoke();
+        if (DeclaredToolHomeEnvironment.DescribeMissing(toolHomes) is { } missingToolHome)
+            throw new InvalidOperationException(missingToolHome);
         Directory.CreateDirectory(logRoot);
         var prefix = $"{goalId.Value[..8]}-{taskId.Value[..8]}-{_clock.UtcNow:yyyyMMddHHmmss}";
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");
@@ -357,6 +361,7 @@ public sealed partial class BackgroundDispatchRunner
         // and writes logs/heartbeat/exit natively.
         var startInfo = DispatchHostStartInfoFactory.Create(dispatch.WorkingDirectory,
             ResolveDispatchHostAssembly(), parametersPath, startGatePath, ConductorChildEnvironment.Capture());
+        DeclaredToolHomeEnvironment.Apply(startInfo.Environment, toolHomes);
 
         WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
         if (WorkerBuildInvocations is not null && task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&

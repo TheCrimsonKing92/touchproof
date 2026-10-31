@@ -55,12 +55,16 @@ internal static class ProjectCompareManifestCommand
                 applied = OwnerAnswerApplier.Apply(model, read.Answers);
         }
         IReadOnlyList<ManifestCheckComparison> comparisons;
+        IReadOnlyList<ManifestFactComparison> toolHomeComparisons;
         try
         {
             comparisons = applied is null ? ManifestCheckComparer.Compare(model, manifestJson)
                 : ManifestCheckComparer.Compare(model, manifestJson, applied);
+            toolHomeComparisons = ManifestEngineSettingsComparer.Compare(manifestJson,
+                toolHomes: DeclaredToolHomeValidator.FromAnswers(applied))
+                .Where(comparison => comparison.Fact.StartsWith("toolHome[", StringComparison.Ordinal)).ToArray();
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is JsonException or InvalidDataException)
         {
             throw ManifestError(exception);
         }
@@ -70,6 +74,8 @@ internal static class ProjectCompareManifestCommand
             var reason = string.IsNullOrEmpty(comparison.Reason) ? "" : $" ({comparison.Reason})";
             output.WriteLine($"{comparison.Kind} {comparison.ProjectPath} learned={comparison.LearnedRunner ?? "-"} manifest={comparison.ManifestRunner ?? "-"}{reason}");
         }
+        foreach (var comparison in toolHomeComparisons)
+            output.WriteLine($"{comparison.Kind} {comparison.Fact} hand={comparison.Hand} learned={comparison.Learned} ({comparison.Reason})");
         if (answerError is not null)
             output.WriteLine($"Owner answers unreadable: {answerError}");
 
@@ -77,6 +83,7 @@ internal static class ProjectCompareManifestCommand
             EnvironmentContractDeriver.ForModel(model, applied ?? OwnerAnswerApplier.Apply(model, [])), EnvironmentContract.FromManifest(manifestJson));
         foreach (var comparison in toolComparisons) output.WriteLine(comparison);
         return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) &&
+            toolHomeComparisons.All(comparison => comparison.Kind == ManifestFactResultKind.Match) &&
             toolComparisons.All(comparison => comparison.StartsWith("Match ", StringComparison.Ordinal)) ? 0 : 1;
     }
 

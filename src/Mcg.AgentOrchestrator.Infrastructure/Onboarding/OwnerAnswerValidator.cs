@@ -20,6 +20,8 @@ public static class OwnerAnswerValidator
     {
         value ??= "";
         if (OwnerAnsweredEnvironmentTools.IsKey(factKey)) return OwnerAnsweredEnvironmentTools.Validate(factKey, value);
+        if (DeclaredToolHomeValidator.IsToolHomeKey(factKey))
+            return DeclaredToolHomeValidator.Validate(factKey[DeclaredToolHomeValidator.KeyPrefix.Length..], value);
         if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||
             (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
              factKey.EndsWith("/timeoutMinutes", StringComparison.Ordinal) &&
@@ -61,6 +63,6 @@ public static class OwnerAnswerValidator
             throw new ArgumentException($"{factKey} requires yes or no with no surrounding whitespace.");
         }
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
     }
 }

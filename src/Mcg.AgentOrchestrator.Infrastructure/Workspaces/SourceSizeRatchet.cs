@@ -68,7 +68,8 @@ internal static class SourceSizeRatchet
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
             // Goal bd3c0539 adds one settled-check progress call.
             // Goal a9983773 adds 11 lines binding the lane-plan observation to the existing attempt and dispatch set.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4458),
+            // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4462),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -276,7 +277,8 @@ internal static class SourceSizeRatchet
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
             // Goal 4ad7cdef adds the Developer ignored-file call site; evaluation lives in InScopeIgnoredFileCheck.
             // c32e68ed: one line for the dispatch execution-throttling policy delegate.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2697),
+            // Goal fafad26f: declared tool-home resolution, preflight and environment application call sites.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2702),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -571,7 +573,8 @@ internal static class SourceSizeRatchet
             // of promising Active; this belongs with the existing command outcome rendering.
             // Goal f608f29b adds six conductor-start probe and operator-attention wiring lines;
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
-            new SourceClassCeiling("CliCommandHandlers", 11067, 30),
+            // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
+            new SourceClassCeiling("CliCommandHandlers", 11071, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -589,7 +592,8 @@ internal static class SourceSizeRatchet
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
             // Goal a9983773 adds 11 lane-plan call-site lines; record, publisher and reader live in separate types.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8096, 27),
+            // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8100, 27),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
