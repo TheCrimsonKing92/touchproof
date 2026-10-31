@@ -2490,14 +2490,8 @@ public sealed partial class AgentOrchestratorKernel
             : throw new KeyNotFoundException($"Goal '{goalId}' was not found.");
     }
 
-    public Goal? FindGoalBySourceBacklogItemId(string backlogItemId)
-    {
-        if (string.IsNullOrWhiteSpace(backlogItemId))
-            return null;
-
-        return _goals.Values.FirstOrDefault(goal =>
-            string.Equals(goal.SourceBacklogItemId, backlogItemId, StringComparison.Ordinal));
-    }
+    public Goal? FindGoalBySourceBacklogItemId(string backlogItemId) =>
+        GoalSourceBacklogLookup.Find(_goals.Values, backlogItemId);
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
 
@@ -2510,6 +2504,9 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal priority set: previous={GoalPriorities.Format(previous)} new={GoalPriorities.Format(priority)} actor={actor} reason={(string.IsNullOrEmpty(rationale) ? "(no reason given)" : rationale)}");
         return previous;
     }
+
+    public void RecordGoalDeliveredForReview(GoalId goalId, GoalDeliveredForReview delivery) =>
+        GetGoal(goalId).RecordDeliveredForReview(delivery, _eventWriter.AppendTimelineEvent);
 
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);
