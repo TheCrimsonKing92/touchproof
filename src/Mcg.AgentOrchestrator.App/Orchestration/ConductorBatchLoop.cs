@@ -1315,9 +1315,7 @@ internal sealed partial class ConductorBatchLoop
                                 }
                             }
 
-                            if (_progressiveReviewSteering is not null && watchInterval is not null &&
-                                GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)) == GoalLifecycleState.Running &&
-                                _progressiveReviewSteering.HasPendingIntent(goal))
+                            if (_progressiveReviewSteering?.CanExecutePending(goal, driver, watchInterval) == true)
                             {
                                 if (driver.EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Running) is { } environmentHold)
                                     return environmentHold;
