@@ -1218,8 +1218,8 @@ public sealed class DispatchOutcomeClassifyTests
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
-        Xunit.Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
-        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification));
+        Xunit.Assert.False(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(verification));
+        Xunit.Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitEvidence(verification));
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=provider-rate-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
@@ -1233,7 +1233,7 @@ public sealed class DispatchOutcomeClassifyTests
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
-        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+        Xunit.Assert.True(SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(verification));
         Xunit.Assert.Contains("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("You've hit your usage limit", outcome.EvidenceSummary, StringComparison.Ordinal);
         Xunit.Assert.Contains("evidence=ERROR: You've hit your usage limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
@@ -1249,7 +1249,7 @@ public sealed class DispatchOutcomeClassifyTests
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
-        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification));
+        Xunit.Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitEvidence(verification));
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=provider-rate-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
@@ -2244,7 +2244,7 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
-        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+        Xunit.Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
     }
 
     [Xunit.Fact(DisplayName = "Classify returns UnknownFailure for unrecognized nonzero exit")]

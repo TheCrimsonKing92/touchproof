@@ -713,7 +713,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(exit, 0);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_completes_dead_exiting_worker_from_exit_file")]
@@ -1496,7 +1496,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.NotNull(task.LastVerification);
     Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification.ProviderFailureKind);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
-    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitHistory(task));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&

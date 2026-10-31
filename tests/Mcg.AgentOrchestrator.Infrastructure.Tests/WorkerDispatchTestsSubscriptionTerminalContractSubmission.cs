@@ -27,7 +27,7 @@ public sealed class WorkerDispatchTestsSubscriptionTerminalContractSubmission : 
             workerProviderKind: structuredCodex ? ProviderKind.OpenAICodexCli : ProviderKind.Unknown);
         Assert.Equal(VerificationTerminalContractStatus.Missing,
             WorkerResultBlockers.AssessTerminalVerificationOutput(AgentRole.Tester, censusOutput).Status);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task));
+        Assert.True(SubscriptionLimitEvidence.IsSubscriptionProviderCliDispatch(task));
         var path = Submit(validationRoot, goal, task, process, task.Id, task.LastDispatch!.DispatchedAt.AddMinutes(1));
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
