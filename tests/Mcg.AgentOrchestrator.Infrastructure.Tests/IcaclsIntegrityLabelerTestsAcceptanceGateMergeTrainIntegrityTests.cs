@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.ProcessSpawning)]
-public sealed class AcceptanceGateMergeTrainIntegrityTests : AcceptanceCohortWorkflowTests
+public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateMergeTrainIntegrityTests : AcceptanceCohortWorkflowTests
 {
     [Theory]
     [InlineData(false)]

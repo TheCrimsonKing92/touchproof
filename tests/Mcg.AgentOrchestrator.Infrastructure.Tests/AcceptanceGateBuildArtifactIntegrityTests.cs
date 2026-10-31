@@ -4,9 +4,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceGateBuildArtifactIntegrityTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void PrepareBuildArtifacts_CreatesFreshBaselineRootAndNormalizesExistingOutputs(bool existingOutputs)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task PrepareBuildArtifacts_CreatesFreshRootAndNormalizesOutputs(
+        bool existingOutputs, bool ownedPreparation)
     {
         var root = Directory.CreateTempSubdirectory("gate-artifact-integrity-").FullName;
         try
@@ -25,7 +28,19 @@ public sealed class AcceptanceGateBuildArtifactIntegrityTests
             var labeler = new RecordingLabeler();
             using var labels = AcceptanceGateIntegrityNormalizer.PushIntegrityLabelerForTests(labeler);
 
-            AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, context: null);
+            if (ownedPreparation)
+            {
+                await using var owner = new AcceptanceFocusedVerificationOwner(
+                    new AcceptanceFocusedVerificationIdentity("fixture-focused", "fixture-goal", root,
+                        "fixture-candidate", Path.Combine(root, "focused"), SlotIndex: null),
+                    new AcceptanceGateEngineSettings());
+                // The focused runner prepares the lease directly, before any build creates it.
+                owner.PrepareBuildArtifactIntegrity(artifacts);
+            }
+            else
+            {
+                AcceptanceGateIntegrityNormalizer.PrepareBuildArtifacts(environment, context: null);
+            }
 
             Assert.True(Directory.Exists(artifacts));
             var rootCall = Assert.Single(labeler.Calls, call => call.Path == artifacts);

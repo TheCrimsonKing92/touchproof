@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.ProcessSpawning)]
-public sealed class AcceptanceGateIntegrityLevelTests
+public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateIntegrityLevelTests
 {
     [Fact]
     public async Task Normalize_LowWorkspace_NewExecutableRunsMediumAndWritesTemp()

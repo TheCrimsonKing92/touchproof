@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.ProcessSpawning)]
-public sealed class AcceptanceGateWorkerRelabelTests
+public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateWorkerRelabelTests
 {
     [Fact]
     public void Prepare_AfterGateNormalization_InvalidatesReceiptAndRestoresLow()

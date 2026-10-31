@@ -206,7 +206,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     internal void PrepareBuildArtifactIntegrity(string artifactsPath) =>
         _ = _preparedArtifactRoots.GetOrAdd(Path.GetFullPath(artifactsPath), path => new Lazy<bool>(() =>
         {
-            AcceptanceGateIntegrityNormalizer.Normalize(path);
+            AcceptanceGateIntegrityNormalizer.PrepareBuildArtifactRoot(path);
             return true;
         }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
