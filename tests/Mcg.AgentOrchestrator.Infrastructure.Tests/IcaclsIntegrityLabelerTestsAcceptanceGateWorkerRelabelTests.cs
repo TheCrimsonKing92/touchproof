@@ -3,8 +3,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Collection(TestCollections.ProcessSpawning)]
 public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateWorkerRelabelTests
 {
-    [Fact]
-    public void Prepare_AfterGateNormalization_InvalidatesReceiptAndRestoresLow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Prepare_AfterGateNormalization_InvalidatesReceiptAndRestoresLow(bool explicitFileLabel)
     {
         AcceptanceGateIntegrityTestSupport.RequireWindows();
         using var fixture = new AcceptanceGateIntegrityTestSupport();
@@ -15,6 +17,8 @@ public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateWorkerRelabelTests
         var preparer = new WorkerSandboxPreparer(fixture.Labels);
         Assert.Null(preparer.Prepare(fixture.Worktree, sandbox).RecoveryAction);
         Assert.True(preparer.Prepare(fixture.Worktree, sandbox).PrepReceiptHit);
+        if (explicitFileLabel)
+            Assert.True(fixture.Labels.SetIntegrity(existingFile, "L", recursive: false));
         Assert.True(fixture.Labels.Query(existingFile).Low);
 
         AcceptanceGateIntegrityNormalizer.Normalize(fixture.Worktree);
@@ -23,6 +27,9 @@ public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateWorkerRelabelTests
         Assert.True(fixture.Labels.Query(existingFile).Medium);
         Assert.True(fixture.Labels.Query(sandbox).Low);
         Assert.True(File.Exists(Path.Combine(fixture.Worktree, WorkerSandboxPreparer.ReceiptFileName)));
+        var gateOutput = Path.Combine(child, "gate-output.txt");
+        File.WriteAllText(gateOutput, "gate output");
+        Assert.True(fixture.Labels.Query(gateOutput).Medium);
 
         var nextDispatch = preparer.Prepare(fixture.Worktree, sandbox);
 
@@ -37,6 +44,7 @@ public sealed class IcaclsIntegrityLabelerTestsAcceptanceGateWorkerRelabelTests
             Assert.False(state.Medium, directory);
         }
         Assert.True(fixture.Labels.Query(existingFile).Low);
+        Assert.True(fixture.Labels.Query(gateOutput).Low);
         Assert.True(preparer.Prepare(fixture.Worktree, sandbox).PrepReceiptHit);
     }
 }

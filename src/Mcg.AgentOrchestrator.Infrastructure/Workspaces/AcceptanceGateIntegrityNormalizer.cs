@@ -23,6 +23,8 @@ internal static class AcceptanceGateIntegrityNormalizer
             return;
 
         labeler ??= new IcaclsIntegrityLabeler();
+        if (labeler is IcaclsIntegrityLabeler native)
+            labeler = new AcceptanceGateIntegrityLabeler(native);
         try
         {
             SetAndConfirm(path, recursive: false, directory: true, labeler);
