@@ -30,8 +30,12 @@ public sealed class ProjectEmitManifestRoundTripCliTests
 
         var checksComparison = Compare("compare-manifest", destination);
         Assert.Equal(0, checksComparison.Exit);
-        Assert.Equal(2, checksComparison.Lines.Length);
-        Assert.All(checksComparison.Lines, line => Assert.StartsWith("Match ", line));
+        Assert.Equal(new[]
+        {
+            $"Match {AppTest} learned=vstest manifest=vstest",
+            $"Match {CoreTest} learned=vstest manifest=vstest",
+            "Match tool dotnet"
+        }, checksComparison.Lines);
         var engineComparison = Compare("compare-manifest-engine", destination);
         Assert.Equal(0, engineComparison.Exit);
         var comparisons = engineComparison.Lines.Where(line => !line.StartsWith("Owner answer:", StringComparison.Ordinal)).ToArray();

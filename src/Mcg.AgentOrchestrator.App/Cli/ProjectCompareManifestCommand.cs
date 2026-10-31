@@ -76,12 +76,11 @@ internal static class ProjectCompareManifestCommand
         }
         foreach (var comparison in toolHomeComparisons)
             output.WriteLine($"{comparison.Kind} {comparison.Fact} hand={comparison.Hand} learned={comparison.Learned} ({comparison.Reason})");
-        if (answerError is not null)
-            output.WriteLine($"Owner answers unreadable: {answerError}");
-
         var toolComparisons = EnvironmentContractComparer.Compare(
             EnvironmentContractDeriver.ForModel(model, applied ?? OwnerAnswerApplier.Apply(model, [])), EnvironmentContract.FromManifest(manifestJson));
         foreach (var comparison in toolComparisons) output.WriteLine(comparison);
+        if (answerError is not null)
+            output.WriteLine($"Owner answers unreadable: {answerError}");
         return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) &&
             toolHomeComparisons.All(comparison => comparison.Kind == ManifestFactResultKind.Match) &&
             toolComparisons.All(comparison => comparison.StartsWith("Match ", StringComparison.Ordinal)) ? 0 : 1;

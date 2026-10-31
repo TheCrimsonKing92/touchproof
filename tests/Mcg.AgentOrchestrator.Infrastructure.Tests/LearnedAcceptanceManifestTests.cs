@@ -22,7 +22,7 @@ public sealed class LearnedAcceptanceManifestTests
         Assert.NotNull(result.Json);
         using var document = JsonDocument.Parse(result.Json);
         var root = document.RootElement;
-        Assert.Equal(new[] { "version", "engine", "checks", "forbiddenChangedPathGlobs" }, Keys(root));
+        Assert.Equal(new[] { "version", "engine", "checks", "forbiddenChangedPathGlobs", "environmentContract" }, Keys(root));
         Assert.Equal(1, root.GetProperty("version").GetInt32());
         Assert.Empty(root.GetProperty("forbiddenChangedPathGlobs").EnumerateArray());
         var engine = root.GetProperty("engine");
@@ -147,9 +147,9 @@ public sealed class LearnedAcceptanceManifestTests
     }
 
     [Fact]
-    public void Build_VstestOnly_MatchesPreMtpJsonBytes()
+    public void Build_VstestOnly_MatchesJsonBytesWithEnvironmentContract()
     {
-        // Baseline from the existing VSTest composition: two shards and a measured ten-minute timeout.
+        // VSTest composition with its derived tool contract: two shards and a measured ten-minute timeout.
         const string expected = """
             {
               "version": 1,
@@ -178,7 +178,22 @@ public sealed class LearnedAcceptanceManifestTests
                   "arguments": []
                 }
               ],
-              "forbiddenChangedPathGlobs": []
+              "forbiddenChangedPathGlobs": [],
+              "environmentContract": {
+                "version": 1,
+                "tools": [
+                  {
+                    "name": "dotnet",
+                    "command": "dotnet",
+                    "arguments": [
+                      "--version"
+                    ],
+                    "outputPattern": null,
+                    "variables": [],
+                    "source": "check"
+                  }
+                ]
+              }
             }
             """;
         var result = LearnedAcceptanceManifest.Build(Model(), Answers());
@@ -269,7 +284,22 @@ public sealed class LearnedAcceptanceManifestTests
                   "arguments": []
                 }
               ],
-              "forbiddenChangedPathGlobs": []
+              "forbiddenChangedPathGlobs": [],
+              "environmentContract": {
+                "version": 1,
+                "tools": [
+                  {
+                    "name": "dotnet",
+                    "command": "dotnet",
+                    "arguments": [
+                      "--version"
+                    ],
+                    "outputPattern": null,
+                    "variables": [],
+                    "source": "check"
+                  }
+                ]
+              }
             }
             """;
         var result = LearnedAcceptanceManifest.Build(Model(), Answers());
