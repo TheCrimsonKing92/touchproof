@@ -16,7 +16,9 @@ internal sealed class OperatorIntentAdjudication(
     Func<GoalId, string?>? goalHeadResolver = null,
     AcceptanceFailingTestIndex? regateIndex = null,
     int regateCap = ApparatusRedGate.DefaultPerGoalRegateCap,
-    Func<GoalId, bool>? hasLiveAcceptanceAttempt = null)
+    Func<GoalId, bool>? hasLiveAcceptanceAttempt = null,
+    Func<Goal, PassedGateHold?>? passedGateHold = null,
+    Func<Goal, PassedGateHold, string, bool>? requestPassedGateRegate = null)
 {
     private const string TemplateVersion = "operator-adjudication-v1";
     internal const string StewardAssurance = "steward";
@@ -30,7 +32,11 @@ internal sealed class OperatorIntentAdjudication(
         DateTimeOffset now)
     {
         var shape = NormalizeShape(payload.Shape);
+        var verifiedRegate = shape == "reopen-regate" && goal.Status == GoalStatus.Verified;
         var manifest = BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
+        var heldReceipt = verifiedRegate
+            ? passedGateHold?.Invoke(goal) : null;
+        manifest = PassedGateHoldEvidence.Include(manifest, heldReceipt);
         var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause,
             OperatorRouteNoteAdmission.Admits(task, intent));
         var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
@@ -68,7 +74,7 @@ internal sealed class OperatorIntentAdjudication(
             $"Adjudicate task {task.Id.Value}",
             string.IsNullOrWhiteSpace(payload.Text)
                 ? $"Adjudication rejected: {reason ?? "missing-explanation"}."
-                : payload.Text.Trim(),
+                : payload.Text.Trim() + (heldReceipt is null ? "" : "\n" + heldReceipt.Describe()),
             TemplateVersion,
             manifest,
             expiresAt,
@@ -133,6 +139,15 @@ internal sealed class OperatorIntentAdjudication(
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "reopen-regate":
+                if (verifiedRegate)
+                {
+                    if (heldReceipt is null || HasLiveAcceptanceAttempt(goal.Id) ||
+                        requestPassedGateRegate?.Invoke(goal, heldReceipt,
+                            $"OPERATOR_ADJUDICATION decision={receipt.Id} gate-request=queued; {heldReceipt.Describe()}") != true)
+                        Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                            "acceptance-attempt-live", now);
+                    break;
+                }
                 kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     task.Id,
@@ -276,7 +291,13 @@ internal sealed class OperatorIntentAdjudication(
         if (string.IsNullOrWhiteSpace(payload.Text)) return "missing-explanation";
         if (payload.EvidenceReferences is null || payload.EvidenceReferences.All(string.IsNullOrWhiteSpace)) return "missing-evidence";
         if (shape is not ("close" or "reopen-regate" or "route")) return "unknown-shape";
-        if (shape == "reopen-regate" && goal.Status == GoalStatus.Verifying)
+        if (shape == "reopen-regate" && goal.Status == GoalStatus.Verified)
+        {
+            if (HasLiveAcceptanceAttempt(goal.Id)) return "acceptance-attempt-live";
+            if (passedGateHold?.Invoke(goal) is null || requestPassedGateRegate is null)
+                return WithCancelledRouteHint(task, "goal-not-acceptance-failed");
+        }
+        else if (shape == "reopen-regate" && goal.Status == GoalStatus.Verifying)
         {
             if (goal.Tasks.Any(candidate => candidate.Status is not
                 (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)))

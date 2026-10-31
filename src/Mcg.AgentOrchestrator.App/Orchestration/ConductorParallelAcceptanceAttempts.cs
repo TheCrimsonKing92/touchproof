@@ -62,7 +62,9 @@ internal enum ConductorEvidenceSupersessionCause
     FindingRoundChanged,
     FocusedRequestChanged,
     GoalMovedOn,
-    CoordinatorReplacement
+    CoordinatorReplacement,
+    OperatorRegate,
+    ManifestChanged
 }
 
 internal enum ConductorParallelAcceptanceAttemptDecisionKind
@@ -163,6 +165,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? StateDirectory { get; init; }
     public string? ProjectName { get; init; }
     public string? ReplayContextFingerprint { get; init; }
+    public string? EffectiveManifestIdentity { get; init; }
+    // Invalidating landing authority does not turn a successful gate into a failed attempt.
+    public DateTimeOffset? RegateRequestedAt { get; init; }
     public string? ReplayResultFingerprint { get; init; }
     public string? FocusedExecutionBasisIdentity { get; init; }
     public FindingEvidenceReceipt? OriginalFocusedReceipt { get; init; }
@@ -374,6 +379,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
+    internal string? ProjectHomeDirectory { get; set; }
     private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
     internal const int RetainedAttemptCountPerGoal = 20;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
@@ -745,7 +751,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     out var refusedCarryDecision))
                 return refusedCarryDecision;
 
-            if (current.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+            if (current.RegateRequestedAt is not null ||
+                current.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
                 current.SupersessionCause is not null)
             {
                 var successor = CreateAttempt(
@@ -2278,6 +2285,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,
             ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
+            EffectiveManifestIdentity = dispatchKind == GateDispatchKind && _executionDirectory is not null
+                ? AcceptanceAttemptManifestIdentity.Capture(
+                    candidate, id, _executionDirectory, ProjectHomeDirectory) : null,
             FocusedExecutionBasisIdentity = requestContext?.ExecutionBasisIdentity,
             HolderContractVersion = _usesDurableHolderLease ? 1 : 0,
             HolderCandidateKey = _usesDurableHolderLease ? candidate.CandidateKey : null
@@ -2305,7 +2315,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
-    private ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
+    internal ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
     {
         var directory = Path.Combine(_rootDirectory, goalId);
         if (!Directory.Exists(directory))

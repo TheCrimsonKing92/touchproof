@@ -52,7 +52,9 @@ internal sealed partial class OperatorIntentCoordinator
         ClarificationAnswerRecovery? clarificationAnswerRecovery = null,
         AcceptanceFailingTestIndex? apparatusRegateIndex = null,
         int apparatusRegateCap = ApparatusRedGate.DefaultPerGoalRegateCap,
-        Func<GoalId, bool>? hasLiveAcceptanceAttempt = null)
+        Func<GoalId, bool>? hasLiveAcceptanceAttempt = null,
+        Func<Goal, PassedGateHold?>? passedGateHold = null,
+        Func<Goal, PassedGateHold, string, bool>? requestPassedGateRegate = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -65,7 +67,8 @@ internal sealed partial class OperatorIntentCoordinator
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
         _adjudication = decisions is null ? null : new OperatorIntentAdjudication(
             decisions, goalStateVersionResolver!, evidenceResolver ?? new AdjudicationEvidenceResolver(),
-            goalHeadResolver, apparatusRegateIndex, apparatusRegateCap, hasLiveAcceptanceAttempt);
+            goalHeadResolver, apparatusRegateIndex, apparatusRegateCap, hasLiveAcceptanceAttempt,
+            passedGateHold, requestPassedGateRegate);
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
@@ -87,6 +90,16 @@ internal sealed partial class OperatorIntentCoordinator
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             apparatusRegateIndex: ConductorStewardCaseDSources.CreateIndex(workspace),
             hasLiveAcceptanceAttempt: BuildLiveAcceptanceAttemptQuery(solo),
+            passedGateHold: goal => PassedGateRegateAdmission.Resolve(goal, solo.TryReadLatest(goal.Id.Value),
+                ResolveGoalHead(workspace.ExecutionDirectory, goal.Id)),
+            requestPassedGateRegate: (goal, hold, detail) =>
+            {
+                if (!solo.TryInvalidatePassedReceipt(goal, hold.AttemptId, hold.Candidate,
+                    ConductorEvidenceSupersessionCause.OperatorRegate, detail,
+                    () => ResolveGoalHead(workspace.ExecutionDirectory, goal.Id))) return false;
+                GoalOperationJournal.Completed(workspace.ExecutionDirectory, goal, "operator:passed-gate-regate", detail);
+                return true;
+            },
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
             clarificationAnswerRecovery: (key, answer, briefVersion) =>

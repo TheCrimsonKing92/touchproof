@@ -15,8 +15,12 @@ internal static class OwnerConsoleStageDescriber
         if (OwnerConsoleRoutingHold.Describe(goal, now) is { } routingHold) return routingHold;
         if (key.Rank is OwnerConsoleAttention.GateRunning or OwnerConsoleAttention.WaitingForGate &&
             gate?.ForMember(goal.Id.Value) is { } live)
-            return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
+        {
+            var count = OwnerConsoleGateCount.Of(live);
+            if (live.Failing) return OwnerConsoleGateBoardStatus.Failing(count);
+            return count.Total > 0 ? $"in gate: {count.Done}/{count.Total}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
                 $"gate running {(int)live.Elapsed.TotalMinutes}m";
+        }
         if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null))
         {
             if (goal.Status == GoalStatus.Verified && goal.LandingBlocker is not null)
