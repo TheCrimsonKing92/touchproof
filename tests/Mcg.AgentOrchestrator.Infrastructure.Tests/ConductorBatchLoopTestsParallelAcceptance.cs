@@ -3271,6 +3271,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     $$"""
                     {
                       "version": 1,
+                      "environmentContract": { "version": 1, "tools": [] },
                       "checks": [
                         {
                           "name": "background owned start marker",
@@ -3993,6 +3994,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     "enforceStructuralCoverage": false,
                     "timeouts": {}
                   },
+                  "environmentContract": { "version": 1, "tools": [] },
                   "checks": [
                     { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
                     { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }

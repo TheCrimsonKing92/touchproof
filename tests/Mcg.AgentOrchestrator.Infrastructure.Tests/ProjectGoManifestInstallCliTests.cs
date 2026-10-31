@@ -175,7 +175,22 @@ public sealed class ProjectGoManifestInstallCliTests
               ]
             }
           ],
-          "forbiddenChangedPathGlobs": []
+          "forbiddenChangedPathGlobs": [],
+          "environmentContract": {
+            "version": 1,
+            "tools": [
+              {
+                "name": "go",
+                "command": "go",
+                "arguments": [
+                  "version"
+                ],
+                "outputPattern": null,
+                "variables": [],
+                "source": "check"
+              }
+            ]
+          }
         }
         """;
 }

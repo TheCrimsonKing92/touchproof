@@ -31,6 +31,8 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
+        if (EnvironmentGate?.CheckMany(orderedGoals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)), policy) is { } environmentHolds)
+            return new(null, environmentHolds, "Environment hold prevents cohort gate start.");
         if (_runAcceptanceCohortOverride is not null)
         {
             return _runAcceptanceCohortOverride(selection, orderedGoals, policy);

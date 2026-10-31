@@ -133,6 +133,7 @@ internal sealed partial class ConductorDriver
         }
 
         // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
+        if (EnvironmentGate?.Check(goal, policy, GoalLifecycleState.Verified, forGate: true) is { } environmentHold) return environmentHold;
         var gateStart = VerifiedGateStartExecutor.Execute(
             () => RunInlineLandingSourceSizePreflight(goal),
             () => _runAcceptanceVerification(
@@ -282,6 +283,7 @@ internal sealed partial class ConductorDriver
             }
         }
 
+        if (EnvironmentGate?.Check(goal, policy, callerState, forGate: true) is { } environmentHold) return environmentHold;
         ConductorParallelAcceptanceRunAcceptance runAcceptance = _isConductorTick
             ? RunParallelLandingAcceptance
             : (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
@@ -466,6 +468,8 @@ internal sealed partial class ConductorDriver
         AcceptanceRunExecutionOptions executionOptions,
         bool omitStableSlotIndexWithoutLease)
     {
+        if (EnvironmentGate?.Check(candidate.Goal, policy, GoalLifecycleState.Verifying, forGate: true) is { } environmentHold)
+            return ConductorParallelAcceptanceRunResult.Early(candidate, environmentHold, null);
         executionOptions = executionOptions with { IntegrationBranch = _integrationBranch, ProjectHomeDirectory = _cohortWorkspace?.ProjectHomeDirectoryOrNull };
         var effectiveCandidate = candidate;
         var evidenceMutationLease = _tryAcquireEvidenceMutationLease(

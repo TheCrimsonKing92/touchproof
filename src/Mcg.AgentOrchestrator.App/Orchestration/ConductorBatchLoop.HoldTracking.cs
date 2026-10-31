@@ -21,6 +21,7 @@ internal sealed partial class ConductorBatchLoop
         List<string> tickLines,
         ConductEventLogWriter? conductEventLogWriter = null)
     {
+        if (goal.CurrentHold?.State == "environment-hold") { changedGoalIds.Add(goal.Id); return; }
         ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, observedAt, changedGoalIds);
         if (outcome is ConductorAdvanceOutcome.Held held)
         {

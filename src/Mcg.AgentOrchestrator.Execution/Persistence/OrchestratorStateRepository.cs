@@ -111,7 +111,8 @@ public sealed record AttentionReadProjection(
     IReadOnlyList<AttentionOwnerQuestionEvidence> OwnerQuestions,
     IReadOnlyList<ProviderUsageGoalEvidence> ProviderEvidence,
     AttentionProjectionReadCounts Reads,
-    IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null);
+    IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null,
+    IReadOnlyList<AttentionEnvironmentHoldEvidence>? EnvironmentHolds = null);
 
 public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
     DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);

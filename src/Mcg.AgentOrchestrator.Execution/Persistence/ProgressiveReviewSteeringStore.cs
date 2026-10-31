@@ -52,6 +52,8 @@ public interface IProgressiveReviewSteeringStore
 {
     Task EnqueueIntentAsync(ProgressiveReviewSteerIntent intent, CancellationToken cancellationToken = default);
 
+    Task<bool> HasPendingIntentAsync(string goalId, CancellationToken cancellationToken = default);
+
     Task<ProgressiveReviewSteerIntent?> ReserveNextPendingAsync(
         string goalId,
         CancellationToken cancellationToken = default);
@@ -82,6 +84,11 @@ public sealed class InMemoryProgressiveReviewSteeringStore : IProgressiveReviewS
         _intents.Add(intent);
         return Task.CompletedTask;
     }
+
+    public Task<bool> HasPendingIntentAsync(string goalId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_intents.Any(candidate =>
+            candidate.GoalId.Equals(goalId, StringComparison.Ordinal) &&
+            candidate.Status != ProgressiveReviewSteerIntentStatus.Completed));
 
     public Task<ProgressiveReviewSteerIntent?> ReserveNextPendingAsync(
         string goalId,
@@ -184,6 +191,12 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
             """;
         BindIntent(cmd, intent);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<bool> HasPendingIntentAsync(string goalId, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await ReadNextPendingAsync(conn, goalId, cancellationToken) is not null;
     }
 
     public async Task<ProgressiveReviewSteerIntent?> ReserveNextPendingAsync(

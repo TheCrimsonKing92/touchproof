@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json.Nodes;
 using Xunit;
 
@@ -35,11 +36,12 @@ public sealed class ProjectCompareManifestCliTests
 
         Assert.Equal(mismatch ? 1 : 0, exit);
         var lines = Lines(output);
-        Assert.Equal(2, lines.Length);
+        Assert.Equal(3, lines.Length);
         Assert.Equal($"Match {AppTest} learned=vstest manifest=vstest", lines[0]);
         Assert.Equal(mismatch
             ? $"RunnerDiffers {CoreTest} learned=vstest manifest=mtp (The learned and manifest runners differ.)"
             : $"Match {CoreTest} learned=vstest manifest=vstest", lines[1]);
+        Assert.Equal("Match tool dotnet", lines[2]);
         AssertUnchanged(source.Root, sourceBefore);
         AssertUnchanged(home.Root, homeBefore);
         AssertNoModel(registry.DataRootDirectory);
@@ -48,7 +50,7 @@ public sealed class ProjectCompareManifestCliTests
     }
 
     [Fact]
-    public void Compare_NoTestUnitsOrDotnetChecks_ReturnsZeroAndNoOutput()
+    public void Compare_NoTestChecks_MissingSdkContract_ReturnsDifference()
     {
         using var home = new ProjectOnboardingFixture("no-solution");
         using var source = new ProjectOnboardingFixture("answer-key-repository");
@@ -59,13 +61,25 @@ public sealed class ProjectCompareManifestCliTests
         var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!;
         foreach (var check in manifest["checks"]!.AsArray()) check!["type"] = "command";
         File.WriteAllText(manifestPath, manifest.ToJsonString());
+        Assert.Contains(new DotnetProjectDiscoveryAdapter().Discover(source.Root).EnvironmentNeeds,
+            need => need.Name == "dotnet-sdk");
         var registry = Registry(home);
         using var output = new StringWriter();
 
-        Assert.Equal(0, ProjectCliCommand.Execute(
+        Assert.Equal(1, ProjectCliCommand.Execute(
             ["project", "compare-manifest", "--root", source.Root, "--manifest", manifestPath],
             registry, home.Root, null, output));
-        Assert.Empty(output.ToString());
+        Assert.Equal("MissingFromManifest tool dotnet", Assert.Single(Lines(output)));
+
+        // Settling the SDK contract is sufficient even when there are no test checks.
+        manifest["environmentContract"] = new EnvironmentContract(1,
+            [new("dotnet", "dotnet", ["--version"], Variables: [])]).ToJson();
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        using var matched = new StringWriter();
+        Assert.Equal(0, ProjectCliCommand.Execute(
+            ["project", "compare-manifest", "--root", source.Root, "--manifest", manifestPath],
+            registry, home.Root, null, matched));
+        Assert.Equal("Match tool dotnet", Assert.Single(Lines(matched)));
         AssertNoModel(registry.DataRootDirectory);
     }
 
@@ -163,7 +177,8 @@ public sealed class ProjectCompareManifestCliTests
         Assert.Equal(new[]
         {
             $"Match {AppTest} learned=vstest manifest=vstest",
-            $"Match {CoreTest} learned={(useDefault ? "vstest" : "mtp")} manifest={(useDefault ? "vstest" : "mtp")}"
+            $"Match {CoreTest} learned={(useDefault ? "vstest" : "mtp")} manifest={(useDefault ? "vstest" : "mtp")}",
+            "Match tool dotnet"
         }, Lines(output));
         AssertUnchanged(source.Root, sourceBefore);
         AssertUnchanged(home.Root, homeBefore);

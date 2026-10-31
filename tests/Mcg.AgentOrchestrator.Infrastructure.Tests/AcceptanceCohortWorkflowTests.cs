@@ -8,6 +8,10 @@ using Microsoft.Data.Sqlite;
 
 public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 {
+    // These fixtures inject a verifier, so they require no external tools. Declare that
+    // explicitly: an empty JSON object is an invalid environment contract.
+    private protected const string FakeAcceptanceManifest =
+        """{"environmentContract":{"version":1,"tools":[]}}""";
 
     private protected static void AssertEarlyInfrastructureResultWithInvalidPathPersistsStructuredFailure(
         bool skipped,
@@ -71,7 +75,7 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     private protected static void AddAcceptanceManifest(string repo)
     {
         Directory.CreateDirectory(Path.Combine(repo, "config"));
-        File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
+        File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), FakeAcceptanceManifest);
         RunGit(repo, "add", "config/acceptance-manifest.json");
         RunGit(repo, "commit", "-m", "Add manifest");
     }
