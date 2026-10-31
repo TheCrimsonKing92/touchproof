@@ -15,33 +15,57 @@ public sealed class GitHubPullRequestPublisherTests
     public void New_branch_uses_absent_lease_and_temporary_body_is_deleted(bool createFails)
     {
         string? bodyPath = null;
+        string? body = null;
+        string[]? pushArguments = null;
+        var ghArguments = new List<string[]>();
         var runner = new Runner((command, args) =>
         {
             if (command == "git" && args[0] == "remote") return Ok("https://github.com/octo/sample.git");
             if (command == "git" && args[0] == "ls-remote") return Ok("");
             if (command == "git" && args[0] == "push")
             {
-                Assert.Contains($"--force-with-lease={Reference}:", args);
-                Assert.Contains($"{Candidate}:{Reference}", args);
+                pushArguments = args;
                 return Ok("");
             }
-            Assert.Equal("gh", command);
-            Assert.Contains("octo/sample", args);
-            Assert.Contains("release", args);
+            ghArguments.Add(args);
             if (args[1] == "list") return Ok("[]");
-            Assert.Equal("create", args[1]);
             bodyPath = args[Array.IndexOf(args, "--body-file") + 1];
-            Assert.Equal("approved body", File.ReadAllText(bodyPath));
-            Assert.StartsWith(Path.GetFullPath(OrchestratorTempRoot.GetParent()) + Path.DirectorySeparatorChar,
-                bodyPath, StringComparison.OrdinalIgnoreCase);
+            body = File.ReadAllText(bodyPath);
             return createFails ? new(true, 1, "", "creation failed") : Ok(Url);
         });
 
         var result = new GitHubPullRequestPublisher(runner).Publish(Request());
 
-        Assert.Equal(!createFails, result.Succeeded);
-        Assert.Equal(Candidate, result.PushedCommit);
+        // Publisher exceptions become typed failures. Assert outside that boundary so
+        // callback assertion failures cannot masquerade as an expected create failure.
+        runner.AssertEnvironment();
+        Assert.NotNull(pushArguments);
+        Assert.Contains($"--force-with-lease={Reference}:", pushArguments);
+        Assert.Contains($"{Candidate}:{Reference}", pushArguments);
+        Assert.Equal(2, ghArguments.Count);
+        Assert.All(ghArguments, args =>
+        {
+            Assert.Contains("octo/sample", args);
+            Assert.Contains("release", args);
+        });
+        Assert.Equal("create", ghArguments[1][1]);
+        Assert.Equal("approved body", body);
         Assert.NotNull(bodyPath);
+        Assert.StartsWith(Path.GetFullPath(OrchestratorTempRoot.GetParent()) + Path.DirectorySeparatorChar,
+            bodyPath, StringComparison.OrdinalIgnoreCase);
+        if (createFails)
+        {
+            Assert.False(result.Succeeded);
+            Assert.Equal(PullRequestPublishFailureKind.GhFailed, result.FailureKind);
+            Assert.Equal("creation failed", result.Message);
+        }
+        else
+        {
+            Assert.True(result.Succeeded, $"{result.FailureToken}: {result.Message}");
+            Assert.Equal(7, result.PullRequestNumber);
+            Assert.Equal(Url, result.Url);
+        }
+        Assert.Equal(Candidate, result.PushedCommit);
         Assert.False(File.Exists(bodyPath));
         Assert.Equal(["git remote", "git ls-remote", "git push", "gh pr list", "gh pr create"], runner.Calls);
     }
@@ -55,6 +79,7 @@ public sealed class GitHubPullRequestPublisherTests
 
         var result = new GitHubPullRequestPublisher(runner).Publish(Request());
 
+        runner.AssertEnvironment();
         Assert.True(result.Succeeded);
         Assert.Equal(7, result.PullRequestNumber);
         Assert.Equal(Url, result.Url);
@@ -67,6 +92,7 @@ public sealed class GitHubPullRequestPublisherTests
         var runner = new Runner((_, args) => args[0] == "remote"
             ? Ok("git@github.com:octo/sample.git") : Ok($"{Foreign}\t{Reference}"));
         var result = new GitHubPullRequestPublisher(runner).Publish(Request());
+        runner.AssertEnvironment();
         Assert.Equal(PullRequestPublishFailureKind.PushRejected, result.FailureKind);
         Assert.Null(result.PushedCommit);
         Assert.Equal(["git remote", "git ls-remote"], runner.Calls);
@@ -89,6 +115,7 @@ public sealed class GitHubPullRequestPublisherTests
             return args[1] == "list" ? Ok("[]") : new(true, 1, "", "failed " + secret);
         });
         var result = new GitHubPullRequestPublisher(runner).Publish(Request());
+        runner.AssertEnvironment();
         Assert.False(result.Succeeded);
         Assert.Equal(expected, result.FailureKind);
         Assert.DoesNotContain(secret, result.Message ?? "");
@@ -102,11 +129,22 @@ public sealed class GitHubPullRequestPublisherTests
     private sealed class Runner(Func<string, string[], ForgeProcessResult> run) : IForgeProcessRunner
     {
         public List<string> Calls { get; } = [];
+        private readonly List<(string WorkingDirectory, IReadOnlyDictionary<string, string> Environment)> environments = [];
+
+        public void AssertEnvironment()
+        {
+            Assert.NotEmpty(environments);
+            Assert.All(environments, call =>
+            {
+                Assert.Equal(Directory.GetParent(call.WorkingDirectory)!.FullName, call.Environment["GIT_CEILING_DIRECTORIES"]);
+                Assert.DoesNotContain("GH_TOKEN", call.Environment.Keys);
+            });
+        }
+
         public ForgeProcessResult Run(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             IReadOnlyDictionary<string, string> environment, TimeSpan timeout)
         {
-            Assert.Equal(Directory.GetParent(workingDirectory)!.FullName, environment["GIT_CEILING_DIRECTORIES"]);
-            Assert.DoesNotContain("GH_TOKEN", environment.Keys);
+            environments.Add((workingDirectory, new Dictionary<string, string>(environment)));
             Calls.Add(fileName + " " + string.Join(" ", arguments.Take(fileName == "git" ? 1 : 2)));
             return run(fileName, arguments.ToArray());
         }
