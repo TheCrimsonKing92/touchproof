@@ -321,6 +321,16 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         }
     }
 
+    internal bool ReservesCapacityReadOnly(ConductorGroupedGateAttempt attempt)
+    {
+        if (HasFinishedResult(attempt)) return false;
+        var binding = AcceptanceHolderBinding.For(attempt);
+        if (attempt.HolderContractVersion == 1 || LeaseFilePresent(binding.LeasePath))
+            return HolderLease.Read(binding).Phase is not ("Released" or "Cancelled");
+        return LegacyHolderSettlementReason(attempt) is null ||
+            attempt.Outcome == "Running" && File.Exists(attempt.ResultPath);
+    }
+
     // Published terminal evidence outranks leases. Legacy classification never backfills a lease.
     internal bool ReservesCapacity(ConductorGroupedGateAttempt attempt)
     {
