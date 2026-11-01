@@ -255,10 +255,10 @@ public sealed class WorkerContextPackageBuilder
         }
 
         var bytes = artifact.AuthoritativeBytes!;
-        var encoding = TryDecodeUtf8(bytes, out var text) ? "utf8-json" : "base64";
-        var payload = encoding == "utf8-json" ? JsonSerializer.Serialize(text) : Convert.ToBase64String(bytes);
-        return $"INLINE FULL: identity={artifact.Identity.Value}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; encoding={encoding}" +
-            Environment.NewLine + payload;
+        var headerPrefix = $"INLINE FULL: identity={artifact.Identity.Value}; sha256={artifact.ContentHash}; contract={artifact.ContractVersion.Value}; encoding=";
+        return TryDecodeUtf8(bytes, out var text)
+            ? WorkerContextInlinePayload.Render(headerPrefix, text, artifact.ContentHash)
+            : headerPrefix + "base64" + Environment.NewLine + Convert.ToBase64String(bytes);
     }
 
     private static WorkerContextArtifact RehydrateArtifact(
@@ -283,23 +283,7 @@ public sealed class WorkerContextPackageBuilder
         }
 
         var headerPrefix = $"INLINE FULL: identity={section.LogicalIdentity}; sha256={section.ContentHash}; contract={section.ContractVersion}; encoding=";
-        var normalized = renderedPackage.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var lines = normalized.Split('\n');
-        var headerIndexes = lines
-            .Select((line, index) => (line, index))
-            .Where(item => item.line.StartsWith(headerPrefix, StringComparison.Ordinal))
-            .ToArray();
-        if (headerIndexes.Length != 1 || headerIndexes[0].index + 1 >= lines.Length)
-        {
-            throw new WorkerContextPreparationException(
-                identity,
-                "inline-rehydration-ambiguous",
-                $"Expected exactly one rendered inline payload, found {headerIndexes.Length}.");
-        }
-
-        var header = headerIndexes[0].line;
-        var encoding = header[headerPrefix.Length..];
-        var bytes = RecoverInlineBytes(lines[headerIndexes[0].index + 1], encoding);
+        var bytes = WorkerContextInlinePayload.Rehydrate(renderedPackage, headerPrefix, identity, section.ContentHash);
         return WorkerContextArtifact.Create(
             identity,
             ContextArtifactKind.RegisteredContext,

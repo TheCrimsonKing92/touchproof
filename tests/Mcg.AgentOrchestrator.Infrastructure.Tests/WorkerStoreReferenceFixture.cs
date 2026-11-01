@@ -122,7 +122,7 @@ internal sealed class WorkerStoreReferenceFixture : IDisposable
         var lines = File.ReadAllLines(prepared.PromptPath);
         var index = Array.FindIndex(lines, line => line.StartsWith($"INLINE FULL: identity={identity};", StringComparison.Ordinal));
         Assert.True(index >= 0, $"No final prompt artifact for {identity}.");
-        return JsonSerializer.Deserialize<string>(lines.Skip(index + 1).First(line => !string.IsNullOrWhiteSpace(line)))!;
+        return WorkerContextInlinePayloadFixture.ReadText(File.ReadAllText(prepared.PromptPath), identity);
     }
 
     internal string Capture(Goal goal)
