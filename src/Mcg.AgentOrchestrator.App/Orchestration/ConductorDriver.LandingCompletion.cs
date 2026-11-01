@@ -162,6 +162,7 @@ internal sealed partial class ConductorDriver
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
+                var failureRecordedAt = _utcNow();
                 IReadOnlyList<string> retryFeedback =
                     [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines];
                 var retryCount = _recordCriterionRetryFeedback(
@@ -171,6 +172,12 @@ internal sealed partial class ConductorDriver
                 var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
                     string.Join(Environment.NewLine, retryFeedback);
                 _retryTask(goal.Id, task.Id, retryMessage, null, RetryCause.CriterionEvidenceOwnerMismatch);
+                var retryGoal = GetCurrentGoal(goal);
+                var retryTask = retryGoal.FindTask(task.Id);
+                OperatorRoutingNoteLedger.OpenHold(retryTask, failureRecordedAt,
+                    policy.AutomaticRetryOperatorRoutingHoldSeconds, acceptance.AttemptId, retryFeedback);
+                if (policy.AutomaticRetryOperatorRoutingHoldSeconds > 0)
+                    _recordTaskNote(goal.Id, task.Id, AcceptanceRetryRoutingHoldGate.Describe(retryTask, _utcNow()));
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }
@@ -482,7 +489,7 @@ internal sealed partial class ConductorDriver
 
             if (testResultPaths.Length == 0)
             {
-                AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                 evidence.Add($"detail unavailable: no TRX path was recorded for partition \"{criterion.Name}\"");
                 continue;
             }
@@ -495,7 +502,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -510,7 +517,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -528,7 +535,7 @@ internal sealed partial class ConductorDriver
                 {
                     if (!fallbackAdded)
                     {
-                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        AcceptanceRetryOutputEvidence.AppendBounded(evidence, outputEvidence, ref remainingEvidenceEntries);
                         fallbackAdded = true;
                     }
 
@@ -566,24 +573,6 @@ internal sealed partial class ConductorDriver
         }
 
         return evidence;
-    }
-
-    private static void AddBoundedOutputEvidence(
-        ICollection<string> evidence,
-        IReadOnlyList<string> outputEvidence,
-        ref int remainingEvidenceEntries)
-    {
-        var retainedCount = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
-        for (var index = 0; index < retainedCount; index++)
-        {
-            evidence.Add(outputEvidence[index]);
-        }
-
-        remainingEvidenceEntries -= retainedCount;
-        if (retainedCount < outputEvidence.Count)
-        {
-            evidence.Add($"{outputEvidence.Count - retainedCount} more acceptance evidence entries omitted.");
-        }
     }
 
     private static string FormatTrxFailureEvidence(AcceptanceTrxFailure failure)

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -299,7 +300,8 @@ public sealed partial class SqliteOperatorIntentStore
             while (reader.Read())
             {
                 var status = reader.GetString(3);
-                if (status == "Rejected")
+                if (status == "Rejected" || status == "Applied" && reader.GetString(2) == OperatorIntentVerbs.Adjudicate &&
+                    OperatorRoutingNote.IsQueuedOutcome(reader.IsDBNull(4) ? null : reader.GetString(4)))
                 {
                     rejected.Add(new("continued", reference.GoalId, reference.TaskId, reference.Version,
                         reference.DispatchedAt, reader.GetString(1), status,

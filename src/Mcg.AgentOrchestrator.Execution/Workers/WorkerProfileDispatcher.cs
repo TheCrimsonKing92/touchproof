@@ -162,6 +162,7 @@ public static partial class WorkerProfileDispatcher
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        OperatorRoutingNoteLedger.PrepareDispatch(task, dispatchedAt);
         var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
         var durableArtifactFindings = new List<string>();
         AddDurableArtifactDependencyFindings(

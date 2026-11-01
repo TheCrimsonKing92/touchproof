@@ -5,6 +5,47 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class ConductorAutonomyPolicyTests
 {
+    [Xunit.Fact]
+    public void RoutingHold_DefaultsToThreeMinutes_IncludingLegacyJson()
+    {
+        foreach (var policy in ConductorAutonomyPolicy.All)
+            Assert.Equal(180, policy.AutomaticRetryOperatorRoutingHoldSeconds);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ConductorAutonomyPolicy.Default.ToJson())!.AsObject();
+        Assert.True(json.Remove("automaticRetryOperatorRoutingHoldSeconds"));
+        Assert.Equal(180, ConductorAutonomyPolicy.ParseJson(json.ToJsonString()).AutomaticRetryOperatorRoutingHoldSeconds);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(17)]
+    [Xunit.InlineData(180)]
+    public void RoutingHold_NonnegativeSeconds_ValidateAndRoundTrip(int seconds)
+    {
+        var policy = ConductorAutonomyPolicy.Default with { AutomaticRetryOperatorRoutingHoldSeconds = seconds };
+        Assert.Empty(policy.Validate());
+        Assert.Equal(seconds, ConductorAutonomyPolicy.ParseJson(policy.ToJson()).AutomaticRetryOperatorRoutingHoldSeconds);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("-1")]
+    [Xunit.InlineData("1.5")]
+    [Xunit.InlineData("\"180\"")]
+    [Xunit.InlineData("null")]
+    [Xunit.InlineData("2147483648")]
+    public void RoutingHold_InvalidSeconds_AreRejected(string value)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ConductorAutonomyPolicy.Default.ToJson())!.AsObject();
+        json["automaticRetryOperatorRoutingHoldSeconds"] = System.Text.Json.Nodes.JsonNode.Parse(value);
+        Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json.ToJsonString()));
+    }
+
+    [Xunit.Fact]
+    public void RoutingHold_NegativeRecordValue_FailsValidation()
+    {
+        var policy = ConductorAutonomyPolicy.Default with { AutomaticRetryOperatorRoutingHoldSeconds = -1 };
+        Assert.Contains(policy.Validate(), error => error.Contains("automaticRetryOperatorRoutingHoldSeconds", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_Conservative_is_default_preset")]
     public void ConductorAutonomyPolicyConservativeIsDefaultPreset()
     {

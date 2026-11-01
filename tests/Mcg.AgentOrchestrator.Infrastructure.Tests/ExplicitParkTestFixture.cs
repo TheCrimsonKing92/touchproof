@@ -14,8 +14,10 @@ internal sealed class ExplicitParkTestFixture : IDisposable
     internal Goal Goal { get; private set; }
     internal TaskSpec Task => Goal.Tasks.Single();
     internal int Dispatches, Acceptances, Landings;
+    // These cases exercise disposition/merge authority with immediate retry admission.
     internal static readonly ConductorAutonomyPolicy Policy =
-        ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 1 };
+        ConductorAutonomyPolicy.Conservative with
+        { MaxCriterionRetries = 1, AutomaticRetryOperatorRoutingHoldSeconds = 0 };
 
     internal ExplicitParkTestFixture()
     {
