@@ -51,7 +51,7 @@ internal static class FocusedEvidenceBareSelectorResolution
                     if (!declaration.Members.OfType<MethodDeclarationSyntax>().Any(method =>
                             method.Identifier.ValueText.Equals(value, StringComparison.Ordinal) &&
                             method.AttributeLists.SelectMany(list => list.Attributes)
-                                .Any(attribute => FocusedEvidenceRequestResolver.IsFocusedEvidenceTestAttribute(attribute.Name.ToString()))))
+                                .Any(attribute => FocusedEvidenceMethodResolver.IsTestAttribute(attribute.Name.ToString()))))
                     {
                         continue;
                     }
