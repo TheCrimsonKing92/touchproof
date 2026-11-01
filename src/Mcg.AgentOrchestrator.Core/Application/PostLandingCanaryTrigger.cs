@@ -31,8 +31,9 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
             // Class history is reached through the lane resolver and balanced lane plan writer.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
-            // The process invoker is reached indirectly through AcceptanceProcessRunner.
+            // The process invoker and test context are reached indirectly through AcceptanceProcessRunner.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessTestContext",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
@@ -113,7 +114,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner.CandidateTree",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessRunner",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessTestContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRetryEvidenceRetentionFailure",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext.FollowerPinnedBase",
