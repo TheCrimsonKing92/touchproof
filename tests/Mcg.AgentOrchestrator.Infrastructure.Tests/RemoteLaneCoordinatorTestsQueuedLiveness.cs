@@ -161,8 +161,13 @@ public sealed class RemoteLaneCoordinatorTestsQueuedLiveness
         baseline.Stop.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Completed(run, "healthy run cancellation"));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Completed(baselineRun, "baseline cancellation"));
+        // Caller cancellation cleans up both remote jobs without recording a fallback.
+        await fixture.CancellationCompleted();
+        await baseline.CancellationCompleted();
         Assert.Empty(fixture.Rows());
-        Assert.Empty(fixture.CancelCopies());
+        Assert.Empty(baseline.Rows());
+        Assert.Single(fixture.CancelCopies());
+        Assert.Single(baseline.CancelCopies());
     }
 
     [Xunit.Fact]
@@ -267,7 +272,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedLiveness
             await CancellationCompleted();
             return row;
         }
-        private async Task CancellationCompleted()
+        internal async Task CancellationCompleted()
         {
             var task = Transport.Handle.QueuedJobCancellation;
             Assert.NotNull(task);

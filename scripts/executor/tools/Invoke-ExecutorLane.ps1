@@ -122,8 +122,12 @@ try {
     try {
         $budget = if ($TestHostTimeoutSeconds -gt 0) { $TestHostTimeoutSeconds } else { 2100 }
         $timeoutArgs = @('-TestHostTimeoutSeconds', $budget)
+        # The job JSON carries an arbitrary-sized filter. Keep it off the native pwsh
+        # command line too; Windows CreateProcess is limited to 32,767 characters.
+        $filterFile = Join-Path $out 'filter.txt'
+        [IO.File]::WriteAllText($filterFile, $Filter, [Text.UTF8Encoding]::new($false))
         $phaseStart = [DateTime]::UtcNow
-        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -Filter $Filter -NoBuild -ResultsRoot $results @timeoutArgs *>&1 |
+        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -FilterFile $filterFile -NoBuild -ResultsRoot $results @timeoutArgs *>&1 |
             Tee-Object -FilePath (Join-Path $out 'runner.log') | Out-Null
         $exit = $LASTEXITCODE
         $phases.testSeconds = Get-PhaseSeconds $phaseStart

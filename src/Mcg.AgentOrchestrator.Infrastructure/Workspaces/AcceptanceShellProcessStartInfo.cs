@@ -108,6 +108,8 @@ internal static class AcceptanceShellProcessStartInfo
             // cmd /c strips one surrounding quote pair, so wrap the whole command once.
             startInfo.Arguments = $"/c \"{command}\"";
             GoalAcceptanceVerifier.ThrowIfCmdCommandLineTooLong(startInfo.Arguments, arguments);
+            AcceptanceGatePhaseAccountant.RecordCurrentLaneCommand(startInfo.Arguments.Length,
+                AcceptanceMtpFilterResponseFile.Plan(arguments).ResponseFilePath is not null);
         }
         else
         {

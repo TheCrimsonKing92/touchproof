@@ -14,7 +14,8 @@ internal static class AttentionHumanWaitQuery
             .Where(request => includeHistory || !request.IsCompleted)
             .Where(request => includeHistory || request.PlannerIdentity is null ||
                 request.PlannerIdentity.BriefVersion == kernel.GetGoal(request.GoalId).AuthoritativeBrief.Version)
-            .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId))
+            .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId) ||
+                kernel.Goals.Any(goal => PostLandingFollowUpAttention.IsFollowUp(goal, request)))
             .OrderBy(request => request.CreatedAt)
             .ToList();
     }

@@ -13,7 +13,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     ];
 
     [Fact]
-    public void ShippedManifest_OnlyThreeGitHeavyLanesDeclareTheSharedKey()
+    public void ShippedManifest_OnlyConstrainedGitHeavyLanesDeclareTheSharedKey()
     {
         var lanes = LoadLanes();
         Assert.Equal(27, lanes.Count);
@@ -28,6 +28,7 @@ public sealed class GitHeavyLaneKeyManifestTests
         });
         Assert.All(lanes.Where(lane => !GitHeavyLaneNames.Contains(lane.Name)),
             lane => Assert.DoesNotContain(SharedKey, lane.ExclusiveResourceKeys));
+        Assert.NotNull(AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).BalancedLanePool);
     }
 
     [Fact]

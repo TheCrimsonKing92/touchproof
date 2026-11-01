@@ -41,6 +41,8 @@ internal static class HumanWaitsTextView
             Console.WriteLine($"    question: {request.Question}");
             if (request.PlannerEvidence is { } payload)
                 Console.WriteLine($"    evidence: identity={System.Text.Json.JsonSerializer.Serialize(request.PlannerIdentity)} owner={request.EvidenceOwner ?? "operator"} availability={payload.Availability} next={request.ResumeCommand}");
+            if ((goals ?? []).Any(goal => PostLandingFollowUpAttention.IsFollowUp(goal, request)))
+                Console.WriteLine($"    follow-up: {PostLandingFollowUpAttention.Label}");
             var resumeCommand = string.Equals(
                 request.ResumeCommand,
                 HumanInputRequest.BuildDefaultResumeCommand(request.Id),

@@ -79,7 +79,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_records_later_partitions_after_early_failure")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheRecordsLaterPartitionsAfterEarlyFailure()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateStaticPartitionVerdictManifestWorkspace();
         var cliLaneFilter = ResolveLaneFilter(root, "Cli");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
@@ -123,7 +123,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_probe_keeps_first_run_timeout_red")]
     public async Task GoalAcceptanceVerifierWithinAttemptProbeKeepsFirstRunTimeoutRed()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateStaticPartitionVerdictManifestWorkspace();
         var cliLaneFilter = ResolveLaneFilter(root, "Cli");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
@@ -302,7 +302,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_aggregate_ignores_unrelated_check_failures")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheAggregateIgnoresUnrelatedCheckFailures()
     {
-        var root = CreateManifestWorkspace("""
+        var root = CreateStaticPartitionVerdictManifestWorkspace("""
             {
               "version": 1,
               "checks": [
@@ -437,7 +437,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_filter_hash_change_runs_only_changed_partition")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheFilterHashChangeRunsOnlyChangedPartition()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateStaticPartitionVerdictManifestWorkspace();
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
@@ -1055,6 +1055,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         Assert.False(File.Exists(Path.Combine(defaultArtifacts, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "cache.txt")), defaultArtifacts);
 
         await GoalAcceptanceVerifierSlotGateSkipsBaseBuildCacheWhenSwitchIsOff();
+    }
+
+    private static string CreateStaticPartitionVerdictManifestWorkspace(string? manifestJson = null)
+    {
+        // These cache scenarios mutate/reuse named hand-written partitions. Pin membership
+        // so scanner discovery and duration history cannot dissolve the partition under test.
+        var root = manifestJson is null ? CreateCheckedInManifestShapeWorkspace() : CreateManifestWorkspace(manifestJson);
+        var path = Path.Combine(root, "config", "acceptance-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        manifest["engine"]!.AsObject().Remove("balancedLanePool");
+        File.WriteAllText(path, manifest.ToJsonString());
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        Assert.Null(settings.BalancedLanePool);
+        Assert.NotEmpty(settings.InfrastructureTestLanes);
+        Assert.Contains(settings.InfrastructureTestLanes, lane => lane.Name == "Cli");
+        return root;
     }
 
     private static void WriteVstestTrx(string[] arguments, string testName)

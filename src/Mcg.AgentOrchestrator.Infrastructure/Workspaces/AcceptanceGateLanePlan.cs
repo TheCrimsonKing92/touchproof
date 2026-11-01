@@ -4,7 +4,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Observation of a completed selection decision, never an input to scheduling.
 internal sealed record AcceptanceGateLanePlan(string SchemaVersion, string AttemptId,
-    IReadOnlyList<string> Scheduled, IReadOnlyList<AcceptanceGateLaneSkip> Skipped)
+    IReadOnlyList<string> Scheduled, IReadOnlyList<AcceptanceGateLaneSkip> Skipped,
+    AcceptanceBalancedLaneLayout? BalancedLayout = null)
 {
     internal const string CurrentSchemaVersion = "gate-lane-plan.v1";
     internal const string ArtifactSuffix = ".lane-plan.json";

@@ -71,7 +71,7 @@ public sealed class NextActionCommandAdviceCharacterizationTests
             : "ordinary dispatch failure";
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec", "C:\\repo", 1, string.Empty, stderr, DateTimeOffset.UtcNow));
-        Assert.Equal(dirty, DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out _));
+        Assert.Equal(dirty, DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out _));
 
         Assert.Equal(expected,
             NextActionCommandAdvice.BuildSuggestedCommand(goal, Action(NextActionKind.FixFailedVerification, task)));

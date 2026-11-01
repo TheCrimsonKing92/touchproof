@@ -495,6 +495,12 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new InvalidOperationException($"Invalid goal priority '{priorityPayload.Level}'; valid levels: {GoalPriorities.ValidLevelsText}.");
                 kernel.SetGoalPriority(goal.Id, priority, intent.Actor, priorityPayload.Rationale ?? "");
                 return;
+            case OperatorIntentVerbs.GoalNote:
+                var note = Deserialize<GoalNoteOperatorIntentPayload>(intent);
+                if (string.IsNullOrWhiteSpace(note.Text))
+                    throw new InvalidOperationException("An operator goal note requires text.");
+                kernel.RecordGoalPolicyDecision(goal.Id, $"Operator note: {note.Text}", null);
+                return;
             case OperatorIntentVerbs.GoalIsolation:
                 var isolationPayload = Deserialize<GoalIsolationOperatorIntentPayload>(intent);
                 if (!GoalIsolations.TryParse(isolationPayload.Mode, out var isolation))

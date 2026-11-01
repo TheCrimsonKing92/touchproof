@@ -1,5 +1,5 @@
 using System.Text;
-using static Mcg.AgentOrchestrator.Core.DispatchFailureClassifier;
+using static Mcg.AgentOrchestrator.Core.WorkerResultMarkers;
 
 namespace Mcg.AgentOrchestrator.Core;
 

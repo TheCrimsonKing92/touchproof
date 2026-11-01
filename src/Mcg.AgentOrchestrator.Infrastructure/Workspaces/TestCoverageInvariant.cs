@@ -11,7 +11,8 @@ internal sealed record TestPartitionCoverage(
     bool HasEnvironmentInterferenceEvidence = false,
     string? AttemptId = null,
     int RunOrdinal = 0,
-    bool IsExplicitCrossAttemptReuse = false);
+    bool IsExplicitCrossAttemptReuse = false,
+    bool AllowsEmptySelection = false);
 
 internal sealed record TestCoverageInvariantResult(
     bool Passed,
@@ -332,7 +333,9 @@ internal static class TestCoverageInvariant
         foreach (var partition in partitions)
         {
             var executed = ReadTestRecords(partition.TestResultPaths, passedOnly: true);
-            if (!partition.Completed || executed.Count == 0)
+            // A lane declared empty-allowed (the balanced residual complement) legitimately
+            // selects nothing once every scanned class is owned elsewhere.
+            if (!partition.Completed || (executed.Count == 0 && !partition.AllowsEmptySelection))
             {
                 emptyPartitions.Add(partition.Name);
                 continue;
