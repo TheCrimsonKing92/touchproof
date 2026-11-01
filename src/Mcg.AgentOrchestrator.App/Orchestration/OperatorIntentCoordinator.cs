@@ -247,6 +247,7 @@ internal sealed partial class OperatorIntentCoordinator
                 var recoveredOutcome = typedApplied
                     ? $"Applied; recovered durable operator-intent payload {intent.Id}."
                     : $"Applied; recovered durable goal marker {marker}.";
+                recoveredOutcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
                 _store.CompleteAsync(
                     intent.Id,
                     ClaimOwner,
@@ -315,6 +316,7 @@ internal sealed partial class OperatorIntentCoordinator
                     ? "Applied retry continuation to goal "
                     : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +
                     (intent.TaskId is null ? "." : $" task {intent.TaskId[..Math.Min(8, intent.TaskId.Length)]}.");
+                outcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
@@ -492,6 +494,12 @@ internal sealed partial class OperatorIntentCoordinator
                 if (!GoalPriorities.TryParse(priorityPayload.Level, out var priority))
                     throw new InvalidOperationException($"Invalid goal priority '{priorityPayload.Level}'; valid levels: {GoalPriorities.ValidLevelsText}.");
                 kernel.SetGoalPriority(goal.Id, priority, intent.Actor, priorityPayload.Rationale ?? "");
+                return;
+            case OperatorIntentVerbs.GoalNote:
+                var note = Deserialize<GoalNoteOperatorIntentPayload>(intent);
+                if (string.IsNullOrWhiteSpace(note.Text))
+                    throw new InvalidOperationException("An operator goal note requires text.");
+                kernel.RecordGoalPolicyDecision(goal.Id, $"Operator note: {note.Text}", null);
                 return;
             case OperatorIntentVerbs.GoalIsolation:
                 var isolationPayload = Deserialize<GoalIsolationOperatorIntentPayload>(intent);

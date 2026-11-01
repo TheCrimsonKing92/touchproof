@@ -52,9 +52,9 @@ public sealed class FocusedEvidenceOverflowSyntheticRootEquivalenceTests
     private static IReadOnlyList<AcceptanceManifestCheck> Resolve(
         string root, string request, out FocusedEvidenceCoverage coverage)
     {
-        var accepted = GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+        var accepted = FocusedEvidenceRequestResolver.TryBuildFocusedEvidenceChecks(
             request, new AcceptanceGateEngineSettings(), root,
-            out var checks, out coverage, out var rejection);
+            out var checks, out coverage, out var rejection, NoClassDurationHistory.Instance);
         Assert.True(accepted, $"{rejection.Code}: {rejection.Detail}");
         Assert.NotEmpty(checks);
         return checks;
