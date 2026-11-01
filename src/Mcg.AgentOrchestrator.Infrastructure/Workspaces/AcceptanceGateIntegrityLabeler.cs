@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // The normalizer prepares each parent before its files. Files must inherit that
 // parent's Medium label so the next worker's directory relabel can restore Low.
-internal sealed class AcceptanceGateIntegrityLabeler(IcaclsIntegrityLabeler native) : IWorkerIntegrityLabeler
+internal sealed class AcceptanceGateIntegrityLabeler(IcaclsIntegrityLabeler native)
+    : IAcceptanceGateSelectiveIntegrityLabeler
 {
     private const int SeFileObject = 1;
     private const uint LabelSecurityInformation = 0x00000010;
@@ -16,6 +17,8 @@ internal sealed class AcceptanceGateIntegrityLabeler(IcaclsIntegrityLabeler nati
 
     public bool SetIntegrity(string path, string level, bool recursive)
     {
+        if (!recursive && level == AcceptanceGateIntegrityNormalizer.MediumInheritableLevel)
+            return AcceptanceGateDirectoryIntegrityLabel.SetMedium(path);
         if (recursive || level != "M")
             return native.SetIntegrity(path, level, recursive);
 
