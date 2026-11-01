@@ -805,6 +805,22 @@ public sealed partial class TaskSpec
         LatestRetryInherited = false;
     }
 
+    internal void AdvanceVerifiedCandidateCoverage(string candidateSha)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateSha);
+        if (Status != WorkTaskStatus.Completed ||
+            RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer) ||
+            string.IsNullOrWhiteSpace(LastVerification?.ReviewedCommit))
+            throw new InvalidOperationException("Candidate coverage requires a completed Tester or Reviewer verdict with a reviewed commit.");
+
+        var prior = LastVerification;
+        var updated = prior with { ReviewedCommit = candidateSha.Trim() };
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
+        if (historyIndex >= 0) _verificationHistory[historyIndex] = updated;
+        LastVerification = updated;
+    }
+
     internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
     {
         if (LastVerification is null)

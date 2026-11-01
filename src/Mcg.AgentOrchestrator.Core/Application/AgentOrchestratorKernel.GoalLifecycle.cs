@@ -1645,6 +1645,15 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
+            if (DownstreamVerdictPatchEquivalence.TryCarry(
+                    _candidatePatchEquivalence, goal, downstream, priorCandidate, out var reviewedSha, out var evidence))
+            {
+                downstream.AdvanceVerifiedCandidateCoverage(priorCandidate!);
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated,
+                    $"Preserved {downstream.RequiredRole} task because candidate {priorCandidate!.Trim()} is patch-equivalent to reviewed candidate {reviewedSha} ({evidence}).");
+                continue;
+            }
+
             ResetTaskForRetry(downstream, retryAt, retryCause, inherited: true);
             Append(
                 goal,
@@ -1687,6 +1696,15 @@ public sealed partial class AgentOrchestratorKernel
                     downstream.Id,
                     ProgressKind.TaskUpdated,
                     $"Preserved {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} completed with unchanged candidate {currentCandidate}.");
+                continue;
+            }
+
+            if (DownstreamVerdictPatchEquivalence.TryCarry(
+                    _candidatePatchEquivalence, goal, downstream, currentCandidateSha, out var reviewedSha, out var evidence))
+            {
+                downstream.AdvanceVerifiedCandidateCoverage(currentCandidateSha!);
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated,
+                    $"Preserved {downstream.RequiredRole} task because candidate {currentCandidate} is patch-equivalent to reviewed candidate {reviewedSha} ({evidence}).");
                 continue;
             }
 

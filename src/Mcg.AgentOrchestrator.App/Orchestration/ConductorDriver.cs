@@ -285,6 +285,8 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         var dispatchLifecycleGate = new CriticalDispatchLifecycleEventGate(eventWriter);
         kernel.SetEventWriter(dispatchLifecycleGate);
+        kernel.SetCandidatePatchEquivalence(new GoalWorktreeCandidatePatchEquivalence(
+            workspace.ExecutionDirectory, workspace.IntegrationBranch));
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
                 ? reason

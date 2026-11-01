@@ -9,6 +9,7 @@ public sealed partial class AgentOrchestratorKernel
     private readonly Dictionary<GoalId, string> _knownDependencyGoalStatuses = [];
     private readonly IClock _clock;
     private IGoalLifecycleEventWriter _eventWriter = NullGoalLifecycleEventWriter.Instance;
+    private ICandidatePatchEquivalence? _candidatePatchEquivalence;
 
     public AgentOrchestratorKernel(IClock? clock = null)
     {
@@ -18,6 +19,11 @@ public sealed partial class AgentOrchestratorKernel
     public void SetEventWriter(IGoalLifecycleEventWriter writer)
     {
         _eventWriter = writer ?? NullGoalLifecycleEventWriter.Instance;
+    }
+
+    public void SetCandidatePatchEquivalence(ICandidatePatchEquivalence? equivalence)
+    {
+        _candidatePatchEquivalence = equivalence;
     }
 
     public IReadOnlyCollection<Goal> Goals => _goals.Values;

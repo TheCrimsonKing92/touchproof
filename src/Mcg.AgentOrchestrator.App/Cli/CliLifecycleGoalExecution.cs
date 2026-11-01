@@ -33,6 +33,8 @@ internal static class CliLifecycleGoalExecution
         var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory,
             kernel: kernel, integrationBranch: workspace.IntegrationBranch);
         kernel.SetEventWriter(writer);
+        kernel.SetCandidatePatchEquivalence(new GoalWorktreeCandidatePatchEquivalence(
+            workspace.ExecutionDirectory, workspace.IntegrationBranch));
         var context = createContext?.Invoke(kernel, persist) ?? new CliExecutionContext(
             kernel, workspace, providers, agents, profiles, selected, channel,
             reloadKernel: () => repository.LoadAsync().GetAwaiter().GetResult(), persistKernel: persist)
