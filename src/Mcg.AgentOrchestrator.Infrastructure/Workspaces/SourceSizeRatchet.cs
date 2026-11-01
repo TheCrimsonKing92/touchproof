@@ -282,7 +282,8 @@ internal static class SourceSizeRatchet
             // Goal 4ad7cdef adds the Developer ignored-file call site; evaluation lives in InScopeIgnoredFileCheck.
             // c32e68ed: one line for the dispatch execution-throttling policy delegate.
             // Goal fafad26f: declared tool-home resolution, preflight and environment application call sites.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2702),
+            // d52855ed: carry the manifest-declared Node install to the sandbox preparation host (+2).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2704),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -582,7 +583,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b adds six conductor-start probe and operator-attention wiring lines;
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
-            new SourceClassCeiling("CliCommandHandlers", 11019, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11015, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
