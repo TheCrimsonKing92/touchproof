@@ -600,7 +600,7 @@ if (startupArgs.Count > 0)
     }
 }
 
-Console.WriteLine("MCG Agent Orchestrator");
+Console.WriteLine("Touchproof");
 Console.WriteLine($"Project: {workspace.ProjectName}");
 Console.WriteLine($"Tenant: {workspace.TenantName}");
 Console.WriteLine($"State: {workspace.SqliteStatePath}");

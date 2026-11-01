@@ -42,7 +42,7 @@ public sealed class ConductorDriverTestsOwnerReviewHold
         Assert.Equal(0, fixture.Dispatches);
         var text = Assert.Single(fixture.Escalations);
         Assert.Contains(Candidate, text, StringComparison.Ordinal);
-        Assert.Contains($".\\mcg-orchestrator.cmd approve-policy-change {fixture.Goal.Id.Value[..8]} {Candidate} --text-file <reason-file>", text, StringComparison.Ordinal);
+        Assert.Contains($".\\touchproof.cmd approve-policy-change {fixture.Goal.Id.Value[..8]} {Candidate} --text-file <reason-file>", text, StringComparison.Ordinal);
         Assert.Contains("changed field(s) engine.maxParallelShards", text, StringComparison.Ordinal);
         Assert.Contains(Fingerprint, text, StringComparison.Ordinal);
         Assert.Contains("cancel-goal", text, StringComparison.Ordinal);

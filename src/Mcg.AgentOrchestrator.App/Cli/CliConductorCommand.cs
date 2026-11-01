@@ -271,7 +271,7 @@ internal static class CliConductorCommand
         var pid = receipt.RootElement.GetProperty("pid").GetInt32();
         var stdoutPath = receipt.RootElement.GetProperty("stdoutPath").GetString();
         output.WriteLine($"Conductor launched: pid {pid}; stdout log: {stdoutPath}");
-        output.WriteLine("Check status: mcg-orchestrator.cmd conductor status");
+        output.WriteLine("Check status: touchproof.cmd conductor status");
         return 0;
     }
 }

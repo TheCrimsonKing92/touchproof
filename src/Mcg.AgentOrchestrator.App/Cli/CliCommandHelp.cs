@@ -910,7 +910,8 @@ internal static class CliCommandHelp
 
     private static void PrintRootHelp()
     {
-        Console.WriteLine("Usage: mcg-orchestrator <command> [options]");
+        Console.WriteLine("Usage: touchproof <command> [options]");
+        Console.WriteLine("mcg-orchestrator.cmd still works as an alias.");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  goal              Create a goal.");

@@ -20,7 +20,8 @@ public static partial class RepositoryChangeClassifier
     [
         "scripts/resolve-run-dir.ps1",
         "scripts/Update-AppDllGitHeadMarker.ps1",
-        "mcg-orchestrator.cmd"
+        "mcg-orchestrator.cmd",
+        "touchproof.cmd"
     ];
 
     public static ConductorRelaunchDecision DecideConductorRelaunch(IEnumerable<string> paths)
