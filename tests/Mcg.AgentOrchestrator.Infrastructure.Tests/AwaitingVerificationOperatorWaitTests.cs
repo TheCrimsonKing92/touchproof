@@ -10,7 +10,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AwaitingVerificationOperatorWaitTests(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Blocked_gate_ticks_show_one_wait_then_clear_after_verification()
     {
@@ -64,7 +64,7 @@ public sealed class AwaitingVerificationOperatorWaitTests(ITestOutputHelper outp
         Assert.Empty(await fixture.AttentionItemIds());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Changed_worklist_refreshes_same_wait_and_lists_every_blocked_task()
     {
