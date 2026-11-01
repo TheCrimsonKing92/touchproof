@@ -2,7 +2,7 @@ using System.Globalization;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each scenario owns a temporary git repository and its executor occupancy root.
-[Collection("IsolatedProcessSpawning")]
+[Collection("IsolatedProcessSpawningRemainderC")]
 public sealed class RemoteFirstFocusedEvidenceExecutorWaitTests : RemoteFirstFocusedEvidenceFixture
 {
     [Fact]
