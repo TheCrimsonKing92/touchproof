@@ -51,6 +51,9 @@ internal sealed class OwnerQuestionReadModel(
         var loadedGoals = (loaded?.Goals ?? kernel!.Goals).Where(goal => loadedIds.Contains(goal.Id.Value)).ToArray();
         var goals = loadedGoals.ToDictionary(goal => goal.Id.Value, goal => goal.Status,
             StringComparer.OrdinalIgnoreCase);
+        var awaitingVerificationGoals = loadedGoals
+            .Where(goal => GoalLifecycle.ResolveState(goal) == GoalLifecycleState.AwaitingVerification)
+            .Select(goal => goal.Id.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var item in terminal) goals[item.Id] = Enum.Parse<GoalStatus>(item.Status, ignoreCase: true);
         var candidates = new List<QuestionCandidate>();
         // The hydrated kernel owns request repair/sweeping for non-terminal goals. Detached rows
@@ -84,6 +87,14 @@ internal sealed class OwnerQuestionReadModel(
                     item.CorrelationKey?.StartsWith(PassedGateHoldAttention.Prefix, StringComparison.Ordinal) == true)
                 {
                     if (goals.GetValueOrDefault(item.GoalId) == GoalStatus.Verified)
+                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                            OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
+                    continue;
+                }
+                if (item.GoalId is not null &&
+                    item.CorrelationKey?.StartsWith(AwaitingVerificationGateAttention.Prefix, StringComparison.Ordinal) == true)
+                {
+                    if (awaitingVerificationGoals.Contains(item.GoalId))
                         candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
                             OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
                     continue;

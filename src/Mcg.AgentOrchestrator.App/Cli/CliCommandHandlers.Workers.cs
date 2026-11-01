@@ -497,11 +497,7 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, goal, task),
         HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-    var startResult = new BackgroundDispatchRunner
-    {
-        DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
-            context.Workspace.RootDirectory, context.Workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
-    }.TryStartLatestDispatch(
+    var startResult = CliWorkerDispatchRunnerFactory.Create(context.Workspace).TryStartLatestDispatch(
         context.Kernel,
         goal.Id,
         task.Id,

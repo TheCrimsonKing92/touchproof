@@ -18,7 +18,7 @@ internal sealed record FocusedEvidenceMatchedClassSelection(string CanonicalToke
 
 internal static partial class FocusedEvidenceRequestResolver
 {
-    private static IEnumerable<string> EnumerateFocusedEvidenceSourceFiles(string worktreePath, string project)
+    internal static IEnumerable<string> EnumerateFocusedEvidenceSourceFiles(string worktreePath, string project)
     {
         var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
         var projectDirectory = Path.GetDirectoryName(projectPath);

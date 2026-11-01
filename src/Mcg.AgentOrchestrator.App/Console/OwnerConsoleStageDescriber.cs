@@ -21,6 +21,7 @@ internal static class OwnerConsoleStageDescriber
             return count.Total > 0 ? $"in gate: {count.Done}/{count.Total}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
                 $"gate running {(int)live.Elapsed.TotalMinutes}m";
         }
+        if (OwnerConsoleDeliveredForReviewText.For(goal) is { } delivered) return delivered;
         if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null))
         {
             if (goal.Status == GoalStatus.Verified && goal.LandingBlocker is not null)

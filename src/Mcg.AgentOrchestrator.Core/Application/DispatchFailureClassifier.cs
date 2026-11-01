@@ -407,6 +407,10 @@ public static class DispatchFailureClassifier
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = EmptyOutputDispatchEvidence.HasZeroByteStandardOutput(verification);
 
+        if (NodeDependencyPreparationFailureClassification.TryClassify(
+            task, verification, workerResultPresent, hasCommittedChanges, out var preparationFailure))
+            return preparationFailure;
+
         var terminalContract = assessTerminalContract(task, verification);
         if (!terminalContract.AllowsCompletion)
         {
@@ -503,6 +507,13 @@ public static class DispatchFailureClassifier
             WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
             testsStatus == WorkerResultBlockers.TestsStatus.Fail)
         {
+            if (OutsideRootWriteRefusalClassification.TryFindExternalWrite(task, verification, out var refusedPath))
+                return BuildOutcome(TaskOutcomeRules.WorkerSandboxRefused, task, verification,
+                    workerResultPresent, hasCommittedChanges,
+                    new DispatchOutcome(DispatchOutcomeKind.UnknownFailure, exitCode, hasZeroByteOutput,
+                        null, null, RecoveryRecommendation.OperatorNeeded,
+                        $"worker sandbox refused: reason=write-outside-worktree path={refusedPath}"));
+
             return BuildOutcome(
                 TaskOutcomeRules.SucceededWorkerResultFailingTests,
                 task,

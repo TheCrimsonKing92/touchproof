@@ -19,8 +19,12 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             // Selection coverage is reached through the verifier's telemetry collaborator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
+            // Missing-tool signatures are reached through the independently owned failure-cause adjudicator.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceMissingToolClassifier",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
             // Membership, expansion and packing are reached through the infrastructure lane resolver.
@@ -87,6 +91,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureClassifications",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFileExistsCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFocusedRunBinding",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateCancellationMonitor",
@@ -110,9 +115,11 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaunchLockSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestLocator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestPartitionEquivalence",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceMtpFailureOutput",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceNormalizedTestResultEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOverlappedCheckRunner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerProtectedFingerprint",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerResultsRoot",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.MissReasons",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.RemoteLaneIdentity",
@@ -137,6 +144,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetStructuralCoverageDiscovery",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetTestCheckTranslator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/EffectiveAcceptanceManifestIdentity",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceCoverage",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceMethodResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceRequestResolver.BooleanPlanning.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
@@ -158,6 +166,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ManifestScopedImpactPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/NegativeControlRevertPaths",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/OwnerProtectedConfigurationPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/PolicyTestCheckStackDispatch",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteExecutorHealthLedger",

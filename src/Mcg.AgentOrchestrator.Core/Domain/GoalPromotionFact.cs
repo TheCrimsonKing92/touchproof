@@ -1,13 +1,14 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-// An observation of a successful main publication, never an intent
-// or a later confirmation of reachability. One original fact belongs to each goal.
+// An observation of a successful trunk publication, locally or through a merged pull request,
+// never an intent or ancestry alone. One original fact belongs to each goal.
 public sealed record GoalPromotionFact
 {
     public const string SoloProvenance = "native-main-compare-and-swap";
     public const string CohortProvenance = "cohort-main-compare-and-swap";
     public const string MergeTrainProvenance = "merge-train-main-compare-and-swap";
     public const string CliFastForwardProvenance = "cli-workspace-fast-forward";
+    public const string PullRequestMergedProvenance = "pull-request-merged";
 
     public GoalPromotionFact(string goalId, string candidateRevision, string priorMainRevision,
         string promotedMainRevision, DateTimeOffset promotedAt, string provenance)
@@ -15,7 +16,7 @@ public sealed record GoalPromotionFact
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
         if (promotedAt == default || promotedAt.Offset != TimeSpan.Zero)
             throw new ArgumentException("Promotion time must be a non-default UTC instant.", nameof(promotedAt));
-        if (provenance is not (SoloProvenance or CohortProvenance or MergeTrainProvenance or CliFastForwardProvenance))
+        if (provenance is not (SoloProvenance or CohortProvenance or MergeTrainProvenance or CliFastForwardProvenance or PullRequestMergedProvenance))
             throw new ArgumentException("Unrecognized successful promotion provenance.", nameof(provenance));
         GoalId = goalId;
         CandidateRevision = Revision(candidateRevision);

@@ -88,9 +88,9 @@ public sealed class WorkerDispatchTestsReviewFindingFormatRepair : WorkerDispatc
         var envelopeHeaderIndex = Array.FindIndex(promptLines, line =>
             line.StartsWith($"INLINE FULL: identity={envelopeIdentity};", StringComparison.Ordinal));
         Assert.True(envelopeHeaderIndex >= 0, "The repair envelope was not delivered inline.");
-        Assert.EndsWith("encoding=utf8-json", promptLines[envelopeHeaderIndex]);
+        Assert.Contains("encoding=utf8-raw; chars=", promptLines[envelopeHeaderIndex]);
         Assert.True(envelopeHeaderIndex + 1 < promptLines.Length, "The inline repair envelope has no payload.");
-        var envelopeJson = JsonSerializer.Deserialize<string>(promptLines[envelopeHeaderIndex + 1]);
+        var envelopeJson = WorkerContextInlinePayloadFixture.ReadText(prompt, envelopeIdentity);
         Assert.NotNull(envelopeJson);
         using var envelope = JsonDocument.Parse(envelopeJson);
         Assert.Equal("pass", envelope.RootElement.GetProperty("prior_substantive_verdict").GetString());

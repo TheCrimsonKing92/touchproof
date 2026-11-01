@@ -10,7 +10,7 @@ internal static partial class FocusedEvidenceRequestResolver
 
     // An arm is one conjunction of MTP option groups. Repeated positives of the same
     // kind denote OR; different groups and all exclusions denote AND.
-    private static string CanonicalLaunchFilter(IReadOnlyList<FocusedEvidenceFilterToken> arm)
+    internal static string CanonicalLaunchFilter(IReadOnlyList<FocusedEvidenceFilterToken> arm)
     {
         var clauses = arm.Where(IsPositiveToken).GroupBy(token => token.Kind)
             .Select(group => string.Join("|", group.Select(token => token.CanonicalToken)))

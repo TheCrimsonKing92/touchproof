@@ -49,7 +49,8 @@ public sealed class DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning
         var lines = prompt.Replace("\r\n", "\n").Split('\n');
         var summaryLine = Array.FindIndex(lines, line => line.StartsWith("INLINE FULL: identity=goal/deferred-no-change-evidence.json;", StringComparison.Ordinal));
         Assert.True(summaryLine >= 0, "Ordinary Tester preparation must expose the deferred evidence summary.");
-        var summary = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Deserialize<string>(lines[summaryLine + 1])!);
+        var summary = JsonSerializer.Deserialize<JsonElement>(WorkerContextInlinePayloadFixture.ReadText(
+            prompt, "goal/deferred-no-change-evidence.json"));
         Assert.Equal(fixture.Candidate, summary.GetProperty("CurrentCandidateSha").GetString());
         Assert.True(summary.GetProperty("Receipts")[0].GetProperty("CurrentGreenProof").GetBoolean());
         Assert.Equal(ContextDeliveryMode.MandatoryFile, bodySection.DeliveryMode);

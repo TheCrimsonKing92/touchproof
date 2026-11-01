@@ -9,7 +9,7 @@ internal static class OwnerQuestionViewOnly
     {
         OwnerQuestionKind.StewardHold => $"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {goalId}.",
         OwnerQuestionKind.ExperimentReading => "Decide this experiment on the command line: run experiment-show to print the reading, then experiment-decide with the outcome, evidence and action.",
-        OwnerQuestionKind.PassedGateHold => "Resolve this landing hold using the commands shown in the decision.",
+        OwnerQuestionKind.PassedGateHold => "Resolve this hold using the commands shown in the decision.",
         _ => throw new InvalidOperationException("This question is not view only.")
     };
 }

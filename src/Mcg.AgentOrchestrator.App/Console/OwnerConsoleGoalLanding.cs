@@ -13,6 +13,7 @@ internal static class OwnerConsoleGoalLanding
             var landed = goal.MetadataTerminatedAt ?? goal.Timeline.LastOrDefault()?.OccurredAt;
             return landed is { } time ? "landed " + Time(time, zone) : null;
         }
+        if (OwnerConsoleDeliveredForReviewText.For(goal) is { } delivered) return delivered;
         if (goal.CurrentHold is { } hold) return "held: " + OwnerActivityText.WaitingOn(hold.Blocker);
         if (goal.Status == GoalStatus.Verifying)
         {

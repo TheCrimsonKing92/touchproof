@@ -82,6 +82,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner
         {
+            NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
             DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
                 workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
         }.StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory,

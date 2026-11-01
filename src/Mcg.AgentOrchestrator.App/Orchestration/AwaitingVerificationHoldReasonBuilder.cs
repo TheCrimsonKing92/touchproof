@@ -24,6 +24,21 @@ internal static class AwaitingVerificationHoldReasonBuilder
         return $"Task verification gates require operator attention: {string.Join("; ", blocked)}{remainder}";
     }
 
+    internal static string? BuildOperatorWait(Goal goal)
+    {
+        var worklist = AgentOrchestratorKernel.BuildVerificationWorklist(goal);
+        if (worklist.Items.Count == 0) return null;
+
+        var blocked = worklist.Items.Select(item =>
+        {
+            var number = TaskDisplayNumber.Resolve(goal, item.TaskId);
+            return $"task {number} role={item.Role} gate={item.GateStatus}: " +
+                $"verify-manual {goal.Id.Value[..8]} {number} passed";
+        });
+        return "AwaitingVerification: task verification gates require operator attention." +
+            Environment.NewLine + string.Join(Environment.NewLine, blocked);
+    }
+
     private static string BoundDetail(string detail) =>
         detail.Length <= MaxGateDetailLength
             ? detail

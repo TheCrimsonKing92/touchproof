@@ -578,6 +578,7 @@ public sealed class GoalAdvancementOperations
             .GetPreparedAdmission(goal.Id.Value, taskId.Value, kernel.GetTask(goal.Id, taskId).LastDispatch!.DispatchedAt);
         var startResult = new BackgroundDispatchRunner
         {
+            NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
             DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
                 workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
         }.TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory,

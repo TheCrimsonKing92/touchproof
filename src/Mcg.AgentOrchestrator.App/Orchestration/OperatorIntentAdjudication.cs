@@ -305,7 +305,7 @@ internal sealed class OperatorIntentAdjudication(
             if (HasLiveAcceptanceAttempt(goal.Id)) return "acceptance-attempt-live";
         }
         else if (shape == "reopen-regate" && goal.Status != GoalStatus.AcceptanceFailed)
-            return WithCancelledRouteHint(task, "goal-not-acceptance-failed");
+            return WithReopenRefusalHint(goal, task, "goal-not-acceptance-failed");
         if (shape is "close" or "reopen-regate" && task.Status is not
             (WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed))
             return WithCancelledRouteHint(task, "task-not-closable");
@@ -320,6 +320,11 @@ internal sealed class OperatorIntentAdjudication(
         if (unresolvedEvidence) return "evidence-reference-unresolved";
         return null;
     }
+
+    private static string WithReopenRefusalHint(Goal goal, TaskSpec task, string reason) =>
+        task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed
+            ? reason + $"; task is closable: use adjudicate --goal {goal.Id.Value[..8]} {TaskDisplayNumber.Resolve(goal, task.Id)} close"
+            : WithCancelledRouteHint(task, reason);
 
     private static string WithCancelledRouteHint(TaskSpec task, string reason) =>
         task.Status == WorkTaskStatus.Cancelled

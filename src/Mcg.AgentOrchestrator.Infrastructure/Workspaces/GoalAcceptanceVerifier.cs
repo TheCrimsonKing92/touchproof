@@ -110,33 +110,6 @@ internal sealed record AcceptanceProcessCleanupObservation(
     bool NativeHandleOpen,
     bool ProcessDisposed);
 
-public static class AcceptanceFailureClassifications
-{
-    public const string GateEnvironmentInterference = "gate-environment-interference";
-    public const string InheritedBaselineApparatus = "inherited-baseline-apparatus";
-    public const string StructuralCoverageFailed = "structural-coverage-failed";
-    public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
-    public const string FocusedSelectionAbsentAtBaseline = "focused-selection-absent-at-baseline";
-    public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
-    public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
-    public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
-    public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
-    public const string SharedGateApparatusInvalidated = "shared-gate-apparatus-invalidated";
-    public const string AssemblyCleanupFailure = "assembly-cleanup-failure";
-    public const string BuildPhaseTimeout = "build-phase-timeout";
-
-    public static bool IsEnvironmentalApparatus(string? classification) =>
-        classification is GateEnvironmentInterference or
-            InheritedBaselineApparatus or
-            FocusedSelectionApparatusFailure or
-            FocusedSelectionReceiptUnreadable or
-            SeededRepositoryProcessOutputApparatus or
-            SeededRepositoryApparatus or
-            AssemblyCleanupFailure or
-            BuildPhaseTimeout or
-            SharedGateApparatusInvalidated;
-}
-
 public enum FocusedEvidenceRejectionCode
 {
     EmptyRequest,
@@ -235,15 +208,6 @@ public sealed record FocusedEvidenceArmRunResult(
     FindingEvidenceRevertPathsRejection? RevertPathsRejection = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null,
     IReadOnlyList<FindingEvidenceSelection>? NotRunSelections = null);
-
-public sealed record FocusedEvidenceTargetCoverage(
-    string Target,
-    IReadOnlyList<string> CheckNames);
-
-public sealed record FocusedEvidenceCoverage(
-    IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks,
-    string ExecutionMode = "focused",
-    string ExecutionReason = "explicit-focused-mapping");
 
 public interface IGoalAcceptanceVerifier
 {
@@ -2655,7 +2619,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
             : passed
                 ? null
-                : BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
+                : AcceptanceMtpFailureOutput.BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
         var resultSummary = zeroTestApparatusFailure
             ? AcceptanceDotnetBuildPhase.PrefixResultSummary(
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
@@ -3015,7 +2979,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero
     // is a testhost shutdown abort, not a test failure. Treat it as passed so a benign abort does not block
     // a green goal; a build/compile failure ("Build FAILED" / "error CS...") is a real failure, not this.
-    private static bool TestRunReportsAllPassed(string output)
+    internal static bool TestRunReportsAllPassed(string output)
     {
         if (output.Contains("Build FAILED", StringComparison.Ordinal) ||
             output.Contains("error CS", StringComparison.Ordinal))
@@ -3731,14 +3695,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         string ownerKind)
     {
-        var repositoryRoot = ResolveOwnerResultsRootForCandidate(worktreePath);
+        var repositoryRoot = AcceptanceOwnerResultsRoot.ResolveOwnerResultsRootForCandidate(worktreePath);
         var owner = goalId?.Value ?? "operator";
         var directory = Path.Combine(
             repositoryRoot,
             ".orchestrator",
             OwnerResultsAttemptRoot(ownerKind),
             owner);
-        CreateOwnerResultsDirectory(directory);
+        AcceptanceOwnerResultsRoot.CreateOwnerResultsDirectory(directory);
         return Path.Combine(
             directory,
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
@@ -3806,10 +3770,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath) =>
         AcceptanceTrxTestIdentityResolver.ExtractTrxFailureIdentities(trxPath);
 
-    private static TrxCompletionEvidence InspectTrxCompletionEvidence(IEnumerable<string>? trxPaths) =>
+    internal static TrxCompletionEvidence InspectTrxCompletionEvidence(IEnumerable<string>? trxPaths) =>
         GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(trxPaths);
 
-    private static AcceptanceShardCompletionDecision DecideTestShardCompletion(
+    internal static AcceptanceShardCompletionDecision DecideTestShardCompletion(
         CommandResult result,
         TrxCompletionEvidence trx,
         string? policyFailure = null,
@@ -3883,7 +3847,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 line.Contains("Total:", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string? TailOutput(string output)
+    internal static string? TailOutput(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
         {

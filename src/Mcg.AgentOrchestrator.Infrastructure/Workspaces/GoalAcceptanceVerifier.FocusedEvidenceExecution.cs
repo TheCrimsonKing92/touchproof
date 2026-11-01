@@ -121,6 +121,9 @@ internal static class FocusedEvidenceExecution
                 Rejection: rejection);
         }
 
+        if (focusedChecks.Count == 0 && coverage.DroppedSelections is { Count: > 0 })
+            return FocusedEvidenceTraitExcludedSelection.NoRunnableSelection(request, coverage);
+
         var candidateSha = GoalAcceptanceVerifier.ResolveGitScalar(worktreePath, "rev-parse", "HEAD") ?? "unavailable";
         // Baseline experiments, mutations and implicit reverts keep their original execution path.
         continuation = !runBaselineArm && negativeControl == FindingEvidenceNegativeControl.RevertSrc &&
@@ -322,7 +325,8 @@ internal static class FocusedEvidenceExecution
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var planSummary = GoalAcceptanceVerifier.FormatFocusedEvidencePlanSummary(coverage);
+        var planSummary = GoalAcceptanceVerifier.FormatFocusedEvidencePlanSummary(coverage) +
+            FocusedEvidenceTraitExcludedSelection.FormatDropped(coverage);
         var summary = failed is null
             ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {GoalAcceptanceVerifier.FormatReceiptPaths(receiptPaths)}"
             : disposition == FindingEvidenceArmDisposition.ApparatusFailure

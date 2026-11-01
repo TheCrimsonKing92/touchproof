@@ -1046,7 +1046,7 @@ internal static partial class LandingExecutor
             : null;
     }
 
-    private static GitCli.GitResult UpdateRef(
+    internal static GitCli.GitResult UpdateRef(
         string executionDirectory,
         string branch,
         string? newRevision,

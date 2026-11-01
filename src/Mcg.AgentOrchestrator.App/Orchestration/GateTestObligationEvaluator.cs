@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateTestObligationEvaluator
 {
-    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived }
+    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded }
 
     internal sealed record RenameScope(string RepositoryDirectory, string IntegrationBranch);
 
@@ -17,12 +17,17 @@ internal static class GateTestObligationEvaluator
         IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null,
         CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
         IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
-        IReadOnlyList<string>? ClosestIdentities = null)
+        IReadOnlyList<string>? ClosestIdentities = null,
+        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rename.OldClass} new={rename.NewClass} old_path={rename.OldPath} new_path={rename.NewPath} " +
             $"similarity={rename.Similarity} evidence={rename.Evidence} source={SourceId}"));
+
+        internal string TraitExclusionProvenance => string.Join("; ", (TraitExclusions ?? []).Select(exclusion =>
+            $"GATE_TEST_OBLIGATION_TRAIT_EXCLUDED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
+            $"selector={exclusion.Selector} reason={string.Join(',', exclusion.Reasons)} source={SourceId}"));
 
         internal string AnswerRebindProvenance => string.Join("; ", (AnswerRebinds ?? []).Select(rebind =>
             $"GATE_TEST_OBLIGATION_ANSWER_REBOUND id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -74,6 +79,8 @@ internal static class GateTestObligationEvaluator
             result = result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
                 ? FollowAnswerRebinds(result, sources, orchestratorDirectory,
                     AnsweredSelectorRebinding.For(goal, obligation, answeredRequests)) : result;
+            if (result.Outcome == Outcome.SelectorNotFound && !string.IsNullOrWhiteSpace(candidateSha))
+                result = GateTestObligationTraitExclusionFollow.Follow(result, sources, orchestratorDirectory, candidateSha);
             if (result.Outcome == Outcome.Satisfied &&
                 sources.FirstOrDefault(source => source.Id == result.SourceId)?.CarriedFrom is { } from)
                 result = result with { CarryForward = new(goal.Id.Value, from, candidateSha!) };
@@ -158,30 +165,7 @@ internal static class GateTestObligationEvaluator
         foreach (var source in sources)
         {
             if (obligation.PlannerIdentity is not null && source.BriefVersion != obligation.PlannerIdentity.BriefVersion) continue;
-            var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
-                obligation.Selectors, source.Paths, orchestratorDirectory).ToArray();
-            var declared = DeclaredTestReportRows.Read(source.Paths, orchestratorDirectory, source.Checks, source.WorktreeRoot);
-            if (declared.Applies)
-                evidence = obligation.Selectors.Select(selector =>
-                    DeclaredTestSelectorResolver.Evaluate(selector, declared.Rows)).ToArray();
-            var pending = new HashSet<string>(StringComparer.Ordinal);
-            for (var index = 0; index < evidence.Length; index++)
-            {
-                var selector = evidence[index].Selector;
-                switch (GateCheckSelectorMatcher.Grade(selector, source.Checks))
-                {
-                    case GateCheckSelectorMatcher.Outcome.Satisfied:
-                        evidence[index] = new(selector, 1, 0, 0, 0, true);
-                        break;
-                    case GateCheckSelectorMatcher.Outcome.Failed:
-                        evidence[index] = new(selector, 0, 1, 0, 0, false);
-                        break;
-                    case GateCheckSelectorMatcher.Outcome.Pending:
-                        evidence[index] = new(selector, 0, 0, 0, 0, false);
-                        pending.Add(selector);
-                        break;
-                }
-            }
+            var (evidence, pending, declared) = ReadSelectorEvidence(obligation.Selectors, source, orchestratorDirectory);
             if (evidence.All(item => item.Satisfied))
                 return new(obligation, Outcome.Satisfied, obligation.Selectors, source.Id);
             if (newest is not null) continue;
@@ -195,6 +179,36 @@ internal static class GateTestObligationEvaluator
                 newest = new(obligation, Outcome.Pending, obligation.Selectors.Where(pending.Contains).ToArray(), source.Id);
         }
         return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
+    }
+
+    // Every follow step that regrades selectors must preserve command-check and declared-row semantics.
+    internal static (GroupedGateReceiptTrxEvidence.SelectorEvidence[] Evidence, HashSet<string> Pending,
+        DeclaredTestReportRows.Report Declared) ReadSelectorEvidence(
+        IReadOnlyList<string> selectors, Source source, string orchestratorDirectory)
+    {
+        var evidence = GroupedGateReceiptTrxEvidence.Evaluate(selectors, source.Paths, orchestratorDirectory).ToArray();
+        var declared = DeclaredTestReportRows.Read(source.Paths, orchestratorDirectory, source.Checks, source.WorktreeRoot);
+        if (declared.Applies)
+            evidence = selectors.Select(selector => DeclaredTestSelectorResolver.Evaluate(selector, declared.Rows)).ToArray();
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < evidence.Length; index++)
+        {
+            var selector = evidence[index].Selector;
+            switch (GateCheckSelectorMatcher.Grade(selector, source.Checks))
+            {
+                case GateCheckSelectorMatcher.Outcome.Satisfied:
+                    evidence[index] = new(selector, 1, 0, 0, 0, true);
+                    break;
+                case GateCheckSelectorMatcher.Outcome.Failed:
+                    evidence[index] = new(selector, 0, 1, 0, 0, false);
+                    break;
+                case GateCheckSelectorMatcher.Outcome.Pending:
+                    evidence[index] = new(selector, 0, 0, 0, 0, false);
+                    pending.Add(selector);
+                    break;
+            }
+        }
+        return (evidence, pending, declared);
     }
 
     internal static Result Grade(GateTestObligation obligation, string sourceId,

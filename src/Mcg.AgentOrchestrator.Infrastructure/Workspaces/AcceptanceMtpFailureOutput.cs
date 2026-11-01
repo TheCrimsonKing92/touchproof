@@ -1,8 +1,10 @@
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceMtpFailureOutput
 {
-    private static string BuildMtpFailureOutput(
+    internal static string BuildMtpFailureOutput(
         string checkName,
         CommandResult result,
         DotnetTestTelemetry telemetry,
