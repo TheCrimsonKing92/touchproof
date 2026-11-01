@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
-using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.ProcessInvokerAccess;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.Infrastructure.AcceptanceProcessRunner.ProcessInvokerAccess;
 
 internal sealed record AcceptanceProcessRequest
 {

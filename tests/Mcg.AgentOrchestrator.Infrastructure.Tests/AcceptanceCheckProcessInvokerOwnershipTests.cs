@@ -11,7 +11,7 @@ public sealed class AcceptanceCheckProcessInvokerOwnershipTests
     {
         var directory = Path.Combine(VerifiedRepositoryRoot.Find(),
             "src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces");
-        var verifier = File.ReadAllText(Path.Combine(directory, "GoalAcceptanceVerifier.ProcessRunner.cs"));
+        var verifier = File.ReadAllText(Path.Combine(directory, "AcceptanceProcessRunner.cs"));
         var invoker = File.ReadAllText(Path.Combine(directory, "AcceptanceCheckProcessInvoker.cs"));
 
         Assert.DoesNotContain(declaration, verifier, StringComparison.Ordinal);
@@ -26,7 +26,7 @@ public sealed class AcceptanceCheckProcessInvokerOwnershipTests
     {
         var directory = Path.Combine(VerifiedRepositoryRoot.Find(),
             "src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces");
-        var verifier = File.ReadAllText(Path.Combine(directory, "GoalAcceptanceVerifier.ProcessRunner.cs"));
+        var verifier = File.ReadAllText(Path.Combine(directory, "AcceptanceProcessRunner.cs"));
         var invoker = File.ReadAllText(Path.Combine(directory, "AcceptanceCheckProcessInvoker.cs"));
 
         const string sharedLoop = "GateLaneHeartbeatLoop.RunAsync(";

@@ -331,7 +331,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
     private readonly bool _requiresTestTelemetryReceipt;
-    private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(5), DefaultProgressInterval = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(5), DefaultProgressInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DefaultTransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(75), DefaultTransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(250);
     private const int DefaultTransientNoHolderBuildLockMaxRetryCycles = 2;
     internal static readonly TimeSpan CaptureDrainTimeout = TimeSpan.FromSeconds(12);
@@ -347,13 +347,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal GoalAcceptanceVerifier(CrosswalkExecutableResolver crosswalkExecutable, GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
         : this(
             crosswalkExecutable,
-            (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
+            (arguments, workingDirectory, timeout, cancellationToken) => AcceptanceProcessRunner.RunProcessAsync(
                 arguments, workingDirectory, timeout,
                 forceUtf8ConsoleOutput: false,
                 cancellationToken,
                 heartbeatInterval: testOverrides.HeartbeatInterval,
                 progressInterval: testOverrides.ProgressInterval),
-            (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
+            (arguments, workingDirectory, timeout, cancellationToken) => AcceptanceProcessRunner.RunProcessAsync(
                 arguments, workingDirectory, timeout,
                 forceUtf8ConsoleOutput: true,
                 cancellationToken,
@@ -3845,7 +3845,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsDotnetCommand(string[] arguments) =>
         AcceptanceCheckCommandBuilder.IsDotnetCommand(arguments);
 
-    private static string[] BuildCommandArguments(AcceptanceManifestCheck check)
+    internal static string[] BuildCommandArguments(AcceptanceManifestCheck check)
     {
         if (string.IsNullOrWhiteSpace(check.Command))
         {
@@ -3953,7 +3953,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool resolveBareCommand)
     {
         return _requiresTestTelemetryReceipt
-            ? await RunProcessAsync(
+            ? await AcceptanceProcessRunner.RunProcessAsync(
                 arguments,
                 workingDirectory,
                 timeout,
@@ -4171,7 +4171,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string QuoteProgressToken(string value) =>
         AcceptanceGateProgressReporter.QuoteProgressToken(value);
 
-    private static string QuoteForDisplay(string value) =>
+    internal static string QuoteForDisplay(string value) =>
         value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
             ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : value;
@@ -4191,10 +4191,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
             arguments, workingDirectory, stdoutRedirectTarget, stderrRedirectTarget, forceUtf8ConsoleOutput);
 
-    private static NamedPipeServerStream CreateCapturePipe(string pipeName) =>
+    internal static NamedPipeServerStream CreateCapturePipe(string pipeName) =>
         GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(pipeName);
 
-    private static Task<CaptureLimitResult> ConnectAndDrainCappedCaptureAsync(
+    internal static Task<CaptureLimitResult> ConnectAndDrainCappedCaptureAsync(
         NamedPipeServerStream source,
         Task connection,
         string path,
@@ -4204,7 +4204,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalAcceptanceVerifierCaptureCustody.ConnectAndDrainCappedCaptureAsync(
             source, connection, path, limitBytes, utcNow, onLimitReached, cancellationToken, capturePublicationInterval);
 
-    private static Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
+    internal static Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
         RegisteredOwnedProcess process,
         Task<CaptureLimitResult>[] captureDrains,
         CancellationTokenSource captureDrainCts,
@@ -4212,16 +4212,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalAcceptanceVerifierCaptureCustody.CompleteCaptureDrainsAsync(
             process, captureDrains, captureDrainCts, captureSources);
 
-    private static Task CancelCaptureDrainsAsync(
+    internal static Task CancelCaptureDrainsAsync(
         CancellationTokenSource captureDrainCts,
         Task<CaptureLimitResult>[]? captureDrains,
         IReadOnlyList<Stream>? captureSources) =>
         GoalAcceptanceVerifierCaptureCustody.CancelCaptureDrainsAsync(captureDrainCts, captureDrains, captureSources);
 
-    private static void DisposeCaptureSources(IReadOnlyList<Stream>? captureSources) =>
+    internal static void DisposeCaptureSources(IReadOnlyList<Stream>? captureSources) =>
         GoalAcceptanceVerifierCaptureCustody.DisposeCaptureSources(captureSources);
 
-    private static void EmitCaptureLimitReached(
+    internal static void EmitCaptureLimitReached(
         GateHeartbeatContext? context,
         string? attemptResultsPrefix,
         string path,

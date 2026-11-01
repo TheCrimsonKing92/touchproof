@@ -21,26 +21,31 @@ public sealed class PassedCohortApprovalHoldAttentionTests : AcceptanceCohortWor
         var waiting = scenario.Goals[waitingIndex];
         var candidate = scenario.CandidateRevisions[waitingIndex];
         string? itemId = null;
-        for (var tick = 0; tick < 2; tick++)
+        // Keep the released partner queued on independent capacity while checking the stable
+        // approval item. Approval below arrives before either candidate starts another gate.
+        using (PassedCohortReceiptApprovalHoldTests.Scenario.PauseNewGates())
         {
-            scenario.Tick();
-            var item = Assert.Single(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
-            Assert.Equal(item.Id, Assert.Single(Attention()).Id);
-            Assert.Equal(CollaborationItemType.Decision, item.Type);
-            Assert.Equal(waiting.Id.Value, item.GoalId);
-            Assert.False(CollaborationItemLifecycle.IsTerminal(item.Status));
-            // Pin the solo approval item's subject, actionable body and goal attribution.
-            Assert.Equal($"Landing parked on {LandingExecutor.IntegrationBranchName}", item.Subject);
-            Assert.Contains("landing-denylist owner approval required", item.Body, StringComparison.Ordinal);
-            Assert.Contains($"goal={waiting.Id.Value[..8]} candidate={candidate}", item.Body, StringComparison.Ordinal);
-            Assert.Contains("rule=landing-policy", item.Body, StringComparison.Ordinal);
-            Assert.Contains($"path={Protected}", item.Body, StringComparison.Ordinal);
-            Assert.Contains("fingerprint=v1:", item.Body, StringComparison.Ordinal);
-            Assert.Contains($"approve-policy-change {waiting.Id.Value[..8]} {candidate} --text-file <reason-file>",
-                item.Body, StringComparison.Ordinal);
-            if (itemId is not null) Assert.Equal(itemId, item.Id);
-            itemId = item.Id;
-            Assert.All(scenario.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+            for (var tick = 0; tick < 2; tick++)
+            {
+                scenario.AssertPartnerReleased(scenario.Tick(), waitingIndex);
+                var item = Assert.Single(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+                Assert.Equal(item.Id, Assert.Single(Attention()).Id);
+                Assert.Equal(CollaborationItemType.Decision, item.Type);
+                Assert.Equal(waiting.Id.Value, item.GoalId);
+                Assert.False(CollaborationItemLifecycle.IsTerminal(item.Status));
+                // Pin the solo approval item's subject, actionable body and goal attribution.
+                Assert.Equal($"Landing parked on {LandingExecutor.IntegrationBranchName}", item.Subject);
+                Assert.Contains("landing-denylist owner approval required", item.Body, StringComparison.Ordinal);
+                Assert.Contains($"goal={waiting.Id.Value[..8]} candidate={candidate}", item.Body, StringComparison.Ordinal);
+                Assert.Contains("rule=landing-policy", item.Body, StringComparison.Ordinal);
+                Assert.Contains($"path={Protected}", item.Body, StringComparison.Ordinal);
+                Assert.Contains("fingerprint=v1:", item.Body, StringComparison.Ordinal);
+                Assert.Contains($"approve-policy-change {waiting.Id.Value[..8]} {candidate} --text-file <reason-file>",
+                    item.Body, StringComparison.Ordinal);
+                if (itemId is not null) Assert.Equal(itemId, item.Id);
+                itemId = item.Id;
+                Assert.All(scenario.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+            }
         }
 
         var intents = new SqliteOperatorIntentStore(Path.Combine(scenario.Workspace.OrchestratorDirectory,

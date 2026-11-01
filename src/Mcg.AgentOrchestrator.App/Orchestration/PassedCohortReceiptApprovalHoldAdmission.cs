@@ -50,13 +50,15 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
             observable.Select(goal => goal.Id.Value).ToArray(), kernel.Goals, activeGoalIds);
         observable = observable.Where(goal => groupedIds.Contains(goal.Id.Value)).ToArray();
         var projections = observable.ToDictionary(goal => goal.Id,
-            goal => driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel));
-        var observations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+            goal => PassedCohortReceiptPartnerRelease.ProjectReceiptCandidate(driver, goal, policy, kernel));
+        var receiptObservations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, projections[goal.Id])).ToArray();
+        var observations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+            goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         var goals = observable.ToDictionary(goal => goal.Id);
         var eligibleIds = goals.Keys.ToHashSet();
         var restored = new HashSet<GoalId>();
-        foreach (var selection in driver.FindLandablePassedCohortSelections(observations))
+        foreach (var selection in driver.FindLandablePassedCohortSelections(receiptObservations))
         {
             var receipt = driver.ReadCurrentPassedCohortReceipt(selection);
             if (receipt is null || receipt.Identity.Members.Any(member => driver.HasFinalizedCohortLanding(member.GoalId)))
@@ -85,11 +87,11 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
                 restored.UnionWith(selection.Members.Select(member => member.GoalId));
                 continue;
             }
-            foreach (var member in receipt.Identity.Members)
+            foreach (var goalId in PassedCohortReceiptPartnerRelease.HeldMembers(hold, tick, recordProgress))
             {
-                results[member.GoalId.Value] = new ParallelLandingOutcome(
-                    PassedCohortReceiptApprovalHold.Held(goals[member.GoalId], policy, hold), null);
-                recordProgress($"ADMISSION tick={tick} result=held reason=PassedCohortReceiptApprovalHeld {hold.Reason} goal={member.GoalId.Value[..8]}");
+                results[goalId.Value] = new ParallelLandingOutcome(
+                    PassedCohortReceiptApprovalHold.Held(goals[goalId], policy, hold), null);
+                recordProgress($"ADMISSION tick={tick} result=held reason=PassedCohortReceiptApprovalHeld {hold.Reason} goal={goalId.Value[..8]}");
             }
             foreach (var (goalId, holdReason) in hold.MissingApprovals)
             {

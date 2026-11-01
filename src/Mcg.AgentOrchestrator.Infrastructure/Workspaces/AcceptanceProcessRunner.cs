@@ -1,12 +1,13 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using Mcg.AgentOrchestrator.Core;
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceProcessRunner
 {
-    private static async Task<CommandResult> RunProcessAsync(
+    internal static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
         TimeSpan commandTimeout,
@@ -100,7 +101,7 @@ public sealed partial class GoalAcceptanceVerifier
             forceUtf8ConsoleOutput: true,
             cancellationToken).ConfigureAwait(false);
 
-    private static async Task<CommandResult> RunProcessAsync(
+    internal static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
         TimeSpan commandTimeout,

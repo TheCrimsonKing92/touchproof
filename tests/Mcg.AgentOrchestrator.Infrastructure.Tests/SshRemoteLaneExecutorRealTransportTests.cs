@@ -30,7 +30,7 @@ public sealed class SshRemoteLaneExecutorRealTransportTests
                 filter, GoalAcceptanceVerifier.ShortHash(filter), sha, treeResult.Output.Trim(), sha, "ssh-smoke");
             var executor = new SshRemoteLaneExecutor(new([entry], [request.Lane], null), root,
                 Path.Combine(folder, "attempt", "result"), TimeProvider.System,
-                (args, directory, bound, token) => GoalAcceptanceVerifier.RunProcessForTestsAsync(args, directory, bound, token),
+                (args, directory, bound, token) => AcceptanceProcessRunner.RunProcessForTestsAsync(args, directory, bound, token),
                 GitCli.Run, null, observation => polls.Writer.TryWrite(observation));
             var submission = await executor.SubmitAsync(request, default);
             Assert.Null(submission.FailureReason);

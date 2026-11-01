@@ -66,6 +66,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                     if (site.Kind == "job")
                         Assert.True(site.Node is InvocationExpressionSyntax invocation &&
                             (invocation.Expression.ToString().StartsWith("GoalAcceptanceVerifier.RunProcess", StringComparison.Ordinal) ||
+                             invocation.Expression.ToString().StartsWith("AcceptanceProcessRunner.RunProcess", StringComparison.Ordinal) ||
                              invocation.Expression.ToString() == "WorkerProcessJobs.TryRegister"),
                             $"Job exception does not cover a new job-creation API: {type.FullName} at {path}:{Line(site.Node)}.");
                     used.Add(key);
@@ -263,8 +264,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             {
                 void Test()
                 {
-                    GoalAcceptanceVerifier.RunProcessForTestsAsync(args);
-                    GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(args);
+                    AcceptanceProcessRunner.RunProcessForTestsAsync(args);
+                    AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(args);
                     GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(args);
                 }
             }
@@ -316,7 +317,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             }
             """;
         const string processRunner = """
-            class GoalAcceptanceVerifier
+            class AcceptanceProcessRunner
             {
                 void RunProcessForTestsAsync() => RunProcessAsync();
                 void RunProcessWithHeartbeatForTestsAsync() => RunProcessWithHeartbeatForTestsAsync(null);
@@ -538,7 +539,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                 yield return new Site("dispatch", call);
             else if (name.StartsWith("WorkerProcessJobs.TryRegister", StringComparison.Ordinal) ||
                      shortName is "CreateJobObjectW" or "CreateKillOnCloseJob" ||
-                     name.StartsWith("GoalAcceptanceVerifier.RunProcess", StringComparison.Ordinal))
+                     name.StartsWith("GoalAcceptanceVerifier.RunProcess", StringComparison.Ordinal) ||
+                     name.StartsWith("AcceptanceProcessRunner.RunProcess", StringComparison.Ordinal))
                 yield return new Site("job", call);
             else if (name == "Path.Combine" && args.Skip(1).Any(arg =>
                          arg.Expression is LiteralExpressionSyntax literal &&
@@ -564,8 +566,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
 
     private static bool IsOwnedByProcessInvokerSeam(SyntaxNode node) =>
         node is InvocationExpressionSyntax call && call.Expression.ToString() is
-            "GoalAcceptanceVerifier.RunProcessForTestsAsync" or
-            "GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync" or
+            "AcceptanceProcessRunner.RunProcessForTestsAsync" or
+            "AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync" or
             "GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync";
 
     private static bool IsScenarioHostRoot(ExpressionSyntax identity, ClassDeclarationSyntax declaration)
@@ -857,7 +859,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             "UseRegistryScopeForTests", "ScopedRegistry.Value = new RegistryScopeState");
         Assert.True(ProcessInvokerChainReleasesInFinally(
             File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs")),
-            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs")),
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessRunner.cs")),
             File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureLimit.cs")),
             File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs")),
             File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/OwnedProcessGroup.cs")),
@@ -870,7 +872,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         var sources = new[]
         {
             (Name: "AcceptanceCheckProcessInvoker", Text: invoker),
-            (Name: "GoalAcceptanceVerifier.ProcessRunner", Text: processRunner),
+            (Name: "AcceptanceProcessRunner", Text: processRunner),
             (Name: "GoalAcceptanceVerifier.CaptureLimit", Text: captureLimit),
             (Name: "RegisteredOwnedProcess", Text: workerProcessJobs),
             (Name: "OwnedProcessGroup", Text: ownedProcessGroup)
@@ -891,17 +893,17 @@ public sealed class JobAccountingRunIdentityEvidenceTests
 
         var checks = new[]
         {
-            (Name: "GoalAcceptanceVerifier.RunProcessForTestsAsync -> RunProcessAsync",
-                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessForTestsAsync")
+            (Name: "AcceptanceProcessRunner.RunProcessForTestsAsync -> RunProcessAsync",
+                Passed: Methods(roots[1], "AcceptanceProcessRunner", "RunProcessForTestsAsync")
                     .Any(method => HasTokens(method, "RunProcessAsync("))),
-            (Name: "GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync -> RunProcessAsync",
-                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessWithHeartbeatForTestsAsync")
+            (Name: "AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync -> RunProcessAsync",
+                Passed: Methods(roots[1], "AcceptanceProcessRunner", "RunProcessWithHeartbeatForTestsAsync")
                     .Any(method => HasTokens(method, "RunProcessAsync("))),
             (Name: "GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync -> RunProcessAsync",
                 Passed: Methods(roots[2], "GoalAcceptanceVerifier", "RunProcessWithCaptureLimitForTestsAsync")
                     .Any(method => HasTokens(method, "RunProcessAsync("))),
-            (Name: "GoalAcceptanceVerifier.RunProcessAsync -> AcceptanceCheckProcessInvoker.RunAsync",
-                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessAsync")
+            (Name: "AcceptanceProcessRunner.RunProcessAsync -> AcceptanceCheckProcessInvoker.RunAsync",
+                Passed: Methods(roots[1], "AcceptanceProcessRunner", "RunProcessAsync")
                     .Any(method => HasTokens(method, "AcceptanceCheckProcessInvoker.RunAsync("))),
             (Name: "AcceptanceCheckProcessInvoker.RunAsync: owned process, GUID capture pipes, finally release/dispose",
                 Passed: Methods(roots[0], "AcceptanceCheckProcessInvoker", "RunAsync").Any(method =>

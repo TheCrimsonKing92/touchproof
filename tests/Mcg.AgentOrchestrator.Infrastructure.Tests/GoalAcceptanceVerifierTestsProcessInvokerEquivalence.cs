@@ -48,7 +48,7 @@ public sealed class GoalAcceptanceVerifierTestsProcessInvokerEquivalence
         try
         {
             // The child cannot exit until the test has observed the running heartbeat file.
-            run = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+            run = AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     $"$gate = [System.Threading.EventWaitHandle]::OpenExisting('{releaseName}'); " +
                     $"try {{ [void]$gate.WaitOne(); [Console]::WriteLine('{BaselineStdout}') }} finally {{ $gate.Dispose() }}"],
