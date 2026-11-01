@@ -26,6 +26,7 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
     IMainTipReader tipReader, IMainSuspectReleaseProbe probe, Action<string> progress)
 {
     internal const int MaxReleaseProbeAttemptsPerTip = 3;
+    private const int RequiredSameTipPasses = 3;
     private readonly HashSet<string> _terminalTips = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _deferredAttempts = new(StringComparer.OrdinalIgnoreCase);
     private int _inFlight;
@@ -55,7 +56,7 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
         var tip = ReadTip();
         if (string.IsNullOrWhiteSpace(tip)) return MainSuspectReleaseCheckOutcome.TipUnreadable;
         if (failures.Any(item => string.Equals(tip, item.Payload.LandingSha, StringComparison.OrdinalIgnoreCase)))
-            return MainSuspectReleaseCheckOutcome.SuspectStillTip;
+            return await ProbeSuspectTipAsync(failures, tip, cancellationToken).ConfigureAwait(false);
         if (_terminalTips.Contains(tip)) return MainSuspectReleaseCheckOutcome.AlreadyResolvedForTip;
         var attempts = _deferredAttempts.GetValueOrDefault(tip);
         if (attempts >= MaxReleaseProbeAttemptsPerTip) return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
@@ -110,6 +111,79 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
             default:
                 throw new InvalidOperationException($"Unknown release probe outcome: {result.Outcome}");
         }
+    }
+
+    private async Task<MainSuspectReleaseCheckOutcome> ProbeSuspectTipAsync(
+        PostLandingCanaryEvent[] failures, string tip, CancellationToken cancellationToken)
+    {
+        if (_terminalTips.Contains(tip)) return MainSuspectReleaseCheckOutcome.AlreadyResolvedForTip;
+        var attempts = _deferredAttempts.GetValueOrDefault(tip);
+        if (attempts >= MaxReleaseProbeAttemptsPerTip) return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
+
+        var tests = failures.SelectMany(item => item.Payload.SharedFailingTests!)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var suspects = string.Join(",", failures.Select(item => item.Payload.LandingSha!)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
+        var receipts = new List<string>();
+        for (var run = 1; run <= RequiredSameTipPasses; run++)
+        {
+            if (attempts >= MaxReleaseProbeAttemptsPerTip) return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
+            // Same-tip confirmation charges every invocation, including passes, to the existing tip budget.
+            _deferredAttempts[tip] = ++attempts;
+            MainSuspectReleaseProbeResult result;
+            try { result = await probe.RunAsync(tip, tests, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                result = new(MainSuspectReleaseProbeOutcome.CouldNotRun, string.Empty, ex.GetType().Name);
+            }
+
+            var outcome = result.Outcome switch
+            {
+                MainSuspectReleaseProbeOutcome.Passed => "passed",
+                MainSuspectReleaseProbeOutcome.Failed => "failed",
+                MainSuspectReleaseProbeOutcome.CouldNotRun => "could-not-run",
+                _ => throw new InvalidOperationException($"Unknown release probe outcome: {result.Outcome}")
+            };
+            if (!string.IsNullOrWhiteSpace(result.ProbeReceipt)) receipts.Add(result.ProbeReceipt);
+            progress($"CANARY_GATE sha={tip} main-suspect same-tip probe {run}/{RequiredSameTipPasses} {outcome} suspect={suspects} tests={string.Join(",", tests)} probes={string.Join(",", receipts)}");
+            if (result.Outcome == MainSuspectReleaseProbeOutcome.Failed)
+            {
+                _terminalTips.Add(tip);
+                progress($"CANARY_GATE sha={tip} result=still-failing suspect={suspects}");
+                return MainSuspectReleaseCheckOutcome.StillFailing;
+            }
+            // Defer writes the charged attempt back without consuming another probe invocation.
+            if (result.Outcome == MainSuspectReleaseProbeOutcome.CouldNotRun)
+                return Defer(tip, suspects, attempts - 1, result.Reason);
+
+            // Revalidate after every pass, before another probe or the final release append.
+            if (!string.Equals(tip, ReadTip(), StringComparison.OrdinalIgnoreCase))
+            {
+                _terminalTips.Add(tip);
+                return MainSuspectReleaseCheckOutcome.TipMovedDuringProbe;
+            }
+            var current = await ReadFailuresAsync(cancellationToken).ConfigureAwait(false);
+            if (PostLandingCanaryEmergencyCircuit.TryRead(events.Identity) is not null ||
+                !failures.Select(item => item.EventId).SequenceEqual(current.Select(item => item.EventId)))
+            {
+                _terminalTips.Add(tip);
+                return MainSuspectReleaseCheckOutcome.ReceiptsChangedDuringProbe;
+            }
+            if (string.IsNullOrWhiteSpace(result.ProbeReceipt))
+                return Defer(tip, suspects, attempts - 1, "missing-probe-receipt");
+        }
+
+        try
+        {
+            var note = $"main-suspect auto-release: suspect={suspects} tip={tip} tests={string.Join(",", tests)} probes={string.Join(",", receipts)}";
+            await circuit.AppendAutomaticReleaseAsync(tip, note, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return Defer(tip, suspects, attempts - 1, $"clear-append-{ex.GetType().Name}"); }
+        _terminalTips.Add(tip);
+        progress($"CANARY_GATE sha={tip} result=released reason=same-tip suspect={suspects}");
+        return MainSuspectReleaseCheckOutcome.Released;
     }
 
     private MainSuspectReleaseCheckOutcome Defer(string tip, string suspects, int attempts, string? reason)
