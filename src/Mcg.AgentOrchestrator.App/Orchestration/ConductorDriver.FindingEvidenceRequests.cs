@@ -245,14 +245,19 @@ internal sealed partial class ConductorDriver
                 capped.ReceiptId, telemetryCandidateSha, findingRoundFingerprint, _recordFindingEvidenceRequest);
             return true;
         }
-        var batches = plan.Executable;
+        var redCoverage = FindingRoundRedCoverage.Evaluate(plan.Executable, requestingTask, goal.Timeline,
+            telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity);
+        redCoverage.RecordSkips(goal, requestingTask, telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity,
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
+        var batches = redCoverage.Remaining;
         var runnable = batches.FirstOrDefault();
         if (runnable is null)
         {
-            if (plan.RedCovered.Count == 0) return false;
+            if (plan.RedCovered.Count == 0 && redCoverage.Skipped.Count == 0) return false;
             decision = BuildReceiptClosureOrDeliveryRetry(goal, requestingTask, telemetryCandidateSha,
-                plan.CoveredFindings, plan.CoveredReceiptIds, plan.CoveredEvidence + "; " +
-                "Focused evidence for this round already completed RED at this candidate; its receipt was attached without rerunning tests.");
+                plan.CoveredFindings.Concat(redCoverage.Findings).ToArray(),
+                plan.CoveredReceiptIds.Concat(redCoverage.ReceiptIds).Distinct(StringComparer.Ordinal).ToArray(),
+                plan.CoveredEvidence + "; " + redCoverage.Evidence);
             return true;
         }
 
@@ -499,19 +504,9 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        decision = batches.Skip(1).Any()
-            ? FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidencePending,
-                "Focused evidence completed; another distinct request from the same finding round remains pending: " +
-                $"next_request={batches[1].Identity}; completed_receipt_id={receiptId}.")
-            : BuildReceiptClosureOrDeliveryRetry(
-                goal,
-                requestingTask,
-                candidateSha!,
-                runnable.Findings.Concat(plan.CoveredFindings).ToArray(),
-                plan.CoveredReceiptIds.Append(receiptId).Distinct(StringComparer.Ordinal).ToArray(),
-                "Focused evidence completed and its receipt was attached to the requesting finding." +
-                (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence));
+        decision = FindingRoundRedCoverage.Complete(this, goal, requestingTask, batches.Skip(1).ToArray(),
+            runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
         return true;
     }
 
