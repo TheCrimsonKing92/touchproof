@@ -4,15 +4,27 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Publishes through origin and gh's own login; never obtains or retains credentials.</summary>
-public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPullRequestPublisher
+/// <summary>Publishes as the configured identity, or gh's own login when unset. Grants live in memory for one publish.</summary>
+public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner, IForgeIdentityProvider? identities = null) : IPullRequestPublisher
 {
     public PullRequestPublishResult Publish(PullRequestPublishRequest request)
     {
         string? pushed = null;
+        ForgeIdentityPublish? identity = null;
         var failureKind = PullRequestPublishFailureKind.NoGitHubOrigin;
         PullRequestPublishResult Failure(PullRequestPublishFailureKind kind, string message) =>
-            new(null, null, pushed, kind, ForgeDiagnosticRedactor.Redact(message), pushed is null ? null : request.GoalBranch);
+            new(null, null, pushed, kind, ForgeDiagnosticRedactor.Redact(message, identity?.Environment),
+                pushed is null ? null : request.GoalBranch, identity?.Login);
+        if (request.ForgeIdentityPath is not null)
+        {
+            try { identity = (identities ?? new ForgeIdentityProvider()).Acquire(request.ForgeIdentityPath); }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                return Failure(PullRequestPublishFailureKind.ForgeIdentityUnavailable,
+                    exception is ForgeIdentityUnavailableException ? exception.Message :
+                        $"forge identity unavailable ({exception.GetType().Name})");
+            }
+        }
         try
         {
             var root = Path.GetFullPath(request.RepositoryRoot);
@@ -21,6 +33,8 @@ public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPu
                 ["GIT_CEILING_DIRECTORIES"] = Directory.GetParent(root)?.FullName ?? root,
                 ["GIT_TERMINAL_PROMPT"] = "0"
             };
+            if (identity is not null)
+                foreach (var entry in identity.Environment) environment[entry.Key] = entry.Value;
             ForgeProcessResult Run(string command, params string[] args) =>
                 runner.Run(command, args, root, environment, TimeSpan.FromSeconds(command == "git" ? 60 : 30));
 
@@ -28,6 +42,10 @@ public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPu
             if (!Ok(origin)) return Failure(failureKind, Diagnostic(origin));
             if (!GitHubRemote.TryParse(origin.StandardOutput.Trim(), out var repository))
                 return Failure(failureKind, "origin is not a supported GitHub repository URL");
+            if (identity is not null && (!Uri.TryCreate(origin.StandardOutput.Trim(), UriKind.Absolute, out var originUri) ||
+                originUri.Scheme != "https" || originUri.UserInfo.Length > 0))
+                return Failure(PullRequestPublishFailureKind.ForgeIdentityUnavailable,
+                    "configured forge identity requires a GitHub HTTPS origin without embedded credentials");
 
             failureKind = PullRequestPublishFailureKind.PushRejected;
             if (!Regex.IsMatch(request.GoalBranch, @"\Agoal/[0-9a-f]{8}\z") ||
@@ -73,7 +91,7 @@ public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPu
                     return Failure(failureKind, "unreadable gh pr list entry");
                 if (number is null || candidateNumber < number) { number = candidateNumber; url = u.GetString(); }
             }
-            if (number is not null) return new(number, url, pushed);
+            if (number is not null) return new(number, url, pushed, ActingLogin: identity?.Login);
 
             var temporaryDirectory = Path.GetFullPath(OrchestratorTempRoot.GetPurposeDirectory("pull-request-bodies"));
             if (Within(temporaryDirectory, root))
@@ -87,7 +105,7 @@ public sealed class GitHubPullRequestPublisher(IForgeProcessRunner runner) : IPu
                 if (!Ok(create)) return Failure(GhFailure(create), Diagnostic(create));
                 url = create.StandardOutput.Trim();
                 return TryPullRequest(url, repository!, out var createdNumber)
-                    ? new(createdNumber, url, pushed)
+                    ? new(createdNumber, url, pushed, ActingLogin: identity?.Login)
                     : Failure(failureKind, "unreadable gh pr create response");
             }
             finally { if (File.Exists(bodyPath)) File.Delete(bodyPath); }

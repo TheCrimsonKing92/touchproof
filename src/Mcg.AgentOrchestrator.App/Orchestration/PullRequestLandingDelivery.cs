@@ -26,7 +26,7 @@ internal static class PullRequestLandingDelivery
         }
 
         if (goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
-            return Result($"delivered for review: {delivered.Url}");
+            return Result($"delivered for review: {delivered.Url}" + ActingSuffix(delivered.ActingLogin));
         if (mutationBlocker?.Invoke() is { Length: > 0 } blocked)
             return Result($"landing mutation blocked: {blocked}");
 
@@ -50,7 +50,8 @@ internal static class PullRequestLandingDelivery
                 var pushed = Regex.Match(progress.Message, $@"; pushed branch {Regex.Escape(branch)} commit ([0-9a-f]{{40}}|[0-9a-f]{{64}})\z");
                 if (pushed.Success) { previousCommit = pushed.Groups[1].Value; break; }
             }
-            request = new(workspace.ExecutionDirectory, branch, candidate, previousCommit, workspace.IntegrationBranch, content.Title, content.Body);
+            request = new(workspace.ExecutionDirectory, branch, candidate, previousCommit, workspace.IntegrationBranch,
+                content.Title, content.Body, ForgeIdentityPath: workspace.ForgeIdentity);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
         {
@@ -69,7 +70,7 @@ internal static class PullRequestLandingDelivery
         try
         {
             kernel.RecordGoalDeliveredForReview(goal.Id, new GoalDeliveredForReview(publication.PullRequestNumber!.Value,
-                publication.Url!, publication.PushedCommit!, attemptId, clock.UtcNow));
+                publication.Url!, publication.PushedCommit!, attemptId, clock.UtcNow, publication.ActingLogin));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -80,6 +81,8 @@ internal static class PullRequestLandingDelivery
             return Result($"landing mutation blocked: delivered-for-review record write failed ({exception.GetType().Name})",
                 stateChanged: true);
         }
-        return Result($"delivered for review: {publication.Url}", stateChanged: true);
+        return Result($"delivered for review: {publication.Url}" + ActingSuffix(publication.ActingLogin), stateChanged: true);
     }
+
+    private static string ActingSuffix(string? login) => login is null ? "" : $" as {login}";
 }

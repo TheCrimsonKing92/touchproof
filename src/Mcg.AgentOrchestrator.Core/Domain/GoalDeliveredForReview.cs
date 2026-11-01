@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record GoalDeliveredForReview
 {
     public GoalDeliveredForReview(int pullRequestNumber, string url, string pushedCommit,
-        string gateAttemptId, DateTimeOffset deliveredAt)
+        string gateAttemptId, DateTimeOffset deliveredAt, string? actingLogin = null)
     {
         if (pullRequestNumber <= 0) throw new ArgumentOutOfRangeException(nameof(pullRequestNumber));
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
@@ -18,11 +18,15 @@ public sealed record GoalDeliveredForReview
         ArgumentException.ThrowIfNullOrWhiteSpace(gateAttemptId);
         if (deliveredAt == default || deliveredAt.Offset != TimeSpan.Zero)
             throw new ArgumentException("Delivery time must be a non-default UTC instant.", nameof(deliveredAt));
+        if (actingLogin is not null && !System.Text.RegularExpressions.Regex.IsMatch(actingLogin,
+            @"\A[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*(?:\[bot\])?\z"))
+            throw new ArgumentException("Delivery requires a code-host acting login.", nameof(actingLogin));
         PullRequestNumber = pullRequestNumber;
         Url = url;
         PushedCommit = pushedCommit.ToLowerInvariant();
         GateAttemptId = gateAttemptId;
         DeliveredAt = deliveredAt;
+        ActingLogin = actingLogin;
     }
 
     public int PullRequestNumber { get; }
@@ -30,4 +34,5 @@ public sealed record GoalDeliveredForReview
     public string PushedCommit { get; }
     public string GateAttemptId { get; }
     public DateTimeOffset DeliveredAt { get; }
+    public string? ActingLogin { get; }
 }

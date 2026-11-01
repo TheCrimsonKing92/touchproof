@@ -1,7 +1,8 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record PullRequestPublishResult(int? PullRequestNumber, string? Url, string? PushedCommit,
-    PullRequestPublishFailureKind? FailureKind = null, string? Message = null, string? PushedBranch = null)
+    PullRequestPublishFailureKind? FailureKind = null, string? Message = null, string? PushedBranch = null,
+    string? ActingLogin = null)
 {
     public bool Succeeded => FailureKind is null && PullRequestNumber > 0 && Url is not null && PushedCommit is not null;
     public string? FailureToken => FailureKind switch
@@ -10,6 +11,7 @@ public sealed record PullRequestPublishResult(int? PullRequestNumber, string? Ur
         PullRequestPublishFailureKind.PushRejected => "push-rejected",
         PullRequestPublishFailureKind.GhNotSignedIn => "gh-not-signed-in",
         PullRequestPublishFailureKind.GhFailed => "gh-failed",
+        PullRequestPublishFailureKind.ForgeIdentityUnavailable => "forge-identity-unavailable",
         _ => null
     };
 }

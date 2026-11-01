@@ -23,6 +23,7 @@ public sealed record OrchestratorWorkspace(
     public string? ProjectHomeDirectoryOrNull => IsProjectScoped ? OrchestratorDirectory : null;
     public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
     public string Delivery { get; init; } = ProjectDelivery.Direct;
+    public string? ForgeIdentity { get; init; }
     public string ConductorStopFilePath => Path.Combine(
         IsProjectScoped ? OrchestratorDirectory : ExecutionDirectory, ConductorBatchLoop.StopFileName);
     public const string DefaultTenantName = "default";
