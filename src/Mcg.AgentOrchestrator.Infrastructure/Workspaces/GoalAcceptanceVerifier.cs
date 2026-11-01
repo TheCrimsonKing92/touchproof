@@ -1223,7 +1223,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IAcceptanceRunExecutionContext? executionOwner = null,
         bool partitionCandidateOnlySelections = false)
     {
-        var baselineRoot = Path.Combine(Path.GetTempPath(), FocusedEvidenceBaselinesRootDirectoryName);
+        var baselineRoot = Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName);
         return FocusedEvidenceExecution.RunBaselineFocusedEvidenceArmAsync(
             RunFocusedEvidenceArmAsync, () => baselineRoot, TryLabelFocusedEvidenceBaselineWorktree,
             SelectBaselineFocusedChecks, CombineFindingBaselineArm, _storageRoot,
@@ -3770,7 +3770,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidate = candidate.Parent;
         }
 
-        return Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName);
+        return Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName);
     }
 
     private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
@@ -4072,7 +4072,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return stableSlotIndex.HasValue
             ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value, storageRoot)
             : GateHeartbeatArtifacts.GetManualPath(
-                worktreePath ?? Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName));
+                worktreePath ?? Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName));
     }
 
     internal static string ResolveGateHeartbeatPathForTests(
