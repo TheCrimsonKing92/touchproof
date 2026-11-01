@@ -172,7 +172,7 @@ public static class GoalRecoveryPlanner
 
         if (task.LastVerification is { Succeeded: false } verification)
         {
-            var hasDirtyRecovery = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var dirtyRecovery);
+            var hasDirtyRecovery = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var dirtyRecovery);
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,

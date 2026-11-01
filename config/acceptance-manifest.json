@@ -15,6 +15,14 @@
       "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
       "tests/Mcg.AgentOrchestrator.TestSupport"
     ],
+    "balancedLanePool": {
+      "laneCount": 4,
+      "historyWindow": 5,
+      "laneNamePrefix": "Balanced",
+      "residualLaneName": "Infrastructure residual",
+      "defaultClassSecondsWhenNoHistory": 1,
+      "traitExclusions": ["Category!=HostIntegration"]
+    },
     "infrastructureTestLanes": [
       {
         "name": "Cli",

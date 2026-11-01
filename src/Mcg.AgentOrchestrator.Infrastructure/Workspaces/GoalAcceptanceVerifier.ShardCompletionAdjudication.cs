@@ -120,7 +120,8 @@ internal static class AcceptanceShardCompletionAdjudicator
         string? policyFailure = null,
         string? policySignal = null,
         bool allowNonzeroExit = false,
-        bool requireTrxEvidence = true)
+        bool requireTrxEvidence = true,
+        bool allowEmptySelection = false)
     {
         var missingTrxCompatibility = !requireTrxEvidence &&
             string.Equals(
@@ -132,7 +133,7 @@ internal static class AcceptanceShardCompletionAdjudicator
             failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
         if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
             failedPredicate = trx.FailedPredicate;
-        if (failedPredicate is null && !missingTrxCompatibility && trx.DiscoveredTestCount == 0)
+        if (failedPredicate is null && !missingTrxCompatibility && !allowEmptySelection && trx.DiscoveredTestCount == 0)
             failedPredicate = AcceptanceShardCompletionPredicates.ZeroTests;
         if (failedPredicate is null && !missingTrxCompatibility &&
             trx.DiscoveredTestCount != (trx.ExecutedTestCount ?? 0) + (trx.NotExecutedTestCount ?? 0))

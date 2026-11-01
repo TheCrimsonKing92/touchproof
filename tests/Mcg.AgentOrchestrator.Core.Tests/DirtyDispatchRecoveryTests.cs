@@ -15,7 +15,7 @@ public sealed class DirtyDispatchRecoveryTests
     {
         var task = BuildFailedDeveloperTaskWithVerification(TestPassStdout, DirtyGuardStderr);
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
 
         Assert.True(result);
         Assert.Equal("dirty-useful", recovery.Label);
@@ -32,7 +32,7 @@ public sealed class DirtyDispatchRecoveryTests
         var noEvidenceStdout = "Done. Files written.";
         var task = BuildFailedDeveloperTaskWithVerification(noEvidenceStdout, DirtyGuardStderr);
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
 
         Assert.True(result);
         Assert.Equal("dirty-unverified", recovery.Label);
@@ -47,7 +47,7 @@ public sealed class DirtyDispatchRecoveryTests
         var differentStderr = "Developer/Tester dispatch exited 0 but did not produce required file-change evidence. branch=goal/abc; head=def; worktree=clean; commits_after_dispatch=0.";
         var task = BuildFailedDeveloperTaskWithVerification(TestPassStdout, differentStderr);
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
 
         Assert.False(result);
         Assert.Equal(DirtyDispatchRecovery.None, recovery);
@@ -70,7 +70,7 @@ public sealed class DirtyDispatchRecoveryTests
             DirtyGuardStderr,
             clock.UtcNow));
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(plannerTask, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(plannerTask, out var recovery);
 
         Assert.False(result);
         Assert.Equal(DirtyDispatchRecovery.None, recovery);
@@ -85,7 +85,7 @@ public sealed class DirtyDispatchRecoveryTests
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
 
         Assert.False(result);
         Assert.Equal(DirtyDispatchRecovery.None, recovery);
@@ -108,7 +108,7 @@ public sealed class DirtyDispatchRecoveryTests
             DirtyGuardStderr,
             clock.UtcNow));
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(testerTask, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(testerTask, out var recovery);
 
         Assert.True(result);
         Assert.Equal("dirty-useful", recovery.Label);
@@ -197,7 +197,7 @@ public sealed class DirtyDispatchRecoveryTests
             "branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0.";
         var task = BuildFailedDeveloperTaskWithVerification(string.Empty, stderrNoStatusShort);
 
-        var result = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+        var result = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
 
         Assert.True(result);
         Assert.Equal("dirty-unverified", recovery.Label);

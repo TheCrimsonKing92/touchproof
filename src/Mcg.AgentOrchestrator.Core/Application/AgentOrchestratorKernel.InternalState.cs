@@ -86,7 +86,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (task.LastVerification is { Succeeded: false, CompletionVerdictVerifiedSuccess: false })
         {
-            var isDirty = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
+            var isDirty = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery);
             var message = isDirty
                 ? BuildDirtyDispatchRecoveryMessage(recovery)
                 : $"Latest verification failed with exit {task.LastVerification.ExitCode}: {task.LastVerification.Command}";

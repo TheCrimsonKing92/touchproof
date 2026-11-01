@@ -40,12 +40,8 @@ internal static class GoalAcceptanceVerifierTestTelemetry
         string? attemptResultsPrefix,
         AcceptanceInvocationContext? invocationContext,
         string? resultsDirectoryOverride = null) =>
-        GoalAcceptanceVerifier.ResolveTestTelemetryCore(
-            check,
-            environment,
-            attemptResultsPrefix,
-            invocationContext?.Ordinal ?? 0,
-            resultsDirectoryOverride);
+        AcceptanceTestTelemetryResolver.Resolve(
+            check, environment, attemptResultsPrefix, invocationContext, resultsDirectoryOverride);
 
     internal static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry) =>
         AcceptanceTestRunPreparation.Prepare(telemetry.Paths);
@@ -180,7 +176,8 @@ internal static class GoalAcceptanceVerifierTestTelemetry
         string? policyFailure = null,
         string? policySignal = null,
         bool allowNonzeroExit = false,
-        bool requireTrxEvidence = true) =>
+        bool requireTrxEvidence = true,
+        bool allowEmptySelection = false) =>
         AcceptanceShardCompletionAdjudicator.DecideTestShard(
             GoalAcceptanceVerifier.IsInterrupted(result),
             result.ExitCode,
@@ -188,7 +185,7 @@ internal static class GoalAcceptanceVerifierTestTelemetry
             policyFailure,
             policySignal,
             allowNonzeroExit,
-            requireTrxEvidence);
+            requireTrxEvidence, allowEmptySelection);
 
     internal static AcceptanceShardCompletionDecision DecideNonTestCommandCompletion(CommandResult result) =>
         AcceptanceShardCompletionAdjudicator.DecideNonTestCommand(

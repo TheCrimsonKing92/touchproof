@@ -182,7 +182,7 @@ public sealed class RemainderBalanceCLaneMoveTests
         Assert.Single(lanes, lane => lane.Name == BalanceC);
         var remainder = Assert.Single(lanes, lane => lane.Name == Remainder);
         var exclusions = string.Concat(Substrings.Select(substring => $"&FullyQualifiedName!~{substring}"));
-        Assert.Equal(2, remainder.Filter.Split(exclusions + "&Category!=HostIntegration",
+        Assert.Equal(2, remainder.Filter.Split(exclusions,
             StringSplitOptions.None).Length);
         return lanes.Where(lane => lane.Name != BalanceC).Select(lane => lane.Name == Remainder
             ? lane with { Filter = lane.Filter.Replace(exclusions, "", StringComparison.Ordinal) }
