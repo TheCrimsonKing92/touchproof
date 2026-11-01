@@ -633,6 +633,13 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
         }
 
+        var developerResult = DeveloperWorkerResultContextSection.Build(goal, task,
+            string.IsNullOrWhiteSpace(targetHeadCommit) ? task.PreReviewEvidenceReceipt?.CandidateSha : targetHeadCommit);
+        if (developerResult.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(developerResult));
+        }
+
         var sliceBatchParentReview = ReviewerEvidenceBriefSection.BuildSliceBatchParentReviewBriefBlock(goal, task, _goals.Values);
         if (sliceBatchParentReview.Count > 0)
         {
