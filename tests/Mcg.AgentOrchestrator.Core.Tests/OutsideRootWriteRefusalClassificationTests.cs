@@ -13,8 +13,19 @@ public sealed class OutsideRootWriteRefusalClassificationTests
     [InlineData(AgentRole.Tester)]
     public void Classify_OnlyViteWriteRefusals_ReportsEnvironmentFault(AgentRole role)
     {
-        var outcome = DispatchFailureClassifier.Classify(Task(role),
-            Verification($"fail - npm run check: 87 passed, 13 failed; all failures: {Open(ViteOutput)}"));
+        var task = Task(role);
+        var verification = Verification($"fail - npm run check: 87 passed, 13 failed; all failures: {Open(ViteOutput)}") with
+        {
+            DispatchStartedAt = task.LastDispatch!.DispatchedAt,
+            DispatchAttemptAt = task.LastDispatch.DispatchedAt,
+            EvidenceSource = VerificationEvidenceSource.Dispatch
+        };
+        // Reach refusal classification through the subscription Tester's terminal-contract gate.
+        if (role == AgentRole.Tester)
+            Assert.Equal(VerificationTerminalContractStatus.Valid,
+                WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
 
         AssertEnvironmentFault(outcome, ViteOutput);
     }
@@ -162,7 +173,7 @@ public sealed class OutsideRootWriteRefusalClassificationTests
 
     private static TaskVerificationRecord Verification(string tests, string stderr = "", string? workingDirectory = null)
     {
-        var stdout = $"WORKER_RESULT:\nfiles: none\ntests: {tests}\ncommit: none\nblockers: none\nEND_WORKER_RESULT";
+        var stdout = $"WORKER_RESULT:\nfiles: none\ncommands: npm run check\ntests: {tests}\ncommit: none\nblockers: none\nmodel_fit: fixture\nskills: none\nconfidence: high\nEND_WORKER_RESULT";
         return new TaskVerificationRecord("codex exec", workingDirectory ?? Worktree, 0, stdout, stderr,
             new DateTimeOffset(2026, 11, 1, 10, 0, 0, TimeSpan.Zero), WorkerResultPresent: true,
             HeartbeatStandardOutputBytes: stdout.Length);
