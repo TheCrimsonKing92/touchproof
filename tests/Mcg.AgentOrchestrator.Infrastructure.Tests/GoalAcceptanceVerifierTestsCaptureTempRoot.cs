@@ -34,7 +34,7 @@ public sealed class GoalAcceptanceVerifierTestsCaptureTempRoot : GoalAcceptanceV
     }
 
     private static Task<GoalAcceptanceVerifier.CommandResult> Run(bool? keep) =>
-        GoalAcceptanceVerifier.RunProcessForTestsAsync(
+        AcceptanceProcessRunner.RunProcessForTestsAsync(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                 "[Console]::Out.Write('capture-out'); [Console]::Error.Write('capture-err')"],
             Path.GetTempPath(), TimeSpan.FromSeconds(30), keepCaptureFiles: keep);

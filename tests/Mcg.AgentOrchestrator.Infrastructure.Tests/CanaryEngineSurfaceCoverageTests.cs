@@ -93,6 +93,23 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
+    [Theory]
+    [InlineData("AcceptanceCheckProcessInvoker")]
+    [InlineData("AcceptanceProcessTestContext")]
+    public void Indirect_process_runner_helpers_trigger_canary(string helper)
+    {
+        var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.DoesNotContain(prefix, Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
     [Fact]
     public void Collaborator_surface_exactly_matches_preexisting_coverage_gap()
     {

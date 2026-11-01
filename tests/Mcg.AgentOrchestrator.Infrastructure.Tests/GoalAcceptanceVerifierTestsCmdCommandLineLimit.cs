@@ -56,7 +56,7 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
         var observations = new List<AcceptanceProcessCleanupObservation>();
         var identitiesObserved = 0;
         var error = await Assert.ThrowsAsync<CommandLineTooLongException>(() =>
-            GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["git", new string('x', 8200)], Path.GetTempPath(), TimeSpan.FromSeconds(30),
                 cleanupObserver: observations.Add,
                 commandIdentityObserver: _ => identitiesObserved++));

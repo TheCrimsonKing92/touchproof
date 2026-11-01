@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
+using static Mcg.AgentOrchestrator.Infrastructure.AcceptanceProcessRunner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
