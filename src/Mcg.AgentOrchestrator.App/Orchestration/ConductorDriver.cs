@@ -977,10 +977,8 @@ internal sealed partial class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
-        PassedGateHoldAttention = new(CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            goal => PassedGateRegateAdmission.Resolve(goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value),
-                _resolveAcceptanceHeads(goal).BranchHeadSha));
-        AwaitingVerificationGateAttention = new(CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+        ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
+            goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
             _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
