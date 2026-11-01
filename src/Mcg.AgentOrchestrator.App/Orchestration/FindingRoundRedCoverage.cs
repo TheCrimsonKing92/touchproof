@@ -86,14 +86,16 @@ internal static class FindingRoundRedCoverage
                     FindingEvidenceFilterSyntax.TryGetExpandableClass(executed.TestClass, out var prior, out _) &&
                     token.Contains(prior, StringComparison.Ordinal))).ToArray();
                 var rows = matching.SelectMany(item => item.Outcomes.Where(pair =>
-                    MatchesToken(pair.Key, token))).ToArray();
-                if (rows.Length == 0 || rows.Any(pair => !pair.Value))
+                    MatchesToken(pair.Key, token))).GroupBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+                // Each concrete case needs an earlier failure. Passing observations contribute no
+                // coverage, but do not erase a failure from another eligible execution in this round.
+                if (rows.Length == 0 || rows.Any(group => !group.Any(pair => pair.Value)))
                 {
                     covered = false;
                     break;
                 }
-                sources.AddRange(matching.Where(item => item.Outcomes.Keys.Any(identity =>
-                    MatchesToken(identity, token))).Select(item => item.Receipt));
+                sources.AddRange(matching.Where(item => item.Outcomes.Any(pair =>
+                    pair.Value && MatchesToken(pair.Key, token))).Select(item => item.Receipt));
             }
             if (covered) skipped.Add((batch, sources.DistinctBy(receipt => receipt.ReceiptId).ToArray()));
             else remaining.Add(batch);

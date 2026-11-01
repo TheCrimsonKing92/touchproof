@@ -147,6 +147,44 @@ public sealed class FindingRoundRedundantRequestTests
     }
 
     [Fact]
+    public void EarlierPass_DoesNotEraseLaterFailureForTheSameTest()
+    {
+        using var scenario = new Scenario(["AlphaTests", "AlphaTests.First", "BetaTests.Unseen"],
+            (run, _) => run == 0 ? [new(Second), new(First, "Passed")] : [new(First)]);
+        scenario.Advance();
+        scenario.Advance();
+        var receipts = scenario.Receipts;
+        Assert.Equal(2, receipts.Length);
+
+        var coverage = scenario.Evaluate(Batch("AlphaTests.First"));
+
+        Assert.Empty(coverage.Remaining);
+        Assert.Equal(new[] { receipts[1].ReceiptId },
+            Assert.Single(coverage.Skipped).Receipts.Select(item => item.ReceiptId));
+    }
+
+    [Fact]
+    public void ParameterizedSelection_CombinesFailuresWithoutUsingPassingCasesAsCoverage()
+    {
+        const string caseOne = "Fixture.AlphaTests.Case(value: 1)";
+        const string caseTwo = "Fixture.AlphaTests.Case(value: 2)";
+        using var scenario = new Scenario(["AlphaTests", "AlphaTests.Case", "BetaTests.Unseen"],
+            (run, _) => run == 0 ? [new(caseOne), new(caseTwo, "Passed")]
+                : [new(caseOne, "Passed"), new(caseTwo)]);
+        scenario.Advance();
+        Assert.Single(scenario.Evaluate(Batch("AlphaTests.Case")).Remaining);
+        scenario.Advance();
+        var receipts = scenario.Receipts;
+        Assert.Equal(2, receipts.Length);
+
+        var coverage = scenario.Evaluate(Batch("AlphaTests.Case"));
+
+        Assert.Empty(coverage.Remaining);
+        Assert.Equal(receipts.Select(item => item.ReceiptId).Order(),
+            Assert.Single(coverage.Skipped).Receipts.Select(item => item.ReceiptId).Order());
+    }
+
+    [Fact]
     public void ChangedCandidateThenReturned_DiscardsEarlierCoverage()
     {
         using var scenario = new Scenario(["AlphaTests", "BetaTests.Unseen"], (_, _) => [new(First)]);
