@@ -499,6 +499,7 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
         HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
     var startResult = new BackgroundDispatchRunner
     {
+        NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(context.Workspace.ProjectHomeDirectoryOrNull),
         DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
             context.Workspace.RootDirectory, context.Workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
     }.TryStartLatestDispatch(
