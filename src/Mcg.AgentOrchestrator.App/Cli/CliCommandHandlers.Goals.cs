@@ -1347,7 +1347,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--loop"))
             {
                 using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
-                var firstTickEvent = ConductorFirstTickEvent.ForCurrentProcess();
+                var firstTickEvent = ConductorFirstTickEvent.ForCurrentProcess(context.Workspace.ConductEventsLogPath);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicyResolution = CliConductLoopStartup.PrepareConductLoopPolicy(
                     context.Workspace.OrchestratorDirectory, loopPolicyName, Console.Error, projectPolicyTemplatePath: ProjectConductorPolicySeeder.TemplatePathFor(context.Workspace, OrchestratorHome.ResolveForProcess()));

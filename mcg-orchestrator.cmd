@@ -1,5 +1,7 @@
 @echo off
 setlocal
+set "MCG_CLI_LAUNCHER_STARTED_UTC="
+set "MCG_CLI_LAUNCHER_PATH=fresh"
 set "ROOT=%~dp0"
 set "MCG_ORCHESTRATOR_REPOSITORY_ROOT=%ROOT%"
 set "LOCK_DIR=%ROOT%.build-lock"
@@ -41,10 +43,12 @@ if "%CURRENT_HEAD%"=="HEAD_UNAVAILABLE" goto intree_path
 if not "%ADOPTED_COMMIT%"=="%CURRENT_HEAD%" goto intree_path
 git -C "%ROOT%." diff --quiet HEAD -- src Directory.Build.props Directory.Build.rsp global.json >nul 2>&1
 if not "%ERRORLEVEL%"=="0" goto intree_path
+set "MCG_CLI_LAUNCHER_PATH=fast"
 "%DOTNET_HOST%" "%ADOPTED_DLL%" %*
 exit /b %ERRORLEVEL%
 
 :intree_path
+for /f "delims=" %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToString('o')" 2^>nul') do set "MCG_CLI_LAUNCHER_STARTED_UTC=%%T"
 :: Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 :: A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
 :: A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.
@@ -89,6 +93,7 @@ rmdir /s /q "%LOCK_DIR%" 2>nul
 if %BUILD_EXIT% neq 0 goto build_failed
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Update-AppDllGitHeadMarker.ps1" "%ROOT%." "%APP_HEAD%"
 del "%BUILD_LOG%" 2>nul
+set "MCG_CLI_LAUNCHER_PATH=built"
 
 :run_app
 :: Run from an isolated copy of the complete app closure under %TEMP%\mcg-run\v2\<digest>.
