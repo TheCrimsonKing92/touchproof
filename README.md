@@ -1,8 +1,6 @@
 # Touchproof
 
-Touchproof (touchdown + proof): agent-built changes land only once they are proven. Formerly MCG Agent Orchestrator.
-
-This repository runs software development goals through local Codex CLI and Claude CLI workers, verifies their work, and lands accepted changes in `main`. Most commits in this history were written by the orchestrator's own worker agents and landed through its acceptance gates, while the operator sets goals and owns the design, as [Reading the history](#reading-the-history) explains. See the [architecture map](docs/architecture.md) for the projects, dependencies, and state ownership.
+Touchproof (touchdown + proof): agent-built changes land only once they are proven. Formerly MCG Agent Orchestrator. This repository runs software development goals through local Codex CLI and Claude CLI workers, verifies their work, and lands accepted changes in `main`. Most commits in this history were written by the orchestrator's own worker agents and landed through its acceptance gates, while the operator sets goals and owns the design, as [Reading the history](#reading-the-history) explains. See the [architecture map](docs/architecture.md) for the projects, dependencies, and state ownership.
 
 ## Architecture
 
