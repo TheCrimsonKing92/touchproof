@@ -99,6 +99,14 @@ internal sealed class OwnerQuestionReadModel(
                             OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
                     continue;
                 }
+                if (item.GoalId is not null &&
+                    item.CorrelationKey?.StartsWith(StalledEvidenceWaitAttention.Prefix, StringComparison.Ordinal) == true)
+                {
+                    if (goals.GetValueOrDefault(item.GoalId) == GoalStatus.Verified)
+                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                            OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
+                    continue;
+                }
                 if (OwnerExperimentReadingQuestion.From(item) is { } reading)
                 {
                     candidates.Add(new QuestionCandidate(reading, item.RaisedAt));
