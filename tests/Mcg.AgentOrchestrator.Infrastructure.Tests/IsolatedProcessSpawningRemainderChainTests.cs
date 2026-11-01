@@ -31,11 +31,12 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(RemoteFirstFocusedEvidenceNormalizedResultTests)
     ];
 
-    private static readonly Type[] DeferredContextTypes =
+    private static readonly Type[] RemainderCTypes =
     [
         typeof(DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning),
         typeof(DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning),
-        typeof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning)
+        typeof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning),
+        typeof(RemoteFirstFocusedEvidenceExecutorWaitTests)
     ];
 
     // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
@@ -131,12 +132,20 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     // Sum of all 13 passing normalization cases; a single gate sample, not a five-gate mean.
     private const double NormalizedResultGateSeconds = 12.4667215;
 
+    // Native Remainder gate on candidate 10a8b8ee3960683d693843275fd51d7d81f84240:
+    // attempt 6742c564-0-20261101053726688-6e14b0b5f5bb4e069a3186a6f53e1fd7,
+    // infrastructure-tests-remainder.trx SHA256
+    // 5E50B080F8F92340F8C1E5422CFDBC979C10050B5ABEC2F36124A35358892C3A.
+    // Sum of all four passing wait cases; a single gate sample, not a five-gate mean.
+    private const double ExecutorWaitGateSeconds = 4.3292729;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
         .Append(new(nameof(RemoteFirstFocusedEvidencePermitReleaseScenarioTests), PermitReleaseScenarioGateSeconds))
         .Append(new(nameof(FocusedEvidenceInterruptionTests), FocusedEvidenceInterruptionGateSeconds))
         .Append(new(nameof(RemoteFirstFocusedEvidenceNormalizedResultTests), NormalizedResultGateSeconds))
+        .Append(new(nameof(RemoteFirstFocusedEvidenceExecutorWaitTests), ExecutorWaitGateSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -164,12 +173,12 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     }
 
     [Xunit.Fact]
-    public void DeferredContextChainHasParallelSharedFixtureAndExactMembers()
+    public void ThirdChainHasParallelSharedFixtureAndExactMembers()
     {
-        foreach (var type in DeferredContextTypes)
+        foreach (var type in RemainderCTypes)
             Xunit.Assert.Equal(DeferredContextCollection, DeclaredCollection(type));
         var members = RunnableTypes().Where(type => DeclaredCollection(type) == DeferredContextCollection).ToArray();
-        Xunit.Assert.Equal(DeferredContextTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
+        Xunit.Assert.Equal(RemainderCTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
             members.Select(type => type.FullName).Order(StringComparer.Ordinal));
 
         var definitionType = typeof(IsolatedProcessSpawningRemainderCCollection);
@@ -205,7 +214,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
             Xunit.Assert.True(actualNames.SequenceEqual(baselineNames, StringComparer.Ordinal),
                 $"{type.FullName}: actual={{{string.Join(", ", actualNames)}}}, baseline={{{string.Join(", ", baselineNames)}}}");
         }
-        foreach (var type in MovedTypes.Concat(DeferredContextTypes))
+        foreach (var type in MovedTypes.Concat(RemainderCTypes))
             Xunit.Assert.Equal(Remainder, Xunit.Assert.Single(LaneNames(resolvedActual, type.FullName!)));
     }
 
@@ -220,7 +229,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         Xunit.Assert.InRange(sums[OriginalCollection],
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
-        Xunit.Assert.InRange(sums[DeferredContextCollection], 129.5138644 - 1e-7, 129.5138644 + 1e-7);
+        Xunit.Assert.InRange(sums[DeferredContextCollection],
+            129.5138644 + ExecutorWaitGateSeconds - 1e-7,
+            129.5138644 + ExecutorWaitGateSeconds + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
     }
@@ -253,7 +264,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     }
 
     [Xunit.Fact]
-    public void ControlsRejectMergingDeferredContextIntoEitherExistingChainAndMissingItsMeasurement()
+    public void ControlsRejectMergingThirdChainIntoEitherExistingChainAndMissingItsMeasurement()
     {
         var members = RemainderMembers();
         foreach (var target in new[] { OriginalCollection, SplitCollection })
@@ -263,7 +274,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
             Xunit.Assert.True(merged.Sums[target] > BudgetSeconds);
         }
 
-        foreach (var type in DeferredContextTypes)
+        foreach (var type in RemainderCTypes)
         {
             var withoutRow = new Dictionary<string, double>(PlanningSeconds, StringComparer.Ordinal);
             Xunit.Assert.True(withoutRow.Remove(type.Name));

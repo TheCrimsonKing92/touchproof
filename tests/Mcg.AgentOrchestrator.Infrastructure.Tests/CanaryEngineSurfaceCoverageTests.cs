@@ -54,6 +54,22 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
+    [Fact]
+    public void Extracted_focused_method_resolver_triggers_canary()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceMethodResolver";
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.Contains(prefix, Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
     [Theory]
     [InlineData("AcceptanceBalancedLaneExpander")]
     [InlineData("AcceptanceBalancedLanePacker")]

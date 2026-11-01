@@ -6,6 +6,10 @@ public static partial class RepositoryChangeClassifier
     [
         ("src/Mcg.AgentOrchestrator.Core/", "AgentOutputDirectives"),
         ("src/Mcg.AgentOrchestrator.Core/Application/", "DispatchFailureClassifier"),
+        ("src/Mcg.AgentOrchestrator.Core/Application/", "CliRefusalSignals"),
+        ("src/Mcg.AgentOrchestrator.Core/Application/", "DeveloperDeferredNoChangeRound"),
+        ("src/Mcg.AgentOrchestrator.Core/Application/", "DetachedWithoutWorkerResultRounds"),
+        ("src/Mcg.AgentOrchestrator.Core/Application/", "WorkerSandboxRefusal"),
         ("src/Mcg.AgentOrchestrator.Execution/Processes/", "BackgroundDispatch"),
         ("src/Mcg.AgentOrchestrator.Execution/Processes/", "DispatchProcessHost"),
         ("src/Mcg.AgentOrchestrator.Execution/Processes/", "GracefulDispatchDetacher"),
