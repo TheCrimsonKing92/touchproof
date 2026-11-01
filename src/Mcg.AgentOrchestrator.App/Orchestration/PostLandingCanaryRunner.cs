@@ -349,8 +349,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             "git",
             [
                 "-c", "core.longpaths=true",
-                "-c", "user.name=MCG Canary",
-                "-c", "user.email=canary@localhost",
+                .. ConductorGitIdentity.CanaryArguments,
                 "commit", "--quiet", "-m", "known-green canary fixture"
             ],
             fixtureRoot,

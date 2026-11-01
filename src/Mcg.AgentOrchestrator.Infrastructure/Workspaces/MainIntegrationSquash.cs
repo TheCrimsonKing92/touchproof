@@ -17,7 +17,7 @@ internal static class MainIntegrationSquash
         var message = GoalWorktrees.ComposeSquashCommitMessage(
             root, baseRevision, mergeBase, candidateRevision, tree, goalId);
         var commit = runGit([
-            "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
+            .. ConductorGitIdentity.ConductorArguments,
             "commit-tree", tree, "-p", mergeBase, "-m", message]);
         var revision = commit.Output.Trim();
         return commit.Succeeded && !commit.DrainTimedOut && revision.Length is 40 or 64 &&

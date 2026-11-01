@@ -18,8 +18,8 @@ public static class AcceptanceHermeticEnvironment
     // Identity for commits a verification child creates (the pre-landing rebase replays commits). Fixed and
     // attributable on purpose: a gate must not author commits as the operator, and it must not depend on the
     // operator having configured git at all.
-    private const string HermeticGitIdentityName = "MCG Acceptance Gate";
-    private const string HermeticGitIdentityEmail = "acceptance-gate@localhost";
+    private const string HermeticGitIdentityName = ConductorGitIdentity.GateName;
+    private const string HermeticGitIdentityEmail = ConductorGitIdentity.GateEmail;
 
     public static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
