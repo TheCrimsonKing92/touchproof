@@ -28,8 +28,7 @@ public static class ConductorOnlyCandidateRange
                     reached = true;
                     break;
                 }
-                if (!(fields[1] == "mcg-orchestrator" && fields[2] == "mcg-orchestrator@localhost") &&
-                    !(fields[1] == "MCG Acceptance Gate" && fields[2] == "acceptance-gate@localhost")) return false;
+                if (!ConductorGitIdentity.IsConductorCommitter(fields[1], fields[2])) return false;
             }
             if (!reached || !MergeBase(executionDirectory, integration, reviewed, out var oldBase) ||
                 !MergeBase(executionDirectory, integration, landing, out var newBase)) return false;

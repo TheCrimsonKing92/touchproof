@@ -124,9 +124,8 @@ public static partial class GoalWorktrees
             }
             var merge = GitCli.Run(
                 workspacePath,
-                "-c", "user.name=mcg-orchestrator",
-                "-c", "user.email=mcg-orchestrator@localhost",
-                "merge", "--no-ff", "--no-edit", member.CandidateRevision);
+                [.. ConductorGitIdentity.ConductorArguments,
+                "merge", "--no-ff", "--no-edit", member.CandidateRevision]);
             if (merge.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -214,9 +213,8 @@ public static partial class GoalWorktrees
             {
                 var merge = GitCli.Run(
                     workspacePath,
-                    "-c", "user.name=mcg-orchestrator",
-                    "-c", "user.email=mcg-orchestrator@localhost",
-                    "merge", "--no-ff", "--no-edit", member.CandidateRevision);
+                    [.. ConductorGitIdentity.ConductorArguments,
+                    "merge", "--no-ff", "--no-edit", member.CandidateRevision]);
                 if (merge.ExitCode != 0)
                 {
                     throw new AcceptanceCohortMaterializationException(

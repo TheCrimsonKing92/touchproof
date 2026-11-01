@@ -243,7 +243,7 @@ internal sealed class ConductorConflictIntegration(
         return ReadRef(worktree, "HEAD") == round.OriginalHead && !GitCli.IsWorktreeDirty(worktree) && ReadRef(worktree, "MERGE_HEAD") is null;
     }
 
-    private static readonly string[] Identity = ["-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost", "-c", "commit.gpgSign=false"];
+    private static readonly string[] Identity = [.. ConductorGitIdentity.ConductorArguments, "-c", "commit.gpgSign=false"];
     private static bool SamePaths(IEnumerable<string> left, IEnumerable<string> right) =>
         left.Order(StringComparer.Ordinal).SequenceEqual(right.Order(StringComparer.Ordinal), StringComparer.Ordinal);
     private static string? ReadRef(string worktree, string reference)

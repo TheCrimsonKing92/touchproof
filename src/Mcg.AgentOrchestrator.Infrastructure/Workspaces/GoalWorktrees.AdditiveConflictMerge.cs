@@ -107,9 +107,9 @@ public static partial class GoalWorktrees
                             if (RegistryAwareConflictMerge.TryValidatePlans(worktreePath, registryPlans, out reason))
                             {
                                 reason = "commit-failed";
-                                var commit = RunAdditiveGit(worktreePath, "-c", "user.name=mcg-orchestrator",
-                                    "-c", "user.email=mcg-orchestrator@localhost", "-c", "commit.gpgSign=false",
-                                    "commit", "-m", $"Integrate main into {branch} (additive conflict auto-merge)");
+                                var commit = RunAdditiveGit(worktreePath, [.. ConductorGitIdentity.ConductorArguments,
+                                    "-c", "commit.gpgSign=false",
+                                    "commit", "-m", $"Integrate main into {branch} (additive conflict auto-merge)"]);
                                 if (CompleteGit(commit))
                                 {
                                     reason = "merge-commit-unverified";

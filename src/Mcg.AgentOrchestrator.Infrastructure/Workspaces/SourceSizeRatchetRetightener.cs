@@ -148,7 +148,7 @@ internal static class SourceSizeRatchetRetightener
             ? $"class {row.RelativePath[6..]}{(row.Field is null ? "" : " files")}: {row.OldCeiling} -> {row.NewCeiling} (rule {row.Rule})"
             : $"{row.RelativePath}: {row.OldCeiling} -> {row.NewCeiling}" +
                 (row.OldFileCount is null ? "" : $" lines, {row.OldFileCount} -> {row.NewFileCount} files")));
-        string[] args = ["-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
+        string[] args = [.. ConductorGitIdentity.ConductorArguments,
             "commit", "--only", "-m", CommitSubject, "-m", body, "--", SourceSizeRatchet.SourcePath];
         var commit = commitDate is null ? GitCli.Run(worktreeRoot, args)
             : GitCli.RunWithEnvironment(worktreeRoot, new Dictionary<string, string>
