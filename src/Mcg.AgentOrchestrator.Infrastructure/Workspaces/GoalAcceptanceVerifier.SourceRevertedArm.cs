@@ -76,7 +76,7 @@ public sealed partial class GoalAcceptanceVerifier
         IAcceptanceRunExecutionContext executionOwner, IReadOnlyList<string>? revertPaths, FindingEvidenceMutation? mutation, IReadOnlyList<string>? declaredPaths)
     {
         string? revertedPath = null;
-        var root = OrchestratorTempRoot.GetPurposeDirectory(FocusedEvidenceBaselinesRootDirectoryName);
+        var root = OrchestratorTempRoot.GetPurposeDirectory(AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName);
         DotnetBuildEnvironment? environment = null;
         GoalId? environmentId = null;
         List<string>? restoredPaths = null, droppedPaths = null;
