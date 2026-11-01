@@ -61,6 +61,40 @@ public sealed class WorkerNodeDependencyPreparationTests
     }
 
     [Fact]
+    public void Prepare_ReadOnlyWorktree_SkipsInstallAndEnvironmentChanges()
+    {
+        foreach (var lowIntegrity in new[] { true, false })
+        {
+            using var fixture = new Fixture();
+            fixture.Declare("npm", "ci");
+            var install = fixture.DeclaredInstall();
+            Assert.NotNull(install);
+            Assert.False(WorkerNodeDependencyPreparation.HasOwnNodeModules(fixture.Worktree));
+            var worker = fixture.Worker();
+            var before = worker.Environment.ToArray();
+            var calls = 0;
+            var parameters = fixture.Parameters(install) with
+            {
+                SandboxWorktreeWritable = false,
+                SandboxLowIntegrity = lowIntegrity
+            };
+
+            WorkerNodeDependencyPreparation.Prepare(worker, parameters, _ =>
+            {
+                calls++;
+                fixture.InstallLocalVite();
+                return new WorkerProcessRunResult(0, "", "");
+            });
+
+            Assert.Equal(0, calls);
+            Assert.Equal(before, worker.Environment.ToArray());
+            Assert.False(Directory.Exists(Path.Combine(fixture.Worktree, "node_modules")));
+            Assert.False(Directory.Exists(Path.Combine(fixture.Sandbox, "node")));
+            Assert.False(File.Exists(fixture.Incomplete));
+        }
+    }
+
+    [Fact]
     public void Prepare_ExistingOwnModules_SkipsInstallAndEnvironmentChanges()
     {
         using var fixture = new Fixture();

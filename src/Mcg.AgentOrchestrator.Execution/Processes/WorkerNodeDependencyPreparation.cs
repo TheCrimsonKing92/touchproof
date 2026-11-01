@@ -21,7 +21,7 @@ internal static class WorkerNodeDependencyPreparation
     internal static void Prepare(ProcessStartInfo worker, DispatchProcessHost.DispatchRunParameters parameters,
         Func<ProcessStartInfo, WorkerProcessRunResult>? runner = null)
     {
-        if (parameters.NodeDependencyInstall is not { } install)
+        if (!parameters.SandboxWorktreeWritable || parameters.NodeDependencyInstall is not { } install)
             return;
 
         var sandboxRoot = DispatchProcessHost.ResolveSandboxRoot(parameters);
