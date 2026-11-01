@@ -43,6 +43,7 @@ internal static class OwnerLandingsQuery
                 GoalPromotionFact.SoloProvenance => "solo",
                 GoalPromotionFact.CohortProvenance => "cohort",
                 GoalPromotionFact.MergeTrainProvenance => "merge train",
+                GoalPromotionFact.PullRequestMergedProvenance => "pull request",
                 _ => "unknown"
             };
             rows.Add(new(goal.Id, OwnerGoalTitle.From(goal.Objective), local,

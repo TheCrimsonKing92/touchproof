@@ -157,6 +157,7 @@ internal sealed partial class ConductorDriver
     private readonly string _integrationBranch;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     internal PassedGateHoldAttention? PassedGateHoldAttention { get; set; }
+    internal PullRequestDeliveryTracker? PullRequestDeliveryTracker { get; set; }
     internal AwaitingVerificationGateAttention? AwaitingVerificationGateAttention { get; set; }
     internal Func<IEnumerable<Goal>, IReadOnlyList<string>>? RefreshHeldGateReceipts { get; set; }
     internal readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
@@ -977,6 +978,11 @@ internal sealed partial class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
+        if (PullRequestLandingDelivery.Applies(workspace))
+            PullRequestDeliveryTracker = new(kernel, workspace, new GitHubPullRequestStatusReader(new ForgeProcessRunner()),
+                new ForgeProcessRunner(), CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                eventWriter, channel, refreshJournal: RefreshJournal, mutationBlocker: () => LandingMutationBlocker?.Invoke(),
+                landingSink: receipt => SuccessfulLandingSink?.Invoke(receipt));
         ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
             goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
