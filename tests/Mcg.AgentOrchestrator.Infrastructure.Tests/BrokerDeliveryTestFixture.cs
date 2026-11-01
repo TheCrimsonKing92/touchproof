@@ -210,8 +210,8 @@ internal static class BrokerDeliveryTestFixture
             var lines = Prompt.ReplaceLineEndings("\n").Split('\n');
             var index = Array.FindIndex(lines, line => line.StartsWith($"INLINE FULL: identity={identity};", StringComparison.Ordinal));
             Assert.True(index >= 0 && index + 1 < lines.Length, $"Missing inline delivery: {identity}");
-            Assert.Contains("encoding=utf8-json", lines[index], StringComparison.Ordinal);
-            var bytes = WorkerContextPackageBuilder.RecoverInlineBytes(lines[index + 1], "utf8-json");
+            Assert.Contains("encoding=utf8-raw", lines[index], StringComparison.Ordinal);
+            var bytes = Encoding.UTF8.GetBytes(WorkerContextInlinePayloadFixture.ReadText(Prompt, identity));
             Assert.Equal(section.ByteCount, bytes.Length);
             Assert.Equal(section.ContentHash, WorkerContextArtifact.Hash(bytes));
             return bytes;

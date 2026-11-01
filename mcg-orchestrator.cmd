@@ -24,6 +24,30 @@ if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNE
 :: Directory.Build.rsp; do not export those settings here because unrelated descendants own their runtimes.
 set "DOTNET_GCConserveMemory=7"
 
+:: The home publisher projects its adopted record into two batch-readable lines.
+if "%MCG_ORCHESTRATOR_LAUNCHER_INTREE%"=="1" goto intree_path
+set "ADOPTION_POINTER=%ROOT%.orchestrator\continuity\home-build-adoption.cmd.txt"
+if not exist "%ADOPTION_POINTER%" goto intree_path
+set "ADOPTED_COMMIT="
+set "ADOPTED_DLL="
+(
+    set /p "ADOPTED_COMMIT="
+    set /p "ADOPTED_DLL="
+) < "%ADOPTION_POINTER%"
+if not defined ADOPTED_COMMIT goto intree_path
+if not defined ADOPTED_DLL goto intree_path
+if not exist "%ADOPTED_DLL%" goto intree_path
+set "CURRENT_HEAD="
+for /f "usebackq delims=" %%H in (`git -C "%ROOT%." rev-parse HEAD 2^>nul ^|^| echo HEAD_UNAVAILABLE`) do set "CURRENT_HEAD=%%H"
+if not defined CURRENT_HEAD goto intree_path
+if "%CURRENT_HEAD%"=="HEAD_UNAVAILABLE" goto intree_path
+if not "%ADOPTED_COMMIT%"=="%CURRENT_HEAD%" goto intree_path
+git -C "%ROOT%." diff --quiet HEAD -- src Directory.Build.props Directory.Build.rsp global.json >nul 2>&1
+if not "%ERRORLEVEL%"=="0" goto intree_path
+"%DOTNET_HOST%" "%ADOPTED_DLL%" %*
+exit /b %ERRORLEVEL%
+
+:intree_path
 :: Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 :: A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
 :: A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.

@@ -168,6 +168,7 @@ internal static class AcceptanceFailureCauseAdjudicator
         }
 
         check = AcceptanceAssemblyCleanupEvidence.AttachCleanupCause(check);
+        check = AcceptanceMissingToolClassifier.Attach(check);
         var classification = string.IsNullOrWhiteSpace(check.FailureClassification)
             ? null
             : check.FailureClassification.Trim();
@@ -178,6 +179,7 @@ internal static class AcceptanceFailureCauseAdjudicator
             AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
             AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus or
             AcceptanceFailureClassifications.AssemblyCleanupFailure or
+            AcceptanceFailureClassifications.MissingTool or
             AcceptanceFailureClassifications.SeededRepositoryApparatus =>
                 AcceptanceFailureCause.EnvironmentalApparatus,
             _ => (AcceptanceFailureCause?)null

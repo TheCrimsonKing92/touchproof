@@ -9,7 +9,10 @@ internal sealed class HomeBuildAdoptionPublisher(string homeRoot, string recordP
         if (status == "reverted")
         {
             if (previous is not null && string.Equals(previous.AdoptedCommit, build.CommitSha, StringComparison.OrdinalIgnoreCase))
+            {
+                HomeBuildAdoptionRecord.DeleteLauncherPointer(recordPath);
                 HomeBuildAdoptionRecord.Write(recordPath, previous with { Status = "reverted" });
+            }
             return;
         }
         if (build.CommandPrefix is not { Count: >= 2 } || !HomeBuildAdoptionDetector.IsCommit(build.CommitSha)) return;
@@ -19,5 +22,6 @@ internal sealed class HomeBuildAdoptionPublisher(string homeRoot, string recordP
         // Publish the identity first, so a newly started follower always knows its running sequence.
         HomeBuildAdoptionRecord.Write(HomeBuildAdoptionRecord.BuildIdentityPath(recordPath, build.CommitSha), record);
         HomeBuildAdoptionRecord.Write(recordPath, record);
+        HomeBuildAdoptionRecord.WriteLauncherPointer(recordPath, record);
     }
 }
