@@ -107,8 +107,8 @@ public static partial class GoalWorktrees
                 TryReadCleanMergeTree(root, candidate, follower, out var mergeTree))
             {
                 var commit = GitCli.Run(workspacePath,
-                    "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
-                    "commit-tree", mergeTree, "-p", candidate, "-m", $"Materialize follower {Prefix(followerGoalId)}");
+                    [.. ConductorGitIdentity.ConductorArguments,
+                    "commit-tree", mergeTree, "-p", candidate, "-m", $"Materialize follower {Prefix(followerGoalId)}"]);
                 if (commit.ExitCode != 0)
                     throw new InvalidOperationException($"Failed to squash follower merge commits: {commit.Error}");
                 var reset = GitCli.Run(workspacePath, "reset", "--hard", commit.Output.Trim());
@@ -119,8 +119,8 @@ public static partial class GoalWorktrees
             {
                 // A revision, rather than a branch name, keeps the rebase detached.
                 var rebase = GitCli.Run(workspacePath,
-                    "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
-                    "rebase", "--merge", "--no-stat", "--onto", candidate, candidate, follower);
+                    [.. ConductorGitIdentity.ConductorArguments,
+                    "rebase", "--merge", "--no-stat", "--onto", candidate, candidate, follower]);
                 if (rebase.ExitCode != 0)
                 {
                     var conflicts = ReadMergeTrainConflictPaths(workspacePath);

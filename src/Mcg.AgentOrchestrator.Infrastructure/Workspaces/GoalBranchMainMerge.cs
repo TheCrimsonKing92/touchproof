@@ -33,9 +33,9 @@ public static class GoalBranchMainMerge
         var mainSha = GoalWorktrees.ResolveRequiredRef(executionDirectory, $"{baseBranch}^{{commit}}");
         var oldHead = GoalWorktrees.ResolveRequiredRef(worktree, "HEAD");
         var merge = GitCli.Run(worktree,
-            "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
+            [.. ConductorGitIdentity.ConductorArguments,
             "-c", "commit.gpgSign=false", "merge", "--no-ff", "--no-edit",
-            "-m", $"Integrate {baseBranch} into {branch} before acceptance", mainSha);
+            "-m", $"Integrate {baseBranch} into {branch} before acceptance", mainSha]);
         if (merge.ExitCode == 0)
         {
             var materialized = GoalWorktrees.ValidatePostRebaseMaterialization(worktree, branch, baseBranch, goalId);

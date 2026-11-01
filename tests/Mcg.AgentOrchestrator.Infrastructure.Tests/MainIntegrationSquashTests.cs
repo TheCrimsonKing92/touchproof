@@ -94,8 +94,8 @@ public sealed class MainIntegrationSquashTests : AcceptanceCohortWorkflowTests
         Assert.NotNull(sha);
         Assert.NotNull(arguments);
         var tree = RunGitOutput(scenario.Root, "rev-parse", $"{member.CandidateRevision}^{{tree}}");
-        Assert.Equal(new[] { "-c", "user.name=mcg-orchestrator", "-c",
-            "user.email=mcg-orchestrator@localhost", "commit-tree", tree, "-p", mergeBase, "-m" },
+        Assert.Equal(new[] { "-c", "user.name=touchproof", "-c",
+            "user.email=touchproof@localhost", "commit-tree", tree, "-p", mergeBase, "-m" },
             arguments.Take(9));
         Assert.Equal(GoalWorktrees.ComposeSquashCommitMessage(scenario.Root, scenario.Main,
             mergeBase, member.CandidateRevision, tree, member.GoalId), arguments[9]);
