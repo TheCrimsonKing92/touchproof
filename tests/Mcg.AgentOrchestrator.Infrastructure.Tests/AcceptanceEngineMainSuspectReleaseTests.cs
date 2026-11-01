@@ -14,14 +14,17 @@ public sealed class AcceptanceEngineMainSuspectReleaseTests
         using var fixture = new Fixture();
         await fixture.FailAsync();
         fixture.Tip.Value = S;
-        Assert.Equal(MainSuspectReleaseCheckOutcome.SuspectStillTip, await fixture.Release.CheckAsync());
-        Assert.Empty(fixture.Probe.Calls);
+        fixture.Probe.Handler = (tip, _, _) => Task.FromResult(new MainSuspectReleaseProbeResult(
+            tip == S ? MainSuspectReleaseProbeOutcome.Failed : MainSuspectReleaseProbeOutcome.Passed, "probe-receipt"));
+        Assert.Equal(MainSuspectReleaseCheckOutcome.StillFailing, await fixture.Release.CheckAsync());
+        Assert.Equal(S, Assert.Single(fixture.Probe.Calls).Tip);
         Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await fixture.Circuit.ReadAsync()).Health);
 
         fixture.Tip.Value = T;
         Assert.Equal(MainSuspectReleaseCheckOutcome.Released, await fixture.Release.CheckAsync());
 
-        var call = Assert.Single(fixture.Probe.Calls);
+        Assert.Equal(2, fixture.Probe.Calls.Count);
+        var call = fixture.Probe.Calls[^1];
         Assert.Equal(T, call.Tip);
         Assert.Equal(Tests, call.Tests);
         var cleared = Assert.Single((await fixture.Events.ReadAllAsync()).Where(item => item.Kind == PostLandingCanaryEventKind.Cleared));
@@ -30,10 +33,11 @@ public sealed class AcceptanceEngineMainSuspectReleaseTests
         foreach (var test in Tests) Assert.Contains(test, cleared.Payload.OperatorNote!);
         Assert.Contains("probe=probe-receipt", cleared.Payload.OperatorNote!);
         Assert.Equal(AcceptanceEngineHealth.Healthy, (await fixture.Circuit.ReadAsync()).Health);
-        Assert.Equal($"CANARY_GATE sha={T} result=released reason=main-moved suspect={S}", Assert.Single(fixture.Lines));
+        Assert.Equal($"CANARY_GATE sha={T} result=released reason=main-moved suspect={S}", fixture.Lines[^1]);
+        var lineCount = fixture.Lines.Count;
         await fixture.Release.CheckAsync();
-        Assert.Single(fixture.Probe.Calls);
-        Assert.Single(fixture.Lines);
+        Assert.Equal(2, fixture.Probe.Calls.Count);
+        Assert.Equal(lineCount, fixture.Lines.Count);
     }
 
     [Fact]
@@ -118,11 +122,16 @@ public sealed class AcceptanceEngineMainSuspectReleaseTests
         await fixture.FailAsync();
         await fixture.FailAsync(tests: [Tests[1], "Fixture.Other.FailsC"], sha: U);
         fixture.Tip.Value = U;
-        Assert.Equal(MainSuspectReleaseCheckOutcome.SuspectStillTip, await fixture.Release.CheckAsync());
-        Assert.Empty(fixture.Probe.Calls);
+        fixture.Probe.Handler = (tip, _, _) => Task.FromResult(new MainSuspectReleaseProbeResult(
+            tip == U ? MainSuspectReleaseProbeOutcome.Failed : MainSuspectReleaseProbeOutcome.Passed, "probe-receipt"));
+        Assert.Equal(MainSuspectReleaseCheckOutcome.StillFailing, await fixture.Release.CheckAsync());
+        var sameTipCall = Assert.Single(fixture.Probe.Calls);
+        Assert.Equal(U, sameTipCall.Tip);
+        Assert.Equal(new[] { "Fixture.Other.FailsC", Tests[0], Tests[1] }, sameTipCall.Tests);
         fixture.Tip.Value = T;
         Assert.Equal(MainSuspectReleaseCheckOutcome.Released, await fixture.Release.CheckAsync());
-        Assert.Equal(new[] { "Fixture.Other.FailsC", Tests[0], Tests[1] }, Assert.Single(fixture.Probe.Calls).Tests);
+        Assert.Equal(2, fixture.Probe.Calls.Count);
+        Assert.Equal(new[] { "Fixture.Other.FailsC", Tests[0], Tests[1] }, fixture.Probe.Calls[^1].Tests);
         var cleared = Assert.Single((await fixture.Events.ReadAllAsync()).Where(item => item.Kind == PostLandingCanaryEventKind.Cleared));
         Assert.Contains(S, cleared.Payload.OperatorNote!);
         Assert.Contains(U, cleared.Payload.OperatorNote!);
