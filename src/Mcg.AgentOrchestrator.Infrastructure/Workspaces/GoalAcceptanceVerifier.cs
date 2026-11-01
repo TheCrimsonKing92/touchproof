@@ -237,16 +237,6 @@ public sealed record FocusedEvidenceArmRunResult(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null,
     IReadOnlyList<FindingEvidenceSelection>? NotRunSelections = null);
 
-public sealed record FocusedEvidenceTargetCoverage(
-    string Target,
-    IReadOnlyList<string> CheckNames);
-
-public sealed record FocusedEvidenceCoverage(
-    IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks,
-    string ExecutionMode = "focused",
-    string ExecutionReason = "explicit-focused-mapping",
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<FocusedEvidenceDroppedSelection>? DroppedSelections = null);
-
 public interface IGoalAcceptanceVerifier
 {
     string ComputeEffectivePlanIdentity(

@@ -265,13 +265,9 @@ internal static partial class FocusedEvidenceRequestResolver
             executionReason += $"+unbatched:{string.Join(',', unbatchedReasons.OrderBy(reason => reason, StringComparer.Ordinal))}";
         }
         checks = new FocusedEvidenceCheckPlan(built, durationHistory);
-        coverage = new FocusedEvidenceCoverage(
-            TargetToChecks: targetToChecks,
-            ExecutionMode: built.Count == 0 && dropped.Count > 0 ? "no-runnable-selection" : hasFocusedFilters && hasMappedProjects
-                ? "mixed"
-                : hasFocusedFilters ? "focused" : "project",
-            ExecutionReason: built.Count == 0 && dropped.Count > 0 ? "no-runnable-selection" : executionReason,
-            DroppedSelections: dropped.Count == 0 ? null : dropped);
+        coverage = FocusedEvidenceTraitExcludedSelection.CreateCoverage(
+            targetToChecks, hasFocusedFilters && hasMappedProjects ? "mixed"
+                : hasFocusedFilters ? "focused" : "project", executionReason, dropped);
         return true;
     }
 

@@ -72,6 +72,18 @@ internal static class FocusedEvidenceTraitExcludedSelection
         return result;
     }
 
+    internal static FocusedEvidenceCoverage CreateCoverage(
+        IReadOnlyList<FocusedEvidenceTargetCoverage> targetToChecks,
+        string executionMode, string executionReason,
+        IReadOnlyList<FocusedEvidenceDroppedSelection> dropped)
+    {
+        var noRunnableSelection = targetToChecks.Count == 0 && dropped.Count > 0;
+        return new(targetToChecks,
+            ExecutionMode: noRunnableSelection ? "no-runnable-selection" : executionMode,
+            ExecutionReason: noRunnableSelection ? "no-runnable-selection" : executionReason,
+            DroppedSelections: dropped.Count == 0 ? null : dropped);
+    }
+
     internal static FocusedEvidenceRunResult NoRunnableSelection(string request, FocusedEvidenceCoverage coverage) =>
         new(request, Accepted: true, Passed: false,
             Summary: "no runnable selection" + FormatDropped(coverage), Checks: [], Coverage: coverage,
