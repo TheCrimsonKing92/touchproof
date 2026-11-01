@@ -1,34 +1,36 @@
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
+
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class NegativeControlRevertPaths
 {
-    private static IReadOnlySet<string>? ValidDeclaredRevertPaths(IReadOnlyList<string>? paths)
+    internal static IReadOnlySet<string>? ValidDeclaredRevertPaths(IReadOnlyList<string>? paths)
     {
         if (paths is null) return null;
         var declaration = NegativeControlRevertDeclaration.Parse("negative-control-revert: " + string.Join(',', paths));
         return declaration.Paths.ToHashSet(StringComparer.Ordinal);
     }
 
-    private static string[] NegativeControlDiffPathspecs(IReadOnlyList<string>? revertPaths,
+    internal static string[] NegativeControlDiffPathspecs(IReadOnlyList<string>? revertPaths,
         FindingEvidenceMutation? mutation, IReadOnlySet<string>? declared) =>
         ["src/", .. (revertPaths is null ? [] : NegativeControlRevertPolicy.RevertablePolicyFiles),
             .. (revertPaths is null && mutation is null ? [] : declared ?? (IEnumerable<string>)[])];
 
-    private static bool IsDeclaredRevertPath(string path, IReadOnlySet<string>? declared) =>
+    internal static bool IsDeclaredRevertPath(string path, IReadOnlySet<string>? declared) =>
         declared?.Contains(path) == true;
 
-    private static FocusedEvidenceArmRunResult WithSourceRevertedPathReceipt(FocusedEvidenceArmRunResult arm,
+    internal static FocusedEvidenceArmRunResult WithSourceRevertedPathReceipt(FocusedEvidenceArmRunResult arm,
         IReadOnlyList<string>? restored, IReadOnlyList<string>? dropped) => arm with
     {
         RestoredPaths = restored?.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
         DroppedPaths = dropped?.OrderBy(path => path, StringComparer.Ordinal).ToArray()
     };
 
-    private static FindingEvidenceRevertPathsRejection? ValidateSelectedTestClassPaths(
+    internal static FindingEvidenceRevertPathsRejection? ValidateSelectedTestClassPaths(
         IEnumerable<string> paths, string[] diff, string candidatePath, string candidateSha, string mergeBase,
         IReadOnlyList<AcceptanceManifestCheck> checks, IReadOnlySet<string>? declared)
     {

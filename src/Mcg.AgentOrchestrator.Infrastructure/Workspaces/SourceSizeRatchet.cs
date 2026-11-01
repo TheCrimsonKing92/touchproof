@@ -602,7 +602,8 @@ internal static class SourceSizeRatchet
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration: measured 8022 lines in the existing 27 partial files, no headroom.
             // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 7708, 23),
+            // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 7406, 20),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

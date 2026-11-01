@@ -21,7 +21,7 @@ public sealed partial class GoalAcceptanceVerifier
             ? $"acceptance-check-capture-limit: {AcceptanceArtifactFileNames.Slug(check.Name)} {BuildTimeoutSummary(result)}"
             : BuildTimeoutFailureName(check, result);
 
-    private static string BuildInterruptedOutput(CommandResult result) =>
+    internal static string BuildInterruptedOutput(CommandResult result) =>
         result.CaptureLimited
             ? BuildCaptureLimitOutput(result, result.CaptureLimitBytes ?? throw new InvalidOperationException(
                 "Capture-limited process result is missing its configured cap bytes."))

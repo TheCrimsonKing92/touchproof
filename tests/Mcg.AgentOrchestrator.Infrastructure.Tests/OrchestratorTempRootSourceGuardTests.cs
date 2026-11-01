@@ -16,8 +16,8 @@ public sealed class OrchestratorTempRootSourceGuardTests
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", "Path.GetTempPath(),", 1, "Test-only heartbeat fixture seam."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment.cs", "var profileRoot = Path.Combine(Path.GetTempPath(), HermeticProfileRootDirectoryName);", 1, "Profile root already has a scanner exclusion."),
         new("Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames.cs", "? Path.Combine(Path.GetTempPath(), HermeticProfileRootDirectoryName) : profile);", 1, "Preserves the existing scanner-excluded hermetic profile fallback in the shared NuGet packages resolver."),
-        new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.OwnerResultsRooting.cs", "return configuredRoot ?? Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName);", 1, "Existing owner results fallback is pinned by a test."),
-        new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.OwnerResultsRooting.cs", "Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName),", 1, "Compares against the pinned owner results fallback."),
+        new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerResultsRoot.cs", "return configuredRoot ?? Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName);", 1, "Existing owner results fallback is pinned by a test."),
+        new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerResultsRoot.cs", "Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName),", 1, "Compares against the pinned owner results fallback."),
         new("Mcg.AgentOrchestrator.Execution/Processes/HostScanExclusionRoots.cs", "var tempPath = Path.GetTempPath();", 1, "Reads the temp base to list scanner-exclusion roots; creates nothing.")
     ];
 

@@ -1,10 +1,12 @@
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceOwnerResultsRoot
 {
     internal const string OwnerResultsCreatorFileName = ".owner-results-creator";
 
-    private static void CreateOwnerResultsDirectory(string directory)
+    internal static void CreateOwnerResultsDirectory(string directory)
     {
         var alreadyExisted = Directory.Exists(directory);
         Directory.CreateDirectory(directory);

@@ -15,7 +15,7 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
             [FATAL ERROR] Foreground threads were left running, forcing process exit
             """);
 
-        var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+        var output = AcceptanceMtpFailureOutput.BuildMtpFailureOutputForTests(
             "infrastructure tests: Worker dispatch fixtures",
             result,
             [MtpFixturePath("mtp-xunit-v3-green-run.trx.xml")]);
@@ -34,7 +34,7 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
             1,
             "Test run summary: Passed! - Mcg.AgentOrchestrator.Infrastructure.Tests.dll");
 
-        var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+        var output = AcceptanceMtpFailureOutput.BuildMtpFailureOutputForTests(
             "infrastructure tests: Worker dispatch fixtures",
             result,
             [MtpFixturePath("mtp-xunit-v3-green-run.trx.xml")]);
@@ -53,7 +53,7 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
             TimedOut: true,
             Timeout: TimeSpan.FromMinutes(5));
 
-        var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+        var output = AcceptanceMtpFailureOutput.BuildMtpFailureOutputForTests(
             "infrastructure tests: Worker dispatch fixtures",
             result,
             [MtpFixturePath("mtp-xunit-v3-green-run.trx.xml")]);
@@ -68,7 +68,7 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
     {
         var result = new GoalAcceptanceVerifier.CommandResult(1, "Runner exited after reporting one test.");
 
-        var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+        var output = AcceptanceMtpFailureOutput.BuildMtpFailureOutputForTests(
             "infrastructure tests: Worker dispatch fixtures",
             result,
             [MtpFixturePath("mtp-xunit-v3-aborted-run.trx.xml")]);
@@ -102,7 +102,7 @@ public sealed class GoalAcceptanceVerifierMtpFailureOutputTests
                       </TestRun>
                       """);
 
-            var output = GoalAcceptanceVerifier.BuildMtpFailureOutputForTests(
+            var output = AcceptanceMtpFailureOutput.BuildMtpFailureOutputForTests(
                 "infrastructure tests: empty shard",
                 new GoalAcceptanceVerifier.CommandResult(1, "Runner exited without reporting a test."),
                 [trxPath]);
