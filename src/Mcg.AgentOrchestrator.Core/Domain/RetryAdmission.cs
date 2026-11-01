@@ -4,7 +4,8 @@ using System.Text;
 
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed record AcceptedRetryFeedback(string Message, DateTimeOffset AcceptedAt);
+public sealed record AcceptedRetryFeedback(string Message, DateTimeOffset AcceptedAt,
+    CriteriaCorrectionSource Source = CriteriaCorrectionSource.Operator);
 
 public enum RetryCause
 {

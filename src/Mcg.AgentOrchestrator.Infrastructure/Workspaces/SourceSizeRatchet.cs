@@ -140,14 +140,16 @@ internal static class SourceSizeRatchet
             // this guard belongs at the existing lifecycle decision boundary.
             // b596bd5a: one fault-recorded AcceptanceFailed routing arm; measured 1714 lines, no headroom.
             // Goal f608f29b: seven call-site/wiring lines for the separately owned environment gate; no new partial.
+            // Goal 387027bb adds three integration lines for the separately owned acceptance retry hold gate.
             // Goal 5ca3f5c0: six property/construction lines wire the separately owned PR tracker and landing receipt.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1704),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1707),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 652),
+            // Goal 387027bb snapshots the routing deadline and emits its initial waiting event (+7 integration lines).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 641),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
@@ -337,7 +339,8 @@ internal static class SourceSizeRatchet
             // Goal 6e82a00d extracts build-scope preparation to WorkerBuildScopeDispatchPreparation and
             // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
             // Goal 60609951: stable provider-capability code and ready-blocked reason routing (+9 lines).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2572),
+            // Goal 387027bb enforces hold and note preparation at the shared prompt boundary (+1 integration line).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2573),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -545,7 +548,7 @@ internal static class SourceSizeRatchet
             // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
             // Goal 5ca3f5c0: six PR-tracker wiring lines, no added partial file.
-            new SourceClassCeiling("ConductorDriver", 14430, 70),
+            new SourceClassCeiling("ConductorDriver", 14422, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
