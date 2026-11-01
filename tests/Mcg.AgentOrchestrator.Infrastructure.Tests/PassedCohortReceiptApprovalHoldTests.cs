@@ -9,9 +9,10 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLand
 public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
-    public void HeldTick_MissingDenylistApproval_StartsNoGateAndPreservesReceiptAndMembers()
+    public void HeldTick_RequeuesPartnerWhileCapacityPreservesReceiptAndMembers()
     {
         using var scenario = new Scenario();
+        using var capacity = Scenario.PauseNewGates();
         var beforeGoals = MemberState();
         var beforeReceipt = JsonSerializer.Serialize(scenario.Receipt);
         var decisions = CollaborationItemStore.ForDirectory(scenario.Workspace.OrchestratorDirectory);
@@ -21,14 +22,14 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         for (var tick = 0; tick < 2; tick++)
         {
             var progress = scenario.Tick();
-            Assert.All(scenario.Goals, goal => Assert.Contains(
-                $"goal={goal.Id.Value[..8]}", progress.Single(line =>
-                    line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                    RecipientGoalField(line) == $"goal={goal.Id.Value[..8]}")));
+            Assert.Equal($"goal={scenario.Goals[0].Id.Value[..8]}", RecipientGoalField(
+                Assert.Single(progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+                    line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)))));
             Assert.DoesNotContain(progress, line => line.Contains("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal) ||
                 line.Contains("outcome=inflight", StringComparison.Ordinal) ||
                 line.Contains("result=admitted", StringComparison.Ordinal));
             Assert.Equal(gateCount, scenario.Verifier.RunCount);
+            scenario.AssertPartnerReleased(progress, heldIndex: 0);
             Assert.Equal(beforeGoals, MemberState());
             Assert.Equal(beforeReceipt, JsonSerializer.Serialize(scenario.Store.TryReadReceipt(scenario.Receipt.Identity.Value)));
             var approval = Assert.Single(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
@@ -44,7 +45,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             });
         }
 
-        // Only the journal and its landing-blocker observation may change during the reservation.
+        // The owner hold and the partner's independent capacity wait only change observations.
         string MemberState() => JsonSerializer.Serialize(scenario.Kernel.ExportSnapshot().Goals
             .Select(goal => goal with { Timeline = [], LandingBlocker = null }));
     }
@@ -53,7 +54,10 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     public void ApprovalRecorded_NextTickLandsBothMembersFromSameReceiptWithoutNewGate()
     {
         using var scenario = new Scenario();
-        scenario.Tick();
+        using (Scenario.PauseNewGates())
+        {
+            scenario.AssertPartnerReleased(scenario.Tick(), heldIndex: 0);
+        }
         var gateCount = scenario.Verifier.RunCount;
         var store = new SqliteOperatorIntentStore(Path.Combine(scenario.Workspace.OrchestratorDirectory,
             "operator-intents.db"), Path.Combine(scenario.Workspace.OrchestratorDirectory, "logs"));
@@ -84,21 +88,20 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     public void HeldTick_EmitsHoldReasonNamingWaitingMemberAndApprovalNotGate()
     {
         using var scenario = new Scenario();
+        using var capacity = Scenario.PauseNewGates();
         var progress = scenario.Tick();
         var waiting = scenario.Goals[0].Id.Value[..8];
-        foreach (var member in scenario.Goals)
-        {
-            // The shared reason also names the waiting goal; the last goal field identifies the recipient.
-            var line = Assert.Single(progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                RecipientGoalField(line) == $"goal={member.Id.Value[..8]}"));
-            Assert.Contains($"receipt={scenario.Receipt.ReceiptId}", line, StringComparison.Ordinal);
-            Assert.Contains($"cohort waits on landing-denylist approval for {waiting}, not on a gate", line, StringComparison.Ordinal);
-            Assert.Contains($"approve-policy-change {waiting} {scenario.CandidateRevisions[0]} --text-file <reason-file>", line, StringComparison.Ordinal);
-        }
+        var line = Assert.Single(progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+            line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)));
+        Assert.Equal($"goal={waiting}", RecipientGoalField(line));
+        Assert.Contains($"receipt={scenario.Receipt.ReceiptId}", line, StringComparison.Ordinal);
+        Assert.Contains($"cohort waits on landing-denylist approval for {waiting}, not on a gate", line, StringComparison.Ordinal);
+        Assert.Contains($"approve-policy-change {waiting} {scenario.CandidateRevisions[0]} --text-file <reason-file>", line, StringComparison.Ordinal);
+        scenario.AssertPartnerReleased(progress, heldIndex: 0);
     }
 
     [Fact]
-    public void PreWalkIntent_ReservesPartnerThenRestoresApprovedReceiptForLanding()
+    public void PreWalkIntent_RequeuesPartnerThenRestoresApprovedReceiptForLanding()
     {
         using var scenario = new Scenario();
         var results = new Dictionary<string, ParallelLandingOutcome>();
@@ -106,27 +109,34 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         var second = scenario.Goals[1];
         var candidate = new ConductorSpeculativeAcceptanceCandidate(second.Id,
             scenario.Driver.ProjectGroupedAdmissionCandidate(second, ConductorAutonomyPolicy.Permissive, scenario.Kernel));
-        var (eligible, _) = Apply();
-        Assert.Empty(eligible);
-        Assert.Equal(2, results.Count);
+        var (eligible, candidates) = Apply();
+        Assert.Equal(second.Id, Assert.Single(eligible).Id);
+        Assert.Equal(candidate, Assert.Single(candidates));
+        Assert.Equal(scenario.Goals[0].Id.Value, Assert.Single(results).Key);
+        Assert.Null(ConductorAcceptanceCohortSelector.Select(candidates).Selection);
+        Assert.Empty(scenario.Driver.FindLandablePassedCohortSelections(candidates));
         Assert.All(results.Values, result => Assert.True(PassedCohortReceiptApprovalHold.IsReadOnlyReservation(result.Result)));
-        Assert.All(scenario.Goals, goal =>
+        var heldGoal = scenario.Goals[0];
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(results[heldGoal.Id.Value].Result.Outcome);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal("cohort-receipt-admission", decision.Stage);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Equal(1, decision.Rung);
+        Assert.Equal("passed-cohort-awaiting-landing-denylist-approval", decision.DiscriminatingEvidence);
+        Assert.Equal(held.Reason, decision.Reason);
+        Assert.Contains($"approve-policy-change {scenario.Goals[0].Id.Value[..8]}", decision.Reason, StringComparison.Ordinal);
+        Assert.Equal(new PolicyDecisionFact[]
         {
-            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(results[goal.Id.Value].Result.Outcome);
-            var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
-            Assert.Equal("cohort-receipt-admission", decision.Stage);
-            Assert.Equal("Hold", decision.Action);
-            Assert.Equal(1, decision.Rung);
-            Assert.Equal("passed-cohort-awaiting-landing-denylist-approval", decision.DiscriminatingEvidence);
-            Assert.Equal(held.Reason, decision.Reason);
-            Assert.Contains($"approve-policy-change {scenario.Goals[0].Id.Value[..8]}", decision.Reason, StringComparison.Ordinal);
-            Assert.Equal(new PolicyDecisionFact[]
-            {
-                new("goalId", goal.Id.Value),
-                new("receiptId", scenario.Receipt.ReceiptId),
-                new("cohortIdentity", scenario.Receipt.Identity.Value),
-                new("observedMainRevision", scenario.Receipt.Identity.ObservedMainRevision)
-            }, decision.Facts);
+            new("goalId", heldGoal.Id.Value),
+            new("receiptId", scenario.Receipt.ReceiptId),
+            new("cohortIdentity", scenario.Receipt.Identity.Value),
+            new("observedMainRevision", scenario.Receipt.Identity.ObservedMainRevision)
+        }, decision.Facts);
+        Assert.All(scenario.Goals, member =>
+        {
+            Assert.Equal(GoalStatus.Verified, member.Status);
+            Assert.Empty(scenario.Store.ReadFinalizedLandingsForGoal(member.Id));
+            AssertNoLanded(scenario.Workspace, member.Id);
         });
         Approve(scenario.Workspace, scenario.Goals[0], scenario.CandidateRevisions[0]);
         results.Clear();
@@ -207,6 +217,39 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         }
 
         internal string GoalState() => JsonSerializer.Serialize(Kernel.ExportSnapshot().Goals);
+
+        // Receipt-replay tests observe requeue before a replacement gate changes a candidate.
+        // The partner waits only for these unrelated slots, never for the owner's decision.
+        internal static IDisposable PauseNewGates() => GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            Enumerable.Range(0, ConductorBatchLoop.MaxParallelAcceptanceCapacity)
+                .Select(slot => new GateLoadContextProbe.LiveGateOccupant(null, $"approval-fixture-{slot}",
+                    slot, TimeSpan.Zero, RunClass: GateHeartbeatRunClass.Acceptance,
+                    RunId: $"approval-fixture-run-{slot}")).ToArray());
+
+        internal void AssertPartnerReleased(IReadOnlyList<string> progress, int heldIndex)
+        {
+            var held = Goals[heldIndex];
+            var partner = Goals[1 - heldIndex];
+            Assert.Contains(progress, line => line.StartsWith("COHORT_RECEIPT_RELEASED ", StringComparison.Ordinal) &&
+                line.Contains($"held={held.Id.Value[..8]} released={partner.Id.Value[..8]} path=requeue", StringComparison.Ordinal));
+            Assert.DoesNotContain(progress, line => line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal) &&
+                RecipientGoalField(line) == $"goal={partner.Id.Value[..8]}");
+            Assert.Contains(progress, line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+                line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal) &&
+                line.Contains("deferred=1", StringComparison.Ordinal));
+            var candidates = Goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(goal.Id,
+                Driver.ProjectGroupedAdmissionCandidate(goal, ConductorAutonomyPolicy.Permissive, Kernel))).ToArray();
+            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(candidates[heldIndex].ProjectionResult);
+            Assert.IsType<GateReadyCandidateProjectionResult.Ready>(candidates[1 - heldIndex].ProjectionResult);
+            Assert.Null(ConductorAcceptanceCohortSelector.Select(candidates).Selection);
+            Assert.Empty(Driver.FindLandablePassedCohortSelections(candidates));
+            Assert.All(Goals, goal =>
+            {
+                Assert.Equal(GoalStatus.Verified, goal.Status);
+                Assert.Empty(Store.ReadFinalizedLandingsForGoal(goal.Id));
+                AssertNoLanded(Workspace, goal.Id);
+            });
+        }
 
         internal void BlockNextGate()
         {

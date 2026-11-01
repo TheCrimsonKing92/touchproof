@@ -79,6 +79,7 @@ internal abstract record GateReadyCandidateProjectionResult
     {
         public IReadOnlyList<string> ConflictPaths { get; init; } = Array.Empty<string>();
         public string? HoldRequestId { get; init; }
+        public string? HoldReason { get; init; }
     }
 }
 
