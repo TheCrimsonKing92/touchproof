@@ -137,7 +137,7 @@ public sealed class OwnerProtectedGateDiagnosticTests : IDisposable
         File.WriteAllText(Path.Combine(_root, manifest), candidateJson);
         string? Git(string _, string[] args) => args[0] == "diff" ? manifest + "\n" : mainJson;
 
-        var held = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
+        var held = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
             [manifest], null, Git, decisions, () => throw new InvalidDataException("No equivalent partition"), sha);
 
         var failure = Assert.IsType<AcceptanceCheckResult>(held.Failure);
@@ -153,7 +153,7 @@ public sealed class OwnerProtectedGateDiagnosticTests : IDisposable
             [], "owner", "cli", "local-process", DateTimeOffset.UtcNow, ActorKind: OperatorActorKind.Human));
         new OperatorIntentCoordinator(intents, decisions: decisions, goalStateVersionResolver: _ => 0).ExecutePending(kernel, goal);
 
-        var approved = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
+        var approved = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
             [manifest], null, Git, decisions, () => throw new InvalidDataException("No equivalent partition"), sha);
 
         Assert.Null(approved.Failure);
