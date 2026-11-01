@@ -79,7 +79,7 @@ public sealed class FocusedEvidenceTraitExcludedSelectionTests : RemoteFirstFocu
         Assert.Null(result.Coverage!.DroppedSelections);
         var failure = Assert.Single(result.Checks.Where(check =>
             check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionApparatusFailure));
-        Assert.Contains("matching 0 tests", failure.OutputTail);
+        Assert.Contains("executed 0 tests", failure.OutputTail);
         Assert.Single(fixture.Calls.Where(args => args.Contains("--filter-class")));
     }
 
@@ -238,12 +238,13 @@ public sealed class FocusedEvidenceTraitExcludedSelectionTests : RemoteFirstFocu
             var directory = args[Array.IndexOf(args, "--results-directory") + 1];
             var filename = args[Array.IndexOf(args, "--report-trx-filename") + 1];
             Directory.CreateDirectory(directory);
-            new XDocument(new XElement("TestRun",
-                new XElement("TestDefinitions", executed ? new XElement("UnitTest", new XAttribute("id", "one"), new XAttribute("name", "AlphaTests.Runs"),
-                    new XElement("TestMethod", new XAttribute("className", "AlphaTests"), new XAttribute("name", "Runs"))) : null),
-                new XElement("Results", executed ? new XElement("UnitTestResult", new XAttribute("testId", "one"),
+            XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+            new XDocument(new XElement(trx + "TestRun",
+                new XElement(trx + "TestDefinitions", executed ? new XElement(trx + "UnitTest", new XAttribute("id", "one"), new XAttribute("name", "AlphaTests.Runs"),
+                    new XElement(trx + "TestMethod", new XAttribute("className", "AlphaTests"), new XAttribute("name", "Runs"))) : null),
+                new XElement(trx + "Results", executed ? new XElement(trx + "UnitTestResult", new XAttribute("testId", "one"),
                     new XAttribute("testName", "AlphaTests.Runs"), new XAttribute("outcome", "Passed")) : null),
-                new XElement("ResultSummary", new XAttribute("outcome", "Completed"), new XElement("Counters",
+                new XElement(trx + "ResultSummary", new XAttribute("outcome", "Completed"), new XElement(trx + "Counters",
                     new XAttribute("total", executed ? 1 : 0), new XAttribute("executed", executed ? 1 : 0),
                     new XAttribute("passed", executed ? 1 : 0), new XAttribute("failed", 0), new XAttribute("notExecuted", 0)))))
                 .Save(Path.Combine(directory, filename));
