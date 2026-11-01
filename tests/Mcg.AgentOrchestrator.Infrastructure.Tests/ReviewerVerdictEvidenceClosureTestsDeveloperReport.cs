@@ -129,7 +129,7 @@ public sealed class ReviewerVerdictEvidenceClosureTestsDeveloperReport
 
         RecordReviewer(scenario, candidate: "A");
 
-        AssertSkippedWait(scenario, request, "candidate-differs");
+        AssertSkippedWait(scenario, request, "candidate-differs reviewed=A expected=B");
         AssertMatchingReportClosesControlWait();
     }
 
