@@ -485,11 +485,7 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
         Assert.True(headerStart >= 0, $"Inline artifact '{identity}' was not rendered.");
         var payloadStart = prompt.IndexOf('\n', headerStart);
         Assert.True(payloadStart >= 0, $"Inline artifact '{identity}' has no payload.");
-        payloadStart++;
-        var payloadEnd = prompt.IndexOf(Environment.NewLine + Environment.NewLine, payloadStart, StringComparison.Ordinal);
-        var payload = payloadEnd < 0 ? prompt[payloadStart..] : prompt[payloadStart..payloadEnd];
-        return JsonSerializer.Deserialize<string>(payload)
-            ?? throw new InvalidOperationException($"Inline artifact '{identity}' decoded to null.");
+        return WorkerContextInlinePayloadFixture.ReadText(prompt, identity);
     }
 
     private sealed record DispatchFixture(
