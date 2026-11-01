@@ -5,6 +5,25 @@ internal static class ReviewerEvidenceBriefSection
 {
     private const int ReviewerExecutedTestEvidenceMaxLines = 12;
 
+    internal static IReadOnlyList<TaskBriefSegment> BuildCandidateEvidenceSegments(
+        Goal goal, TaskSpec task, string? candidateCommit)
+    {
+        var segments = new List<TaskBriefSegment>();
+        var reviewerExecutedTestEvidence = BuildReviewerExecutedTestEvidenceBriefBlock(goal, task);
+        if (reviewerExecutedTestEvidence.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
+        }
+
+        var developerResult = DeveloperWorkerResultContextSection.Build(goal, task, candidateCommit);
+        if (developerResult.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(developerResult));
+        }
+
+        return segments;
+    }
+
     internal static IReadOnlyList<string> BuildSliceBatchParentReviewBriefBlock(Goal goal, TaskSpec task, IEnumerable<Goal> goals)
     {
         if (task.RequiredRole != AgentRole.Reviewer || goal.SliceBatchParentId is not null)
@@ -216,15 +235,9 @@ internal static class ReviewerEvidenceBriefSection
 
     private static string DescribeVerificationFreshness(TaskSpec task, TaskVerificationRecord verification)
     {
-        if (TryGetWorkerResultField(verification, "commit", out var workerResultCommit) &&
-            !IsNoneValue(workerResultCommit))
+        if (ResolveVerifiedCommit(task, verification) is { } commit)
         {
-            return $"verified commit {workerResultCommit}";
-        }
-
-        if (!string.IsNullOrWhiteSpace(task.LastDispatch?.ResultCommit))
-        {
-            return $"verified commit {task.LastDispatch.ResultCommit.Trim()}";
+            return $"verified commit {commit}";
         }
 
         if (!string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit))
@@ -233,6 +246,22 @@ internal static class ReviewerEvidenceBriefSection
         }
 
         return "unknown commit";
+    }
+
+    internal static string? ResolveVerifiedCommit(TaskSpec task, TaskVerificationRecord verification)
+    {
+        if (TryGetWorkerResultField(verification, "commit", out var workerResultCommit) &&
+            !IsNoneValue(workerResultCommit))
+        {
+            return workerResultCommit;
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastDispatch?.ResultCommit))
+        {
+            return task.LastDispatch.ResultCommit.Trim();
+        }
+
+        return null;
     }
 
     private static string DescribeVerificationArtifactPaths(TaskVerificationRecord verification)
