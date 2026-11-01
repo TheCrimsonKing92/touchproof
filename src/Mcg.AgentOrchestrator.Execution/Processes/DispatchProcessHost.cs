@@ -92,7 +92,8 @@ public static class DispatchProcessHost
         TaskIntentAdmissionReference? TaskIntentAdmission = null,
         string? StartGatePath = null,
         WorkerBuildHostReference? WorkerBuildHost = null,
-        bool OptOutExecutionThrottling = false);
+        bool OptOutExecutionThrottling = false,
+        NodeDependencyInstall? NodeDependencyInstall = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -1894,6 +1895,12 @@ public static void DropToLow() {
                 sandboxPrepStartedAt,
                 DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
+            if (parameters.NodeDependencyInstall is not null)
+            {
+                WriteHeartbeat("preparing-node-dependencies");
+                WritePrepHeartbeat("preparing-node-dependencies");
+                WorkerNodeDependencyPreparation.Prepare(startInfo, parameters);
+            }
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             WritePrepHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             var preflightStartedAt = DateTimeOffset.UtcNow;
