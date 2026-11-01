@@ -14,9 +14,13 @@ public sealed class PassedCohortReceiptApprovalHoldNegativeControlTests : Accept
     public void MainAdvancedBeforeApproval_ReceiptNotReusedAndMembersAdmittedToOrdinaryGating()
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario();
-        var held = scenario.Tick();
-        Assert.Equal(2, held.Count(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-            line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)));
+        using (PassedCohortReceiptApprovalHoldTests.Scenario.PauseNewGates())
+        {
+            var held = scenario.Tick();
+            scenario.AssertPartnerReleased(held, heldIndex: 0);
+            Assert.Single(held.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+                line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)));
+        }
         var beforeReceipt = JsonSerializer.Serialize(scenario.Store.TryReadReceipt(scenario.Receipt.Identity.Value));
 
         File.WriteAllText(Path.Combine(scenario.Repo, "unrelated-main.txt"), "Advance main before owner approval.");
@@ -53,7 +57,12 @@ public sealed class PassedCohortReceiptApprovalHoldNegativeControlTests : Accept
     public void NonAcceptanceCriterionObligation_IsNotReportedAndSelectionUnchanged()
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario();
-        var candidates = Candidates(scenario);
+        // Receipt observation precedes the owner-approval filter. Actual grouped admission
+        // still excludes the protected member, independently of criterion obligations.
+        var candidates = scenario.Goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(goal.Id,
+            PassedCohortReceiptPartnerRelease.ProjectReceiptCandidate(scenario.Driver, goal,
+                ConductorAutonomyPolicy.Permissive, scenario.Kernel))).ToArray();
+        Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(Candidates(scenario)[0].ProjectionResult);
         Assert.NotNull(Evaluate(scenario, candidates));
         var blocked = scenario.Goals[0];
         scenario.Kernel.MapCriterionEvidenceOwner(blocked.Id, 0, 1, CriterionEvidenceOwner.Operator,

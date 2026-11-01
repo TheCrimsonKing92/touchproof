@@ -9,18 +9,19 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDeny
 public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
-    public void HeldTick_SecondMemberNeedsApproval_StreamsOneEventPerMember()
+    public void HeldTick_SecondMemberNeedsApproval_StreamsOnlyWaitingMemberHold()
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario(protectedMemberIndex: 1);
+        using var capacity = PassedCohortReceiptApprovalHoldTests.Scenario.PauseNewGates();
         var logPath = scenario.Workspace.ConductEventsLogPath;
         var progress = scenario.Tick(events: new ConductEventLogWriter(logPath));
 
         AssertHeldLines(scenario, progress);
+        scenario.AssertPartnerReleased(progress, heldIndex: 1);
         var events = ReadHeldEvents(logPath);
-        Assert.Equal(2, events.Length);
+        Assert.Single(events);
         AssertHeldLines(scenario, events.Select(record => record.Detail).ToArray());
-        Assert.All(scenario.Goals, goal => Assert.Single(events.Where(record =>
-            record.GoalId == goal.Id.Value[..8])));
+        Assert.Equal(scenario.Goals[1].Id.Value[..8], events[0].GoalId);
         Assert.Equal(1, scenario.Verifier.RunCount);
     }
 
@@ -29,6 +30,7 @@ public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflo
     public void TwoTicks_UnchangedHold_StreamsEachTickAndPersistsOneDecision()
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario(protectedMemberIndex: 1);
+        using var capacity = PassedCohortReceiptApprovalHoldTests.Scenario.PauseNewGates();
         var persisted = new Dictionary<GoalId, int>();
         var ticks = new List<BatchTickSummary>();
         Assert.All(scenario.Goals, goal => Assert.Empty(HeldDecisions(goal)));
@@ -48,54 +50,52 @@ public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflo
             {
                 ticks.Add(tick);
                 AssertHeldLines(scenario, tick.ProgressLines);
-                Assert.All(scenario.Goals, goal =>
-                {
-                    var decision = Assert.Single(HeldDecisions(goal));
-                    Assert.Contains(scenario.Receipt.Identity.Value, decision.Message, StringComparison.Ordinal);
-                    // This check runs after each tick, including tick one, proving journal durability.
-                    Assert.True(persisted.ContainsKey(goal.Id), "The held member journal was not persisted.");
-                    Assert.Equal(1, persisted[goal.Id]);
-                });
+                scenario.AssertPartnerReleased(tick.ProgressLines, heldIndex: 1);
+                var goal = scenario.Goals[1];
+                var decision = Assert.Single(HeldDecisions(goal));
+                Assert.Contains(scenario.Receipt.Identity.Value, decision.Message, StringComparison.Ordinal);
+                // This check runs after each tick, including tick one, proving journal durability.
+                Assert.True(persisted.ContainsKey(goal.Id), "The held member journal was not persisted.");
+                Assert.Equal(1, persisted[goal.Id]);
+                Assert.Empty(HeldDecisions(scenario.Goals[0]));
             });
 
         Assert.Equal(2, ticks.Count);
         var events = ReadHeldEvents(scenario.Workspace.ConductEventsLogPath);
-        Assert.Equal(4, events.Length);
-        Assert.All(scenario.Goals, goal => Assert.Equal(2,
-            events.Count(record => record.GoalId == goal.Id.Value[..8])));
+        Assert.Equal(2, events.Length);
+        Assert.All(events, record => Assert.Equal(scenario.Goals[1].Id.Value[..8], record.GoalId));
         Assert.Equal(1, scenario.Verifier.RunCount);
     }
 
     private static List<ProgressEvent> HeldDecisions(Goal goal) => goal.Timeline
         .Where(entry => entry.Kind == ProgressKind.GoalPolicyDecision &&
-            entry.Message.Contains("held at Verified", StringComparison.Ordinal)).ToList();
+            entry.Message.Contains("held at Verified", StringComparison.Ordinal) &&
+            entry.Message.Contains("cohort=", StringComparison.Ordinal)).ToList();
 
     private static ConductEventRecord[] ReadHeldEvents(string path) => File.ReadAllLines(path)
         .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line,
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
         .Where(record => record.Detail.StartsWith("GOAL ", StringComparison.Ordinal) &&
-            record.Detail.Contains("result=held", StringComparison.Ordinal)).ToArray();
+            record.Detail.Contains("result=held", StringComparison.Ordinal) &&
+            record.Detail.Contains("landing-denylist_owner_approval_required", StringComparison.Ordinal)).ToArray();
 
     private static void AssertHeldLines(PassedCohortReceiptApprovalHoldTests.Scenario scenario,
         IReadOnlyList<string> progress)
     {
         var held = progress.Where(line => line.StartsWith("GOAL ", StringComparison.Ordinal) &&
-            line.Contains("result=held", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(2, held.Length);
+            line.Contains("result=held", StringComparison.Ordinal) &&
+            line.Contains("landing-denylist_owner_approval_required", StringComparison.Ordinal)).ToArray();
+        var line = Assert.Single(held);
         var waiting = scenario.Goals[1].Id.Value[..8];
-        foreach (var goal in scenario.Goals)
-        {
-            var line = Assert.Single(held.Where(line => line.StartsWith(
-                $"GOAL goal={goal.Id.Value[..8]} ", StringComparison.Ordinal)));
-            Assert.Contains("result=held state=Verified", line, StringComparison.Ordinal);
-            Assert.Contains("landing-denylist_owner_approval_required", line, StringComparison.Ordinal);
-            Assert.Contains($"cohort={scenario.Receipt.Identity.Value}", line, StringComparison.Ordinal);
-            Assert.Contains($"waiting={waiting}", line, StringComparison.Ordinal);
-            Assert.Contains($"candidate={scenario.CandidateRevisions[1]}", line, StringComparison.Ordinal);
-            Assert.Contains("rule=landing-policy", line, StringComparison.Ordinal);
-            Assert.Contains($"path={Protected}", line, StringComparison.Ordinal);
-            Assert.Contains($"approve-policy-change_{waiting}_{scenario.CandidateRevisions[1]}",
-                line, StringComparison.Ordinal);
-        }
+        Assert.StartsWith($"GOAL goal={waiting} ", line, StringComparison.Ordinal);
+        Assert.Contains("result=held state=Verified", line, StringComparison.Ordinal);
+        Assert.Contains("landing-denylist_owner_approval_required", line, StringComparison.Ordinal);
+        Assert.Contains($"cohort={scenario.Receipt.Identity.Value}", line, StringComparison.Ordinal);
+        Assert.Contains($"waiting={waiting}", line, StringComparison.Ordinal);
+        Assert.Contains($"candidate={scenario.CandidateRevisions[1]}", line, StringComparison.Ordinal);
+        Assert.Contains("rule=landing-policy", line, StringComparison.Ordinal);
+        Assert.Contains($"path={Protected}", line, StringComparison.Ordinal);
+        Assert.Contains($"approve-policy-change_{waiting}_{scenario.CandidateRevisions[1]}",
+            line, StringComparison.Ordinal);
     }
 }
