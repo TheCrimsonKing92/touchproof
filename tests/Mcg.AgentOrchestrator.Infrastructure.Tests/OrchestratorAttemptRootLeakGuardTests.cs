@@ -19,7 +19,7 @@ public sealed class OrchestratorAttemptRootLeakGuardTests
             Directory.CreateDirectory(createdByAnotherProcess);
             Directory.CreateDirectory(unmarked);
             File.WriteAllText(
-                Path.Combine(createdByAnotherProcess, GoalAcceptanceVerifier.OwnerResultsCreatorFileName),
+                Path.Combine(createdByAnotherProcess, AcceptanceOwnerResultsRoot.OwnerResultsCreatorFileName),
                 $"{Environment.ProcessId}:0");
 
             var baseline = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "old-fixture" };

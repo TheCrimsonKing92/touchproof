@@ -104,7 +104,7 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
         current.Where(name => !baseline.Contains(name) &&
                               !name.Equals("operator", StringComparison.OrdinalIgnoreCase) &&
                               !goalIds.Contains(name) &&
-                              GoalAcceptanceVerifier.WasOwnerResultsDirectoryCreatedByCurrentProcess(
+                              AcceptanceOwnerResultsRoot.WasOwnerResultsDirectoryCreatedByCurrentProcess(
                                   Path.Combine(root, name)))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
 
@@ -116,7 +116,7 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
         current.Where(name => !baseline.Contains(name) &&
                               !name.Equals("operator", StringComparison.OrdinalIgnoreCase) &&
                               !goalIds.Contains(name) &&
-                              !GoalAcceptanceVerifier.WasOwnerResultsDirectoryCreatedByCurrentProcess(
+                              !AcceptanceOwnerResultsRoot.WasOwnerResultsDirectoryCreatedByCurrentProcess(
                                   Path.Combine(root, name)))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
 

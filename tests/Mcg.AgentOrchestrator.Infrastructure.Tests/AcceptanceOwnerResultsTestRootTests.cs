@@ -109,8 +109,8 @@ public sealed class AcceptanceOwnerResultsTestRootTests : GoalAcceptanceVerifier
             Assert.NotEqual(firstWorkspace, secondWorkspace);
             Assert.False(Directory.Exists(Path.Combine(firstWorkspace, ".git")));
             Assert.False(Directory.Exists(Path.Combine(secondWorkspace, ".git")));
-            var firstRoot = GoalAcceptanceVerifier.ResolveOwnerResultsRootForCandidate(firstWorkspace);
-            var secondRoot = GoalAcceptanceVerifier.ResolveOwnerResultsRootForCandidate(secondWorkspace);
+            var firstRoot = AcceptanceOwnerResultsRoot.ResolveOwnerResultsRootForCandidate(firstWorkspace);
+            var secondRoot = AcceptanceOwnerResultsRoot.ResolveOwnerResultsRootForCandidate(secondWorkspace);
 
             Assert.Equal(firstRoot, secondRoot);
             Assert.Equal(Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName), firstRoot);
