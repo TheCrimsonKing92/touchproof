@@ -62,7 +62,7 @@ public sealed class OwnerProtectedPartitionEquivalenceTests : IDisposable
     {
         WriteCandidate(Candidate);
         File.WriteAllText(Path.Combine(_root, "config", "conductor-policy.json"), """{"maxRetries":4}""");
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             ["config/acceptance-manifest.json", "config/conductor-policy.json"], null,
             (_, args) => args[0] == "diff" ? "config/acceptance-manifest.json\nconfig/conductor-policy.json\n" :
                 args[0] == "show" && args[1].EndsWith("conductor-policy.json", StringComparison.Ordinal)
@@ -98,11 +98,11 @@ public sealed class OwnerProtectedPartitionEquivalenceTests : IDisposable
         Xunit.Assert.Equal("operator review required", Xunit.Assert.IsType<AcceptanceCheckResult>(result.Failure).ResultSummary);
     }
 
-    private GoalAcceptanceVerifier.OwnerProtectedDecision Evaluate(string candidate,
+    private OwnerProtectedConfigurationPolicy.OwnerProtectedDecision Evaluate(string candidate,
         Func<AcceptanceTestInventory>? inventory = null)
     {
         WriteCandidate(candidate);
-        return GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        return OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             ["config/acceptance-manifest.json"], null,
             (_, args) => args[0] == "diff" ? "config/acceptance-manifest.json\n" : Main, null,
             inventory ?? Inventory, new string('a', 40));
