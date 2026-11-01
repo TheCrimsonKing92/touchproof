@@ -8,7 +8,7 @@ public sealed partial class GoalAcceptanceVerifier
 {
     internal static Task<CommandResult> RunRemoteLaneTransportAsync(
         string[] args, string directory, TimeSpan bound, CancellationToken token) =>
-        RunProcessAsync(args, directory, bound, token);
+        AcceptanceProcessRunner.RunProcessAsync(args, directory, bound, token);
 
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
     private RemoteLaneCoordinator? _cachelessRemoteLaneCoordinator;
@@ -106,7 +106,7 @@ public sealed partial class GoalAcceptanceVerifier
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
                 ? new SshRemoteLaneExecutor(configuration, worktreePath, _executionContext?.ResultsPrefix, clock,
-                    _testOverrides.RemoteLaneTransportRunnerForTests ?? RunProcessAsync,
+                    _testOverrides.RemoteLaneTransportRunnerForTests ?? AcceptanceProcessRunner.RunProcessAsync,
                     _testOverrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                 : UnavailableRemoteLaneExecutor.Instance);
         var coordinator = new RemoteLaneCoordinator(configuration, identity, worktreePath, _executionContext?.ResultsPrefix,
