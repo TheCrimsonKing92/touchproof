@@ -55,10 +55,12 @@ public sealed record ConductorAutonomyPolicy(
     bool BuildGcConserveMemory = false,
     int BuildGcConserveMemoryLevel = 5,
     int BuildGcHeapCount = 0,
-    int BuildRootRetentionDays = 0)
+    int BuildRootRetentionDays = 0,
+    int AutomaticRetryOperatorRoutingHoldSeconds = 180)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
+    public const int DefaultAutomaticRetryOperatorRoutingHoldSeconds = 180;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
 
@@ -192,6 +194,8 @@ public sealed record ConductorAutonomyPolicy(
 
         if (AcceptanceCohortGatherWindowSeconds < 0)
             errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
+        if (AutomaticRetryOperatorRoutingHoldSeconds < 0)
+            errors.Add($"automaticRetryOperatorRoutingHoldSeconds must be zero or greater (got {AutomaticRetryOperatorRoutingHoldSeconds}).");
 
         if (string.IsNullOrWhiteSpace(CascadeCheapModelAlias))
             errors.Add("cascadeCheapModelAlias must not be empty.");
@@ -237,6 +241,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
+        sb.AppendLine($"  \"automaticRetryOperatorRoutingHoldSeconds\": {AutomaticRetryOperatorRoutingHoldSeconds},");
         sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"acceptanceChildrenOptOutExecutionThrottling\": {AcceptanceChildrenOptOutExecutionThrottling.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"buildGcConserveMemory\": {BuildGcConserveMemory.ToString().ToLowerInvariant()},");
@@ -327,6 +332,12 @@ public sealed record ConductorAutonomyPolicy(
                 ? RequireInt(root, "acceptanceWidth", src)
                 : 2;
             var gatherWindowSeconds = DefaultAcceptanceCohortGatherWindowSeconds;
+            var routingHoldSeconds = DefaultAutomaticRetryOperatorRoutingHoldSeconds;
+            if (root.TryGetProperty("automaticRetryOperatorRoutingHoldSeconds", out var routingHoldElement))
+            {
+                if (routingHoldElement.ValueKind != JsonValueKind.Number || !routingHoldElement.TryGetInt32(out routingHoldSeconds))
+                    throw new FormatException($"conductor-policy.json{src}: automaticRetryOperatorRoutingHoldSeconds must be an integer.");
+            }
             if (root.TryGetProperty("acceptanceCohortGatherWindowSeconds", out var gatherWindowElement) &&
                 gatherWindowElement.ValueKind != JsonValueKind.Null)
             {
@@ -499,7 +510,8 @@ public sealed record ConductorAutonomyPolicy(
                 buildGcConserveMemory,
                 buildGcConserveMemoryLevel,
                 buildGcHeapCount,
-                buildRootRetentionDays);
+                buildRootRetentionDays,
+                routingHoldSeconds);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

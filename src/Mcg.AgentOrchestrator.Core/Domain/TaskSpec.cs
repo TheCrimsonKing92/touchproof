@@ -42,6 +42,10 @@ public sealed partial class TaskSpec
 
     public AcceptedRetryFeedback? AcceptedRetryFeedback { get; private set; }
 
+    public AcceptanceRetryRoutingHold? AcceptanceRetryRoutingHold { get; internal set; }
+    public IReadOnlyList<OperatorRoutingNote> OperatorRoutingNotes { get; internal set; } = [];
+    public IReadOnlyList<string>? OperatorRoutingAutomaticFeedback { get; internal set; }
+
     public int EmptyOutputRetryCount { get; private set; }
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
@@ -405,7 +409,8 @@ public sealed partial class TaskSpec
             LatestRetryInherited,
             SubscriptionDeferralReleasedAt,
             CompletionBuildEvidence,
-            WorkerBuildInvocations, FindingEvidenceReviewContinuation);
+            WorkerBuildInvocations, FindingEvidenceReviewContinuation,
+            AcceptanceRetryRoutingHold, OperatorRoutingNotes, OperatorRoutingAutomaticFeedback);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -665,6 +670,9 @@ public sealed partial class TaskSpec
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.LatestRetryInherited = snapshot.LatestRetryInherited;
         task.CriterionRetryFeedbackRoundAt = snapshot.CriterionRetryFeedbackRoundAt;
+        task.AcceptanceRetryRoutingHold = snapshot.AcceptanceRetryRoutingHold;
+        task.OperatorRoutingNotes = snapshot.OperatorRoutingNotes ?? [];
+        task.OperatorRoutingAutomaticFeedback = snapshot.OperatorRoutingAutomaticFeedback;
         task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
@@ -962,6 +970,8 @@ public sealed partial class TaskSpec
         bool inherited = false)
     {
         LatestRetryAt = retriedAt;
+        AcceptanceRetryRoutingHold = null;
+        OperatorRoutingAutomaticFeedback = null;
         LatestRetryInherited = inherited;
         if (!inherited && retryCause != RetryCause.UnchangedContextRepeat)
             LatestRoleInputRetryAt = retriedAt;
@@ -1117,8 +1127,8 @@ public sealed partial class TaskSpec
         AcceptedRetryFeedback = null;
     }
 
-    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt) =>
-        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt);
+    internal void RecordAcceptedRetryFeedback(string message, DateTimeOffset acceptedAt, CriteriaCorrectionSource source = CriteriaCorrectionSource.Operator) =>
+        AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt, source);
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
     internal void IncrementWorkerBuildCheckRecoveryCount() => WorkerBuildCheckRecoveryCount++;
@@ -1165,6 +1175,7 @@ public sealed partial class TaskSpec
         SubscriptionRetryAfter = null;
         LastDispatch = dispatch;
         _dispatchHistory.Add(dispatch);
+        OperatorRoutingNoteLedger.CommitDelivery(this, dispatch.DispatchedAt);
         PendingPreDispatchIntegrationReceipt = null;
         LastProcess = null;
     }

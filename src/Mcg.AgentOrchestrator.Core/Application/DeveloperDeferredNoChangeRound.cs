@@ -1,8 +1,8 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public static partial class DispatchFailureClassifier
+internal static class DeveloperDeferredNoChangeRound
 {
-    private static bool IsDeveloperDeferredNoChangeRound(
+    internal static bool IsDeveloperDeferredNoChangeRound(
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent,
