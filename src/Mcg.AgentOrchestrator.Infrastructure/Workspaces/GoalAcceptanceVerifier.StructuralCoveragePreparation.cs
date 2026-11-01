@@ -105,7 +105,7 @@ public sealed partial class GoalAcceptanceVerifier
                             result?.LockRemediationApplied == true,
                             result?.TestResultAttemptId,
                             result?.TestResultRunOrdinal ?? 0,
-                            result?.TestResultIsExplicitCrossAttemptReuse == true);
+                            result?.TestResultIsExplicitCrossAttemptReuse == true, shard.AllowsEmptySelection);
                     })
                     .ToArray();
             }
