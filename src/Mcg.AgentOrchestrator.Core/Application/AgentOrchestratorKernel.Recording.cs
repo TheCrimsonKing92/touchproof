@@ -2,6 +2,14 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? _declaredGateCheckSource;
+
+    public void SetDeclaredGateCheckSource(Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>> source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        _declaredGateCheckSource = source;
+    }
+
     private void RejectPlannerEvidence(Goal goal, TaskSpec task, TaskVerificationRecord verification, string diagnostic)
     {
         // Preserve the observed process exit. A protocol rejection is nevertheless not passing
@@ -13,7 +21,7 @@ public sealed partial class AgentOrchestratorKernel
     internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork) =>
         new PlannerEvidenceRecorder(this, _humanInputRequestLock, _clock,
-            (g, t, k, message) => Append(g, t, k, message))
+            (g, t, k, message) => Append(g, t, k, message), _declaredGateCheckSource)
             .Record(goal, task, batch, dispatchBriefVersion, out blocksActiveWork);
 
     private const int ProviderConnectivityRetryLimit = 3;
@@ -277,6 +285,12 @@ public sealed partial class AgentOrchestratorKernel
                 ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion);
             if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner) && testNames is { Count: > 0 })
             {
+                var diagnostic = PlannerCommandSelectorValidation.Refusal(testNames, goal, task, _declaredGateCheckSource);
+                if (diagnostic is not null)
+                {
+                    RejectPlannerEvidence(goal, task, verification, diagnostic);
+                    return;
+                }
                 var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
                     testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow);
                 goal.RecordGateTestObligation(obligation);

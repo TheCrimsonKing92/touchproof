@@ -5,7 +5,8 @@ internal sealed class PlannerEvidenceRecorder(
     AgentOrchestratorKernel kernel,
     object requestLock,
     IClock clock,
-    Action<Goal, TaskId?, ProgressKind, string> append)
+    Action<Goal, TaskId?, ProgressKind, string> append,
+    Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? declaredGateCheckSource)
 {
     internal static bool HasCurrentBlockingHumanInput(Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests)
     {
@@ -57,6 +58,13 @@ internal sealed class PlannerEvidenceRecorder(
                 }
                 items.Add((directive, identity));
             }
+
+            var selectorDiagnostic = PlannerCommandSelectorValidation.Refusal(
+                items.Select(item => item.Directive)
+                    .Where(directive => directive.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+                        GateTestObligation.IsAcceptanceGateOwner(directive.EvidenceOwner))
+                    .SelectMany(directive => directive.TestNames ?? []), goal, task, declaredGateCheckSource);
+            if (selectorDiagnostic is not null) return selectorDiagnostic;
 
             foreach (var (directive, identity) in items)
             {
