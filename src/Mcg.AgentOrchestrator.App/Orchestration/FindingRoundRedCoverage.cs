@@ -202,7 +202,9 @@ internal static class FindingRoundRedCoverage
                 var outcome = new FindingEvidenceOutcome(true, ids[0], Detail: Evidence,
                     ResultReason: FindingEvidenceOutcomeReason.CandidateRed, RequestedSelectionIdentity: member.Identity,
                     DecisionReason: Reason, SourceReceiptIds: ids);
-                foreach (var receipt in receipts) recordOutcome(goal.Id, task.Id, finding.StableId, outcome, receipt);
+                // Covering receipts are already attached to this round. Re-attaching one would
+                // merge its original queued dispositions over skips recorded for earlier findings.
+                recordOutcome(goal.Id, task.Id, finding.StableId, outcome, null);
                 recordDispositions(goal.Id, task.Id, [new(finding.StableId, member.Identity, "covered-by-receipt", Reason,
                     FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, fingerprint,
                     SourceReceiptIds: ids, ExecutionBasisIdentity: basis)]);
