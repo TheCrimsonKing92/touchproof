@@ -48,9 +48,9 @@ public sealed class OwnerProtectedCohortApprovalTests : IDisposable
         Xunit.Assert.Null(approved.Pass);
     }
 
-    private GoalAcceptanceVerifier.OwnerProtectedDecision Evaluate(
+    private OwnerProtectedConfigurationPolicy.OwnerProtectedDecision Evaluate(
         IReadOnlyList<AcceptanceOwnerProtectedCohortMember> members, ICollaborationItemStore decisions) =>
-        GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             [Manifest, "README.md"], members, ResolveGit, decisions,
             () => throw new InvalidDataException("Non-equivalent manifests do not need an inventory."), CombinedSha);
 

@@ -318,6 +318,14 @@ public sealed record OrchestratorStateOutboxEnsureResult(
     OrchestratorStateOutboxEnsureDisposition Disposition,
     OrchestratorStateOutboxState State);
 
+public enum OrchestratorStateOutboxRequeueOutcome
+{
+    Requeued,
+    Inserted,
+    Existing,
+    ProtectedByLiveLease
+}
+
 internal sealed class StateDbCommitBeforeRethrowException(
     Func<Exception> postCommitExceptionFactory) : Exception
 {

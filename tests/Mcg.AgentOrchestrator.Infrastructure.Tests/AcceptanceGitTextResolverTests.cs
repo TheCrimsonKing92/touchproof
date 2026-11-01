@@ -64,7 +64,7 @@ public sealed class AcceptanceGitTextResolverTests : IDisposable
             _root,
             "tests/Sample/Sample.csproj",
             Resolve);
-        var manifestTrust = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var manifestTrust = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root,
             ["config/acceptance-manifest.json"],
             Resolve);
@@ -102,7 +102,7 @@ public sealed class AcceptanceGitTextResolverTests : IDisposable
             _root,
             "tests/Sample/Sample.csproj",
             Resolve));
-        var manifestTrust = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var manifestTrust = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root,
             ["config/acceptance-manifest.json"],
             Resolve);
@@ -117,7 +117,7 @@ public sealed class AcceptanceGitTextResolverTests : IDisposable
         Directory.CreateDirectory(configDirectory);
         File.WriteAllText(Path.Combine(configDirectory, "acceptance-manifest.json"), ManifestJson);
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root,
             ["config/acceptance-manifest.json"],
             (worktreePath, arguments) => ManifestJson);
