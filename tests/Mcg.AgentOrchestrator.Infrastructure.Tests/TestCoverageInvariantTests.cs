@@ -252,6 +252,44 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_accepts_completed_zero_test_partition_only_when_empty_selection_is_allowed")]
+    public void TestCoverageInvariantAcceptsEmptyAllowedResidualPartition()
+    {
+        var laneTrx = WriteTrx(("1", "ExampleTests.Owned", "Passed"));
+        var emptyTrx = WriteTrx();
+        try
+        {
+            var discovered = new HashSet<string>(["ExampleTests.Owned"], StringComparer.OrdinalIgnoreCase);
+            var allowed = TestCoverageInvariant.Evaluate(discovered,
+            [
+                new TestPartitionCoverage("Balanced 1", true, [laneTrx]),
+                new TestPartitionCoverage("Infrastructure residual", true, [emptyTrx], AllowsEmptySelection: true)
+            ]);
+            var notAllowed = TestCoverageInvariant.Evaluate(discovered,
+            [
+                new TestPartitionCoverage("Balanced 1", true, [laneTrx]),
+                new TestPartitionCoverage("Infrastructure residual", true, [emptyTrx])
+            ]);
+            var incomplete = TestCoverageInvariant.Evaluate(discovered,
+            [
+                new TestPartitionCoverage("Balanced 1", true, [laneTrx]),
+                new TestPartitionCoverage("Infrastructure residual", false, [emptyTrx], AllowsEmptySelection: true)
+            ]);
+
+            Xunit.Assert.True(allowed.Passed, allowed.Summary);
+            Xunit.Assert.Empty(allowed.EmptyPartitions);
+            Xunit.Assert.False(notAllowed.Passed);
+            Xunit.Assert.Equal(["Infrastructure residual"], notAllowed.EmptyPartitions);
+            Xunit.Assert.False(incomplete.Passed);
+            Xunit.Assert.Equal(["Infrastructure residual"], incomplete.EmptyPartitions);
+        }
+        finally
+        {
+            File.Delete(laneTrx);
+            File.Delete(emptyTrx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_accounts_skip_marked_tests_recorded_as_NotExecuted")]
     public void TestCoverageInvariantAccountsSkipMarkedTestsRecordedAsNotExecuted()
     {

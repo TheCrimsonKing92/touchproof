@@ -52,7 +52,7 @@ public static string BuildSuggestedCommand(
             SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task) is { IsAnomalous: true }
                 ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
                 : command,
-        NextActionKind.FixFailedVerification when DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
+        NextActionKind.FixFailedVerification when DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
             DirtyDispatchRecoveryTextView.BuildDirtyDispatchRecoverySuggestedCommand(taskNumber.Value, recovery),
         NextActionKind.RunAssignedTask => BuildRunAssignedTaskCommand(goal, task, taskNumber.Value, agents),
         _ => command

@@ -19,8 +19,11 @@ public sealed record AcceptanceVerificationResult(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AttemptId { get; init; }
 
+    // A passed check that executed nothing is an empty-allowed lane (the balanced residual
+    // complement); its zero-row receipt is not evidence and would fail TRX coherence.
     internal static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
         checks
+            .Where(check => !(check.Passed && check.ExecutedTestCount == 0))
             .SelectMany(check => check.CrosswalkDiagnostics is not null
                 ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
             .Where(path => !string.IsNullOrWhiteSpace(path))

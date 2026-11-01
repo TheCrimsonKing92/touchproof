@@ -485,7 +485,7 @@ public sealed partial class AgentOrchestratorKernel
 
         return latestEvidence switch
         {
-            TaskEvidenceKind.FailedVerification when DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
+            TaskEvidenceKind.FailedVerification when DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
                 BuildDirtyDispatchRecoveryMessage(recovery),
             TaskEvidenceKind.FailedVerification => $"Latest verification failed with exit {task.LastVerification!.ExitCode}: {task.LastVerification.Command}",
             TaskEvidenceKind.PassedVerification => $"Latest verification passed: {task.LastVerification!.Command}",

@@ -13,6 +13,19 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private AcceptanceHolderLease HolderLease => _holderLease ?? new(utcNow: _utcNow,
         eventSink: line => _conductEventLogWriter?.Append("acceptance-holder", null, line));
 
+    // Operator preflight observes the same capacity boundary without adopting, releasing,
+    // reconciling, or writing receipts. The conductor owns those transitions.
+    internal bool ReservesCapacityReadOnly(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (attempt.ExecutionProtocol == "in-process")
+            return attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && !IsReconciled(attempt);
+        var binding = AcceptanceHolderBinding.For(attempt);
+        if (attempt.HolderContractVersion == 1 || File.Exists(binding.LeasePath))
+            return HolderLease.Read(binding).Phase is not ("Released" or "Cancelled");
+        return LegacyHolderSettlementReason(attempt) is null ||
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && File.Exists(attempt.ResultPath);
+    }
+
     private bool ReservesHolderLease(ConductorParallelAcceptanceAttempt attempt)
     {
         var binding = AcceptanceHolderBinding.For(attempt);

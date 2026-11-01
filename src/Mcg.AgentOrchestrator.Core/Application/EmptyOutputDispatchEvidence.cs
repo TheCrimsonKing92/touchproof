@@ -62,7 +62,7 @@ public static class EmptyOutputDispatchEvidence
         if (verification.ExitCode == 0 ||
             DispatchEvidenceSummaries.IsPreflightFailure(verification) ||
             IsDispatchRecoveryPolicyDiagnostic(verification) ||
-            DispatchFailureClassifier.IsDirtyDispatchGuardFailure(verification) ||
+            DirtyDispatchEvidence.IsDirtyDispatchGuardFailure(verification) ||
             DispatchCompletionEvidence.HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges) ||
             !HasZeroByteStandardOutput(verification) ||
             !HasZeroByteStandardError(verification))
