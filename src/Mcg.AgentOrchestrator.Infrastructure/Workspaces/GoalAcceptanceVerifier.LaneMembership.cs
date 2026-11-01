@@ -9,11 +9,10 @@ public sealed partial class GoalAcceptanceVerifier
 
         [System.Text.Json.Serialization.JsonIgnore]
         public bool RequiresBuildSystemChange { get; init; }
-    }
 
-    private static IReadOnlyList<AcceptanceTestLane> ResolveOwnedCollectionLanes(
-        AcceptanceGateEngineSettings settings, string worktreePath) =>
-        AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, worktreePath);
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool AllowsEmptySelection { get; init; }
+    }
 
     private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
         AcceptanceManifestCheck check,
@@ -33,7 +32,8 @@ public sealed partial class GoalAcceptanceVerifier
             EstimatedSerialSeconds = lane.EstimatedSerialSeconds,
             ExclusiveResourceKeys = lane.ExclusiveResourceKeys,
             RequiresBuildSystemChange = lane.RequiresBuildSystemChange,
-            IsResolvedInfrastructureLane = true
+            IsResolvedInfrastructureLane = true,
+            AllowsEmptySelection = lane.AllowsEmptySelection
         };
 
     private static IEnumerable<string> TranslateCheckMtpFilter(

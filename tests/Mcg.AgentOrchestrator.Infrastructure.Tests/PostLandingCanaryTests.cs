@@ -845,6 +845,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.Workspace.cs"));
         var goals = File.ReadAllText(Path.Combine(
             root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.cs"));
+        var land = File.ReadAllText(Path.Combine(
+            root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliLandCommand.cs"));
 
         Assert.Contains("_postLandingCanary.LaunchLandingAsync(receipt)", conductor, StringComparison.Ordinal);
         Assert.Contains("driver.LandingMutationBlocker", conductor, StringComparison.Ordinal);
@@ -853,9 +855,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", workspace, StringComparison.Ordinal);
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", workspace, StringComparison.Ordinal);
         Assert.Contains("var mergeChangedFiles = merge.ChangedFiles", workspace, StringComparison.Ordinal);
-        Assert.Contains("mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason", goals, StringComparison.Ordinal);
-        Assert.Contains("var landChangedFiles = landResult.ChangedFiles", goals, StringComparison.Ordinal);
-        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", goals, StringComparison.Ordinal);
+        Assert.Contains("return CliLandCommand.Execute(parts, context);", goals, StringComparison.Ordinal);
+        Assert.Contains("mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason", land, StringComparison.Ordinal);
+        Assert.Contains("var landChangedFiles = landResult.ChangedFiles", land, StringComparison.Ordinal);
+        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", land, StringComparison.Ordinal);
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
     }
 

@@ -89,7 +89,7 @@ public sealed record LandingCompletionFacts
 
     internal static void ValidateLandingKind(string? kind)
     {
-        if (kind is not (null or "" or "promote" or "escalate" or "mutation-hold" or "ownership-hold"))
+        if (kind is not (null or "" or "promote" or "escalate" or "mutation-hold" or "ownership-hold" or "delivered-for-review"))
             throw new InvalidOperationException("Invalid landing completion result kind fact.");
     }
 
@@ -158,6 +158,8 @@ public static class LandingCompletionPolicy
                 $"Landing held at mutation boundary: {facts.MutationBlockReason}");
         switch (facts.LandingResultKind)
         {
+            case "delivered-for-review":
+                return Decision(LandingCompletionAction.Hold, 12, "landing-delivered-for-review", Required(facts.LandingReason, "a landing reason"));
             case "mutation-hold":
                 return Decision(LandingCompletionAction.Hold, 9, "landing-mutation-hold-escalation", Required(facts.LandingReason, "a landing reason"));
             case "ownership-hold":

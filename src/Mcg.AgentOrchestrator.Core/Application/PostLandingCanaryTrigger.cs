@@ -23,6 +23,14 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
+            // Membership, expansion and packing are reached through the infrastructure lane resolver.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneExpander",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePacker",
+            // Class discovery is reached through the independently owned test inventory source.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
+            // Class history is reached through the lane resolver and balanced lane plan writer.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
@@ -48,7 +56,11 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout"
         ]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
-        new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),
+        new("gate-settings", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings",
+            // Pool settings are reached indirectly through the engine settings contract.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePoolSettings"
+        ]),
         new("test-coverage-invariant", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant"]),
         new("base-build-cache", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache"]),
         new("gate-heartbeats", [
@@ -61,6 +73,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttributionLaneScope",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneLayout",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
@@ -78,10 +92,10 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInfrastructureLaneResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInvocationEvidenceProvenance",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",
@@ -106,6 +120,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestTelemetryResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceVerificationResult",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",

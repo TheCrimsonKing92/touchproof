@@ -622,6 +622,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
     {
         var calls = new List<string[]>();
         var root = CreatePartitionedInfrastructureManifestWorkspace();
+        var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root)
+            .Where(lane => !lane.RequiresBuildSystemChange).ToArray();
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
@@ -653,6 +655,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
         var laneCount = CountChangeScopedInfrastructureTestLanes(root);
+        Assert.Equal(lanes.Select(lane => "infrastructure tests: " + lane.Name).Order(StringComparer.Ordinal),
+            result.Checks!.Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
+                .Select(check => check.Name).Order(StringComparer.Ordinal));
         Assert.Equal(laneCount, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.True(

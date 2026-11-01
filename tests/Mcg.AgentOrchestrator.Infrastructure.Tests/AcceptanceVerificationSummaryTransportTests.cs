@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -5,6 +6,28 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: pure controlled results; no provider, process or shared store.
 public sealed class AcceptanceVerificationSummaryTransportTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Native_checks_SerializationPreservesAllNamesInReceiptOrder(bool passed)
+    {
+        var checks = new[]
+        {
+            new AcceptanceCheckResult("unit", passed, passed ? 0 : 1, "raw check output"),
+            new AcceptanceCheckResult("build", true, 0, null)
+        };
+        var native = new AcceptanceVerificationResult(passed, false, passed ? 0 : 1, null, Checks: checks);
+        var summary = AcceptanceVerificationSummary.FromVerification(native,
+            passed ? [] : [checks[0]], passed ? [] : [checks[0].Name], "candidate", "main", null, null, null);
+
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var serialized = JsonSerializer.Serialize(summary, options);
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(serialized, options)!;
+
+        Assert.Equal(new[] { "unit", "build" }, restored.CheckNames);
+        Assert.Equal(passed ? [] : new[] { "unit" }, restored.FailedChecks);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
