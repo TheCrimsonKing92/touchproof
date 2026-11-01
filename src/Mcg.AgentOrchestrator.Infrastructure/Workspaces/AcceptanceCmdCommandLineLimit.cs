@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceCmdCommandLineLimit
 {
     internal const int MaxCmdCommandLineLength = 8191;
 

@@ -65,13 +65,28 @@ internal static partial class GoalRefinementWorkCoordinator
     public static bool ResetFailedClaimEscalation(OrchestratorWorkspace workspace, GoalId goalId) =>
         SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
 
-    public static void ResetAfterBriefRevision(
+    public static OrchestratorStateOutboxRequeueOutcome ResetAfterBriefRevision(
         AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, GoalId goalId)
     {
+        var message = CreateMessage(goalId);
+        var outcome = OrchestratorStateOutboxRequeueOutcome.Existing;
+        if (!StateDbWriteSession.TryExecute(
+                workspace.SqliteStatePath,
+                connection => outcome = SqliteOrchestratorStateRepository.RequeueOrInsertOutboxMessage(
+                    connection, message)))
+        {
+            outcome = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .RequeueOrInsertOutboxMessageAsync(message).GetAwaiter().GetResult();
+        }
+
+        if (outcome == OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease)
+            return outcome;
+
         ResetFailedClaimEscalation(workspace, goalId);
+        SpecRefinementTransientRetryStore.ForWorkspace(workspace).Reset(goalId);
         if (!HasPendingWork(kernel.GetGoal(goalId)))
             RecordPending(kernel, goalId);
-        TryEnsurePendingOutbox(workspace, goalId);
+        return outcome;
     }
 
     public static bool HasPendingWork(Goal goal) =>

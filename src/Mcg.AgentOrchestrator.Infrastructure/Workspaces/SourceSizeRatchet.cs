@@ -581,7 +581,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b adds six conductor-start probe and operator-attention wiring lines;
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
-            new SourceClassCeiling("CliCommandHandlers", 11033, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11019, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -602,7 +602,7 @@ internal static class SourceSizeRatchet
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration: measured 8022 lines in the existing 27 partial files, no headroom.
             // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 7742, 26),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 7708, 23),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

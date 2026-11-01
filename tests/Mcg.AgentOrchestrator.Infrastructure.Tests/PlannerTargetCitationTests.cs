@@ -86,6 +86,43 @@ public sealed class PlannerTargetCitationTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("./README.md:236", true)]
+    [Xunit.InlineData("README.md", true)]
+    [Xunit.InlineData("CONTRIBUTING.md", true)]
+    [Xunit.InlineData("./CHANGELOG.md:10-12", true)]
+    [Xunit.InlineData("guide.markdown:2", true)]
+    [Xunit.InlineData("NOTICE.txt:4-8", true)]
+    [Xunit.InlineData("./overview.rst:9", true)]
+    [Xunit.InlineData("./Guide.MD:3", true)]
+    [Xunit.InlineData("notes/random.md", false)]
+    [Xunit.InlineData("lib/readme.txt", false)]
+    [Xunit.InlineData("./notes/random.md", false)]
+    [Xunit.InlineData("nested/../README.md:10", false)]
+    [Xunit.InlineData("../README.md:10", false)]
+    [Xunit.InlineData("/README.md:10", false)]
+    [Xunit.InlineData("docs/x.md", true)]
+    [Xunit.InlineData("src/readme.txt", true)]
+    [Xunit.InlineData("internal/color/color.go:57", true)]
+    public void TryValidate_OnlyDocumentOrSourceCitation_EnforcesPathBoundary(
+        string citation, bool expected)
+    {
+        var plan = PlanWithTargetBody(
+            $"- Inspect `{citation}` and preserve the existing documented behavior for this target.");
+
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
+
+        Xunit.Assert.True(succeeded == expected,
+            $"Citation '{citation}': expected success={expected}, actual={succeeded}. {diagnostic}");
+        if (!expected)
+        {
+            Xunit.Assert.Contains(
+                "must cite a concrete target seam or symbol in backticks in its section body",
+                diagnostic,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("internal/color/color.go::shouldEnableColor", "internal/color/color.go")]
     [Xunit.InlineData("internal/color/color.go::Color.cs", "internal/color/color.go")]
     [Xunit.InlineData("internal/color/color.go:57", "internal/color/color.go")]

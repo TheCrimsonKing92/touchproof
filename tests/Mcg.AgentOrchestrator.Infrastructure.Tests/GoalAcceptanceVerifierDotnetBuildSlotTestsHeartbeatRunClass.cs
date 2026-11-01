@@ -74,22 +74,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunClass 
         Directory.CreateDirectory(root);
         try
         {
-            Assert.Null(GoalAcceptanceVerifier.ClassifyGateHeartbeatRunClassForTests(null));
+            Assert.Null(GateHeartbeatRunClass.Classify(null));
             await using var focused = AcceptanceExecutionOwners.CreateFocusedVerification(
                 root, options: new AcceptanceRunExecutionOptions(
                     ResultsPrefix: Path.Combine(root, "focused")));
             var focusedContext = (IAcceptanceRunExecutionContext)focused;
             Assert.Equal(GateHeartbeatRunClass.FocusedEvidence,
-                GoalAcceptanceVerifier.ClassifyGateHeartbeatRunClassForTests(focusedContext));
+                GateHeartbeatRunClass.Classify(focusedContext));
             Assert.Equal(GateHeartbeatRunClass.FocusedEvidence,
-                GoalAcceptanceVerifier.ClassifyGateHeartbeatRunClassForTests(
+                GateHeartbeatRunClass.Classify(
                     new AcceptanceRunExecutionContextView(focusedContext, Path.Combine(root, "focused-arm"))));
 
             await using var attempt = AcceptanceExecutionOwners.CreateAttempt(
                 root, options: new AcceptanceRunExecutionOptions(
                     ResultsPrefix: Path.Combine(root, "acceptance")));
             Assert.Equal(GateHeartbeatRunClass.Acceptance,
-                GoalAcceptanceVerifier.ClassifyGateHeartbeatRunClassForTests(
+                GateHeartbeatRunClass.Classify(
                     new AcceptanceRunExecutionContextView(
                         (IAcceptanceRunExecutionContext)attempt, Path.Combine(root, "acceptance-arm"))));
         }
