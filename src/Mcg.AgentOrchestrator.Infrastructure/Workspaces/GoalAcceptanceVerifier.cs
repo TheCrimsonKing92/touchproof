@@ -244,7 +244,8 @@ public sealed record FocusedEvidenceTargetCoverage(
 public sealed record FocusedEvidenceCoverage(
     IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks,
     string ExecutionMode = "focused",
-    string ExecutionReason = "explicit-focused-mapping");
+    string ExecutionReason = "explicit-focused-mapping",
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<FocusedEvidenceDroppedSelection>? DroppedSelections = null);
 
 public interface IGoalAcceptanceVerifier
 {

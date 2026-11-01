@@ -120,6 +120,8 @@ internal static partial class FocusedEvidenceRequestResolver
             }
         }
 
+        validated = FocusedEvidenceTraitExcludedSelection.Apply(worktreePath, engineSettings, validated, out var dropped);
+
         // Historical rule: more than four focused targets collapsed to one whole-project check per
         // project (and 18 Infrastructure lanes). It optimized process/check count and replaced the
         // earlier hard rejection of mappings over four targets; no filter-length or runner failure
@@ -265,10 +267,11 @@ internal static partial class FocusedEvidenceRequestResolver
         checks = new FocusedEvidenceCheckPlan(built, durationHistory);
         coverage = new FocusedEvidenceCoverage(
             TargetToChecks: targetToChecks,
-            ExecutionMode: hasFocusedFilters && hasMappedProjects
+            ExecutionMode: built.Count == 0 && dropped.Count > 0 ? "no-runnable-selection" : hasFocusedFilters && hasMappedProjects
                 ? "mixed"
                 : hasFocusedFilters ? "focused" : "project",
-            ExecutionReason: executionReason);
+            ExecutionReason: built.Count == 0 && dropped.Count > 0 ? "no-runnable-selection" : executionReason,
+            DroppedSelections: dropped.Count == 0 ? null : dropped);
         return true;
     }
 
