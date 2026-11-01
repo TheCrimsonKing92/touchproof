@@ -59,7 +59,9 @@ internal static class PreTesterApparatusReceiptClassifier
         if (candidate.ExecutedTestCount is not > 0) return new("executed-count-missing", []);
         var failure = ContentBoundGreenTrxEvidenceCheck.FirstFailure(
             candidate.TestResultPaths, candidate.ReceiptArtifacts, candidate.ExecutedTestCount.Value,
-            selections.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            selections.Select(selection => selection.TestClass)
+                .Except((evidence.Coverage?.DroppedSelections ?? []).Select(drop => drop.Selection), StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
             allowShortNamePrefixCoverage: true);
         return failure is null ? null : new(failure.Check, failure.MissingClasses);
     }
