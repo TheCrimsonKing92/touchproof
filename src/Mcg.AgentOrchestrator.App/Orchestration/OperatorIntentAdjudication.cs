@@ -37,7 +37,8 @@ internal sealed class OperatorIntentAdjudication(
         var heldReceipt = verifiedRegate
             ? passedGateHold?.Invoke(goal) : null;
         manifest = PassedGateHoldEvidence.Include(manifest, heldReceipt);
-        var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause);
+        var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause,
+            OperatorRouteNoteAdmission.Admits(task, intent));
         var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
         var stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
             AdmitsStewardClose(goal, task, payload);
@@ -158,6 +159,8 @@ internal sealed class OperatorIntentAdjudication(
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "route":
+                if (OperatorRouteNoteAdmission.TryApply(kernel, goal, task, intent, payload, retryCause!.Value, now))
+                    break;
                 if (intent.AuthenticationAssurance == StewardAssurance && caseE &&
                     !ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id)))
                     Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
@@ -169,6 +172,7 @@ internal sealed class OperatorIntentAdjudication(
                     retryCause!.Value,
                     invalidateDownstream: true,
                     correctionSource: CorrectionSource(intent));
+                OperatorRouteNoteAdmission.RetainFollowingRoute(kernel, goal, task, intent, payload, retryCause.Value, now);
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported adjudication shape '{shape}'.");
@@ -280,7 +284,8 @@ internal sealed class OperatorIntentAdjudication(
         AdjudicateOperatorIntentPayload payload,
         string shape,
         bool unresolvedEvidence,
-        out RetryCause? retryCause)
+        out RetryCause? retryCause,
+        bool admitsOperatorNote)
     {
         retryCause = null;
         if (string.IsNullOrWhiteSpace(payload.Text)) return "missing-explanation";
@@ -304,7 +309,8 @@ internal sealed class OperatorIntentAdjudication(
         if (shape is "close" or "reopen-regate" && task.Status is not
             (WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed))
             return WithCancelledRouteHint(task, "task-not-closable");
-        if (shape == "route" && task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
+        if (shape == "route" && (task.Status == WorkTaskStatus.WaitingForHuman ||
+            task.Status == WorkTaskStatus.Running && !admitsOperatorNote))
             return "task-not-retryable";
         if (shape == "route" &&
             (!Enum.TryParse(payload.Cause, ignoreCase: true, out RetryCause parsedCause) ||
