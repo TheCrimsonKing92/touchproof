@@ -197,7 +197,12 @@ public sealed class OperatorIntentAnswerRouteTests
             snapshot = harness.Kernel.ExportSnapshot();
             snapshot = snapshot with { Goals = snapshot.Goals.Select(goal => goal with
             {
-                Timeline = goal.Timeline.Where(entry => entry.OperatorIntentApplied?.IntentId != intent.Id).ToArray()
+                // RetryTaskCore and Append read the clock separately. Preserve a later event
+                // deterministically so replay cannot rely on equal timestamps.
+                Timeline = goal.Timeline.Where(entry => entry.OperatorIntentApplied?.IntentId != intent.Id)
+                    .Select(entry => entry.Kind == ProgressKind.TaskRetried && entry.TaskId == harness.Developer.Id.Value
+                        ? entry with { OccurredAt = harness.Developer.LatestRetryAt!.Value.AddTicks(1) }
+                        : entry).ToArray()
             }).ToArray() };
         }
         var restored = AgentOrchestratorKernel.FromSnapshot(snapshot);

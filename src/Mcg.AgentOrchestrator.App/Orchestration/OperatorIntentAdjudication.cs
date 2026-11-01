@@ -146,10 +146,11 @@ internal sealed class OperatorIntentAdjudication(
             case "route":
                 // A decision can survive an uncheckpointed goal. Reuse the retry only
                 // when this snapshot also contains it, and still finish its decision effect.
+                // The kernel appends the event after recording the task's retry timestamp.
                 if (intent.Verb == OperatorIntentVerbs.Answer && task.LatestRetryAt >= receipt.RecordedAt &&
                     task.PendingRetryCause == retryCause && task.AcceptedRetryFeedback?.Message == payload.Text.Trim() &&
                     goal.Timeline.Any(entry => entry.TaskId == task.Id && entry.Kind == ProgressKind.TaskRetried &&
-                        entry.OccurredAt == task.LatestRetryAt && entry.Message == payload.Text.Trim()))
+                        entry.OccurredAt >= task.LatestRetryAt && entry.Message == payload.Text.Trim()))
                     break;
                 if (OperatorRouteNoteAdmission.TryApply(kernel, goal, task, intent, payload, retryCause!.Value, now))
                     break;

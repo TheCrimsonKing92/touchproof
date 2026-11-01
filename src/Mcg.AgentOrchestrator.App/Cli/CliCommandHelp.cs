@@ -344,7 +344,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Attention = new(
         AttentionUsage,
         "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
-        ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--idempotency-key", "--help", "-h"]);
+        ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AbandonGoal = new(
         AbandonGoalUsage,
