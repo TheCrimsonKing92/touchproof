@@ -10,14 +10,6 @@ public sealed partial class AgentOrchestratorKernel
         _declaredGateCheckSource = source;
     }
 
-    private void RejectPlannerEvidence(Goal goal, TaskSpec task, TaskVerificationRecord verification, string diagnostic)
-    {
-        // Preserve the observed process exit. A protocol rejection is nevertheless not passing
-        // verification and must never authorize completion when an unrelated answer arrives.
-        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic, CompletionVerdictVerifiedSuccess = false, CompletionVerdictRule = TaskOutcomeRules.PlannerOutputContractRejected.Token });
-        ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
-    }
-
     internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork) =>
         new PlannerEvidenceRecorder(this, _humanInputRequestLock, _clock,
@@ -238,28 +230,21 @@ public sealed partial class AgentOrchestratorKernel
             verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
         if (parsedHumanInput.IsMalformed)
         {
-            RejectPlannerEvidence(goal, task, verification, parsedHumanInput.Diagnostic!);
+            PlannerEvidenceCompletion.Reject(this, goal, task, verification, parsedHumanInput.Diagnostic!);
             return;
         }
         if (parsedHumanInput.Directives.Any(item => item.PlannerEvidence is not null))
         {
-            var evidenceDispatch = verification.DispatchAttemptAt is { } at
-                ? task.DispatchHistory.LastOrDefault(item => item.DispatchedAt == at) : null;
-            if (verification.DispatchAttemptAt is not null && evidenceDispatch is null)
+            var provenanceDiagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var briefVersion);
+            if (provenanceDiagnostic is not null)
             {
-                RejectPlannerEvidence(goal, task, verification, "Planner evidence has unknown dispatch provenance; replan.");
-                return;
-            }
-            int? briefVersion = evidenceDispatch?.BriefSnapshot is not null ? evidenceDispatch.BriefVersion : null;
-            if (evidenceDispatch is not null && evidenceDispatch.DispatchedAt != task.LastDispatch!.DispatchedAt)
-            {
-                RejectPlannerEvidence(goal, task, verification, "Planner evidence completion belongs to an obsolete dispatch; replan.");
+                PlannerEvidenceCompletion.Reject(this, goal, task, verification, provenanceDiagnostic);
                 return;
             }
             var diagnostic = RecordPlannerEvidenceBatch(goal, task, parsedHumanInput, briefVersion, out var blocked);
             if (diagnostic is not null)
             {
-                RejectPlannerEvidence(goal, task, verification, diagnostic);
+                PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
                 return;
             }
             if (blocked) return;
@@ -288,7 +273,7 @@ public sealed partial class AgentOrchestratorKernel
                 var diagnostic = PlannerCommandSelectorValidation.Refusal(testNames, goal, task, _declaredGateCheckSource);
                 if (diagnostic is not null)
                 {
-                    RejectPlannerEvidence(goal, task, verification, diagnostic);
+                    PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
                     return;
                 }
                 var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
