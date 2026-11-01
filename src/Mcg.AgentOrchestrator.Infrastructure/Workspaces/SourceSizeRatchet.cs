@@ -598,7 +598,8 @@ internal static class SourceSizeRatchet
             // Goal a9983773 adds 11 lane-plan call-site lines; record, publisher and reader live in separate types.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration: measured 8022 lines in the existing 27 partial files, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8022, 27),
+            // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 7742, 26),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
