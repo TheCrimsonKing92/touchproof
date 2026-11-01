@@ -12,10 +12,12 @@ public sealed record OrchestratorProject(string Name, string RootDirectory)
     public string? DataRootDirectory { get; init; }
     public string Delivery { get; init; } = ProjectDelivery.Direct;
     public string? DeliveryDecider { get; init; }
+    public string? ForgeIdentity { get; init; }
+    public OwnerAnswer? ForgeIdentityAnswer { get; init; }
     public OwnerAnswer? DeliveryAnswer { get; init; }
     public OwnerAnswer? DeliveryDeciderAnswer { get; init; }
 
     public OrchestratorWorkspace ResolveWorkspace(string? tenantName = null) =>
         OrchestratorWorkspace.ForProject(Name, RootDirectory, tenantName: tenantName,
-            integrationBranch: IntegrationBranch, dataRootDirectory: DataRootDirectory) with { Delivery = Delivery };
+            integrationBranch: IntegrationBranch, dataRootDirectory: DataRootDirectory) with { Delivery = Delivery, ForgeIdentity = ForgeIdentity };
 }

@@ -11,8 +11,12 @@ internal static class ProjectDeliveryAnswerCommand
     {
         try
         {
-            value = key == ProjectDelivery.ModeKey
-                ? ProjectDelivery.ValidateMode(value) : ProjectDelivery.ValidateDecider(value);
+            value = key switch
+            {
+                ProjectDelivery.ModeKey => ProjectDelivery.ValidateMode(value),
+                ProjectForgeIdentity.Key => ProjectForgeIdentity.Validate(value),
+                _ => ProjectDelivery.ValidateDecider(value)
+            };
             var utc = (clock?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
             utc = new DateTimeOffset(utc.Ticks - utc.Ticks % TimeSpan.TicksPerSecond, TimeSpan.Zero);
             registry.SetDeliveryAnswer(project.Name, new OwnerAnswer(key, value, reason, utc));

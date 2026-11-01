@@ -87,6 +87,8 @@ public sealed class OrchestratorProjectRegistry
                     UseLearnedIntegrationBranch = entry.UseLearnedIntegrationBranch == true,
                     DataRootDirectory = DataRootDirectory,
                     Delivery = entry.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
+                    ForgeIdentity = entry.ForgeIdentityAnswer?.Value,
+                    ForgeIdentityAnswer = entry.ForgeIdentityAnswer,
                     DeliveryDecider = entry.DeliveryDeciderAnswer?.Value,
                     DeliveryAnswer = entry.DeliveryAnswer,
                     DeliveryDeciderAnswer = entry.DeliveryDeciderAnswer
@@ -164,6 +166,8 @@ public sealed class OrchestratorProjectRegistry
         {
             IntegrationBranch = existingBranch, DataRootDirectory = DataRootDirectory,
             Delivery = existing.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
+            ForgeIdentity = existing.ForgeIdentityAnswer?.Value,
+            ForgeIdentityAnswer = existing.ForgeIdentityAnswer,
             DeliveryDecider = existing.DeliveryDeciderAnswer?.Value,
             DeliveryAnswer = existing.DeliveryAnswer,
             DeliveryDeciderAnswer = existing.DeliveryDeciderAnswer
@@ -210,7 +214,8 @@ public sealed class OrchestratorProjectRegistry
         {
             ProjectDelivery.ModeKey => ProjectDelivery.ValidateMode(answer.Value),
             ProjectDelivery.DeciderKey => ProjectDelivery.ValidateDecider(answer.Value),
-            _ => throw new ArgumentException("Expected delivery or delivery-decider.")
+            ProjectForgeIdentity.Key => ProjectForgeIdentity.Validate(answer.Value),
+            _ => throw new ArgumentException("Expected delivery, delivery-decider or forge-identity.")
         };
         var normalizedName = OrchestratorProjectSelection.NormalizeProjectName(name);
         if (normalizedName.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
@@ -223,6 +228,7 @@ public sealed class OrchestratorProjectRegistry
 
         var canonical = new OwnerAnswer(answer.FactKey, value, answer.Reason, answer.RecordedUtc);
         if (answer.FactKey == ProjectDelivery.ModeKey) entry.DeliveryAnswer = canonical;
+        else if (answer.FactKey == ProjectForgeIdentity.Key) entry.ForgeIdentityAnswer = canonical;
         else entry.DeliveryDeciderAnswer = canonical;
         SaveFile(file);
     }
@@ -360,5 +366,7 @@ public sealed class OrchestratorProjectRegistry
         public OwnerAnswer? DeliveryAnswer { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public OwnerAnswer? DeliveryDeciderAnswer { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OwnerAnswer? ForgeIdentityAnswer { get; set; }
     }
 }
