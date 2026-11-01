@@ -113,7 +113,7 @@ public sealed class AcceptanceOwnerResultsTestRootTests : GoalAcceptanceVerifier
             var secondRoot = GoalAcceptanceVerifier.ResolveOwnerResultsRootForCandidate(secondWorkspace);
 
             Assert.Equal(firstRoot, secondRoot);
-            Assert.Equal(Path.Combine(Path.GetTempPath(), GoalAcceptanceVerifier.OwnerResultsRootDirectoryName), firstRoot);
+            Assert.Equal(Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName), firstRoot);
         }
         finally
         {

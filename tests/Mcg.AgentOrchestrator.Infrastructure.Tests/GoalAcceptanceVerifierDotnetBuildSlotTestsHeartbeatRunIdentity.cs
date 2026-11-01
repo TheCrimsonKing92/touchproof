@@ -57,7 +57,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunIdenti
                     ResultsPrefix: Path.Combine(root, "acceptance"), GateRunIdentity: runId));
             var context = new AcceptanceRunExecutionContextView(
                 (IAcceptanceRunExecutionContext)owner, Path.Combine(root, "arm"));
-            var resolved = GoalAcceptanceVerifier.ResolveGateHeartbeatRunIdForTests(context);
+            var resolved = GateHeartbeatRunClass.ResolveRunId(context);
             Assert.Equal(runId, resolved);
             (primaryPath, mirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
                 "grouped lane", null, environment, Environment.ProcessId,
@@ -235,16 +235,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunIdenti
         Directory.CreateDirectory(root);
         try
         {
-            Assert.Null(GoalAcceptanceVerifier.ResolveGateHeartbeatRunIdForTests(null));
+            Assert.Null(GateHeartbeatRunClass.ResolveRunId(null));
             await using var solo = AcceptanceExecutionOwners.CreateAttempt(root,
                 options: new AcceptanceRunExecutionOptions(RunId: "solo-attempt",
                     ResultsPrefix: Path.Combine(root, "solo")));
-            Assert.Equal("solo-attempt", GoalAcceptanceVerifier.ResolveGateHeartbeatRunIdForTests(
+            Assert.Equal("solo-attempt", GateHeartbeatRunClass.ResolveRunId(
                 new AcceptanceRunExecutionContextView((IAcceptanceRunExecutionContext)solo, Path.Combine(root, "solo-arm"))));
             await using var focused = AcceptanceExecutionOwners.CreateFocusedVerification(root,
                 options: new AcceptanceRunExecutionOptions(ResultsPrefix: Path.Combine(root, "focused"),
                     GateRunIdentity: "ignored-focused-id"));
-            Assert.Null(GoalAcceptanceVerifier.ResolveGateHeartbeatRunIdForTests(
+            Assert.Null(GateHeartbeatRunClass.ResolveRunId(
                 new AcceptanceRunExecutionContextView((IAcceptanceRunExecutionContext)focused, Path.Combine(root, "focused-arm"))));
         }
         finally
