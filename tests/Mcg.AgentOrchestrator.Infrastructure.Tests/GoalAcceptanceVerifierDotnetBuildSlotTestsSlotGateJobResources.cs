@@ -87,11 +87,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var shutdown = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var shutdown = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 [shim, "build-server", "shutdown", receivedArguments],
                 root,
                 TimeSpan.FromSeconds(10));
-            var ordinary = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var ordinary = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 [shim, "ordinary"],
                 root,
                 TimeSpan.FromSeconds(10));
@@ -102,7 +102,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 EnableRaisingEvents = true
             };
             watcher.Created += (_, _) => readyObserved.TrySetResult();
-            var slowTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var slowTask = AcceptanceProcessRunner.RunProcessForTestsAsync(
                 [shim, "slow", ready, signal],
                 root,
                 TimeSpan.FromSeconds(10));
@@ -177,7 +177,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             };
 
             var runs = Enumerable.Range(0, 2)
-                .Select(index => GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+                .Select(index => AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                     [shim, "slow", readyPaths[index], signalPaths[index], $"child-{index}"],
                     root,
                     TimeSpan.FromSeconds(15),
@@ -311,7 +311,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 }
             };
 
-            var timeoutRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+            var timeoutRun = AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                 [shim, "timeout", readyPaths["timeout"], signalPaths["timeout"]],
                 root,
                 TimeSpan.FromMinutes(1),
@@ -319,7 +319,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 Observe("timeout"),
                 timeoutSignal: timeoutSignal.Token,
                 registrationIdentityReader: DeterministicRegistrationIdentity);
-            var cancellationRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+            var cancellationRun = AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                 [shim, "cancel", readyPaths["cancel"], signalPaths["cancel"]],
                 root,
                 TimeSpan.FromMinutes(1),
@@ -327,7 +327,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 Observe("cancel"),
                 cancellation.Token,
                 registrationIdentityReader: DeterministicRegistrationIdentity);
-            var faultRun = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+            var faultRun = AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                 [shim, "fault", readyPaths["fault"], signalPaths["fault"]],
                 root,
                 TimeSpan.FromMinutes(1),
@@ -481,7 +481,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            run = GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(
+            run = AcceptanceProcessRunner.RunProcessWithHeartbeatForTestsAsync(
                 arguments,
                 root,
                 TimeSpan.FromMinutes(1),
