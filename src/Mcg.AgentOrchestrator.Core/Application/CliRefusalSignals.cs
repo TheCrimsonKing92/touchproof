@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
-public static partial class DispatchFailureClassifier
+internal static partial class CliRefusalSignals
 {
     internal static IReadOnlyList<string> GetCliRefusalSignalLines(TaskVerificationRecord verification) =>
         ProviderLimitEvidenceParser.GetCliRefusalLines(
@@ -78,7 +78,7 @@ public static partial class DispatchFailureClassifier
             (match.Groups["status"].Value == "529" || CliOverloadText().IsMatch(line));
     }
 
-    private static string BuildProviderAuthenticationEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
+    internal static string BuildProviderAuthenticationEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
         var hasLine = ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var line);
         var dispatch = SubscriptionLimitEvidence.FindDispatchForVerification(task, verification) ?? task.LastDispatch;

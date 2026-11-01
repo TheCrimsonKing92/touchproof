@@ -23,7 +23,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         var history = Assert.Single(task.VerificationHistory);
         Assert.Equal("detached-without-worker-result", history.CompletionVerdictRule);
         Assert.Equal(false, history.CompletionVerdictVerifiedSuccess);
-        Assert.Equal(1, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+        Assert.Equal(1, DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
         Assert.Equal(0, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
         var retry = Assert.Single(goal.Timeline.Where(
             evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
@@ -48,7 +48,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         {
             RecordRound(kernel, goal, task, clock, attempt);
             Assert.Equal(attempt,
-                DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+                DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
             Assert.Equal("detached-without-worker-result",
                 task.VerificationHistory[^1].CompletionVerdictRule);
             Assert.Equal(false, task.VerificationHistory[^1].CompletionVerdictVerifiedSuccess);
@@ -87,7 +87,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
     {
         var clock = new FakeClock();
         var task = new TaskSpec(TaskId.New(), "Count detached rounds", AgentRole.Reviewer);
-        Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+        Assert.Equal(0, DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
         foreach (var rule in new[] { "detached-without-worker-result", otherRule,
                      "detached-without-worker-result", "detached-without-worker-result" })
         {
@@ -97,7 +97,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
             task.RecordCompletionVerdict(false, rule);
         }
 
-        Assert.Equal(2, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+        Assert.Equal(2, DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
     }
 
     [Theory]
@@ -132,7 +132,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         var history = Assert.Single(task.VerificationHistory);
         Assert.Equal(false, history.CompletionVerdictVerifiedSuccess);
         Assert.Equal("verification-terminal-contract-incomplete", history.CompletionVerdictRule);
-        Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+        Assert.Equal(0, DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
         Assert.NotEqual(WorkTaskStatus.Completed, task.Status);
     }
 

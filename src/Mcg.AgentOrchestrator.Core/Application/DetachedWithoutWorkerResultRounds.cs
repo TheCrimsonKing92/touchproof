@@ -1,10 +1,12 @@
+using static Mcg.AgentOrchestrator.Core.DispatchFailureClassifier;
+
 namespace Mcg.AgentOrchestrator.Core;
 
-public static partial class DispatchFailureClassifier
+public static class DetachedWithoutWorkerResultRounds
 {
     internal const int DetachedWithoutWorkerResultRetryLimit = 3;
 
-    private static DispatchOutcome BuildDetachedWithoutWorkerResultOutcome(
+    internal static DispatchOutcome BuildDetachedWithoutWorkerResultOutcome(
         TaskSpec task, TaskVerificationRecord verification, bool workerResultPresent, bool hasCommittedChanges) =>
         BuildOutcome(TaskOutcomeRules.DetachedWithoutWorkerResult, task, verification,
             workerResultPresent, hasCommittedChanges,
@@ -12,7 +14,7 @@ public static partial class DispatchFailureClassifier
                 EmptyOutputDispatchEvidence.HasZeroByteStandardOutput(verification), null, null, RecoveryRecommendation.AutoRetry,
                 $"detached-without-worker-result: process {task.LastProcess!.ProcessId} was gracefully detached and exited 0 without a WORKER_RESULT block"));
 
-    private static bool IsDetachedWithoutWorkerResult(
+    internal static bool IsDetachedWithoutWorkerResult(
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent) =>
