@@ -662,7 +662,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b adds one hold-tracking guard so generic watchdog handling preserves
             // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
             // Goal f608f29b adds the three-line environment admission guard before progressive-review steering.
-            new SourceClassCeiling("ConductorBatchLoop", 8975, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 8974, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
