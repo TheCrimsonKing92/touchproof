@@ -7,7 +7,7 @@ public sealed class AcceptanceProcessRunnerTests
     // Pre-extraction baseline: d2ecd0a2e GoalAcceptanceVerifier.ProcessRunner.cs delegates
     // to AcceptanceCheckProcessInvoker. Its unchanged result construction preserves stdout,
     // the command exit code, and -1/TimedOut for the injected timeout signal.
-    // GoalAcceptanceVerifier.CaptureFiles.cs keeps default captures iff timeout or exit != 0.
+    // AcceptanceCaptureDrain.cs keeps default captures iff timeout or exit != 0.
     private const string Stdout = "acceptance-runner-out";
     private const string Stderr = "acceptance-runner-err";
     private static readonly TimeSpan CommandHangFailsafe = TimeSpan.FromMinutes(5);

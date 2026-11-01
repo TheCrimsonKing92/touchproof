@@ -58,6 +58,8 @@ public static bool ExecuteCommand(
     }
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch);
     kernel.SetEventWriter(eventWriter);
+    kernel.SetCandidatePatchEquivalence(new GoalWorktreeCandidatePatchEquivalence(
+        workspace.ExecutionDirectory, workspace.IntegrationBranch));
     var operationCleanupContext = cleanupContext ?? WorktreeCleanupContext.Load(
         attentionStoreDirectory: workspace.OrchestratorDirectory);
     var context = new CliExecutionContext(

@@ -97,7 +97,7 @@ internal static class GoalAcceptanceVerifierCaptureCustody
         Action? onLimitReached, CancellationToken cancellationToken, TimeSpan? capturePublicationInterval)
     {
         await connection.ConfigureAwait(false);
-        return await GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        return await AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             source,
             path,
             limitBytes,

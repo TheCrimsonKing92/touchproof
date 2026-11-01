@@ -627,11 +627,8 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         segments.Add(TaskBriefSegment.Fixed(BuildNegativeControlRevertSetBriefBlock(goal, task)));
-        var reviewerExecutedTestEvidence = ReviewerEvidenceBriefSection.BuildReviewerExecutedTestEvidenceBriefBlock(goal, task);
-        if (reviewerExecutedTestEvidence.Count > 0)
-        {
-            segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
-        }
+        segments.AddRange(ReviewerEvidenceBriefSection.BuildCandidateEvidenceSegments(goal, task,
+            string.IsNullOrWhiteSpace(targetHeadCommit) ? task.PreReviewEvidenceReceipt?.CandidateSha : targetHeadCommit));
 
         var sliceBatchParentReview = ReviewerEvidenceBriefSection.BuildSliceBatchParentReviewBriefBlock(goal, task, _goals.Values);
         if (sliceBatchParentReview.Count > 0)

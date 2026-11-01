@@ -1,7 +1,19 @@
+using CaptureLimitResult = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.CaptureLimitResult;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceCaptureDrain
 {
+    internal static (string Stdout, string Stderr) CreateCaptureFilePaths()
+    {
+        var directory = OrchestratorTempRoot.GetPurposeDirectory("acceptance-capture");
+        return (Path.Combine(directory, $"mcg-acc-{Guid.NewGuid():N}.out"),
+            Path.Combine(directory, $"mcg-acc-{Guid.NewGuid():N}.err"));
+    }
+
+    internal static bool ShouldKeepCaptureFiles(bool? keepCaptureFiles, bool timedOut, int exitCode) =>
+        keepCaptureFiles ?? (timedOut || exitCode != 0);
+
     private static readonly TimeSpan DefaultCapturePublicationInterval = TimeSpan.FromSeconds(1);
 
     internal static async Task<CaptureLimitResult> DrainCappedCaptureAsync(
@@ -163,4 +175,16 @@ public sealed partial class GoalAcceptanceVerifier
             TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
             TaskScheduler.Default);
     }
+
+    internal static void EmitCaptureLimitReached(
+        GateHeartbeatContext? context,
+        string? attemptResultsPrefix,
+        string path,
+        long capBytes) =>
+        GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached(
+            context?.GoalId,
+            attemptResultsPrefix,
+            path,
+            capBytes,
+            Console.Out);
 }

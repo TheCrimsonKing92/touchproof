@@ -1633,15 +1633,11 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            if (downstream.Status == WorkTaskStatus.Completed &&
-                downstream.LastVerification is not null &&
-                SameNonEmptyReviewedCommit(downstream.LastVerification.ReviewedCommit, priorCandidate))
+            if (DownstreamVerdictPatchEquivalence.TryPreserveForRetry(
+                    _candidatePatchEquivalence, goal, downstream, retriedTask, priorCandidate,
+                    SameNonEmptyReviewedCommit, out var preservationMessage))
             {
-                Append(
-                    goal,
-                    downstream.Id,
-                    ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because its verification covers candidate {priorCandidate!.Trim()} while upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} is retried.");
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated, preservationMessage);
                 continue;
             }
 
@@ -1680,13 +1676,11 @@ public sealed partial class AgentOrchestratorKernel
                      task.Status == WorkTaskStatus.Completed &&
                      task.LastVerification is not null))
         {
-            if (SameNonEmptyReviewedCommit(downstream.LastVerification!.ReviewedCommit, currentCandidateSha))
+            if (DownstreamVerdictPatchEquivalence.TryPreserveForCompletion(
+                    _candidatePatchEquivalence, goal, downstream, retriedTask, currentCandidateSha,
+                    SameNonEmptyReviewedCommit, out var preservationMessage))
             {
-                Append(
-                    goal,
-                    downstream.Id,
-                    ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} completed with unchanged candidate {currentCandidate}.");
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated, preservationMessage);
                 continue;
             }
 

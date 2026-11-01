@@ -70,7 +70,7 @@ internal static class SourceSizeRatchet
             // Goal a9983773 adds 11 lines binding the lane-plan observation to the existing attempt and dispatch set.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4388),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4292),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -147,14 +147,14 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
             // Goal 387027bb snapshots the routing deadline and emits its initial waiting event (+7 integration lines).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 641),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 614),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 629),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 679),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 676),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 345), // Provider hold redispatch hook and injected recovery seam.
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
@@ -209,7 +209,7 @@ internal static class SourceSizeRatchet
             // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
             // Goal f608f29b guards progressive-review paid restarts through EnvironmentContractGate before steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2547),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2546),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -547,7 +547,7 @@ internal static class SourceSizeRatchet
             // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
             // Goal 5ca3f5c0: six PR-tracker wiring lines, no added partial file.
-            new SourceClassCeiling("ConductorDriver", 14422, 70),
+            new SourceClassCeiling("ConductorDriver", 14385, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -606,7 +606,7 @@ internal static class SourceSizeRatchet
             // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
             // Goal 8846120e extracts AcceptanceProcessRunner; main d2ecd0a2e integrated, measured 7830 lines in 26 partials.
             // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 7205, 19),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6929, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -636,7 +636,7 @@ internal static class SourceSizeRatchet
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9290, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9287, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -670,7 +670,7 @@ internal static class SourceSizeRatchet
             // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
             // Goal f608f29b adds the three-line environment admission guard before progressive-review steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines, no added partial file.
-            new SourceClassCeiling("ConductorBatchLoop", 8975, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 8974, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

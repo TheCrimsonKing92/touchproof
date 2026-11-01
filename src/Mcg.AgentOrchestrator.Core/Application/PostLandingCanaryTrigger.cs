@@ -23,6 +23,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
+            // Missing-tool signatures are reached through the independently owned failure-cause adjudicator.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceMissingToolClassifier",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
             // Membership, expansion and packing are reached through the infrastructure lane resolver.
@@ -40,6 +42,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CaptureLimitStop",
+            // Capture drain and file helpers are reached through the process invoker and capture custody.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCaptureDrain",
             // Command-line validation is reached through the acceptance shell process builder.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCmdCommandLineLimit",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
@@ -87,6 +91,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureClassifications",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFileExistsCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFocusedRunBinding",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateCancellationMonitor",

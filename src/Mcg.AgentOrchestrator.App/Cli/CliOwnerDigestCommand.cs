@@ -19,24 +19,26 @@ internal static class CliOwnerDigestCommand
     {
         try
         {
-            var (since, until, json, rounds) = Parse(args);
+            var (since, until, json, rounds, relaunch) = Parse(args);
             var digest = Read(workspace, clock ?? new SystemClock(), out var goals, since, until);
             var panel = CliOwnerDigestJudgePanel.Read(workspace, digest, goals);
+            var measurements = relaunch ? CliOwnerDigestRelaunch.Read(workspace, digest.Since, digest.Until) : null;
             var writer = output ?? Console.Out;
             IReadOnlyList<AppliedRetryIntent> intents = rounds
                 ? CliOwnerDigestRetryIntents.Read(workspace, digest.Until) : [];
             if (json)
             {
-                using var buffer = panel is null ? null : new StringWriter(CultureInfo.InvariantCulture);
+                using var buffer = panel is null && measurements is null ? null : new StringWriter(CultureInfo.InvariantCulture);
                 var jsonWriter = buffer ?? writer;
                 if (rounds)
                     CliOwnerDigestRounds.WriteJson(jsonWriter, digest, goals, intents);
                 else
                     WriteJson(jsonWriter, digest);
-                if (panel is not null)
+                if (panel is not null || measurements is not null)
                 {
                     var root = new JsonObject();
-                    CliOwnerDigestJudgePanel.AddJson(root, panel);
+                    if (panel is not null) CliOwnerDigestJudgePanel.AddJson(root, panel);
+                    if (measurements is not null) CliOwnerDigestRelaunch.AddJson(root, measurements);
                     // Append to the serialized object without re-encoding existing property values.
                     var legacyJson = buffer!.ToString().TrimEnd();
                     writer.Write(legacyJson.AsSpan(0, legacyJson.Length - 1));
@@ -52,6 +54,8 @@ internal static class CliOwnerDigestCommand
                 CliOwnerDigestBoardFill.WriteText(writer, workspace, goals, digest.Until);
                 if (rounds)
                     CliOwnerDigestRounds.WriteText(writer, digest, goals, intents);
+                if (measurements is not null)
+                    CliOwnerDigestRelaunch.WriteText(writer, measurements);
                 if (panel is not null)
                     CliOwnerDigestJudgePanel.WriteText(writer, panel);
             }
@@ -260,14 +264,20 @@ internal static class CliOwnerDigestCommand
         return rows;
     }
 
-    internal static (DateTimeOffset? Since, DateTimeOffset? Until, bool Json, bool Rounds) Parse(IReadOnlyList<string> args)
+    internal static (DateTimeOffset? Since, DateTimeOffset? Until, bool Json, bool Rounds, bool Relaunch) Parse(IReadOnlyList<string> args)
     {
         DateTimeOffset? since = null, until = null;
         var json = false;
         var rounds = false;
+        var relaunch = false;
         for (var i = 1; i < args.Count; i++)
         {
             var flag = args[i];
+            if (flag.Equals("--relaunch", StringComparison.OrdinalIgnoreCase))
+            {
+                relaunch = true;
+                continue;
+            }
             if (flag.Equals("--json", StringComparison.OrdinalIgnoreCase))
             {
                 json = true;
@@ -288,6 +298,6 @@ internal static class CliOwnerDigestCommand
             else throw new ArgumentException(CliCommandHelp.OwnerDigestUsage);
             i++;
         }
-        return (since, until, json, rounds);
+        return (since, until, json, rounds, relaunch);
     }
 }

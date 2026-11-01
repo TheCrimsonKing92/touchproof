@@ -1,5 +1,7 @@
 @echo off
 setlocal
+set "MCG_CLI_LAUNCHER_STARTED_UTC="
+set "MCG_CLI_LAUNCHER_PATH=fresh"
 set "ROOT=%~dp0"
 set "MCG_ORCHESTRATOR_REPOSITORY_ROOT=%ROOT%"
 set "LOCK_DIR=%ROOT%.build-lock"
@@ -21,6 +23,32 @@ if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNE
 :: Directory.Build.rsp; do not export those settings here because unrelated descendants own their runtimes.
 set "DOTNET_GCConserveMemory=7"
 
+:: The home publisher projects its adopted record into two batch-readable lines.
+if "%MCG_ORCHESTRATOR_LAUNCHER_INTREE%"=="1" goto intree_path
+set "ADOPTION_POINTER=%ROOT%.orchestrator\continuity\home-build-adoption.cmd.txt"
+if not exist "%ADOPTION_POINTER%" goto intree_path
+set "ADOPTED_COMMIT="
+set "ADOPTED_DLL="
+(
+    set /p "ADOPTED_COMMIT="
+    set /p "ADOPTED_DLL="
+) < "%ADOPTION_POINTER%"
+if not defined ADOPTED_COMMIT goto intree_path
+if not defined ADOPTED_DLL goto intree_path
+if not exist "%ADOPTED_DLL%" goto intree_path
+set "CURRENT_HEAD="
+for /f "usebackq delims=" %%H in (`git -C "%ROOT%." rev-parse HEAD 2^>nul ^|^| echo HEAD_UNAVAILABLE`) do set "CURRENT_HEAD=%%H"
+if not defined CURRENT_HEAD goto intree_path
+if "%CURRENT_HEAD%"=="HEAD_UNAVAILABLE" goto intree_path
+if not "%ADOPTED_COMMIT%"=="%CURRENT_HEAD%" goto intree_path
+git -C "%ROOT%." diff --quiet HEAD -- src Directory.Build.props Directory.Build.rsp global.json >nul 2>&1
+if not "%ERRORLEVEL%"=="0" goto intree_path
+set "MCG_CLI_LAUNCHER_PATH=fast"
+"%DOTNET_HOST%" "%ADOPTED_DLL%" %*
+exit /b %ERRORLEVEL%
+
+:intree_path
+for /f "delims=" %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToString('o')" 2^>nul') do set "MCG_CLI_LAUNCHER_STARTED_UTC=%%T"
 :: Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 :: A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
 :: A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.
@@ -65,6 +93,7 @@ rmdir /s /q "%LOCK_DIR%" 2>nul
 if %BUILD_EXIT% neq 0 goto build_failed
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Update-AppDllGitHeadMarker.ps1" "%ROOT%." "%APP_HEAD%"
 del "%BUILD_LOG%" 2>nul
+set "MCG_CLI_LAUNCHER_PATH=built"
 
 :run_app
 :: Run from an isolated copy of the complete app closure under %TEMP%\mcg-run\v2\<digest>.

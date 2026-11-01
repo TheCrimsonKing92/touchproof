@@ -190,9 +190,9 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         var artifact = Artifact("instructions/task.md", bytes, ContextDeliveryMode.InlineFull);
         var package = new WorkerContextPackageBuilder().Prepare(AgentRole.Developer, Path.GetTempPath(), [artifact]);
         var rendered = WorkerContextPackageBuilder.Render(package);
-        var encoded = rendered.Split(Environment.NewLine).Last();
+        var encoded = WorkerContextInlinePayloadFixture.ReadText(rendered, artifact.Identity.Value);
 
-        var recovered = WorkerContextPackageBuilder.RecoverInlineBytes(encoded, "utf8-json");
+        var recovered = Encoding.UTF8.GetBytes(encoded);
 
         Assert.Equal(bytes, recovered);
         Assert.Equal(artifact.ContentHash, WorkerContextArtifact.Hash(recovered));
@@ -445,7 +445,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         string workingDirectory,
         string stdoutPipePath,
         string stderrPipePath) =>
-        GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
             command,
             workingDirectory,
             stdoutPipePath,
@@ -773,7 +773,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 $"MANDATORY READ: identity={conflictArtifact.Identity.Value}; purpose={conflictArtifact.Kind}; path={conflictArtifact.MandatoryRelativePath}; bytes={conflictArtifact.AuthoritativeByteCount}; sha256={conflictArtifact.ContentHash}",
                 rendered,
                 StringComparison.Ordinal);
-            Assert.DoesNotContain(changedPaths[0], rendered, StringComparison.Ordinal);
+            Assert.Contains(changedPaths[0], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(changedPaths[^1], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(conflictPaths[0], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(conflictPaths[^1], rendered, StringComparison.Ordinal);

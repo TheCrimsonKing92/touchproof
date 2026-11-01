@@ -20,6 +20,7 @@ internal static class StartupTerminalSweep
             cleanupHooks: cleanupHooks, orchestratorDirectory: workspace.OrchestratorDirectory,
             reclaimGoalRoots: true, gitRunner: gitRunner);
         timing.Stop();
+        StartupSweepTotal.Record(timing.ElapsedMilliseconds);
         try
         {
             var line = StartupSweepStepsLine.Format(result, timing.ElapsedMilliseconds);

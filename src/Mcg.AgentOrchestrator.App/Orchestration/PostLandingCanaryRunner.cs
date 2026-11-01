@@ -638,9 +638,9 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 survivingDescendantProcessIds);
         }
 
-        var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
+        var stdout = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(stdoutPath, false)
             .ConfigureAwait(false);
-        var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
+        var stderr = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(stderrPath, false)
             .ConfigureAwait(false);
         return new PostLandingCanaryProcessResult(exitCode, stdout, stderr);
     }

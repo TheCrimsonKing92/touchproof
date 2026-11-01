@@ -51,6 +51,24 @@ internal sealed class ConductEventLogWriter
 
     public string CurrentPath => _path;
 
+    internal void AppendRecord(ConductorLoopFirstTickRecord record)
+    {
+        lock (_lock)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            _beforeRequiredEventDrain?.Invoke();
+            WithRequiredEventGate(() =>
+            {
+                DrainRequiredEventsUnderGate();
+                _beforeAppendCommit?.Invoke();
+                RotateIfNeeded();
+                var line = JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
+                File.AppendAllText(_path, line);
+                _changes.AppendConductLine(line);
+            });
+        }
+    }
+
     public void Append(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
     {
         lock (_lock)

@@ -14,7 +14,7 @@ public sealed class ConductorBatchLoopTestsAdmissionCpuWindow(ITestOutputHelper 
         var walk = RunFixture(false, true);
         var admissionLine = Phase(admission, "acceptance-admission");
         Assert.Equal(30, Cpu(admissionLine, "cpu_ms"));
-        Assert.Contains("admission_steps=attempt-census:30:1,", admissionLine);
+        Assert.Contains("admission_steps=attempt-census:30:30:1,", admissionLine);
         foreach (var field in new[] { "cpu_sweep_ms", "cpu_prewalk_ms", "cpu_walk_ms" })
             Assert.Equal(Cpu(End(baseline), field), Cpu(End(admission), field));
         Assert.Equal(Cpu(End(admission), "cpu_sweep_ms") + Cpu(End(admission), "cpu_prewalk_ms") +

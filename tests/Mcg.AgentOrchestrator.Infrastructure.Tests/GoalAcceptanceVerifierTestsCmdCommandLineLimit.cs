@@ -13,7 +13,7 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
         var expectedLine = $"/c \"(chcp 65001 > nul && \"git\" \"diff\" \"{payload}\") > \"{stdout}\" 2> \"{stderr}\"\"";
 
         var error = Assert.Throws<CommandLineTooLongException>(() =>
-            GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
                 ["git", "diff", payload], Path.GetTempPath(), stdout, stderr, forceUtf8ConsoleOutput: true));
 
         Assert.Equal(expectedLine.Length, error.Length);
@@ -30,7 +30,7 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
     {
         if (!OperatingSystem.IsWindows()) return;
         const string emptyLine = "/c \"\"git\" \"\"\"";
-        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
             ["git", new string('x', length - emptyLine.Length)], Path.GetTempPath());
 
         Assert.Equal("cmd.exe", startInfo.FileName);
@@ -43,7 +43,7 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
         if (!OperatingSystem.IsWindows()) return;
         const string emptyLine = "/c \"\"git\" \"\"\"";
         var error = Assert.Throws<CommandLineTooLongException>(() =>
-            GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
                 ["git", new string('x', 8192 - emptyLine.Length)], Path.GetTempPath()));
         Assert.Equal(8192, error.Length);
         Assert.Equal(8191, error.Limit);

@@ -890,8 +890,8 @@ internal sealed partial class ConductorBatchLoop
 
             var admissionClock = StartDiagnosticTimer();
             var admissionCpuStart = ReadProcessCpu();
-            var hasParkedAcceptanceToReconcile = scopedGoals.Any(goal => goal.IsExplicitlyParked &&
-                driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0);
+            var hasParkedAcceptanceToReconcile = ConductorTickStepLedger.Measure("admission-pre-batch", () => scopedGoals.Any(goal => goal.IsExplicitlyParked &&
+                driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0));
             if (eligible.Length == 0 && !hasParkedAcceptanceToReconcile)
             {
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
@@ -1098,23 +1098,23 @@ internal sealed partial class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] All goals done or escalated; loop complete after {totalTicks} ticks.");
                 break;
             }
-
             blockedRecheckCycles = 0;
             totalTicks++;
             var tickLines = new List<string>();
-            foreach (var line in preTickTimingLines)
+            ConductorTickStepLedger.Measure("admission-pre-batch", () =>
             {
-                EmitProgress(line, tickLines);
-            }
-            foreach (var line in preWalkIntentLines)
-            {
-                EmitProgress(line, tickLines);
-            }
-
+                foreach (var line in preTickTimingLines)
+                {
+                    EmitProgress(line, tickLines);
+                }
+                foreach (var line in preWalkIntentLines)
+                {
+                    EmitProgress(line, tickLines);
+                }
+            });
             var changedGoalLines = new List<string>();
-            var changedGoalIds = new HashSet<GoalId>(unpersistedIntentGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision)));
+            var changedGoalIds = ConductorTickStepLedger.Measure("admission-pre-batch", () => new HashSet<GoalId>(unpersistedIntentGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision))));
             var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
-
             DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)
             {
                 var dispatch = task.LastDispatch!;
@@ -1130,7 +1130,6 @@ internal sealed partial class ConductorBatchLoop
 
                 return snapshot;
             }
-
             var tickAdvanced = 0;
             var tickHeld = 0;
             var tickEscalated = 0;
@@ -1149,7 +1148,7 @@ internal sealed partial class ConductorBatchLoop
 
                 return isDeferringMaxDurationStop || pendingSelfRelaunch is not null;
             }
-            driver.BeginTick(kernel, totalTicks);
+            ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
                 scopedGoals,
@@ -1164,15 +1163,15 @@ internal sealed partial class ConductorBatchLoop
                 changedGoalLines,
                 changedGoalIds,
                 suppressNewAcceptanceAdmission: SuppressNewAcceptanceAdmission);
-
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
             // Batch reconciliation needs tick context; its admission observations must not leak into the walk.
-            driver.BeginTick(kernel, totalTicks);
+            ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
+            admissionClock.Stop();
             EmitProgress(FormatPhaseTiming(totalTicks, "acceptance-admission", admissionClock.Elapsed,
-                $"admission_steps={_stepLedger!.FormatSteps(ConductorTickStepLedger.AdmissionNames)}", CpuDeltaMs(admissionCpuStart, ReadProcessCpu())), tickLines);
+                _stepLedger!.FormatAdmission(admissionClock.Elapsed), CpuDeltaMs(admissionCpuStart, ReadProcessCpu())), tickLines);
             var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
@@ -2234,7 +2233,7 @@ internal sealed partial class ConductorBatchLoop
         var state = ConductorTickStepLedger.Measure("attempt-census", () => BeginParallelAcceptanceBatch(
             eligible, kernel, driver, policy, completedGoals, escalatedGoals,
             configuredAcceptanceWidth, tick, changedGoalLines));
-        RecordActivationAdmissionWaitingForProbe(state);
+        ConductorTickStepLedger.Measure("activation-probe-record", () => RecordActivationAdmissionWaitingForProbe(state));
         if (state.CapacityStateUnavailable) return state.Results;
 
         ConductorTickStepLedger.Measure("attempt-reconcile", () => ReconcileParallelAcceptanceAttempts(state, scopedGoals, kernel, driver, policy, tick, changedGoalLines, changedGoalIds));
@@ -2242,22 +2241,22 @@ internal sealed partial class ConductorBatchLoop
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission));
-        var priorityOccupantsBefore = GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver);
-        var priorityResultsBefore = state.Results.Keys.ToHashSet(StringComparer.Ordinal);
-        var priorityBaseOrder = GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible);
+        var (priorityOccupantsBefore, priorityResultsBefore, priorityBaseOrder) = ConductorTickStepLedger.Measure("priority-order", () =>
+            (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
+             state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
         if (!suppressNewAcceptanceAdmission())
             ConductorTickStepLedger.Measure("merge-train", () => AdmitMergeTrain(state, driver, policy, tick, changedGoalLines));
         ConductorTickStepLedger.Measure("pair-cohort", () => AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission));
-        HoldCohortMembers(state, driver, policy, tick, changedGoalLines);
+        ConductorTickStepLedger.Measure("hold-cohort-members", () => HoldCohortMembers(state, driver, policy, tick, changedGoalLines));
         if (suppressNewAcceptanceAdmission()) return state.Results;
-        HoldLoneReadyGoalForInReviewCohortPartner(kernel, scopedGoals, state.OrderedEligible, state.ProductionCandidates,
-            state.AcceptanceCensus, driver, policy, state.Results, tick, changedGoalLines);
+        ConductorTickStepLedger.Measure("hold-lone-ready", () => HoldLoneReadyGoalForInReviewCohortPartner(kernel, scopedGoals, state.OrderedEligible, state.ProductionCandidates,
+            state.AcceptanceCensus, driver, policy, state.Results, tick, changedGoalLines));
         if (!suppressNewAcceptanceAdmission())
             ConductorTickStepLedger.Measure("solo-admission", () => AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
                 suppressNewAcceptanceAdmission));
-        _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add);
-        SummarizeAcceptanceDeferrals(state, tick, changedGoalLines);
+        ConductorTickStepLedger.Measure("priority-guard", () => _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add));
+        ConductorTickStepLedger.Measure("deferral-summary", () => SummarizeAcceptanceDeferrals(state, tick, changedGoalLines));
 
         return state.Results;
     }

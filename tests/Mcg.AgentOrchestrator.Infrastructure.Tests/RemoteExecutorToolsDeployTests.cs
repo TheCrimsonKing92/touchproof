@@ -60,7 +60,7 @@ public sealed class RemoteExecutorToolsDeployTests
         var deploy = Create((args, directory, _, _) =>
         {
             commands.Add(args);
-            composed.Add(GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(args, directory,
+            composed.Add(GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(args, directory,
                 @"\\.\pipe\mcg-acceptance-stdout-01234567890123456789012345678901",
                 @"\\.\pipe\mcg-acceptance-stderr-01234567890123456789012345678901").Arguments);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "{\"readback\":\"B\"}"));

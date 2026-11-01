@@ -23,17 +23,10 @@ internal sealed partial class ConductorDriver
         _unchangedCandidateReinstatementKernel = kernel;
     }
 
-    private void ConfigureCandidateIdentity(AgentOrchestratorKernel kernel, string conductEventsLogPath, string? projectHomeDirectory)
+    private void ConfigureCandidateIdentity(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
     {
-        _candidateIdentityEventWriter = new ConductEventLogWriter(conductEventsLogPath);
-        _resolveCandidateIdentity = goal =>
-        {
-            var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
-            if (path is null) return (null, "missing-worktree");
-            GoalWorktrees.TryComputeCandidateIdentity(path, _integrationBranch, out var identity, out var failure,
-                projectHomeDirectory: projectHomeDirectory);
-            return (identity, failure);
-        };
+        _candidateIdentityEventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        _resolveCandidateIdentity = GoalWorktreeCandidateContext.Configure(kernel, workspace);
         kernel.ConfigureCandidateIdentityResolver(goal => _resolveCandidateIdentity(goal).Identity);
     }
 
