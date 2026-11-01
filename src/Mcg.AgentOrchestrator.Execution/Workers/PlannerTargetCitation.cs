@@ -7,6 +7,9 @@ internal static class PlannerTargetCitation
 {
     private static readonly Regex BacktickedCitation = new(@"`(?<citation>[^`\r\n]+)`", RegexOptions.CultureInvariant);
     private static readonly Regex Identifier = new(@"\A[A-Za-z_][A-Za-z0-9_.]+\z", RegexOptions.CultureInvariant);
+    private static readonly Regex RootDocument = new(
+        @"\A(?:\./)?(?<name>[^/\\:`#\r\n]+)(?::[0-9]+(?:-[0-9]+)?)?\z",
+        RegexOptions.CultureInvariant);
     private static readonly Regex LegacyCsMarker = new(@"\.cs\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex RepositoryPath = new(
         @"\A(?<path>[^:`#\r\n]+?)(?:(?:::[^\s`]+)|(?::[0-9]+(?:-[0-9]+)?)|(?:#L[0-9]+(?:-L?[0-9]+)?))?\z",
@@ -17,7 +20,7 @@ internal static class PlannerTargetCitation
         foreach (Match match in BacktickedCitation.Matches(body))
         {
             var citation = match.Groups["citation"].Value;
-            if (Identifier.IsMatch(citation))
+            if (Identifier.IsMatch(citation) || IsRootDocument(citation))
             {
                 return true;
             }
@@ -93,6 +96,20 @@ internal static class PlannerTargetCitation
 
         path = candidate;
         return true;
+    }
+
+    private static bool IsRootDocument(string citation)
+    {
+        var match = RootDocument.Match(citation);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var name = match.Groups["name"].Value;
+        return name.LastIndexOf('.') > 0 &&
+            !char.IsWhiteSpace(name[0]) && !name.Any(char.IsControl) &&
+            IsDocumentationText(name);
     }
 
     private static bool HasLegacySourcePrefix(string citation) =>
