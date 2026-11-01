@@ -61,6 +61,19 @@ public sealed class AcceptanceBalancedLaneResidualTests : IDisposable
             evidence with { FailedPredicate = "missing-trx", Passed = false }, allowEmptySelection: true).Passed);
     }
 
+    [Fact]
+    public void EmptyResidualReceipt_IsLeftOutOfGateTestResultPaths()
+    {
+        var paths = AcceptanceVerificationResult.CollectTestResultPaths([
+            new("infrastructure tests: Balanced 1", true, 0, null, TestResultPaths: ["balanced.trx"], ExecutedTestCount: 4),
+            new("infrastructure tests: Infrastructure residual", true, 0, null, TestResultPaths: ["residual.trx"], ExecutedTestCount: 0),
+            new("infrastructure tests: Balanced 2", false, 1, null, TestResultPaths: ["failed-empty.trx"], ExecutedTestCount: 0),
+            new("infrastructure tests: Balanced 3", true, 0, null, TestResultPaths: ["unknown-count.trx"])
+        ]);
+
+        Assert.Equal(["balanced.trx", "failed-empty.trx", "unknown-count.trx"], paths);
+    }
+
     [Theory]
     [InlineData("failed", false)]
     [InlineData("faulted", false)]
