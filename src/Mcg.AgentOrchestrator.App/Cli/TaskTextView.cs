@@ -107,7 +107,7 @@ public static void PrintTask(Goal goal, TaskSpec task)
             Console.WriteLine(OutputTextPreview.CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath).Text.TrimEnd());
         }
 
-        if (DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery))
+        if (DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery))
         {
             DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(TaskDisplayNumber.Resolve(goal, task.Id), recovery);
         }
