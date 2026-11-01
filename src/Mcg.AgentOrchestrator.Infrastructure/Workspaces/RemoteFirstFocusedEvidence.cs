@@ -13,7 +13,7 @@ internal static class RemoteFirstFocusedEvidence
         TimeProvider fallbackClock, string worktreePath, IReadOnlyList<Check> checks, GoalId? goalId,
         IAcceptanceRunExecutionContext? owner, bool continueAfterFailure,
         Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>> runLocal, CancellationToken token,
-        Action? releaseLocalPermit = null)
+        Action? releaseLocalPermit = null, IClassDurationHistory? history = null)
     {
         RemoteLaneExecutorConfiguration configuration;
         try
@@ -29,7 +29,28 @@ internal static class RemoteFirstFocusedEvidence
         token.ThrowIfCancellationRequested();
         var clock = overrides.RemoteLaneTimeProviderForTests ?? fallbackClock;
         var runs = checks.Select(check => Candidate(check, owner.RunId, goalId.Value, clock)).ToArray();
+        history ??= (checks as FocusedEvidenceCheckPlan)?.History ?? AcceptanceClassDurationHistoryAdapter.Read(worktreePath);
+        foreach (var cohort in runs.OfType<Run>().GroupBy(run =>
+                     (run.Check.Project, Kind: run.Check.FocusedEvidenceSelections.SelectMany(selection => selection).FirstOrDefault()?.Kind)))
+        {
+            var model = new FocusedEvidenceGroupCostModel(cohort.Key.Project!,
+                cohort.SelectMany(run => run.Check.FocusedEvidenceSelections.SelectMany(selection => selection)), history);
+            foreach (var run in cohort)
+                run.PredictedSeconds = run.Check.FocusedEvidenceSelections.Count == 0 ? null :
+                    FocusedEvidenceGroupCostModel.Sum(run.Check.FocusedEvidenceSelections.Select(model.PredictSeconds));
+        }
+        if (runs.Any(run => run?.PredictedSeconds is not null))
+        {
+            var order = Enumerable.Range(0, checks.Count).OrderByDescending(index => runs[index]?.PredictedSeconds)
+                .ThenBy(index => runs[index]?.PredictedSeconds is null ? null : runs[index]!.Request.Filter, StringComparer.Ordinal)
+                .ThenBy(index => index).ToArray();
+            checks = order.Select(index => checks[index]).ToArray();
+            runs = order.Select(index => runs[index]).ToArray();
+        }
+        foreach (var run in runs.OfType<Run>())
+            Report($"REMOTE_FIRST_FOCUSED_EVIDENCE_COST lane={run.Request.Lane} predicted_seconds={FocusedEvidenceGroupCostModel.Format(run.PredictedSeconds)} heavy={FocusedEvidenceGroupCostModel.IsHeavy(run.PredictedSeconds).ToString().ToLowerInvariant()}");
         RemoteLaneCoordinator? coordinator = null;
+        FocusedEvidenceExecutorWaitQueue? waitQueue = null;
         var releasingLocalPermit = false;
         try
         {
@@ -57,8 +78,9 @@ internal static class RemoteFirstFocusedEvidence
                 var interval = overrides.RemoteLanePollInterval is { } value && value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(1);
                 coordinator = new(configuration, identity, worktreePath, prefix, executor, clock, interval, null,
                     claimClass: RemoteExecutorClaimClass.FocusedEvidence);
-                // Claim every slot before starting work; completions cannot recycle a sick executor.
+                // Initiate all claims in cost order before remote work can release any capacity.
                 var claimed = new List<(Run Run, RemoteLaneExecutorEntry Entry)>();
+                var waiting = new List<(Run Run, string InitialReason, Task<(RemoteLaneExecutorEntry? Entry, FocusedEvidenceExecutorWaitRecord Record)> Wait)>();
                 var eligibility = FocusedEvidenceRemoteEligibility.Create(worktreePath, configuration.MachineLocalResourceKeys);
                 foreach (var run in runs.OfType<Run>())
                 {
@@ -67,20 +89,49 @@ internal static class RemoteFirstFocusedEvidence
                     if (eligibility.Decide(run.Check) is { Eligible: false } decision)
                         Finish(run, RemoteLaneOutcomeCode.NotEligibleExclusiveResource, decision.Reason!);
                     else if (coordinator.TryClaimIdleExecutor(out var yieldReason) is not { } entry)
-                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, yieldReason ?? "no-idle-executor");
+                    {
+                        var reason = yieldReason ?? "no-idle-executor";
+                        if (FocusedEvidenceGroupCostModel.IsHeavy(run.PredictedSeconds) && reason != "no-enabled-executor")
+                        {
+                            // OS timers have a finite maximum. Capping here keeps even extreme predictions bounded.
+                            var bound = TimeSpan.FromSeconds(Math.Min(run.PredictedSeconds!.Value, (uint.MaxValue - 2) / 1000d));
+                            waitQueue ??= new(() => coordinator.TryClaimIdleExecutor(), entry => coordinator.Release(entry.Id), clock, interval);
+                            waiting.Add((run, reason, waitQueue.RegisterAsync(run.Request.Lane, run.PredictedSeconds.Value, bound, token, run.Request.Filter)));
+                        }
+                        else Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, reason);
+                    }
                     else
                     {
                         run.Request = run.Request with { ExecutorId = entry.Id };
                         claimed.Add((run, entry));
                     }
                 }
-                if (claimed.Count > 0)
+                if (claimed.Count > 0 || waiting.Count > 0)
                 {
                     releasingLocalPermit = true;
                     releaseLocalPermit?.Invoke();
                     releasingLocalPermit = false;
                 }
-                await Task.WhenAll(claimed.Select(pair => ExecuteAsync(pair.Run, pair.Entry))).ConfigureAwait(false);
+                await Task.WhenAll(claimed.Select(pair => ExecuteAsync(pair.Run, pair.Entry))
+                    .Concat(waiting.Select(pair => WaitAndExecuteAsync(pair.Run, pair.InitialReason, pair.Wait)))).ConfigureAwait(false);
+
+                async Task WaitAndExecuteAsync(Run run, string initialReason,
+                    Task<(RemoteLaneExecutorEntry? Entry, FocusedEvidenceExecutorWaitRecord Record)> wait)
+                {
+                    var (entry, record) = await wait.ConfigureAwait(false);
+                    Report(FormattableString.Invariant($"REMOTE_FIRST_FOCUSED_EVIDENCE_WAIT lane={record.Lane} started={record.Started:O} ended={record.Ended:O} elapsed_ms={record.Elapsed.TotalMilliseconds:0.###} bound_ms={record.Bound.TotalMilliseconds:0.###} outcome={record.Outcome} executor={record.ExecutorId ?? "none"}"));
+                    if (entry is null)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor,
+                            FormattableString.Invariant($"wait-{(record.Outcome == "expired-local-fallback" ? "expired" : record.Outcome)} waited_ms={record.Elapsed.TotalMilliseconds:0.###} bound_ms={record.Bound.TotalMilliseconds:0.###} initial={initialReason}"));
+                        return;
+                    }
+                    // ExecuteAsync owns the acquired claim even if the attempt was just cancelled.
+                    run.Request = run.Request with { ExecutorId = entry.Id };
+                    run.Started = clock.GetUtcNow();
+                    await ExecuteAsync(run, entry).ConfigureAwait(false);
+                }
 
                 async Task ExecuteAsync(Run run, RemoteLaneExecutorEntry entry)
                 {
@@ -112,11 +163,13 @@ internal static class RemoteFirstFocusedEvidence
                         Observe(timerLifetime.CancelAsync());
                         run.Close();
                         try { coordinator.Release(entry.Id); } catch (Exception) { }
+                        waitQueue?.Signal();
                     }
                 }
 
                 async Task PollAsync(Run run, RemoteLaneExecutorEntry entry, CancellationToken laneToken)
                 {
+                    laneToken.ThrowIfCancellationRequested();
                     var submission = await executor.SubmitAsync(run.Request, laneToken).ConfigureAwait(false);
                     if (submission.Handle is not { } handle)
                     {
@@ -161,6 +214,7 @@ internal static class RemoteFirstFocusedEvidence
         finally
         {
             foreach (var run in runs.OfType<Run>()) run.Close();
+            waitQueue?.Dispose();
             try { coordinator?.Dispose(); } catch (Exception) { }
         }
 
@@ -185,6 +239,13 @@ internal static class RemoteFirstFocusedEvidence
             if (!continueAfterFailure && !result.Passed) break;
         }
         return new(merged);
+
+        void Report(string line)
+        {
+            try { Console.WriteLine(line); } catch (Exception) { }
+            try { overrides.OnRemoteLaneProgressLineForTests?.Invoke(line); } catch (Exception) { }
+            try { owner.ReportRemoteLaneEvent(line); } catch (Exception) { }
+        }
 
         void Inspect(Run run, RemoteLaneResult result, string prefix)
         {
@@ -268,9 +329,7 @@ internal static class RemoteFirstFocusedEvidence
                     RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
                     RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples));
                 var line = $"REMOTE_FIRST_FOCUSED_EVIDENCE lane={request.Lane} outcome={JsonNamingPolicy.KebabCaseLower.ConvertName(code.ToString())} reason={reason}";
-                try { Console.WriteLine(line); } catch (Exception) { }
-                try { overrides.OnRemoteLaneProgressLineForTests?.Invoke(line); } catch (Exception) { }
-                try { owner.ReportRemoteLaneEvent(line); } catch (Exception) { }
+                Report(line);
             }
         }
     }
@@ -310,7 +369,8 @@ internal static class RemoteFirstFocusedEvidence
         internal object Gate { get; } = new();
         internal Check Check { get; } = check;
         internal RemoteLaneRequest Request { get; set; } = request;
-        internal DateTimeOffset Started { get; } = started;
+        internal DateTimeOffset Started { get; set; } = started;
+        internal double? PredictedSeconds { get; set; }
         internal AcceptanceCheckResult? Verdict { get; set; }
         internal bool Finished { get; set; }
         private bool _closed;

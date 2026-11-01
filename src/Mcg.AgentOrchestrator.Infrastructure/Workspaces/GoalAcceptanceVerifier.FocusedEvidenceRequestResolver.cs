@@ -19,7 +19,8 @@ internal static partial class FocusedEvidenceRequestResolver
         string worktreePath,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
-        out FocusedEvidenceRejection rejection)
+        out FocusedEvidenceRejection rejection,
+        IClassDurationHistory? durationHistory = null)
     {
         if (GoPackageFocusedEvidence.Applies(engineSettings))
             return GoPackageFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
@@ -138,6 +139,7 @@ internal static partial class FocusedEvidenceRequestResolver
         var planned = new List<FocusedEvidencePlannedCheck>();
         var batchedCompatibleItems = false;
         var unbatchedReasons = new List<string>();
+        durationHistory ??= AcceptanceClassDurationHistoryAdapter.Read(worktreePath);
         foreach (var projectGroup in validated.GroupBy(item => item.Project, StringComparer.OrdinalIgnoreCase))
         {
             var projectUnbatchedReasons = new HashSet<string>(StringComparer.Ordinal);
@@ -169,7 +171,7 @@ internal static partial class FocusedEvidenceRequestResolver
                     }
                     else
                     {
-                        var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
+                        var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key, durationHistory);
                         planned.AddRange(packedGroups);
                         if (packedGroups.Count > 1)
                         {
@@ -260,7 +262,7 @@ internal static partial class FocusedEvidenceRequestResolver
         {
             executionReason += $"+unbatched:{string.Join(',', unbatchedReasons.OrderBy(reason => reason, StringComparer.Ordinal))}";
         }
-        checks = built;
+        checks = new FocusedEvidenceCheckPlan(built, durationHistory);
         coverage = new FocusedEvidenceCoverage(
             TargetToChecks: targetToChecks,
             ExecutionMode: hasFocusedFilters && hasMappedProjects
