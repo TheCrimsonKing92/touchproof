@@ -38,8 +38,8 @@ public sealed class Ce9572ecCandidateRedAttributionTests
             // Only source declarations are needed by the real changed-source resolver. Keep the
             // recorded paths/classes while avoiding a dependency on the current checkout's contents.
             Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(root, LifecyclePath))!);
-            File.WriteAllText(Path.Combine(root, LifecyclePath), "public sealed class CompletionBuildEvidenceLifecycleTests {}");
-            File.WriteAllText(Path.Combine(root, CapacityPath), "public sealed class WorkerBuildCheckRecoveryTestsCapacityQueue {}");
+            File.WriteAllText(Path.Combine(root, LifecyclePath), "public sealed class " + Path.GetFileNameWithoutExtension(LifecyclePath) + " {}");
+            File.WriteAllText(Path.Combine(root, CapacityPath), "public sealed class " + Path.GetFileNameWithoutExtension(CapacityPath) + " {}");
             var (_, goal) = SoftwareGoal();
             var driver = MakeDriver(executionDirectory: root,
                 getLandingFileScopes: _ => [LifecyclePath, CapacityPath]);
