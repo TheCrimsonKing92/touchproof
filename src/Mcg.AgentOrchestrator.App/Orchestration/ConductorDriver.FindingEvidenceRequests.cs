@@ -176,7 +176,9 @@ internal sealed partial class ConductorDriver
                 coverageDecisionReason = coverageReason;
             }
 
-            if (TryRouteReusableRedFindingEvidence(
+            if (!FindingRoundRedCoverage.HasCompletedRedRequest(requestingTask, finding, typedRequest, identity,
+                    telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline) &&
+                TryRouteReusableRedFindingEvidence(
                     goal, requestingTask, finding, typedRequest, request, identity,
                     telemetryCandidateSha, executionBasisIdentity, policy, findingRoundFingerprint, out decision))
             {

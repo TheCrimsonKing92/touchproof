@@ -13,6 +13,19 @@ internal static class FindingRoundRedCoverage
 {
     internal const string Reason = "redundant-candidate-red";
 
+    // A completed request belongs to the round scheduler. Cross-round receipt reuse would
+    // otherwise escalate its non-actionable red again before the next batch can run.
+    internal static bool HasCompletedRedRequest(
+        TaskSpec task, ReviewFinding finding, FindingEvidenceRequest request, string identity,
+        string candidateSha, string fingerprint, string basis, IReadOnlyList<ProgressEvent> timeline)
+    {
+        var member = new FindingEvidenceRequestGroup(identity, string.Empty, request, [finding]);
+        var batch = new FindingEvidenceBatch(identity, string.Empty, request, [finding], [member]);
+        return FindingRoundBatchSchedule.Plan([batch], task.Id,
+            task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []).ToArray(),
+            candidateSha, fingerprint, basis, timeline).RedCovered.Count > 0;
+    }
+
     internal static FailedGoalFindingObservation Complete(
         ConductorDriver driver, Goal goal, TaskSpec task, IReadOnlyList<FindingEvidenceBatch> pending,
         FindingEvidenceBatch runnable, FindingRoundBatchPlan plan, FindingEvidenceReceipt receipt,

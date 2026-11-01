@@ -35,7 +35,9 @@ public sealed class FindingRoundRedundantRequestTests
             Assert.Contains($"candidate_sha={ShaA};", item.Message, StringComparison.Ordinal);
             Assert.Contains($"source_receipt_ids={receipt.ReceiptId};", item.Message, StringComparison.Ordinal);
         });
-        var dispositions = scenario.Reviewer.LastVerification!.FindingEvidenceRequestDispositions!
+        var verification = Assert.Single(scenario.Reviewer.VerificationHistory.Where(record =>
+            (record.FindingEvidenceReceipts ?? []).Any(item => item.ReceiptId == receipt.ReceiptId)));
+        var dispositions = verification.FindingEvidenceRequestDispositions!
             .Where(item => item.Reason == FindingRoundRedCoverage.Reason).ToArray();
         Assert.Equal(2, dispositions.Length);
         Assert.All(dispositions, item =>
