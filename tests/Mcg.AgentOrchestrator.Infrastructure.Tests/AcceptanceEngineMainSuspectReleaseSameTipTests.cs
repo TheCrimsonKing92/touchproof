@@ -92,22 +92,23 @@ public sealed class AcceptanceEngineMainSuspectReleaseSameTipTests
             : Task.FromResult(new MainSuspectReleaseProbeResult(
                 MainSuspectReleaseProbeOutcome.CouldNotRun, "unavailable-receipt", "runner-unavailable"));
 
-        for (var attempt = 1; attempt <= AcceptanceEngineMainSuspectRelease.MaxReleaseProbeAttemptsPerTip; attempt++)
-        {
-            Assert.Equal(MainSuspectReleaseCheckOutcome.Deferred, await fixture.Release.CheckAsync());
-            Assert.Equal(attempt, fixture.Probe.Calls.Count);
-            Assert.Contains("main-suspect same-tip probe 1/3 could-not-run", fixture.Lines[^2]);
-            Assert.Contains($"suspect={S}", fixture.Lines[^2]);
-            Assert.Contains($"sha={S}", fixture.Lines[^2]);
-            Assert.Contains($"tests={string.Join(",", Tests)}", fixture.Lines[^2]);
-            if (!throws) Assert.Contains("unavailable-receipt", fixture.Lines[^2]);
-            Assert.Contains($"result=release-probe-deferred suspect={S} attempt={attempt}", fixture.Lines[^1]);
-            Assert.Contains(throws ? "reason=InvalidOperationException" : "reason=runner-unavailable", fixture.Lines[^1]);
-            await AssertTripped(fixture);
-        }
+        Assert.Equal(MainSuspectReleaseCheckOutcome.Deferred, await fixture.Release.CheckAsync());
+        Assert.Single(fixture.Probe.Calls);
+        Assert.Contains("main-suspect same-tip probe 1/3 could-not-run", fixture.Lines[^2]);
+        Assert.Contains($"suspect={S}", fixture.Lines[^2]);
+        Assert.Contains($"sha={S}", fixture.Lines[^2]);
+        Assert.Contains($"tests={string.Join(",", Tests)}", fixture.Lines[^2]);
+        if (!throws) Assert.Contains("unavailable-receipt", fixture.Lines[^2]);
+        Assert.Contains($"result=release-probe-deferred suspect={S} probe-invocations=1", fixture.Lines[^1]);
+        Assert.Contains(throws ? "reason=InvalidOperationException" : "reason=runner-unavailable", fixture.Lines[^1]);
+        await AssertTripped(fixture);
+
         Assert.Equal(MainSuspectReleaseCheckOutcome.AttemptsExhausted, await fixture.Release.CheckAsync());
-        Assert.Equal(3, fixture.Probe.Calls.Count);
-        Assert.Equal(6, fixture.Lines.Count);
+        Assert.Single(fixture.Probe.Calls);
+        Assert.Contains("result=release-probe-exhausted reason=insufficient-attempts", fixture.Lines[^1]);
+        Assert.Contains("attempts-used=1 remaining=2 required=3", fixture.Lines[^1]);
+        Assert.Equal(3, fixture.Lines.Count);
+        await AssertTripped(fixture);
     }
 
     [Theory]
@@ -155,12 +156,13 @@ public sealed class AcceptanceEngineMainSuspectReleaseSameTipTests
         Assert.Equal(MainSuspectReleaseCheckOutcome.ReceiptsChangedDuringProbe, await fixture.Release.CheckAsync());
         Assert.Equal(changingRun, fixture.Probe.Calls.Count);
         await AssertTripped(fixture);
-        Assert.Equal(MainSuspectReleaseCheckOutcome.AlreadyResolvedForTip, await fixture.Release.CheckAsync());
-        Assert.Equal(changingRun, fixture.Probe.Calls.Count);
+        // The changed failure snapshot is a new trip, with its own confirmation budget.
+        Assert.Equal(MainSuspectReleaseCheckOutcome.Released, await fixture.Release.CheckAsync());
+        Assert.Equal(changingRun + 3, fixture.Probe.Calls.Count);
     }
 
     [Fact]
-    public async Task UnavailableThenPassing_ConsumesSharedBudgetWithoutPartialRelease()
+    public async Task UnavailableThenPassing_ReportsExhaustionWithoutDoomedProbes()
     {
         using var fixture = new Fixture(MainSuspectReleaseProbeOutcome.CouldNotRun);
         await fixture.FailAsync();
@@ -170,12 +172,57 @@ public sealed class AcceptanceEngineMainSuspectReleaseSameTipTests
             new MainSuspectReleaseProbeResult(MainSuspectReleaseProbeOutcome.Passed, "passing-receipt"));
 
         Assert.Equal(MainSuspectReleaseCheckOutcome.AttemptsExhausted, await fixture.Release.CheckAsync());
-        Assert.Equal(3, fixture.Probe.Calls.Count);
-        Assert.Contains("main-suspect same-tip probe 1/3 passed", fixture.Lines[^2]);
-        Assert.Contains("main-suspect same-tip probe 2/3 passed", fixture.Lines[^1]);
+        Assert.Single(fixture.Probe.Calls);
+        Assert.Equal($"CANARY_GATE sha={S} result=release-probe-exhausted reason=insufficient-attempts suspect={S} attempts-used=1 remaining=2 required=3", fixture.Lines[^1]);
         await AssertTripped(fixture);
         Assert.Equal(MainSuspectReleaseCheckOutcome.AttemptsExhausted, await fixture.Release.CheckAsync());
-        Assert.Equal(3, fixture.Probe.Calls.Count);
+        Assert.Single(fixture.Probe.Calls);
+        Assert.Equal(3, fixture.Lines.Count);
+    }
+
+    [Theory]
+    [InlineData("released")]
+    [InlineData("failed")]
+    [InlineData("exhausted")]
+    [InlineData("moved-release")]
+    public async Task NewTripAtSameTip_ReceivesFreshConfirmationBudget(string previousOutcome)
+    {
+        var initialProbeOutcome = previousOutcome switch
+        {
+            "failed" => MainSuspectReleaseProbeOutcome.Failed,
+            "exhausted" => MainSuspectReleaseProbeOutcome.CouldNotRun,
+            _ => MainSuspectReleaseProbeOutcome.Passed
+        };
+        using var fixture = new Fixture(initialProbeOutcome);
+        await fixture.FailAsync();
+        if (previousOutcome != "moved-release") fixture.Tip.Value = S;
+        var expected = previousOutcome switch
+        {
+            "failed" => MainSuspectReleaseCheckOutcome.StillFailing,
+            "exhausted" => MainSuspectReleaseCheckOutcome.Deferred,
+            _ => MainSuspectReleaseCheckOutcome.Released
+        };
+        Assert.Equal(expected, await fixture.Release.CheckAsync());
+        if (previousOutcome == "exhausted")
+            Assert.Equal(MainSuspectReleaseCheckOutcome.AttemptsExhausted, await fixture.Release.CheckAsync());
+        if (previousOutcome is "failed" or "exhausted") fixture.Circuit.Clear("operator repair");
+        Assert.Equal(AcceptanceEngineHealth.Healthy, (await fixture.Circuit.ReadAsync()).Health);
+        var previousCalls = fixture.Probe.Calls.Count;
+        var previousClears = (await fixture.Events.ReadAllAsync()).Count(item => item.Kind == PostLandingCanaryEventKind.Cleared);
+
+        await fixture.FailAsync(sha: fixture.Tip.Value!);
+        Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await fixture.Circuit.ReadAsync()).Health);
+        fixture.Probe.Handler = async (_, _, _) =>
+        {
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await fixture.Circuit.ReadAsync()).Health);
+            Assert.Equal(previousClears, (await fixture.Events.ReadAllAsync()).Count(item => item.Kind == PostLandingCanaryEventKind.Cleared));
+            return new(MainSuspectReleaseProbeOutcome.Passed, $"new-trip-{fixture.Probe.Calls.Count}");
+        };
+
+        Assert.Equal(MainSuspectReleaseCheckOutcome.Released, await fixture.Release.CheckAsync());
+        Assert.Equal(previousCalls + 3, fixture.Probe.Calls.Count);
+        Assert.Equal(previousClears + 1, (await fixture.Events.ReadAllAsync()).Count(item => item.Kind == PostLandingCanaryEventKind.Cleared));
+        Assert.Equal(AcceptanceEngineHealth.Healthy, (await fixture.Circuit.ReadAsync()).Health);
     }
 
     [Fact]

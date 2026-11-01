@@ -29,7 +29,16 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
     private const int RequiredSameTipPasses = 3;
     private readonly HashSet<string> _terminalTips = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _deferredAttempts = new(StringComparer.OrdinalIgnoreCase);
+    // Same-tip confirmation belongs to the active failure snapshot, not to every later trip at this SHA.
+    private readonly Dictionary<(string Tip, string FailureIds), SameTipProbeState> _sameTipTrips = new();
     private int _inFlight;
+
+    private sealed class SameTipProbeState
+    {
+        internal int Attempts;
+        internal bool Terminal;
+        internal bool ExhaustionReported;
+    }
 
     internal async Task<MainSuspectReleaseCheckOutcome> CheckAsync(CancellationToken cancellationToken = default)
     {
@@ -116,20 +125,31 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
     private async Task<MainSuspectReleaseCheckOutcome> ProbeSuspectTipAsync(
         PostLandingCanaryEvent[] failures, string tip, CancellationToken cancellationToken)
     {
-        if (_terminalTips.Contains(tip)) return MainSuspectReleaseCheckOutcome.AlreadyResolvedForTip;
-        var attempts = _deferredAttempts.GetValueOrDefault(tip);
-        if (attempts >= MaxReleaseProbeAttemptsPerTip) return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
+        var key = (tip.ToUpperInvariant(), System.Text.Json.JsonSerializer.Serialize(
+            failures.Select(item => item.EventId).Order(StringComparer.Ordinal).ToArray()));
+        if (!_sameTipTrips.TryGetValue(key, out var state))
+            _sameTipTrips.Add(key, state = new());
+        if (state.Terminal) return MainSuspectReleaseCheckOutcome.AlreadyResolvedForTip;
 
         var tests = failures.SelectMany(item => item.Payload.SharedFailingTests!)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var suspects = string.Join(",", failures.Select(item => item.Payload.LandingSha!)
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
+        // A fresh sequence needs three consecutive passes; never run a sequence that cannot release.
+        if (MaxReleaseProbeAttemptsPerTip - state.Attempts < RequiredSameTipPasses)
+        {
+            if (!state.ExhaustionReported)
+            {
+                progress($"CANARY_GATE sha={tip} result=release-probe-exhausted reason=insufficient-attempts suspect={suspects} attempts-used={state.Attempts} remaining={MaxReleaseProbeAttemptsPerTip - state.Attempts} required={RequiredSameTipPasses}");
+                state.ExhaustionReported = true;
+            }
+            return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
+        }
         var receipts = new List<string>();
         for (var run = 1; run <= RequiredSameTipPasses; run++)
         {
-            if (attempts >= MaxReleaseProbeAttemptsPerTip) return MainSuspectReleaseCheckOutcome.AttemptsExhausted;
             // Same-tip confirmation charges every invocation, including passes, to the existing tip budget.
-            _deferredAttempts[tip] = ++attempts;
+            state.Attempts++;
             MainSuspectReleaseProbeResult result;
             try { result = await probe.RunAsync(tip, tests, cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -149,29 +169,28 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
             progress($"CANARY_GATE sha={tip} main-suspect same-tip probe {run}/{RequiredSameTipPasses} {outcome} suspect={suspects} tests={string.Join(",", tests)} probes={string.Join(",", receipts)}");
             if (result.Outcome == MainSuspectReleaseProbeOutcome.Failed)
             {
-                _terminalTips.Add(tip);
+                state.Terminal = true;
                 progress($"CANARY_GATE sha={tip} result=still-failing suspect={suspects}");
                 return MainSuspectReleaseCheckOutcome.StillFailing;
             }
-            // Defer writes the charged attempt back without consuming another probe invocation.
             if (result.Outcome == MainSuspectReleaseProbeOutcome.CouldNotRun)
-                return Defer(tip, suspects, attempts - 1, result.Reason);
+                return DeferSameTip(tip, suspects, state, result.Reason);
 
             // Revalidate after every pass, before another probe or the final release append.
             if (!string.Equals(tip, ReadTip(), StringComparison.OrdinalIgnoreCase))
             {
-                _terminalTips.Add(tip);
+                state.Terminal = true;
                 return MainSuspectReleaseCheckOutcome.TipMovedDuringProbe;
             }
             var current = await ReadFailuresAsync(cancellationToken).ConfigureAwait(false);
             if (PostLandingCanaryEmergencyCircuit.TryRead(events.Identity) is not null ||
                 !failures.Select(item => item.EventId).SequenceEqual(current.Select(item => item.EventId)))
             {
-                _terminalTips.Add(tip);
+                state.Terminal = true;
                 return MainSuspectReleaseCheckOutcome.ReceiptsChangedDuringProbe;
             }
             if (string.IsNullOrWhiteSpace(result.ProbeReceipt))
-                return Defer(tip, suspects, attempts - 1, "missing-probe-receipt");
+                return DeferSameTip(tip, suspects, state, "missing-probe-receipt");
         }
 
         try
@@ -180,10 +199,18 @@ internal sealed class AcceptanceEngineMainSuspectRelease(
             await circuit.AppendAutomaticReleaseAsync(tip, note, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return Defer(tip, suspects, attempts - 1, $"clear-append-{ex.GetType().Name}"); }
-        _terminalTips.Add(tip);
+        catch (Exception ex) { return DeferSameTip(tip, suspects, state, $"clear-append-{ex.GetType().Name}"); }
+        state.Terminal = true;
         progress($"CANARY_GATE sha={tip} result=released reason=same-tip suspect={suspects}");
         return MainSuspectReleaseCheckOutcome.Released;
+    }
+
+    private MainSuspectReleaseCheckOutcome DeferSameTip(
+        string tip, string suspects, SameTipProbeState state, string? reason)
+    {
+        var token = string.Join("_", (reason ?? "unavailable").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        progress($"CANARY_GATE sha={tip} result=release-probe-deferred suspect={suspects} probe-invocations={state.Attempts} reason={token[..Math.Min(240, token.Length)]}");
+        return MainSuspectReleaseCheckOutcome.Deferred;
     }
 
     private MainSuspectReleaseCheckOutcome Defer(string tip, string suspects, int attempts, string? reason)
