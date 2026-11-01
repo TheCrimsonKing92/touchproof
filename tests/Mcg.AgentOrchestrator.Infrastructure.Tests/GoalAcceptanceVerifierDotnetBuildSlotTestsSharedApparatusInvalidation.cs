@@ -277,7 +277,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
 
         try
         {
-            var runTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var runTask = AcceptanceProcessRunner.RunProcessForTestsAsync(
                 [
                     InfrastructureTestSupport.ResolveDotnetHostPath(),
                     typeof(AcceptanceOwnedIdentityProbeChildTests).Assembly.Location,

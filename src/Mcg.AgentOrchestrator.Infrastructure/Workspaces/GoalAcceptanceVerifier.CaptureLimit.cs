@@ -60,7 +60,7 @@ public sealed partial class GoalAcceptanceVerifier
         var context = new GateHeartbeatContext(
             "test-goal", "verification-check", "capture-limit", null, null, null,
             string.Join(' ', arguments.Select(QuoteForDisplay)), null) { RunClass = runClass };
-        return RunProcessAsync(
+        return AcceptanceProcessRunner.RunProcessAsync(
             arguments, workingDirectory, timeout, forceUtf8ConsoleOutput: false,
             cancellationToken, commandIdentityObserver: commandIdentityObserver,
             engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = captureLimitBytes },

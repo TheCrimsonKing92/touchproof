@@ -278,7 +278,7 @@ public sealed class AcceptanceBareCommandResolutionTests
         }
 
         internal Task<GoalAcceptanceVerifier.CommandResult> RunAsync(string command, bool resolveBareCommand) =>
-            GoalAcceptanceVerifier.RunManifestCommandForTestsAsync(
+            AcceptanceProcessRunner.RunManifestCommandForTestsAsync(
                 new GoalAcceptanceVerifier.AcceptanceManifestCheck
                 {
                     Name = "bare command probe",

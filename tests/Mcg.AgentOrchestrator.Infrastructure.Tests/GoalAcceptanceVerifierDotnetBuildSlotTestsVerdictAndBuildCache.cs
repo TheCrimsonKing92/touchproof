@@ -271,7 +271,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         Directory.CreateDirectory(root);
         try
         {
-            var result = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var result = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-Command", "[Console]::Error.Write('retry-driving stderr')"],
                 root,
                 TimeSpan.FromSeconds(30));
