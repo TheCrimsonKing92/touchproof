@@ -279,10 +279,8 @@ internal sealed partial class ConductorBatchLoop
         state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
         // Reconcile child ejections before projections or implication-key exclusions can hide them.
         state.OrderedEligible = MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines);
-        var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-            goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
-        GroupedAdmissionOwnerApprovalHold.ReportExclusions(speculativeCandidates, tick,
-            line => RecordParallelAcceptanceProgress(line, changedGoalLines));
+        var speculativeCandidates = GroupedAdmissionCandidateProjection.ProjectAll(
+            state.OrderedEligible, driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines));
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
