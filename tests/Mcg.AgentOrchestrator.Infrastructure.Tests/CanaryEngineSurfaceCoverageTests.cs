@@ -54,14 +54,49 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
+    [Fact]
+    public void Extracted_focused_method_resolver_triggers_canary()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceMethodResolver";
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.Contains(prefix, Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
     [Theory]
     [InlineData("AcceptanceBalancedLaneExpander")]
     [InlineData("AcceptanceBalancedLanePacker")]
     [InlineData("AcceptanceBalancedLanePoolSettings")]
     [InlineData("AcceptanceClassDurationHistoryStore")]
+    [InlineData("AcceptanceCmdCommandLineLimit")]
+    [InlineData("CommandLineTooLongException")]
     [InlineData("AcceptanceLaneMembership")]
     [InlineData("AcceptanceTestClassSourceScanner")]
-    public void Indirect_balanced_lane_helpers_trigger_canary(string helper)
+    public void Indirect_acceptance_helpers_trigger_canary(string helper)
+    {
+        var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.DoesNotContain(prefix, Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
+    [Theory]
+    [InlineData("AcceptanceCheckProcessInvoker")]
+    [InlineData("AcceptanceProcessTestContext")]
+    public void Indirect_process_runner_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
         var path = prefix + ".cs";

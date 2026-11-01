@@ -1561,6 +1561,70 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static string SingleLine(string value) =>
         string.Concat(value.Select(character => char.IsWhiteSpace(character) ? ' ' : character)).Trim();
 
+    public async Task<OrchestratorStateOutboxRequeueOutcome> RequeueOrInsertOutboxMessageAsync(
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(RequeueOrInsertOutboxMessageAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
+            var outcome = RequeueOrInsertOutboxMessage(conn, message);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
+            return outcome;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    // The caller must hold the same write transaction used to claim outbox work.
+    internal static OrchestratorStateOutboxRequeueOutcome RequeueOrInsertOutboxMessage(
+        SqliteConnection connection,
+        OrchestratorStateOutboxMessage message)
+    {
+        using var update = connection.CreateCommand();
+        update.CommandText = """
+            UPDATE state_outbox
+            SET quarantined_at = NULL,
+                quarantine_reason = NULL,
+                processing_token = NULL,
+                processing_started_at = NULL
+            WHERE id = $id AND kind = $kind
+              AND (processing_token IS NULL OR processing_started_at IS NULL OR processing_started_at <= $stale_before)
+              AND (quarantined_at IS NOT NULL OR quarantine_reason IS NOT NULL
+                   OR processing_token IS NOT NULL OR processing_started_at IS NOT NULL)
+            """;
+        update.Parameters.AddWithValue("$id", message.Id);
+        update.Parameters.AddWithValue("$kind", message.Kind);
+        update.Parameters.AddWithValue(
+            "$stale_before",
+            DateTimeOffset.UtcNow.Subtract(OutboxProcessingLease).ToString("O", CultureInfo.InvariantCulture));
+        if (update.ExecuteNonQuery() == 1)
+            return OrchestratorStateOutboxRequeueOutcome.Requeued;
+
+        var state = ReadOutboxState(connection, message.Id);
+        if (state is null)
+        {
+            TryInsertOutboxMessageIfMissing(connection, message);
+            return OrchestratorStateOutboxRequeueOutcome.Inserted;
+        }
+
+        if (!state.Message.Kind.Equals(message.Kind, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Outbox message '{message.Id}' has a different kind.");
+
+        // A clean pending row needs no rewrite. All other unchanged rows hold a live lease.
+        return state.Status == OrchestratorStateOutboxStatus.Pending
+            ? OrchestratorStateOutboxRequeueOutcome.Existing
+            : OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease;
+    }
+
     internal static bool TryInsertOutboxMessageIfMissing(
         SqliteConnection conn,
         OrchestratorStateOutboxMessage message)

@@ -19,6 +19,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             // Selection coverage is reached through the verifier's telemetry collaborator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Timeout probe evidence is reached through the independently owned partition verdict cache.
@@ -31,10 +33,16 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestClassSourceScanner",
             // Class history is reached through the lane resolver and balanced lane plan writer.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceClassDurationHistoryStore",
+            // The process invoker and test context are reached indirectly through AcceptanceProcessRunner.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessTestContext",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CaptureLimitStop",
+            // Command-line validation is reached through the acceptance shell process builder.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCmdCommandLineLimit",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",
@@ -76,7 +84,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLaneLayout",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceBalancedLanePlanWriter",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandResultSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner",
@@ -111,7 +118,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.RemoteLaneIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner.CandidateTree",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessTestContext",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessRunner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRetryEvidenceRetentionFailure",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext.FollowerPinnedBase",
@@ -125,12 +132,13 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceVerificationResult",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CandidateRerunCheckClassifier",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CrosswalkAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetStructuralCoverageDiscovery",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetTestCheckTranslator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/EffectiveAcceptanceManifestIdentity",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceCoverage",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceMethodResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceRequestResolver.BooleanPlanning.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatContext",
@@ -151,6 +159,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ManifestScopedImpactPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/OwnerProtectedConfigurationPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/PolicyTestCheckStackDispatch",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteExecutorHealthLedger",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteFirstFocusedEvidence",

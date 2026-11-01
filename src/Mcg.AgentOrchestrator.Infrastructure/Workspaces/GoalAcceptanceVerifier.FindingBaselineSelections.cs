@@ -52,7 +52,7 @@ public sealed partial class GoalAcceptanceVerifier
                             baselinePath, check.Project, token.ContainingClass);
                         var classExists = classFiles.Count > 0;
                         var methodExists = token.Kind != FocusedEvidenceTokenKind.Method ||
-                            (classExists && FocusedEvidenceRequestResolver.FindFocusedEvidenceTestMethodNames(
+                            (classExists && FocusedEvidenceMethodResolver.FindTestMethodNames(
                                 classFiles, token.ContainingClass).Any(method =>
                                     method.StartsWith(token.Value.Split('.').Last(),
                                         StringComparison.OrdinalIgnoreCase)));

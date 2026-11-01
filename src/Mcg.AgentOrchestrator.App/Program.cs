@@ -168,6 +168,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    PlannerCommandSelectorValidation.InstallDefaultSource(DeclaredGateCheckSource.For(workspace.ProjectHomeDirectoryOrNull));
     CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);
     GateHeartbeatOwner.Bind(workspace.OrchestratorDirectory);
     HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));

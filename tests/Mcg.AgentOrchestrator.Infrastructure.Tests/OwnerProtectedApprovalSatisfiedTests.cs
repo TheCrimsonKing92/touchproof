@@ -37,7 +37,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
         var decisions = CollaborationItemStore.ForDirectory(_root);
         await ApproveAsync(kernel, goal, decisions, sameCandidate ? MemberSha : OtherSha, actor);
         WriteCandidate(Candidate);
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, goal.Id,
             [Manifest], null, (_, args) => args[0] == "diff" ? Manifest + "\n" : Main,
             decisions, () => throw new InvalidDataException("No equivalent partition"), MemberSha);
         Assert.Equal(sameCandidate && actor == OperatorActorKind.Human, result.OwnerApprovalSatisfied);
@@ -54,7 +54,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
             Assert.Equal(new[] { "diff", "--name-only", "--no-renames", "main...HEAD", "--" }, args);
             return "src/Sample.cs\n";
         }
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, GoalId.New(),
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, GoalId.New(),
             ["src/Sample.cs"], null, Git,
             null, Inventory, MemberSha);
         Assert.Null(result.Failure);
@@ -66,7 +66,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
     public void PartitionEquivalentPassDoesNotAssertOwnerApproval()
     {
         WriteCandidate(EquivalentCandidate);
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             [Manifest], null, (_, args) => args[0] == "diff" ? Manifest + "\n" : EquivalentMain,
             CollaborationItemStore.ForDirectory(_root), Inventory, MemberSha);
         Assert.Null(result.Failure);
@@ -97,7 +97,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
                 args[3] == "main..." + OtherSha ? "README.md\n" : null,
             _ => null
         };
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             [Manifest, "README.md"],
             [new(goal.Id, MemberSha), new(other.Id, OtherSha)], Git, decisions, Inventory, CombinedSha);
         Assert.Null(result.Failure);
@@ -114,7 +114,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
         var decisions = CollaborationItemStore.ForDirectory(_root);
         await ApproveAsync(kernel, combined, decisions, CombinedSha, OperatorActorKind.Human);
         WriteCandidate(Candidate);
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, combined.Id,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, combined.Id,
             [Manifest], [new(member.Id, MemberSha)],
             (_, args) => args[0] == "diff" ? Manifest + "\n" : args[1] == "main:" + Manifest ? Main : Candidate,
             decisions, Inventory, CombinedSha);
@@ -133,7 +133,7 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
         await ApproveAsync(kernel, goal, decisions, MemberSha, OperatorActorKind.Human);
         Directory.CreateDirectory(Path.Combine(_root, "config"));
         File.WriteAllText(Path.Combine(_root, policy), "new-policy");
-        var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, null,
+        var result = OwnerProtectedConfigurationPolicy.EvaluateOwnerProtectedConfigurationForTests(_root, null,
             [policy], [new(goal.Id, MemberSha)],
             (_, args) => args[0] == "diff" ? policy + "\n" :
                 args[1].StartsWith("main:", StringComparison.Ordinal) ? "old-policy" : "new-policy",

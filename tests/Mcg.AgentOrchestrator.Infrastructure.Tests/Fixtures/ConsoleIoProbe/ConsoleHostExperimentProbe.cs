@@ -185,7 +185,7 @@ internal static class ConsoleHostExperimentProbe
         var images = new Dictionary<int, Image>();
         var root = 0;
         var released = false;
-        var resultTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+        var resultTask = AcceptanceProcessRunner.RunProcessForTestsAsync(
             ["dotnet", "msbuild", "-version"], directory, TimeSpan.FromMinutes(2), cancellationToken,
             cleanupObserver: observation =>
             {

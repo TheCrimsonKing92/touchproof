@@ -37,11 +37,11 @@ public sealed class HermeticVerificationEnvironmentTestsSystemLocations : GoalAc
         try
         {
             Environment.SetEnvironmentVariable("SystemDrive", expectedDrive);
-            var observed = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var observed = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     "[Console]::Write([Environment]::GetEnvironmentVariable('SystemDrive'))"],
                 root, TimeSpan.FromSeconds(20));
-            var expanded = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var expanded = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     @"[Console]::Write([Environment]::ExpandEnvironmentVariables('%SystemDrive%\ProgramData'))"],
                 root, TimeSpan.FromSeconds(20));
@@ -100,11 +100,11 @@ public sealed class HermeticVerificationEnvironmentTestsSystemLocations : GoalAc
         try
         {
             Environment.SetEnvironmentVariable("SystemDrive", null);
-            var observed = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var observed = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     "[Console]::Write([Environment]::GetEnvironmentVariable('SystemDrive'))"],
                 root, TimeSpan.FromSeconds(20));
-            var expanded = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            var expanded = await AcceptanceProcessRunner.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     @"[Console]::Write([Environment]::ExpandEnvironmentVariables('%SystemDrive%\ProgramData'))"],
                 root, TimeSpan.FromSeconds(20));

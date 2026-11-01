@@ -130,7 +130,7 @@ public sealed class AcceptanceDirectSdkLaunchTests
 
         // The resume observer sees the suspended root, so a fast --version exit cannot hide the
         // shell wrapper. Subsequent snapshots cover live descendants of this particular job.
-        var run = Task.Run(() => GoalAcceptanceVerifier.RunProcessForTestsAsync(
+        var run = Task.Run(() => AcceptanceProcessRunner.RunProcessForTestsAsync(
             arguments, directory, TimeSpan.FromMinutes(3),
             cleanupObserver: observation =>
             {

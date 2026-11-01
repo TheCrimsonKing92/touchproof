@@ -39,7 +39,7 @@ public sealed class OwnerProtectedPolicyDecisionTests : IDisposable
         var config = Path.Combine(_root, "config");
         Directory.CreateDirectory(config);
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), Trusted.Replace("old", "new"));
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => Trusted,
             decisions, goal.Id, candidateSha);
 

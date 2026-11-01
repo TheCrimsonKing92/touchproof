@@ -227,7 +227,7 @@ public static class DispatchRejectionDiagnosticMarker
     }
 }
 
-public static partial class DispatchFailureClassifier
+public static class DispatchFailureClassifier
 {
     internal sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description,
         RecoveryRecommendation Recommendation = RecoveryRecommendation.OperatorNeeded);
@@ -419,7 +419,7 @@ public static partial class DispatchFailureClassifier
                 if (ProviderFailureSignals.IsRecoverableProviderAuthenticationFailure(verification))
                     return BuildOutcome(TaskOutcomeRules.ProviderAuthentication, task, verification, false, hasCommittedChanges,
                         new DispatchOutcome(DispatchOutcomeKind.ProviderAuthentication, exitCode, hasZeroByteOutput,
-                            null, null, RecoveryRecommendation.OperatorNeeded, BuildProviderAuthenticationEvidenceSummary(task, verification)));
+                            null, null, RecoveryRecommendation.OperatorNeeded, CliRefusalSignals.BuildProviderAuthenticationEvidenceSummary(task, verification)));
                 var fault = providerFailureKind != ProviderFailureKind.Unknown ? providerFailureKind :
                     IsRecoverableSubscriptionLimitFailure(verification) ? ProviderFailureKind.RateLimit :
                     ProviderFailureKind.Connectivity;
@@ -430,8 +430,8 @@ public static partial class DispatchFailureClassifier
             }
             // Explicit current-attempt detachment retains its existing interruption retry owner.
             if (terminalContract.Status == VerificationTerminalContractStatus.Missing &&
-                IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
-                return BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
+                DetachedWithoutWorkerResultRounds.IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
+                return DetachedWithoutWorkerResultRounds.BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
             return BuildOutcome(TaskOutcomeRules.VerificationTerminalContractIncomplete,
                 task, verification, false, hasCommittedChanges,
                 new DispatchOutcome(DispatchOutcomeKind.VerificationIncomplete, exitCode, hasZeroByteOutput,
@@ -655,7 +655,7 @@ public static partial class DispatchFailureClassifier
                 DispatchEvidenceSummaries.BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)));
         }
 
-        if (IsDeveloperDeferredNoChangeRound(task, verification, workerResultPresent, hasCommittedChanges))
+        if (DeveloperDeferredNoChangeRound.IsDeveloperDeferredNoChangeRound(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
                 TaskOutcomeRules.DeferredNoChangeRound,
@@ -696,9 +696,9 @@ public static partial class DispatchFailureClassifier
                 "retry round produced no commit and no deferral"));
         }
 
-        if (IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
+        if (DetachedWithoutWorkerResultRounds.IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
         {
-            return BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
+            return DetachedWithoutWorkerResultRounds.BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
         }
 
         if (verification.Succeeded &&
@@ -771,7 +771,7 @@ public static partial class DispatchFailureClassifier
                 providerOutcome);
         }
 
-        if (TryClassifyWorkerSandboxRefusal(task, verification, workerResultPresent, hasCommittedChanges, out var sandboxRefusal))
+        if (WorkerSandboxRefusal.TryClassifyWorkerSandboxRefusal(task, verification, workerResultPresent, hasCommittedChanges, out var sandboxRefusal))
         {
             return sandboxRefusal;
         }
@@ -791,7 +791,7 @@ public static partial class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildProviderAuthenticationEvidenceSummary(task, verification)));
+                CliRefusalSignals.BuildProviderAuthenticationEvidenceSummary(task, verification)));
         }
 
         if (ProviderFailureSignals.IsRecoverableProviderConnectivityFailure(verification))
@@ -1091,7 +1091,7 @@ public static partial class DispatchFailureClassifier
             : $"{description} diagnostic stderr-tail: {DispatchEvidenceSummaries.TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
 
-    private static DispatchOutcome BuildOutcome(
+    internal static DispatchOutcome BuildOutcome(
         TaskOutcomeRule rule,
         TaskSpec task,
         TaskVerificationRecord verification,

@@ -12,7 +12,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         Directory.CreateDirectory(config);
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), Trusted.Replace("old", "new"));
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => Trusted);
 
         Assert.NotNull(result);
@@ -28,7 +28,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         Directory.CreateDirectory(config);
         File.WriteAllText(Path.Combine(config, "conductor-policy.json"), """{"autonomy":{"maxRetries":3}}""");
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/conductor-policy.json"], (_, _) => null);
 
         Assert.NotNull(result);
@@ -40,7 +40,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
     [Xunit.Fact]
     public void RemovedManifestRequiresOperatorReview()
     {
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => Trusted);
 
         Assert.NotNull(result);
@@ -57,7 +57,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"),
             Trusted.Replace("\"enforceStructuralCoverage\":true", "\"enforceStructuralCoverage\":false"));
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => Trusted);
 
         Assert.NotNull(result);
@@ -76,7 +76,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
                 .Replace("old", "new"));
         File.WriteAllText(Path.Combine(config, "conductor-policy.json"), """{"autonomy":{"maxRetries":4}}""");
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json", "config/conductor-policy.json"],
             (_, args) => args[1] == "main:config/acceptance-manifest.json"
                 ? Trusted : """{"autonomy":{"maxRetries":3}}""");
@@ -97,7 +97,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), Trusted);
         File.WriteAllText(Path.Combine(config, "conductor-policy.json"), """{"autonomy":{"maxRetries":4}}""");
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json", "config/conductor-policy.json"],
             (_, _) => null);
 
@@ -109,7 +109,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
     [Xunit.Fact]
     public void DeletedConductorPolicyRequiresOperatorReview()
     {
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/conductor-policy.json"],
             (_, _) => """{"autonomy":{"maxRetries":3}}""");
 
@@ -121,7 +121,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
     [Xunit.Fact]
     public void RenamedAwayConductorPolicyRequiresOperatorReview()
     {
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/new-policy.json"], (_, args) => args[0] switch
             {
                 "diff" => "config/conductor-policy.json\nconfig/new-policy.json",
@@ -142,7 +142,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         Directory.CreateDirectory(config);
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), Trusted);
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => null);
 
         Assert.Equal("operator review required", Assert.IsType<AcceptanceCheckResult>(result).ResultSummary);
@@ -156,7 +156,7 @@ public sealed class OwnerProtectedConfigurationGateTests : IDisposable
         Directory.CreateDirectory(config);
         File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), "{invalid");
 
-        var result = GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        var result = OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             _root, ["config/acceptance-manifest.json"], (_, _) => Trusted);
 
         Assert.Equal("operator review required", Assert.IsType<AcceptanceCheckResult>(result).ResultSummary);

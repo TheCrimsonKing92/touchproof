@@ -2,18 +2,18 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    private void RejectPlannerEvidence(Goal goal, TaskSpec task, TaskVerificationRecord verification, string diagnostic)
+    private Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? _declaredGateCheckSource;
+
+    public void SetDeclaredGateCheckSource(Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>> source)
     {
-        // Preserve the observed process exit. A protocol rejection is nevertheless not passing
-        // verification and must never authorize completion when an unrelated answer arrives.
-        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic, CompletionVerdictVerifiedSuccess = false, CompletionVerdictRule = TaskOutcomeRules.PlannerOutputContractRejected.Token });
-        ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
+        ArgumentNullException.ThrowIfNull(source);
+        _declaredGateCheckSource = source;
     }
 
     internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork) =>
         new PlannerEvidenceRecorder(this, _humanInputRequestLock, _clock,
-            (g, t, k, message) => Append(g, t, k, message))
+            (g, t, k, message) => Append(g, t, k, message), _declaredGateCheckSource)
             .Record(goal, task, batch, dispatchBriefVersion, out blocksActiveWork);
 
     private const int ProviderConnectivityRetryLimit = 3;
@@ -230,28 +230,21 @@ public sealed partial class AgentOrchestratorKernel
             verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
         if (parsedHumanInput.IsMalformed)
         {
-            RejectPlannerEvidence(goal, task, verification, parsedHumanInput.Diagnostic!);
+            PlannerEvidenceCompletion.Reject(this, goal, task, verification, parsedHumanInput.Diagnostic!);
             return;
         }
         if (parsedHumanInput.Directives.Any(item => item.PlannerEvidence is not null))
         {
-            var evidenceDispatch = verification.DispatchAttemptAt is { } at
-                ? task.DispatchHistory.LastOrDefault(item => item.DispatchedAt == at) : null;
-            if (verification.DispatchAttemptAt is not null && evidenceDispatch is null)
+            var provenanceDiagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var briefVersion);
+            if (provenanceDiagnostic is not null)
             {
-                RejectPlannerEvidence(goal, task, verification, "Planner evidence has unknown dispatch provenance; replan.");
-                return;
-            }
-            int? briefVersion = evidenceDispatch?.BriefSnapshot is not null ? evidenceDispatch.BriefVersion : null;
-            if (evidenceDispatch is not null && evidenceDispatch.DispatchedAt != task.LastDispatch!.DispatchedAt)
-            {
-                RejectPlannerEvidence(goal, task, verification, "Planner evidence completion belongs to an obsolete dispatch; replan.");
+                PlannerEvidenceCompletion.Reject(this, goal, task, verification, provenanceDiagnostic);
                 return;
             }
             var diagnostic = RecordPlannerEvidenceBatch(goal, task, parsedHumanInput, briefVersion, out var blocked);
             if (diagnostic is not null)
             {
-                RejectPlannerEvidence(goal, task, verification, diagnostic);
+                PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
                 return;
             }
             if (blocked) return;
@@ -277,6 +270,12 @@ public sealed partial class AgentOrchestratorKernel
                 ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion);
             if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner) && testNames is { Count: > 0 })
             {
+                var diagnostic = PlannerCommandSelectorValidation.Refusal(testNames, goal, task, _declaredGateCheckSource);
+                if (diagnostic is not null)
+                {
+                    PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
+                    return;
+                }
                 var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
                     testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow);
                 goal.RecordGateTestObligation(obligation);
@@ -483,8 +482,8 @@ public sealed partial class AgentOrchestratorKernel
                 StringComparison.Ordinal))
         {
             task.RecordCompletionVerdict(false, TaskOutcomeRules.DetachedWithoutWorkerResult.Token);
-            var detachedRounds = DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task);
-            if (detachedRounds <= DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit)
+            var detachedRounds = DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task);
+            if (detachedRounds <= DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(detachedRounds));
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
@@ -494,7 +493,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal,
                     taskId,
                     ProgressKind.TaskRetried,
-                    $"Dispatch was gracefully detached and exited without a WORKER_RESULT; task is ready to retry after bounded backoff (attempt {detachedRounds}/{DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit}): {task.LastDispatch.Command}");
+                    $"Dispatch was gracefully detached and exited without a WORKER_RESULT; task is ready to retry after bounded backoff (attempt {detachedRounds}/{DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit}): {task.LastDispatch.Command}");
                 RefreshGoalStatus(goal);
                 return;
             }
@@ -503,7 +502,7 @@ public sealed partial class AgentOrchestratorKernel
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
-                $"Dispatch detached-without-worker-result repeated {detachedRounds} consecutive time(s); automatic retry budget {DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit} exhausted: {task.LastDispatch.Command}");
+                $"Dispatch detached-without-worker-result repeated {detachedRounds} consecutive time(s); automatic retry budget {DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit} exhausted: {task.LastDispatch.Command}");
             return;
         }
 
