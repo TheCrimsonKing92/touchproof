@@ -12,7 +12,16 @@ internal static class AcceptanceRetryRoutingHoldGate
         {
             var hold = task.AcceptanceRetryRoutingHold!;
             if (now < hold.Deadline)
-                return new(state, Describe(task, now), $"operator-routing-hold:{task.Id.Value}:{hold.Deadline:O}");
+            {
+                var reason = Describe(task, now);
+                return new(state, reason, $"operator-routing-hold:{task.Id.Value}:{hold.Deadline:O}")
+                {
+                    Decision = new("acceptance-retry-operator-routing", "Hold", 1, "routing-window-open", reason,
+                        [new("task", task.Id.Value), new("round_retry_at", $"{hold.RoundRetryAt:O}"),
+                         new("failure_recorded_at", $"{hold.FailureRecordedAt:O}"),
+                         new("deadline", $"{hold.Deadline:O}"), new("observed_at", $"{now:O}")])
+                };
+            }
         }
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
             OperatorRoutingNoteLedger.DeliverPending(task);

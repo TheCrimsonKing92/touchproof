@@ -28,6 +28,16 @@ public sealed class AcceptanceRetryRoutingHoldTests
         Xunit.Assert.Contains("remaining_seconds=120", held.Reason);
         Xunit.Assert.Contains($"deadline={hold.Deadline:O}", held.Reason);
         Xunit.Assert.Equal(ConductorHoldOwner.None, held.Owner);
+        var decision = Xunit.Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Xunit.Assert.Equal("acceptance-retry-operator-routing", decision.Stage);
+        Xunit.Assert.Equal("Hold", decision.Action);
+        Xunit.Assert.Equal("routing-window-open", decision.DiscriminatingEvidence);
+        Xunit.Assert.Equal(held.Reason, decision.Reason);
+        Xunit.Assert.Contains(new PolicyDecisionFact("task", scenario.Task.Id.Value), decision.Facts);
+        Xunit.Assert.Contains(new PolicyDecisionFact("round_retry_at", $"{hold.RoundRetryAt:O}"), decision.Facts);
+        Xunit.Assert.Contains(new PolicyDecisionFact("failure_recorded_at", $"{failureAt:O}"), decision.Facts);
+        Xunit.Assert.Contains(new PolicyDecisionFact("deadline", $"{hold.Deadline:O}"), decision.Facts);
+        Xunit.Assert.Contains(new PolicyDecisionFact("observed_at", $"{scenario.Now:O}"), decision.Facts);
         Xunit.Assert.Contains("120s left", OwnerConsoleRoutingHold.Describe(scenario.Goal, scenario.Now));
         Xunit.Assert.Equal(0, scenario.DispatchCalls);
 
@@ -72,7 +82,9 @@ public sealed class AcceptanceRetryRoutingHoldTests
         scenario.Now = deadline.AddTicks(-1);
         Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
         Xunit.Assert.Equal(0, scenario.DispatchCalls);
+        Xunit.Assert.Contains("1s left", OwnerConsoleRoutingHold.Describe(scenario.Goal, scenario.Now));
         scenario.Now = deadline;
+        Xunit.Assert.Null(OwnerConsoleRoutingHold.Describe(scenario.Goal, scenario.Now));
         Xunit.Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
         Xunit.Assert.Equal(original, Xunit.Assert.Single(scenario.DeliveredFeedback));
         Xunit.Assert.Equal(original, scenario.Task.CriterionRetryFeedback);
@@ -141,6 +153,7 @@ public sealed class AcceptanceRetryRoutingHoldTests
         Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
         Xunit.Assert.Equal(0, scenario.DispatchCalls);
         scenario.Now = deadline.AddSeconds(1);
+        Xunit.Assert.Null(OwnerConsoleRoutingHold.Describe(scenario.Goal, scenario.Now));
         Xunit.Assert.Equal(OperatorIntentStatus.Applied,
             (await scenario.Route("Route committed before dispatch", "late-receipt")).Status);
         Xunit.Assert.Equal(deadline, scenario.Task.AcceptanceRetryRoutingHold!.Deadline);
