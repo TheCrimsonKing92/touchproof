@@ -224,7 +224,7 @@ public sealed class WorkerNodeDependencyPreparationTests
 
         internal ProcessStartInfo Worker()
         {
-            var worker = new ProcessStartInfo { WorkingDirectory = Worktree, UseShellExecute = false };
+            var worker = new ProcessStartInfo { WorkingDirectory = Worktree, UseShellExecute = false, CreateNoWindow = true };
             worker.Environment.Clear();
             worker.Environment["GOFLAGS"] = "untouched";
             worker.Environment["USERPROFILE"] = "fixture-profile";
