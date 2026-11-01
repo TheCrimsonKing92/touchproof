@@ -511,7 +511,7 @@ public sealed partial class AgentOrchestratorKernel
         var capacity = WorkerBuildInfrastructureEvidence.LastDispatchEndedOnQueueCapacity(task) && !(task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.CompilerFailure } build && build.DispatchAt == task.LastDispatch?.DispatchedAt);
         if (task.RequiredRole != AgentRole.Developer || !capacity && task.WorkerBuildCheckRecoveryCount >= 2)
             throw new InvalidOperationException("Worker build check recovery is unavailable for this task.");
-        var retried = RetryTaskCore(goalId, taskId, message, RetryCause.NewSourceFinding, invalidateDownstream: true, RetryRoundKind.Mechanical, authoritativeRetryFeedback: true);
+        var retried = RetryTaskCore(goalId, taskId, message, RetryCause.NewSourceFinding, invalidateDownstream: true, RetryRoundKind.Mechanical, authoritativeRetryFeedback: true, retryFeedbackSource: CriteriaCorrectionSource.Escalation);
         if (!capacity) retried.IncrementWorkerBuildCheckRecoveryCount();
         return retried;
     }
@@ -537,7 +537,7 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind,
         bool authoritativeRetryFeedback,
         bool preserveEquivalentPendingRetry = false,
-        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator, CriteriaCorrectionSource? retryFeedbackSource = null)
     {
         var goal = GetGoal(goalId);
         EnsureGoalCanResumeWork(goal);
@@ -587,7 +587,7 @@ public sealed partial class AgentOrchestratorKernel
             if (authoritativeRetryFeedback)
             {
                 task.RecordCriterionRetryFeedback([retryMessage], previousRetryAt);
-                task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+                task.RecordAcceptedRetryFeedback(retryMessage, retryAt, retryFeedbackSource ?? correctionSource);
             }
             else
             {

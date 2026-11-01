@@ -1,8 +1,9 @@
 using System.Text.RegularExpressions;
+using static Mcg.AgentOrchestrator.Core.DispatchFailureClassifier;
 
 namespace Mcg.AgentOrchestrator.Core;
 
-public static partial class DispatchFailureClassifier
+internal static partial class WorkerSandboxRefusal
 {
     private const string WorkerSandboxRefusedPrefix = "WORKER_SANDBOX_REFUSED ";
 
@@ -13,7 +14,7 @@ public static partial class DispatchFailureClassifier
         RegexOptions.CultureInvariant)]
     private static partial Regex WorkerSandboxRefusalLineRegex();
 
-    private static bool TryClassifyWorkerSandboxRefusal(
+    internal static bool TryClassifyWorkerSandboxRefusal(
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent,
