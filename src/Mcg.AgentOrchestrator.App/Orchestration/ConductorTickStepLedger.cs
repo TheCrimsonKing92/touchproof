@@ -25,14 +25,16 @@ internal sealed class ConductorTickStepLedger
     });
     internal static readonly IReadOnlyList<string> AdmissionNames = Array.AsReadOnly(new[]
     {
-        "attempt-census", "attempt-reconcile", "grouped-admission-prep", "merge-train", "pair-cohort", "solo-admission"
+        "attempt-census", "attempt-reconcile", "grouped-admission-prep", "merge-train", "pair-cohort", "solo-admission",
+        "activation-probe-record", "priority-order", "hold-cohort-members", "hold-lone-ready",
+        "priority-guard", "deferral-summary", "admission-pre-batch", "begin-tick"
     });
     private static readonly AsyncLocal<ConductorTickStepLedger?> Current = new();
     private readonly Func<TimeSpan> _cpu;
     private readonly Action<string>? _probe;
     private readonly int _ownerThread = Environment.CurrentManagedThreadId;
     private readonly object _gate = new();
-    private readonly Dictionary<string, (long Ticks, long Calls)> _steps = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (long Ticks, long WallTicks, long Calls)> _steps = new(StringComparer.Ordinal);
     private readonly Stack<Frame> _frames = new();
     private bool _active;
     private long _goalsHydrated, _metadataRows, _terminalJournalStats, _backlogRows, _readinessEvaluations;
@@ -63,7 +65,7 @@ internal sealed class ConductorTickStepLedger
             if (active)
             {
                 var old = ledger._steps.GetValueOrDefault(name);
-                ledger._steps[name] = (old.Ticks, old.Calls + 1);
+                ledger._steps[name] = (old.Ticks, old.WallTicks, old.Calls + 1);
                 // Other threads still count calls; their process CPU overlaps the owner's
                 // scopes and must not be added to this partition of the phase.
                 frame = Environment.CurrentManagedThreadId == ledger._ownerThread
@@ -85,10 +87,16 @@ internal sealed class ConductorTickStepLedger
                 lock (ledger._gate)
                 {
                     var elapsed = Math.Max(0, (ledger._cpu() - frame.Start).Ticks);
+                    var wallElapsed = frame.Wall.Elapsed.Ticks;
                     ledger._frames.Pop();
-                    if (ledger._frames.TryPeek(out var parent)) parent.ChildTicks += elapsed;
+                    if (ledger._frames.TryPeek(out var parent))
+                    {
+                        parent.ChildTicks += elapsed;
+                        parent.ChildWallTicks += wallElapsed;
+                    }
                     var old = ledger._steps[name];
-                    ledger._steps[name] = (old.Ticks + elapsed - frame.ChildTicks, old.Calls);
+                    ledger._steps[name] = (old.Ticks + elapsed - frame.ChildTicks,
+                        old.WallTicks + Math.Max(0, wallElapsed - frame.ChildWallTicks), old.Calls);
                 }
             }
         }
@@ -151,6 +159,23 @@ internal sealed class ConductorTickStepLedger
             }));
     }
 
+    internal string FormatAdmission(TimeSpan elapsed)
+    {
+        lock (_gate)
+        {
+            long attributedMs = 0;
+            var steps = string.Join(',', AdmissionNames.Select(name =>
+            {
+                var value = _steps.GetValueOrDefault(name);
+                var wallMs = value.WallTicks / TimeSpan.TicksPerMillisecond;
+                attributedMs += wallMs;
+                return FormattableString.Invariant($"{name}:{wallMs}:{value.Ticks / TimeSpan.TicksPerMillisecond}:{value.Calls}");
+            }));
+            var remainder = Math.Max(0, elapsed.Ticks / TimeSpan.TicksPerMillisecond - attributedMs);
+            return FormattableString.Invariant($"admission_steps={steps} unattributed_ms={remainder}");
+        }
+    }
+
     internal string FormatCounters() => string.Join(',', new[]
     {
         ("goals_hydrated", Interlocked.Read(ref _goalsHydrated)),
@@ -163,7 +188,9 @@ internal sealed class ConductorTickStepLedger
     private sealed class Frame(TimeSpan start)
     {
         internal TimeSpan Start { get; } = start;
+        internal ConductorBatchLoop.DiagnosticTimer Wall { get; } = ConductorBatchLoop.StartDiagnosticTimer();
         internal long ChildTicks { get; set; }
+        internal long ChildWallTicks { get; set; }
     }
 
     private sealed class Lifetime(ConductorTickStepLedger ledger, ConductorTickStepLedger? previous) : IDisposable
