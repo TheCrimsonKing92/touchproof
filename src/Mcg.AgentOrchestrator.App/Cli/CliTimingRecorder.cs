@@ -39,14 +39,19 @@ internal static class CliTimingRecorder
     }
 
     internal static void Write(string directory, string verb, string? path, string? started,
-        DateTimeOffset completed, double appElapsedMs, int exitCode)
+        DateTimeOffset completed, double appElapsedMs, int exitCode,
+        Func<DateTimeOffset>? processStarted = null)
     {
         try
         {
-            var valid = (path is "fast" or "fresh" or "built") &&
-                DateTimeOffset.TryParse(started, CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+            DateTimeOffset? launcherStarted = DateTimeOffset.TryParse(started, CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var parsed) ? parsed : null;
+            // The adopted route avoids spawning a clock process; measure from the App process start.
+            if (path == "fast" && string.IsNullOrEmpty(started))
+                launcherStarted = (processStarted ?? ReadProcessStarted)();
+            var valid = (path is "fast" or "fresh" or "built") && launcherStarted.HasValue;
             double? launcherElapsed = valid
-                ? Math.Max(0, (completed - DateTimeOffset.Parse(started!, CultureInfo.InvariantCulture)).TotalMilliseconds)
+                ? Math.Max(0, (completed - launcherStarted!.Value).TotalMilliseconds)
                 : null;
             CliTimingLogWriter.Append(directory, new
             {
@@ -57,5 +62,11 @@ internal static class CliTimingRecorder
             });
         }
         catch { }
+    }
+
+    private static DateTimeOffset ReadProcessStarted()
+    {
+        using var process = Process.GetCurrentProcess();
+        return new DateTimeOffset(process.StartTime.ToUniversalTime());
     }
 }

@@ -55,6 +55,62 @@ public sealed class CliTimingRecordTests
     }
 
     [Fact]
+    public void ManagedExit_FastWithoutTimestamp_RecordsFastLatency()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Run(["--help"], launcherPath: "fast", launcherStarted: null);
+        Assert.Equal(0, result.ExitCode);
+        using var json = JsonDocument.Parse(Assert.Single(File.ReadAllLines(fixture.TimingPath)));
+        Assert.Equal("fast", json.RootElement.GetProperty("launcher_path").GetString());
+        Assert.Equal(JsonValueKind.Number, json.RootElement.GetProperty("launcher_elapsed_ms").ValueKind);
+    }
+
+    [Theory]
+    [InlineData(null, 1500, 1)]
+    [InlineData("", 1500, 1)]
+    [InlineData("2026-11-01T17:59:55Z", 5000, 0)]
+    public void Write_FastPath_UsesProcessStartOnlyWithoutLauncherTimestamp(
+        string? started, double expectedElapsed, int expectedReads)
+    {
+        using var fixture = new Fixture();
+        var completed = new DateTimeOffset(2026, 11, 1, 18, 0, 0, TimeSpan.Zero);
+        var reads = 0;
+        CliTimingRecorder.Write(fixture.Logs, "help", "fast", started, completed, 123, 0,
+            processStarted: () => { reads++; return completed.AddMilliseconds(-1500); });
+
+        using var json = JsonDocument.Parse(Assert.Single(File.ReadAllLines(fixture.TimingPath)));
+        Assert.Equal("fast", json.RootElement.GetProperty("launcher_path").GetString());
+        Assert.Equal(expectedElapsed, json.RootElement.GetProperty("launcher_elapsed_ms").GetDouble());
+        Assert.Equal(expectedReads, reads);
+    }
+
+    [Fact]
+    public void Write_ProcessStartReadFails_PreservesBestEffortBehavior()
+    {
+        using var fixture = new Fixture();
+        var reads = 0;
+        CliTimingRecorder.Write(fixture.Logs, "help", "fast", null,
+            new DateTimeOffset(2026, 11, 1, 18, 0, 0, TimeSpan.Zero), 123, 0,
+            processStarted: () => { reads++; throw new InvalidOperationException("unavailable"); });
+        Assert.Equal(1, reads);
+        Assert.False(Directory.Exists(fixture.Logs));
+    }
+
+    [Fact]
+    public void Launcher_AdoptedRoute_LabelsFastWithoutPowerShell()
+    {
+        var lines = File.ReadAllLines(Path.Combine(VerifiedRepositoryRoot.Find(), "mcg-orchestrator.cmd"));
+        var adopted = Assert.Single(lines.Select((line, index) => (line, index))
+            .Where(item => item.line == "\"%DOTNET_HOST%\" \"%ADOPTED_DLL%\" %*"));
+        Assert.Equal("set \"MCG_CLI_LAUNCHER_PATH=fast\"", lines[adopted.index - 1]);
+        Assert.DoesNotContain(lines.Take(adopted.index),
+            line => line.Contains("powershell", StringComparison.OrdinalIgnoreCase));
+        var intree = Array.IndexOf(lines, ":intree_path");
+        Assert.True(intree > adopted.index);
+        Assert.Contains("MCG_CLI_LAUNCHER_STARTED_UTC=%%T", lines[intree + 1]);
+    }
+
+    [Fact]
     public void InvalidMetadataIsUnclassifiedAndRotationRetainsWholeRecords()
     {
         using var fixture = new Fixture();
@@ -77,7 +133,8 @@ public sealed class CliTimingRecordTests
         internal string Logs => Path.Combine(Root, ".orchestrator", "logs");
         internal string TimingPath => Path.Combine(Logs, "cli-timing.jsonl");
         internal Fixture() => Directory.CreateDirectory(Root);
-        internal CliChildProcessResult Run(string[] args, bool launcher = true, bool invalidProject = false)
+        internal CliChildProcessResult Run(string[] args, bool launcher = true, bool invalidProject = false,
+            string launcherPath = "fresh", string? launcherStarted = "2026-11-01T00:00:00Z")
         {
             var start = new ProcessStartInfo("dotnet")
             {
@@ -94,8 +151,9 @@ public sealed class CliTimingRecordTests
             start.Environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
             if (launcher)
             {
-                start.Environment[CliTimingRecorder.PathVariable] = "fresh";
-                start.Environment[CliTimingRecorder.StartedVariable] = "2026-11-01T00:00:00Z";
+                start.Environment[CliTimingRecorder.PathVariable] = launcherPath;
+                if (launcherStarted is not null)
+                    start.Environment[CliTimingRecorder.StartedVariable] = launcherStarted;
             }
             if (invalidProject) start.Environment[OrchestratorProjectSelection.ProjectEnvironmentVariable] = "invalid/name";
             start.ArgumentList.Add(typeof(OrchestratorWorkspace).Assembly.Location);
