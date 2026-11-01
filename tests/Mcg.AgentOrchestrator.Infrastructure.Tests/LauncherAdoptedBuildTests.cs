@@ -192,6 +192,7 @@ public sealed class LauncherAdoptedBuildTests
             return result.StandardOutput;
         }
 
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        // Git objects can be read-only on Windows; retain loud failure if cleanup cannot finish.
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
     }
 }
