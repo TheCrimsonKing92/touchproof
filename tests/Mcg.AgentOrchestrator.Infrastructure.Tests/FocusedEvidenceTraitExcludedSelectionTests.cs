@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 // Each scenario owns its source/TRX tree and injected runners. The collection supplies isolated build roots.
-[Collection("IsolatedProcessSpawning")]
+[Collection("IsolatedProcessSpawningRemainderC")]
 public sealed class FocusedEvidenceTraitExcludedSelectionTests : RemoteFirstFocusedEvidenceFixture
 {
     private const string Reason = "excluded-by-trait:Category=HostIntegration";

@@ -36,7 +36,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning),
         typeof(DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning),
         typeof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning),
-        typeof(RemoteFirstFocusedEvidenceExecutorWaitTests)
+        typeof(RemoteFirstFocusedEvidenceExecutorWaitTests),
+        typeof(FocusedEvidenceTraitExcludedSelectionTests)
     ];
 
     // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
@@ -139,6 +140,13 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     // Sum of all four passing wait cases; a single gate sample, not a five-gate mean.
     private const double ExecutorWaitGateSeconds = 4.3292729;
 
+    // Native Remainder gate on candidate d744f1b85c730e84be165ff2d6365548122353f4:
+    // attempt 005af028-0-20261101124700243-348dffeec9c84a3f9cb891f8c58f4703,
+    // infrastructure-tests-remainder.trx SHA256
+    // C34FFFEED14EE426D3D5138DF9BFA693C2B679E5916B371D77FF93A5A05E4CD5.
+    // Sum of all 16 passing cases; a single gate sample, not a five-gate mean.
+    private const double TraitExcludedSelectionGateSeconds = 3.326;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
@@ -146,6 +154,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         .Append(new(nameof(FocusedEvidenceInterruptionTests), FocusedEvidenceInterruptionGateSeconds))
         .Append(new(nameof(RemoteFirstFocusedEvidenceNormalizedResultTests), NormalizedResultGateSeconds))
         .Append(new(nameof(RemoteFirstFocusedEvidenceExecutorWaitTests), ExecutorWaitGateSeconds))
+        .Append(new(nameof(FocusedEvidenceTraitExcludedSelectionTests), TraitExcludedSelectionGateSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -230,8 +239,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection],
-            129.5138644 + ExecutorWaitGateSeconds - 1e-7,
-            129.5138644 + ExecutorWaitGateSeconds + 1e-7);
+            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds - 1e-7,
+            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
     }
