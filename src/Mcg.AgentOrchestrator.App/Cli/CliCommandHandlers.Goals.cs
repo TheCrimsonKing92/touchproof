@@ -568,9 +568,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 inlineReason ?? reasonFromFile,
                 answerSupersessions,
                 discardFailedRefinement: resetRefinement);
-            if (resetRefinement)
-                GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
+            var refinementResetOutcome = resetRefinement
+                ? GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id)
+                : (OrchestratorStateOutboxRequeueOutcome?)null;
             GoalBriefRevisionReceipt.WriteSummary(result, resetRefinement);
+            if (refinementResetOutcome == OrchestratorStateOutboxRequeueOutcome.ProtectedByLiveLease)
+                Console.WriteLine("  refinement: refinement is in progress");
             Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
             Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
             Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
