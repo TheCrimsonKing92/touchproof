@@ -1633,24 +1633,11 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            if (downstream.Status == WorkTaskStatus.Completed &&
-                downstream.LastVerification is not null &&
-                SameNonEmptyReviewedCommit(downstream.LastVerification.ReviewedCommit, priorCandidate))
+            if (DownstreamVerdictPatchEquivalence.TryPreserveForRetry(
+                    _candidatePatchEquivalence, goal, downstream, retriedTask, priorCandidate,
+                    SameNonEmptyReviewedCommit, out var preservationMessage))
             {
-                Append(
-                    goal,
-                    downstream.Id,
-                    ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because its verification covers candidate {priorCandidate!.Trim()} while upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} is retried.");
-                continue;
-            }
-
-            if (DownstreamVerdictPatchEquivalence.TryCarry(
-                    _candidatePatchEquivalence, goal, downstream, priorCandidate, out var reviewedSha, out var evidence))
-            {
-                downstream.AdvanceVerifiedCandidateCoverage(priorCandidate!);
-                Append(goal, downstream.Id, ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because candidate {priorCandidate!.Trim()} is patch-equivalent to reviewed candidate {reviewedSha} ({evidence}).");
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated, preservationMessage);
                 continue;
             }
 
@@ -1689,22 +1676,11 @@ public sealed partial class AgentOrchestratorKernel
                      task.Status == WorkTaskStatus.Completed &&
                      task.LastVerification is not null))
         {
-            if (SameNonEmptyReviewedCommit(downstream.LastVerification!.ReviewedCommit, currentCandidateSha))
+            if (DownstreamVerdictPatchEquivalence.TryPreserveForCompletion(
+                    _candidatePatchEquivalence, goal, downstream, retriedTask, currentCandidateSha,
+                    SameNonEmptyReviewedCommit, out var preservationMessage))
             {
-                Append(
-                    goal,
-                    downstream.Id,
-                    ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} completed with unchanged candidate {currentCandidate}.");
-                continue;
-            }
-
-            if (DownstreamVerdictPatchEquivalence.TryCarry(
-                    _candidatePatchEquivalence, goal, downstream, currentCandidateSha, out var reviewedSha, out var evidence))
-            {
-                downstream.AdvanceVerifiedCandidateCoverage(currentCandidateSha!);
-                Append(goal, downstream.Id, ProgressKind.TaskUpdated,
-                    $"Preserved {downstream.RequiredRole} task because candidate {currentCandidate} is patch-equivalent to reviewed candidate {reviewedSha} ({evidence}).");
+                Append(goal, downstream.Id, ProgressKind.TaskUpdated, preservationMessage);
                 continue;
             }
 

@@ -266,7 +266,7 @@ internal sealed partial class ConductorDriver
             workspace, _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch, committed: GoalLifecycleChangeSink.Create(workspace));
         _cohortKernel = kernel;
-        ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath, workspace.ProjectHomeDirectoryOrNull);
+        ConfigureCandidateIdentity(kernel, workspace);
         _cohortWorkspace = workspace;
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
@@ -285,8 +285,6 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
         var dispatchLifecycleGate = new CriticalDispatchLifecycleEventGate(eventWriter);
         kernel.SetEventWriter(dispatchLifecycleGate);
-        kernel.SetCandidatePatchEquivalence(new GoalWorktreeCandidatePatchEquivalence(
-            workspace.ExecutionDirectory, workspace.IntegrationBranch));
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
                 ? reason
