@@ -145,6 +145,20 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private string? _gateLaneLedgerPath;
     private string? _gateAttemptId;
     private bool _disposed;
+    internal AcceptanceBalancedLanePlanWriter? BalancedPlan { get; set; }
+
+    internal static void RecordCurrentClassResults(GoalAcceptanceVerifier.AcceptanceManifestCheck check, AcceptanceCheckResult result) =>
+        CurrentAccountant.Value?.BalancedPlan?.Record(check, result);
+
+    internal static (AcceptanceCheckResult Result, bool Retried) RecordCurrentClassRun(
+        GoalAcceptanceVerifier.AcceptanceManifestCheck check, (AcceptanceCheckResult Result, bool Retried) run)
+    {
+        RecordCurrentClassResults(check, run.Result);
+        return run;
+    }
+
+    internal static void RecordCurrentLaneCommand(int characters, bool responseFile) =>
+        CurrentAccountant.Value?.BalancedPlan?.RecordCommand(CurrentSnapshot.Target, characters, responseFile);
 
     private AcceptanceGatePhaseAccountant(
         TimeProvider timeProvider,
@@ -347,6 +361,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             }
 
             var breakdown = BuildBreakdown(completedTimestamp);
+            BalancedPlan?.Complete(_outcome);
             var observedAt = _timeProvider.GetUtcNow();
             var hostHealth = GateHostHealthProbe.Capture();
             if (hostHealth.LaunchMs.IsAvailable && _hostHealthLedgerPath is { } ledgerPath)

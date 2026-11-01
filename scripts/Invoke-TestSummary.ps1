@@ -25,6 +25,7 @@
 param(
     [string]$Target = '.\Mcg.AgentOrchestrator.sln',
     [string]$Filter = '',
+    [string]$FilterFile,
     [string]$Partition = '',
     [switch]$NoBuild,
     [string]$Configuration = 'Debug',
@@ -48,6 +49,21 @@ function Complete-MtpInvocation {
 
     Write-MtpTerminalSummary -Result $Result
     exit ([int]$Result.ExitCode)
+}
+
+if ($PSBoundParameters.ContainsKey('FilterFile')) {
+    try {
+        if ($PSBoundParameters.ContainsKey('Filter') -or -not [string]::IsNullOrWhiteSpace($Partition)) {
+            throw 'Specify -FilterFile without -Filter or -Partition.'
+        }
+        $Filter = [IO.File]::ReadAllText($FilterFile)
+        if ([string]::IsNullOrWhiteSpace($Filter)) { throw 'Filter file must contain a nonempty filter.' }
+    }
+    catch {
+        $diagnostic = "FILTER FILE FAILURE - $($_.Exception.Message)"
+        Write-Host $diagnostic
+        Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.InvalidPartition -ResultsDirectory $null -Diagnostics @($diagnostic))
+    }
 }
 
 if ($PSBoundParameters.ContainsKey('AcceptanceAttributionReplayInput') -and [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {

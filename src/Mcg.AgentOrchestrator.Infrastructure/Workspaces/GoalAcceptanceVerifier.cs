@@ -471,9 +471,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private string AppendTestTelemetryInvocationSuffix(string stem) =>
         AppendTestTelemetryInvocationSuffix(stem, _invocationContext?.Ordinal ?? 0);
     private static string AppendTestTelemetryInvocationSuffix(string stem, int ordinal) =>
-        ordinal > 0
-            ? $"{stem}-run-{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
-            : stem;
+        AcceptanceTestTelemetryResolver.AppendInvocationSuffix(stem, ordinal);
     private string? AcceptanceAttemptResultsPrefix => _executionContext is AcceptanceAttemptExecutionOwner attemptOwner
         ? attemptOwner.ArtifactResultsPrefix
         : _executionContext?.ResultsPrefix;
@@ -486,7 +484,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
-        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory);
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory,
+            AcceptanceInfrastructureLaneResolver.ResolveIdentity(engineSettings, worktreePath));
         return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks, engineSettings);
     }
 
@@ -618,9 +617,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyShardPlan = effectivePlan.PolicyShardPlan;
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
         var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
-            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, ResolveOwnedCollectionLanes(engineSettings, worktreePath)), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
+            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, effectivePlan.CandidateLanes), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
-            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
+            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner,
+            engineSettings.BalancedLanePool is null ? null : ComputeEffectiveAcceptancePlanIdentity(
+                worktreePath, changedFiles, executionOwner.ProjectHomeDirectory));
         using var remoteLaneScope = remoteLanes;
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
@@ -666,13 +667,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
             : [];
 
-        AcceptanceGateLanePlanPublisher.Publish(AcceptanceGateLanePlanPublisher.Classify(
+        phaseAccountant.BalancedPlan = AcceptanceBalancedLanePlanWriter.Publish(AcceptanceGateLanePlanPublisher.Classify(
             executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray()),
-            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider);
+            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
         {
@@ -877,12 +878,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks[index] = attributedChecks[index];
         }
 
+        phaseAccountant.BalancedPlan?.AddResidualSummary(checks);
         if (ownerProtectedDecision.Pass is { } ownerProtectedPass) checks.Add(ownerProtectedPass);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
-
         var verification = new AcceptanceVerificationResult(
             Passed: failedCheck is null,
             Skipped: false,
@@ -1817,7 +1818,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
         AcceptanceGateEngineSettings engineSettings,
-        string? projectHomeDirectory = null)
+        string? projectHomeDirectory = null,
+        AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1839,14 +1841,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
-        var candidateLanes = ResolveOwnedCollectionLanes(engineSettings, worktreePath);
+        var laneExpansion = infrastructureLaneExpansion ?? AcceptanceInfrastructureLaneResolver.ResolveExecution(engineSettings, worktreePath);
+        var candidateLanes = laneExpansion.Lanes;
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
             candidateLanes,
             changedFiles,
             policyShardPlan);
-
-        // This is the single owner of the environment- and scope-expanded gate plan. Cohort
-        // identity, partition-cache identity, and execution all hash or consume this exact plan.
+        // This owns environment and scope expansion for both execution and identity.
+        // Identity supplies a flattened pool; execution retains its measured lane layout.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
@@ -1877,7 +1879,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             structuralCoverageDeclarations.UndeclaredProjects,
             structuralCoverageApplies,
             dotnetShardDisposition,
-            semanticDeduplication.Receipts);
+            semanticDeduplication.Receipts, laneExpansion.Layout);
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
@@ -2111,8 +2113,19 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string ComputeEffectiveAcceptanceManifestIdentity(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
-        AcceptanceGateEngineSettings? engineSettings = null) =>
-        EffectiveAcceptanceManifestIdentity.Compute(effectiveChecks, engineSettings);
+        AcceptanceGateEngineSettings? engineSettings = null)
+    {
+        var manifestIdentity = EffectiveAcceptanceManifestIdentity.Compute(effectiveChecks, engineSettings);
+        if (engineSettings?.BalancedLanePool is null) return manifestIdentity;
+        // Bind pool settings without bringing measured execution layout into the stable identity.
+        var canonicalJson = JsonSerializer.Serialize(new
+        {
+            ManifestIdentity = manifestIdentity,
+            engineSettings.BalancedLanePool
+        });
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
+        return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
+    }
 
     internal static bool TryGetInfrastructurePartitionId(
         AcceptanceManifestCheck check,
@@ -2329,7 +2342,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
             return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
 
-        return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
+        return AcceptanceGatePhaseAccountant.RecordCurrentClassRun(check, check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
             ? await RunDotnetTestCheckAsync(
                 check,
                 worktreePath,
@@ -2339,7 +2352,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 dotnetTestBuildPhase,
                 cancellationToken,
                 testResultsDirectoryOverride).ConfigureAwait(false)
-            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
+            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false));
         }
         catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
         {
@@ -2625,7 +2638,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             result,
             trxEvidence,
             policyFailure,
-            requireTrxEvidence: _requiresTestTelemetryReceipt);
+            requireTrxEvidence: _requiresTestTelemetryReceipt, allowEmptySelection: check.AllowsEmptySelection);
         var passed = completionDecision.Passed;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
@@ -3780,26 +3793,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironment environment,
         string? attemptPrefix,
         int invocationOrdinal,
-        string? resultsDirectoryOverride = null)
-    {
-        var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
-            ? resultsDirectoryOverride
-            : string.IsNullOrWhiteSpace(attemptPrefix)
-                ? Path.Combine(environment.ArtifactsPath, "TestResults")
-                : Path.GetDirectoryName(attemptPrefix);
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            directory = Path.Combine(environment.ArtifactsPath, "TestResults");
-        }
-
-        var filePrefix = string.IsNullOrWhiteSpace(attemptPrefix)
-            ? $"{environment.LeaseId}.{AcceptanceArtifactFileNames.Slug(check.Name)}"
-            : $"{Path.GetFileName(attemptPrefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}";
-        filePrefix = AppendTestTelemetryInvocationSuffix(filePrefix, invocationOrdinal);
-        var fileName = AcceptanceArtifactFileNames.BoundFileName(AcceptanceArtifactFileNames.SanitizeFileName(filePrefix), ".trx");
-        var path = Path.Combine(directory, fileName);
-        return new DotnetTestTelemetry([path], []);
-    }
+        string? resultsDirectoryOverride = null) =>
+        AcceptanceTestTelemetryResolver.Resolve(check, environment, attemptPrefix, invocationOrdinal, resultsDirectoryOverride);
 
     internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
         IReadOnlyList<string>? sourcePaths,
@@ -4268,7 +4263,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> UndeclaredTestProjects,
         bool StructuralCoverageApplies,
         DotnetShardDisposition DotnetShardDisposition,
-        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications);
+        IReadOnlyList<SemanticExecutionDeduplicationReceipt> SemanticDeduplications, AcceptanceBalancedLaneLayout? BalancedLayout);
 
     internal sealed record SemanticExecutionDeduplicationReceipt(
         string PartitionId,

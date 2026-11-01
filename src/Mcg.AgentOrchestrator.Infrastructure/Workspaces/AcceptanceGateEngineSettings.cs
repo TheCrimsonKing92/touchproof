@@ -17,6 +17,7 @@ internal sealed class AcceptanceGateEngineSettings
 
     public IReadOnlyList<string> LaneTestSourceRoots { get; init; } = [];
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
+    public AcceptanceBalancedLanePoolSettings? BalancedLanePool { get; init; }
     public IReadOnlyList<AcceptanceMtpInvocation> MtpInvocations { get; init; } = [];
     [JsonIgnore]
     public IReadOnlyList<AcceptanceManifestCheck> DeclaredDotnetTestChecks { get; private set; } = [];
@@ -107,6 +108,7 @@ internal sealed class AcceptanceGateEngineSettings
 
     private void Validate()
     {
+        BalancedLanePool?.Validate(InfrastructureTestLanes);
         if (LaneTestSourceRoots is null)
         {
             throw new InvalidDataException("Acceptance manifest engine laneTestSourceRoots must be a list of repository-relative directories.");
@@ -216,6 +218,7 @@ internal sealed record AcceptanceTestLane(
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
     public IReadOnlyList<string> OwnedCollections { get; init; } = [];
     public bool RequiresBuildSystemChange { get; init; }
+    [JsonIgnore] public bool AllowsEmptySelection { get; init; }
 }
 
 internal sealed class AcceptanceMtpInvocation

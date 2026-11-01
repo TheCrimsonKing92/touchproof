@@ -609,6 +609,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
+            var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root);
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
@@ -635,14 +636,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             var shardChecks = result.Checks!
                 .Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
                 .ToArray();
+            Assert.Equal(lanes.Select(lane => "infrastructure tests: " + lane.Name).Order(StringComparer.Ordinal),
+                shardChecks.Select(check => check.Name).Order(StringComparer.Ordinal));
             var mtpCalls = calls
                 .Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 .ToArray();
             Assert.Equal(shardChecks.Length, mtpCalls.Length);
-            Assert.Contains(mtpCalls, call => HasArgumentPair(call, "--filter-class", "*CliCommandTests*"));
-            Assert.Contains(mtpCalls, call =>
-                HasArgumentPair(call, "--filter-not-class", "*CliCommandTests*") &&
-                HasArgumentPair(call, "--filter-not-class", "*GoalAcceptanceVerifierTests*"));
+            foreach (var lane in lanes)
+            {
+                var pairs = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).Chunk(2).ToArray();
+                Assert.NotEmpty(pairs);
+                Assert.Single(mtpCalls, call => pairs.All(pair => HasArgumentPair(call, pair[0], pair[1])));
+            }
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&

@@ -465,7 +465,7 @@ function New-MtpFilterDiagnostic {
         [Parameter(Mandatory = $true)][string]$Detail
     )
 
-    return "MTP test filter '$Filter' is unsupported: $Detail Supported syntax: FullyQualifiedName~Class, FullyQualifiedName!~Class, Name~Method, Name!~Method, and Category!=Trait; use '|' only for positive alternatives of one predicate kind and '&' between representable clauses. Parentheses may group expressions. See docs/operator-runbook.md#managed-test-filter-syntax."
+    return "MTP test filter '$Filter' is unsupported: $Detail Supported syntax: FullyQualifiedName~Class, FullyQualifiedName!~Class, FullyQualifiedName=Class, FullyQualifiedName!=Class, Name~Method, Name!~Method, and Category!=Trait; use '|' only for positive alternatives of one predicate kind and '&' between representable clauses. Parentheses may group expressions. See docs/operator-runbook.md#managed-test-filter-syntax."
 }
 
 function Get-MtpFilterTokens {
@@ -501,13 +501,14 @@ function Get-MtpFilterTokens {
 
         $fullyQualifiedName = [regex]::Match(
             $text,
-            '^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$',
+            '^FullyQualifiedName\s*(?<op>!~|~|!=|=)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$',
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($fullyQualifiedName.Success) {
             $tokens.Add([pscustomobject]@{
                     TokenType = 'Predicate'
                     Kind = 'Class'
-                    IsPositive = $fullyQualifiedName.Groups['op'].Value -eq '~'
+                    IsPositive = $fullyQualifiedName.Groups['op'].Value -in @('~', '=')
+                    IsExact = $fullyQualifiedName.Groups['op'].Value -in @('=', '!=')
                     Value = $fullyQualifiedName.Groups['value'].Value
                     Text = $text
                     Position = $start
@@ -574,6 +575,7 @@ function Read-MtpFilterAtom {
             NodeType = 'Predicate'
             Kind = $token.Kind
             IsPositive = $token.IsPositive
+            IsExact = $token.Kind -eq 'Class' -and $token.IsExact
             Value = $token.Value
             Text = $token.Text
         }
@@ -623,13 +625,18 @@ function Get-MtpFilterOperands {
         [Parameter(Mandatory = $true)][ValidateSet('And', 'Or')][string]$Operator
     )
 
-    if ($Node.NodeType -eq $Operator) {
-        return @(
-            Get-MtpFilterOperands -Node $Node.Left -Operator $Operator
-            Get-MtpFilterOperands -Node $Node.Right -Operator $Operator
-        )
+    # Generated class lists can contain thousands of predicates. Flatten without
+    # consuming a PowerShell call frame per class, preserving left-to-right order.
+    $pending = [System.Collections.Generic.Stack[object]]::new()
+    $pending.Push($Node)
+    while ($pending.Count -gt 0) {
+        $current = $pending.Pop()
+        if ($current.NodeType -eq $Operator) {
+            $pending.Push($current.Right)
+            $pending.Push($current.Left)
+        }
+        else { $current }
     }
-    return @($Node)
 }
 
 function Add-MtpPredicateArguments {
@@ -640,7 +647,7 @@ function Add-MtpPredicateArguments {
 
     if ($Predicate.Kind -eq 'Class') {
         $Arguments.Add($(if ($Predicate.IsPositive) { '--filter-class' } else { '--filter-not-class' }))
-        $Arguments.Add("*$($Predicate.Value)*")
+        $Arguments.Add($(if ($Predicate.IsExact) { $Predicate.Value } else { "*$($Predicate.Value)*" }))
         return
     }
     if ($Predicate.Kind -eq 'Method') {
@@ -2236,6 +2243,35 @@ function New-MtpRunnerArguments {
     }
     else {
         $arguments[$timeoutIndex + 1] = "${TestHostTimeoutSeconds}s"
+    }
+    # Executor lanes launch the managed assembly directly through dotnet. Use MTP's
+    # response-file support before the native command line can exceed Windows' limit.
+    if ($Executable.EndsWith('.dll', [StringComparison]::OrdinalIgnoreCase) -and
+        [IO.Path]::IsPathRooted($ResultsDirectory) -and
+        (@($arguments | ForEach-Object { $_.Length + 3 }) | Measure-Object -Sum).Sum -gt 4096) {
+        $inline = [System.Collections.Generic.List[string]]::new()
+        $spilled = [System.Collections.Generic.List[string]]::new()
+        $filterOptions = @('--filter-class', '--filter-not-class', '--filter-method', '--filter-not-method', '--filter-not-trait')
+        for ($index = 0; $index -lt $arguments.Count; $index++) {
+            $value = $arguments[$index]
+            if ($index -gt 0 -and $value -in $filterOptions -and $index + 1 -lt $arguments.Count) {
+                $spilled.Add($value)
+                $spilled.Add($arguments[++$index])
+            }
+            else { $inline.Add($value) }
+        }
+        if ($spilled.Count -gt 0) {
+            foreach ($entry in $spilled) {
+                if ($entry -match '\s|"' -or $entry.StartsWith('#') -or $entry.StartsWith('@')) {
+                    throw "MTP response-file entry '$entry' cannot be represented losslessly."
+                }
+            }
+            [void][IO.Directory]::CreateDirectory($ResultsDirectory)
+            $path = Join-Path $ResultsDirectory ('filter-' + [Guid]::NewGuid().ToString('N') + '.rsp')
+            [IO.File]::WriteAllText($path, ($spilled -join "`n"), [Text.UTF8Encoding]::new($false))
+            $inline.Add('@' + $path)
+            return $inline.ToArray()
+        }
     }
     return $arguments.ToArray()
 }

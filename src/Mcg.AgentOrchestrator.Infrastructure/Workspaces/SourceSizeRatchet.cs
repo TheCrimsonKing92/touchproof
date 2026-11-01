@@ -69,13 +69,14 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds one settled-check progress call.
             // Goal a9983773 adds 11 lines binding the lane-plan observation to the existing attempt and dispatch set.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4402),
+            // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4397),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
             // Goal b5bb7a54 adds the .NET receipt normalization hook after TRX copying; the step stays in NormalizedGateResultStep.
             // Goal 4e5aab2e: preserve the slot timing sidecar beside each durable TRX receipt (+1 line).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 252),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 249),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.BuildArtifactLock.cs", 334),
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
@@ -367,7 +368,7 @@ internal static class SourceSizeRatchet
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
             // test class as required by criterion 3; measured 1643 lines, no extra headroom.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1643),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1454),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
             // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the
@@ -596,7 +597,8 @@ internal static class SourceSizeRatchet
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
             // Goal a9983773 adds 11 lane-plan call-site lines; record, publisher and reader live in separate types.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8024, 27),
+            // Goal ebfd52d3 integration: measured 8022 lines in the existing 27 partial files, no headroom.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8022, 27),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

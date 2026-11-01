@@ -17,7 +17,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         var root = CreateCheckedInManifestShapeWorkspace();
         try
         {
-            var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
+            var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root);
+            var pool = AcceptanceGateEngineSettings.Load(root).BalancedLanePool!;
+            Assert.Contains(lanes, lane => lane.Name.StartsWith(pool.LaneNamePrefix + " ", StringComparison.Ordinal));
+            Assert.Single(lanes, lane => lane.Name == pool.ResidualLaneName);
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Enqueue(args);

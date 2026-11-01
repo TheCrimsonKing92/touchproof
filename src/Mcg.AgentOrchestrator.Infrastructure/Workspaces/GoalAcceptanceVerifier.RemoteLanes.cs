@@ -21,7 +21,8 @@ public sealed partial class GoalAcceptanceVerifier
             string worktreePath,
             IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
             AcceptanceGateEngineSettings engineSettings,
-            AcceptanceAttemptExecutionOwner executionOwner)
+            AcceptanceAttemptExecutionOwner executionOwner,
+            string? layoutIndependentManifestIdentity)
     {
         Func<string, string?> resolveCandidateTreeSha = path =>
             _testOverrides.ResolvePartitionVerdictCandidateTreeShaForTests?.Invoke(path) ??
@@ -32,7 +33,8 @@ public sealed partial class GoalAcceptanceVerifier
         Func<string, string?> resolveVerifyingCommitSha = path =>
             _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path) ??
             ResolveGitScalar(path, "rev-parse", "HEAD");
-        Func<string> resolveManifestIdentity = () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings);
+        Func<string> resolveManifestIdentity = () => layoutIndependentManifestIdentity ??
+            ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings);
         var partitionVerdictCache = AcceptancePartitionVerdictCache.Create(
             new AcceptancePartitionVerdictCacheOptions(
                 goalId,
@@ -350,6 +352,7 @@ public sealed partial class GoalAcceptanceVerifier
                     if (outcome.Accepted is { } accepted)
                     {
                         cacheContext?.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
+                        AcceptanceGatePhaseAccountant.RecordCurrentClassResults(completedRemote.Shard.Check, accepted);
                         outcomes[completedRemote.Shard.Index] = new ShardRunOutcome(accepted, false);
                         if (outcome.RemoteDuration is { } remoteDuration)
                         {
