@@ -548,7 +548,8 @@ internal static class SourceSizeRatchet
             // EnvironmentContractGate; these 15 wiring lines use the existing partial files.
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
             // Goal 5ca3f5c0: six PR-tracker wiring lines, no added partial file.
-            new SourceClassCeiling("ConductorDriver", 14385, 70),
+            // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
+            new SourceClassCeiling("ConductorDriver", 14386, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
