@@ -87,7 +87,6 @@ public sealed class PlannerCommandSelectorValidationTests
     [InlineData("dotnet")]
     [InlineData("go")]
     [InlineData("cargo")]
-    [InlineData("pwsh")]
     [InlineData("pytest")]
     [InlineData("make")]
     [InlineData("busted")]
@@ -98,6 +97,16 @@ public sealed class PlannerCommandSelectorValidationTests
     public void RunnerVerbsAndWhitespaceCommandsRequireDeclarations(string selector)
     {
         using var fixture = new Fixture();
+        fixture.Record([selector]);
+
+        AssertRejected(fixture, selector);
+    }
+
+    [Fact]
+    public void PowerShellRunnerSelectorRequiresDeclaration()
+    {
+        using var fixture = new Fixture();
+        var selector = "pwsh";
         fixture.Record([selector]);
 
         AssertRejected(fixture, selector);
