@@ -32,11 +32,12 @@ internal sealed class RoleReportEvidenceClosure(
                 var task = Latest(goal, role);
                 string? tests = null;
                 string? gate = null;
+                var testsPass = false;
                 var reason = request.PlannerIdentity?.BriefVersion != goal.AuthoritativeBrief.Version
                     ? "brief-version-differs"
                     : owner == "developer"
                         ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
-                        : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange);
+                        : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange, out testsPass);
                 if (reason is not null)
                 {
                     skipped.Add(request.Id, reason);
@@ -57,6 +58,7 @@ internal sealed class RoleReportEvidenceClosure(
                     $"landing_candidate={landingCandidateSha} worker_result_log={Available(log)}";
                 if (owner == "developer") answer += $" tests={tests} gate={gate}";
                 if (owner == "reviewer") answer += " verdict=pass";
+                if (owner == "tester" && testsPass) answer += " tests=pass";
                 if (workerReport) answer += " requested_owner=worker";
                 request.Complete(answer, clock.UtcNow, origin: HumanInputAnswerOrigin.Worker,
                     briefVersion: goal.AuthoritativeBrief.Version);
@@ -105,11 +107,20 @@ internal sealed class RoleReportEvidenceClosure(
         });
 
     private static string? RoundSkipReason(Goal goal, TaskSpec? task, AgentRole role,
-        string landingCandidateSha, Func<string, string, bool>? conductorOnlyRange)
+        string landingCandidateSha, Func<string, string, bool>? conductorOnlyRange, out bool testsPass)
     {
-        if (task?.Status != WorkTaskStatus.Completed || task.LastVerification is not { } verification ||
-            !WorkerResultBlockers.TryFindPassVerdict(verification))
+        testsPass = false;
+        if (task?.Status != WorkTaskStatus.Completed || task.LastVerification is not { } verification)
             return "owner-round-incomplete";
+        if (!WorkerResultBlockers.TryFindPassVerdict(verification))
+        {
+            testsPass = role == AgentRole.Tester &&
+                WorkerResultBlockers.TryGetTestsStatus(verification, out var tests) &&
+                tests == WorkerResultBlockers.TestsStatus.Pass &&
+                WorkerResultBlockers.TryGetBlockersStatus(verification, out var testerBlockers) &&
+                testerBlockers == WorkerResultBlockers.BlockersStatus.None;
+            if (!testsPass) return "owner-round-incomplete";
+        }
         if (role == AgentRole.Reviewer && (!WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockers) ||
             blockers != WorkerResultBlockers.BlockersStatus.None))
             return "owner-round-incomplete";
