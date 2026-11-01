@@ -157,6 +157,7 @@ internal sealed partial class ConductorDriver
     private readonly string _integrationBranch;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     internal PassedGateHoldAttention? PassedGateHoldAttention { get; set; }
+    internal AwaitingVerificationGateAttention? AwaitingVerificationGateAttention { get; set; }
     internal Func<IEnumerable<Goal>, IReadOnlyList<string>>? RefreshHeldGateReceipts { get; set; }
     internal readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
@@ -976,9 +977,8 @@ internal sealed partial class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
-        PassedGateHoldAttention = new(CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            goal => PassedGateRegateAdmission.Resolve(goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value),
-                _resolveAcceptanceHeads(goal).BranchHeadSha));
+        ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
+            goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
             _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
