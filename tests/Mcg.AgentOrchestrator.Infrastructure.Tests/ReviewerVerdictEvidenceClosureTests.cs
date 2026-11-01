@@ -43,7 +43,7 @@ public sealed class ReviewerVerdictEvidenceClosureTests
     [Theory]
     [InlineData("not-verifiable", "verdict-not-met")]
     [InlineData("missing-entry", "verdict-not-met")]
-    [InlineData("old-candidate", "candidate-differs")]
+    [InlineData("old-candidate", "candidate-differs reviewed=A expected=B")]
     [InlineData("new-developer-running", "candidate-unknown")]
     [InlineData("needs-work", "review-not-pass")]
     [InlineData("untyped", "untyped")]
