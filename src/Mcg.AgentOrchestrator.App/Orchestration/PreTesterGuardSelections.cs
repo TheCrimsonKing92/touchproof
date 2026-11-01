@@ -18,9 +18,16 @@ internal sealed class PreTesterGuardSelections
     }
 
     internal static PreTesterGuardSelections Create(PreTesterChangedFileGuardClasses cache,
-        string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision)
+        string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
+        Action<string>? progress = null)
     {
-        var changedFileGuards = cache.Select(worktreePath, changedPaths, mainRevision);
+        var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
+        foreach (var selection in changedFileGuards.Selections)
+        {
+            var guard = provenance.Single(item => item.Class == selection.TestClass);
+            (progress ?? Console.WriteLine)(
+                $"PRE_TESTER_GUARD_SELECTED class={guard.Class} kind={guard.Kind} path={guard.Path}");
+        }
         return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
             .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
             .Concat(changedFileGuards.Selections).ToArray());
