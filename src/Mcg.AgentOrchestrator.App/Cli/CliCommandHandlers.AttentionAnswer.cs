@@ -13,6 +13,21 @@ internal static partial class CliCommandHandlers
         if (emitAgentReadEnvelope)
             parts = parts.Where(part => !part.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
         var answerParts = WithoutAnswerMetadataFlags(parts);
+        var route = GetFlagValue(parts, "--route");
+        var cause = GetFlagValue(parts, "--cause");
+        if (route is null && cause is not null)
+            throw new ArgumentException("--cause requires --route developer.");
+        if (route is not null)
+        {
+            if (!route.Equals("developer", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("--route accepts only developer.");
+            cause ??= nameof(RetryCause.ContractClarification);
+            if (!Enum.TryParse<RetryCause>(cause, true, out var parsedCause) ||
+                !Enum.IsDefined(parsedCause) || parsedCause == RetryCause.Unknown)
+                throw new ArgumentException("--cause requires a supported explicit RetryCause.");
+            route = "developer";
+            cause = parsedCause.ToString();
+        }
         if (answerParts.Count < 4)
             throw new ArgumentException(CliCommandHelp.AttentionUsage);
 
@@ -84,7 +99,7 @@ internal static partial class CliCommandHandlers
             parts, CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
         var intentId = Guid.NewGuid().ToString("N");
         var payload = new AnswerOperatorIntentPayload(targetKind, targetId, goal!.Id.Value, answer,
-            attribution.ActorKind, GetAnswerEvidence(parts), GetFlagValue(parts, "--precedent"));
+            attribution.ActorKind, GetAnswerEvidence(parts), GetFlagValue(parts, "--precedent"), route, cause);
         var intent = new OperatorIntentRecord(
             intentId, GetFlagValue(parts, "--idempotency-key") ?? intentId,
             OperatorIntentVerbs.Answer, goal.Id.Value, TaskId: null,
@@ -104,7 +119,7 @@ internal static partial class CliCommandHandlers
         for (var index = 0; index < parts.Count; index++)
         {
             if (parts[index] is "--operator-actor" or "--actor-kind" or "--evidence" or
-                "--precedent" or "--idempotency-key")
+                "--precedent" or "--idempotency-key" or "--route" or "--cause")
             {
                 if (++index >= parts.Count)
                     throw new ArgumentException($"{parts[index - 1]} requires a value.");

@@ -248,6 +248,7 @@ internal sealed partial class OperatorIntentCoordinator
                     ? $"Applied; recovered durable operator-intent payload {intent.Id}."
                     : $"Applied; recovered durable goal marker {marker}.";
                 recoveredOutcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
+                recoveredOutcome += AnswerOutcome(goal, intent);
                 _store.CompleteAsync(
                     intent.Id,
                     ClaimOwner,
@@ -317,6 +318,7 @@ internal sealed partial class OperatorIntentCoordinator
                     : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +
                     (intent.TaskId is null ? "." : $" task {intent.TaskId[..Math.Min(8, intent.TaskId.Length)]}.");
                 outcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
+                outcome += AnswerOutcome(goal, intent);
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
