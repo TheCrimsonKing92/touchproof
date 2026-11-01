@@ -54,7 +54,7 @@ internal static class AcceptanceCheckProcessInvoker
         engineSettings ??= new AcceptanceGateEngineSettings();
         // Own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
-        var (stdoutPath, stderrPath) = CreateCaptureFilePaths();
+        var (stdoutPath, stderrPath) = AcceptanceCaptureDrain.CreateCaptureFilePaths();
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
@@ -115,8 +115,8 @@ internal static class AcceptanceCheckProcessInvoker
             Task[]? captureConnections = null;
             void BeginOwnedCapture()
             {
-                var stdoutPipe = CreateCapturePipe(stdoutPipeName!);
-                var stderrPipe = CreateCapturePipe(stderrPipeName!);
+                var stdoutPipe = GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stdoutPipeName!);
+                var stderrPipe = GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stderrPipeName!);
                 captureSources = [stdoutPipe, stderrPipe];
                 var stdoutConnection = stdoutPipe.WaitForConnectionAsync(captureDrainCts.Token);
                 var stderrConnection = stderrPipe.WaitForConnectionAsync(captureDrainCts.Token);
@@ -128,7 +128,7 @@ internal static class AcceptanceCheckProcessInvoker
                 // failure was observed.
                 captureDrains =
                 [
-                    ConnectAndDrainCappedCaptureAsync(
+                    GoalAcceptanceVerifierCaptureCustody.ConnectAndDrainCappedCaptureAsync(
                         stdoutPipe,
                         stdoutConnection,
                         stdoutPath,
@@ -136,7 +136,7 @@ internal static class AcceptanceCheckProcessInvoker
                         () => DateTimeOffset.UtcNow,
                         onLimitReached: captureLimitStop.OnLimitReached,
                         captureDrainCts.Token, capturePublicationInterval),
-                    ConnectAndDrainCappedCaptureAsync(
+                    GoalAcceptanceVerifierCaptureCustody.ConnectAndDrainCappedCaptureAsync(
                         stderrPipe,
                         stderrConnection,
                         stderrPath,
@@ -176,7 +176,7 @@ internal static class AcceptanceCheckProcessInvoker
                 foreach (var source in captureSources!) source.Dispose();
                 stdoutPipeName = $"mcg-acc-{Guid.NewGuid():N}-out";
                 stderrPipeName = $"mcg-acc-{Guid.NewGuid():N}-err";
-                var fallbackStartInfo = BuildAcceptanceProcessStartInfo(
+                var fallbackStartInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
                     arguments, workingDirectory,
                     $@"\\.\pipe\{stdoutPipeName}", $@"\\.\pipe\{stderrPipeName}", forceUtf8ConsoleOutput);
                 fallbackStartInfo.Environment.Clear();
@@ -217,14 +217,14 @@ internal static class AcceptanceCheckProcessInvoker
                 ];
                 captureDrains =
                 [
-                    DrainCappedCaptureAsync(
+                    AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                         captureSources[0],
                         stdoutPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
                         onLimitReached: captureLimitStop.OnLimitReached,
                         cancellationToken: captureDrainCts.Token, publicationInterval: capturePublicationInterval),
-                    DrainCappedCaptureAsync(
+                    AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                         captureSources[1],
                         stderrPath,
                         engineSettings.OutputCaptureLimitBytes,
@@ -277,7 +277,7 @@ internal static class AcceptanceCheckProcessInvoker
                 laneStall?.Complete();
             }
 
-            var captureResults = await CompleteCaptureDrainsAsync(
+            var captureResults = await GoalAcceptanceVerifierCaptureCustody.CompleteCaptureDrainsAsync(
                 process,
                 captureDrains,
                 captureDrainCts,
@@ -285,12 +285,12 @@ internal static class AcceptanceCheckProcessInvoker
             captureDrains = null;
             captureDrainCts.Dispose();
             captureDrainCts = null;
-            DisposeCaptureSources(captureSources);
+            GoalAcceptanceVerifierCaptureCustody.DisposeCaptureSources(captureSources);
             captureSources = null;
 
             foreach (var capture in captureResults.Where(result => result.LimitReached))
             {
-                EmitCaptureLimitReached(
+                AcceptanceCaptureDrain.EmitCaptureLimitReached(
                     heartbeatContext,
                     attemptResultsPrefix,
                     capture.Path,
@@ -301,10 +301,10 @@ internal static class AcceptanceCheckProcessInvoker
                 .Where(result => result.LimitReached)
                 .Select(result => result.Path)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var stdout = await ReadCapturedFileWithRetryAsync(
+            var stdout = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(
                 stdoutPath,
                 cappedPaths.Contains(stdoutPath)).ConfigureAwait(false);
-            var stderr = await ReadCapturedFileWithRetryAsync(
+            var stderr = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(
                 stderrPath,
                 cappedPaths.Contains(stderrPath)).ConfigureAwait(false);
             var stdoutBytes = AcceptanceBestEffortFileOperations.TryGetFileLength(stdoutPath);
@@ -320,7 +320,7 @@ internal static class AcceptanceCheckProcessInvoker
                 completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
                 commandIdentityTracker = null;
             }
-            keepOutputFiles = ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
+            keepOutputFiles = AcceptanceCaptureDrain.ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
             WorkerProcessJobAccounting? accounting = null;
             try
             {
@@ -400,7 +400,7 @@ internal static class AcceptanceCheckProcessInvoker
 
             if (captureDrainCts is not null)
             {
-                await CancelCaptureDrainsAsync(
+                await GoalAcceptanceVerifierCaptureCustody.CancelCaptureDrainsAsync(
                     captureDrainCts,
                     captureDrains,
                     captureSources).ConfigureAwait(false);

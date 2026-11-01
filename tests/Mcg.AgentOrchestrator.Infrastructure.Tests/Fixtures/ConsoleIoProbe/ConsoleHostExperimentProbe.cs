@@ -124,7 +124,7 @@ internal static class ConsoleHostExperimentProbe
             var stderr = stem + ".err";
             var release = stem + ".release";
             var ready = release + ".ready";
-            var info = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            var info = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
                 [ResolveExecutable("dotnet"), typeof(ConsoleHostExperimentProbe).Assembly.Location,
                     "--write-console-text", "non-ASCII caf\u00e9 \u6f22\u5b57 e\u0301", ready, release],
                 directory, stdout, stderr, forceUtf8ConsoleOutput: true);

@@ -1450,10 +1450,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             {
                 await process.WaitForExitAsync();
 
-                var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+                var stdout = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(
                     stdoutPath,
                     captureLimitReached: false);
-                var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+                var stderr = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(
                     stderrPath,
                     captureLimitReached: false);
                 Assert.True(
@@ -1677,9 +1677,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.NotEmpty(stdoutLogs);
             Assert.NotEmpty(stderrLogs);
             var stdoutContents = await Task.WhenAll(stdoutLogs.Select(path =>
-                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
+                GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
             var stderrContents = await Task.WhenAll(stderrLogs.Select(path =>
-                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
+                GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
             if (!OperatingSystem.IsWindows())
             {
                 Assert.Contains(stdoutContents, content =>

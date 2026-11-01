@@ -182,7 +182,7 @@ public sealed class AcceptanceDirectSdkLaunchTests
 
     private static async Task<ShellCapture> RunShellAsync(string[] arguments, string directory)
     {
-        var info = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, directory);
+        var info = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, directory);
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(info.Environment, directory);
         using var process = ProcessTreeGuiSuppression.Start(info);
         using var stdout = new MemoryStream();

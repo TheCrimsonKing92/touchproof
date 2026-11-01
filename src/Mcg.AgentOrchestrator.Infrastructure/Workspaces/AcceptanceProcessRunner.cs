@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO.Pipes;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
@@ -146,48 +145,9 @@ internal static class AcceptanceProcessRunner
 
     internal static class ProcessInvokerAccess
     {
-        internal static (string Stdout, string Stderr) CreateCaptureFilePaths() =>
-            GoalAcceptanceVerifier.CreateCaptureFilePaths();
-
-        internal static bool ShouldKeepCaptureFiles(bool? keepCaptureFiles, bool timedOut, int exitCode) =>
-            GoalAcceptanceVerifier.ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
-
         internal static string QuoteForDisplay(string value) => GoalAcceptanceVerifier.QuoteForDisplay(value);
 
         internal static TimeSpan DefaultHeartbeatInterval => GoalAcceptanceVerifier.DefaultHeartbeatInterval;
         internal static TimeSpan DefaultProgressInterval => GoalAcceptanceVerifier.DefaultProgressInterval;
-
-        internal static NamedPipeServerStream CreateCapturePipe(string pipeName) =>
-            GoalAcceptanceVerifier.CreateCapturePipe(pipeName);
-
-        internal static Task<CaptureLimitResult> ConnectAndDrainCappedCaptureAsync(
-            NamedPipeServerStream source,
-            Task connection,
-            string path,
-            long limitBytes,
-            Func<DateTimeOffset> utcNow,
-            Action? onLimitReached, CancellationToken cancellationToken, TimeSpan? capturePublicationInterval) =>
-            GoalAcceptanceVerifier.ConnectAndDrainCappedCaptureAsync(
-                source, connection, path, limitBytes, utcNow, onLimitReached, cancellationToken, capturePublicationInterval);
-
-        internal static Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
-            RegisteredOwnedProcess process,
-            Task<CaptureLimitResult>[] captureDrains,
-            CancellationTokenSource captureDrainCts,
-            IReadOnlyList<Stream> captureSources) =>
-            GoalAcceptanceVerifier.CompleteCaptureDrainsAsync(process, captureDrains, captureDrainCts, captureSources);
-
-        internal static Task CancelCaptureDrainsAsync(
-            CancellationTokenSource captureDrainCts,
-            Task<CaptureLimitResult>[]? captureDrains,
-            IReadOnlyList<Stream>? captureSources) =>
-            GoalAcceptanceVerifier.CancelCaptureDrainsAsync(captureDrainCts, captureDrains, captureSources);
-
-        internal static void DisposeCaptureSources(IReadOnlyList<Stream>? captureSources) =>
-            GoalAcceptanceVerifier.DisposeCaptureSources(captureSources);
-
-        internal static void EmitCaptureLimitReached(
-            GateHeartbeatContext? context, string? attemptResultsPrefix, string path, long capBytes) =>
-            GoalAcceptanceVerifier.EmitCaptureLimitReached(context, attemptResultsPrefix, path, capBytes);
     }
 }

@@ -90,7 +90,7 @@ public sealed class AcceptanceLaneCommandLineBudgetTests
         const string stderr = @"\\.\pipe\mcg-acc-00000000000000000000000000000000-err";
         try
         {
-            return GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, root, stdout, stderr,
+            return GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, root, stdout, stderr,
                 forceUtf8ConsoleOutput: true).Arguments.Length;
         }
         catch (CommandLineTooLongException error)

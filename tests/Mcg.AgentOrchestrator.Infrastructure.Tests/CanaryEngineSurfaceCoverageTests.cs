@@ -96,6 +96,7 @@ public class CanaryEngineSurfaceCoverageTests
     [Theory]
     [InlineData("AcceptanceCheckProcessInvoker")]
     [InlineData("AcceptanceProcessTestContext")]
+    [InlineData("AcceptanceCaptureDrain")]
     public void Indirect_process_runner_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;

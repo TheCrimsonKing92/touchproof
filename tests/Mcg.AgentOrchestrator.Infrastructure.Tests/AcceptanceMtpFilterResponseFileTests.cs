@@ -186,7 +186,7 @@ public sealed class AcceptanceMtpFilterResponseFileTests
     }
 
     private static System.Diagnostics.ProcessStartInfo Launch(string[] arguments) =>
-        GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, Path.GetTempPath(), Stdout, Stderr,
+        GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, Path.GetTempPath(), Stdout, Stderr,
             forceUtf8ConsoleOutput: true);
 
     private static string Compose(string[] arguments) =>

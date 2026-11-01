@@ -1,7 +1,6 @@
 global using BuildPhaseManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using System.Diagnostics;
 using System.Collections.Concurrent;
-using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -4184,74 +4183,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
             ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : value;
-
-    internal static Task<string> ReadFileWithRetryAsync(string path, int? maximumBytes = null) =>
-        GoalAcceptanceVerifierCaptureCustody.ReadFileWithRetryAsync(path, maximumBytes);
-
-    internal static Task<string> ReadCapturedFileWithRetryAsync(string path, bool captureLimitReached) =>
-        GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(path, captureLimitReached);
-
-    internal static ProcessStartInfo BuildAcceptanceProcessStartInfo(
-        string[] arguments,
-        string workingDirectory,
-        string? stdoutRedirectTarget = null,
-        string? stderrRedirectTarget = null,
-        bool forceUtf8ConsoleOutput = false) =>
-        GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
-            arguments, workingDirectory, stdoutRedirectTarget, stderrRedirectTarget, forceUtf8ConsoleOutput);
-
-    internal static NamedPipeServerStream CreateCapturePipe(string pipeName) =>
-        GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(pipeName);
-
-    internal static Task<CaptureLimitResult> ConnectAndDrainCappedCaptureAsync(
-        NamedPipeServerStream source,
-        Task connection,
-        string path,
-        long limitBytes,
-        Func<DateTimeOffset> utcNow,
-        Action? onLimitReached, CancellationToken cancellationToken, TimeSpan? capturePublicationInterval) =>
-        GoalAcceptanceVerifierCaptureCustody.ConnectAndDrainCappedCaptureAsync(
-            source, connection, path, limitBytes, utcNow, onLimitReached, cancellationToken, capturePublicationInterval);
-
-    internal static Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
-        RegisteredOwnedProcess process,
-        Task<CaptureLimitResult>[] captureDrains,
-        CancellationTokenSource captureDrainCts,
-        IReadOnlyList<Stream> captureSources) =>
-        GoalAcceptanceVerifierCaptureCustody.CompleteCaptureDrainsAsync(
-            process, captureDrains, captureDrainCts, captureSources);
-
-    internal static Task CancelCaptureDrainsAsync(
-        CancellationTokenSource captureDrainCts,
-        Task<CaptureLimitResult>[]? captureDrains,
-        IReadOnlyList<Stream>? captureSources) =>
-        GoalAcceptanceVerifierCaptureCustody.CancelCaptureDrainsAsync(captureDrainCts, captureDrains, captureSources);
-
-    internal static void DisposeCaptureSources(IReadOnlyList<Stream>? captureSources) =>
-        GoalAcceptanceVerifierCaptureCustody.DisposeCaptureSources(captureSources);
-
-    internal static void EmitCaptureLimitReached(
-        GateHeartbeatContext? context,
-        string? attemptResultsPrefix,
-        string path,
-        long capBytes) =>
-        GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached(
-            context?.GoalId,
-            attemptResultsPrefix,
-            path,
-            capBytes,
-            Console.Out);
-
-    internal static void EmitCaptureLimitReached(
-        string? goalId,
-        string? attemptPrefix,
-        string path,
-        long capBytes,
-        TextWriter writer) =>
-        GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached(goalId, attemptPrefix, path, capBytes, writer);
-
-    internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes) =>
-        GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(bytes);
 
     private sealed record EffectiveGatePlan(
         AcceptanceManifest Manifest,

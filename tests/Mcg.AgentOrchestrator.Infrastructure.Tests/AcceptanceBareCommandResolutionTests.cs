@@ -226,7 +226,7 @@ public sealed class AcceptanceBareCommandResolutionTests
         {
             Assert.Equal(expected, resolved);
             Assert.Equal($"/c \"\"{expected}\" \"probe\"\"", startInfo.Arguments);
-            var unchanged = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, files.Root);
+            var unchanged = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, files.Root);
             Assert.Equal("/c \"\"probe\" \"probe\"\"", unchanged.Arguments);
         }
         else

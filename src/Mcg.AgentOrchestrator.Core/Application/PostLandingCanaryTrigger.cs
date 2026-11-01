@@ -38,6 +38,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CaptureLimitStop",
+            // Capture drain and file helpers are reached through the process invoker and capture custody.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCaptureDrain",
             // Command-line validation is reached through the acceptance shell process builder.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCmdCommandLineLimit",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
