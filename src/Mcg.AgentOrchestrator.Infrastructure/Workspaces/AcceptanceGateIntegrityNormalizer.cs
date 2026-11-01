@@ -22,35 +22,58 @@ internal static class AcceptanceGateIntegrityNormalizer
         if (labeler is null && !OperatingSystem.IsWindows())
             return;
 
+        var report = new AcceptanceGateIntegrityNormalizeReport();
         labeler ??= new IcaclsIntegrityLabeler();
         if (labeler is IcaclsIntegrityLabeler native)
             labeler = new AcceptanceGateIntegrityLabeler(native);
         try
         {
-            SetAndConfirm(path, recursive: false, directory: true, labeler);
+            report.MeasureEntry(".", () => Relabel(path, directory: true));
             // Existing build outputs can have explicit Low labels even after the root changes.
             // Keep worker-private scratch and Git metadata under their existing owners.
             var root = new DirectoryInfo(path);
-            var pending = new Stack<DirectoryInfo>();
-            pending.Push(root);
-            while (pending.TryPop(out var parent))
+            foreach (var topLevel in root.EnumerateFileSystemInfos())
             {
-                foreach (var child in parent.EnumerateFileSystemInfos())
+                // Measure the whole subtree, including label reads and traversal.
+                report.MeasureEntry(topLevel.Name, () =>
                 {
-                    var attributes = child.Attributes;
-                    // Never label or traverse links, including dangling junctions. Recursive
-                    // icacls calls cannot enforce this boundary, so visit each entry ourselves.
-                    if ((attributes & FileAttributes.ReparsePoint) != 0 ||
-                        (parent == root &&
-                         (child.Name.Equals(".mcg-sandbox", StringComparison.OrdinalIgnoreCase) ||
-                          child.Name.Equals(".git", StringComparison.OrdinalIgnoreCase))))
-                        continue;
+                    var pending = new Stack<DirectoryInfo>();
+                    Visit(topLevel, topLevelEntry: true, pending);
+                    while (pending.TryPop(out var parent))
+                        foreach (var child in parent.EnumerateFileSystemInfos())
+                            Visit(child, topLevelEntry: false, pending);
+                });
+            }
+            report.WriteSuccess();
 
-                    var directory = (attributes & FileAttributes.Directory) != 0;
-                    SetAndConfirm(child.FullName, recursive: false, directory, labeler);
-                    if (directory)
-                        pending.Push((DirectoryInfo)child);
+            void Visit(FileSystemInfo child, bool topLevelEntry, Stack<DirectoryInfo> pending)
+            {
+                var attributes = child.Attributes;
+                // Never label or traverse links, including dangling junctions. Recursive
+                // icacls calls cannot enforce this boundary, so visit each entry ourselves.
+                if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                    (topLevelEntry &&
+                     (child.Name.Equals(".mcg-sandbox", StringComparison.OrdinalIgnoreCase) ||
+                      child.Name.Equals(".git", StringComparison.OrdinalIgnoreCase))))
+                {
+                    report.CountSkip();
+                    return;
                 }
+
+                var directory = (attributes & FileAttributes.Directory) != 0;
+                Relabel(child.FullName, directory);
+                if (directory)
+                    pending.Push((DirectoryInfo)child);
+            }
+
+            void Relabel(string entryPath, bool directory)
+            {
+                report.CountEntry();
+                if (labeler is IAcceptanceGateSelectiveIntegrityLabeler &&
+                    !AcceptanceGateIntegritySelection.NeedsRelabel(labeler.Query(entryPath), directory))
+                    return;
+                SetAndConfirm(entryPath, recursive: false, directory, labeler);
+                report.CountRelabel();
             }
         }
         catch (AcceptanceGateIntegrityPreparationException) { throw; }

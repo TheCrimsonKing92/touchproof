@@ -67,6 +67,8 @@ internal static class AttentionReadGoalSelection
                 .Select(item => item.GoalId!))
             .Where(id => goals.TryGetValue(id, out var goal) &&
                 !nonLiveStatuses.Contains(goal.Status, StringComparer.OrdinalIgnoreCase))
+            .Concat(openWaits.Where(wait => goals.TryGetValue(wait.GoalId, out var goal) &&
+                PostLandingFollowUpAttention.IsFollowUp(goal, wait)).Select(wait => wait.GoalId))
             .Concat((postLandingDutyGoalIds ?? []).Select(id => id.Value).Where(goals.ContainsKey))
             .Select(id => goals[id].Id)
             .Distinct(StringComparer.OrdinalIgnoreCase)

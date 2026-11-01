@@ -116,7 +116,7 @@ public sealed partial class AgentOrchestratorKernel
             var gate = BuildTaskVerificationGate(goal, task);
             if (task.Status == WorkTaskStatus.Failed)
             {
-                var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+                var message = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery)
                     ? BuildDirtyDispatchRecoveryMessage(recovery)
                     : $"{task.RequiredRole}: {task.Description}";
                 items.Add(new NextActionItem(
@@ -128,7 +128,7 @@ public sealed partial class AgentOrchestratorKernel
 
             if (gate.GateStatus == VerificationGateStatus.FailedVerification)
             {
-                var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)
+                var message = DirtyDispatchEvidence.TryBuildDirtyDispatchRecovery(task, out var recovery)
                     ? BuildDirtyDispatchRecoveryMessage(recovery)
                     : gate.Message;
                 items.Add(new NextActionItem(
