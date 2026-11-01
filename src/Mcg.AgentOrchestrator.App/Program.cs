@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+Mcg.AgentOrchestrator.App.Cli.CliTimingRecorder.Install(args);
 CliProtectedProcessEnvironment.EnsureProtectedPid();
 
 if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand)

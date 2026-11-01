@@ -1,5 +1,8 @@
 @echo off
 setlocal
+set "MCG_CLI_LAUNCHER_STARTED_UTC="
+for /f "delims=" %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToString('o')" 2^>nul') do set "MCG_CLI_LAUNCHER_STARTED_UTC=%%T"
+set "MCG_CLI_LAUNCHER_PATH=fresh"
 set "ROOT=%~dp0"
 set "MCG_ORCHESTRATOR_REPOSITORY_ROOT=%ROOT%"
 set "LOCK_DIR=%ROOT%.build-lock"
@@ -65,6 +68,7 @@ rmdir /s /q "%LOCK_DIR%" 2>nul
 if %BUILD_EXIT% neq 0 goto build_failed
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Update-AppDllGitHeadMarker.ps1" "%ROOT%." "%APP_HEAD%"
 del "%BUILD_LOG%" 2>nul
+set "MCG_CLI_LAUNCHER_PATH=built"
 
 :run_app
 :: Run from an isolated copy of the complete app closure under %TEMP%\mcg-run\v2\<digest>.
