@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class PullRequestLandingDelivery
 {
     private const string PendingRecordPrefix = "pull request delivery pending recording: ";
+    internal const string ClosedUnmergedPrefix = "pull request closed unmerged: ";
     public static bool Applies(OrchestratorWorkspace? workspace) => workspace is { IsProjectScoped: true, Delivery: ProjectDelivery.PullRequest };
     public static bool IsDeliveredForReview(string reason) => reason.StartsWith("delivered for review: ", StringComparison.Ordinal);
 
