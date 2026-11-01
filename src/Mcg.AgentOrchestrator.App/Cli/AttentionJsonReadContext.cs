@@ -8,7 +8,8 @@ internal sealed record AttentionJsonReadContext(
     IReadOnlyList<HumanInputRequest> Waits, IReadOnlyList<CollaborationItem> Items,
     IReadOnlyList<ProviderUsageHoldRow> ProviderHolds, IReadOnlyList<AttentionGateEvidence> GateEvidence,
     IReadOnlyList<OwnerQuestionHoldBlocker> OwnerQuestions,
-    IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null)
+    IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null,
+    IReadOnlyCollection<Goal>? Goals = null)
 {
     internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
         OrchestratorWorkspace workspace, DateTimeOffset now, CancellationToken cancellationToken = default)
@@ -58,7 +59,7 @@ internal sealed record AttentionJsonReadContext(
             CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false),
             ProviderUsageHoldView.ReadEvidence(projection.ProviderEvidence, now, kernel.Goals),
             options.IncludeGateEvidence ? projection.GateEvidence : [],
-            projection.OwnerQuestions.Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties);
+            projection.OwnerQuestions.Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
@@ -74,7 +75,7 @@ internal sealed record AttentionJsonReadContext(
         kernel.Goals.Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
             .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>().ToArray(),
         kernel.Goals.SelectMany(goal => goal.OutstandingPostLandingDuties
-            .Select(item => new AttentionPostLandingDuty(goal.Id.Value, item))).ToArray());
+            .Select(item => new AttentionPostLandingDuty(goal.Id.Value, item))).ToArray(), kernel.Goals);
 
     private static OwnerQuestionHoldBlocker ReadOwnerQuestion(AttentionOwnerQuestionEvidence evidence)
     {
