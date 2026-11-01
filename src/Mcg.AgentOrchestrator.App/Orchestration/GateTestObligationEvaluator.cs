@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateTestObligationEvaluator
 {
-    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived }
+    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded }
 
     internal sealed record RenameScope(string RepositoryDirectory, string IntegrationBranch);
 
@@ -17,12 +17,17 @@ internal static class GateTestObligationEvaluator
         IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null,
         CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
         IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
-        IReadOnlyList<string>? ClosestIdentities = null)
+        IReadOnlyList<string>? ClosestIdentities = null,
+        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rename.OldClass} new={rename.NewClass} old_path={rename.OldPath} new_path={rename.NewPath} " +
             $"similarity={rename.Similarity} evidence={rename.Evidence} source={SourceId}"));
+
+        internal string TraitExclusionProvenance => string.Join("; ", (TraitExclusions ?? []).Select(exclusion =>
+            $"GATE_TEST_OBLIGATION_TRAIT_EXCLUDED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
+            $"selector={exclusion.Selector} reason={string.Join(',', exclusion.Reasons)} source={SourceId}"));
 
         internal string AnswerRebindProvenance => string.Join("; ", (AnswerRebinds ?? []).Select(rebind =>
             $"GATE_TEST_OBLIGATION_ANSWER_REBOUND id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -74,6 +79,8 @@ internal static class GateTestObligationEvaluator
             result = result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
                 ? FollowAnswerRebinds(result, sources, orchestratorDirectory,
                     AnsweredSelectorRebinding.For(goal, obligation, answeredRequests)) : result;
+            if (result.Outcome == Outcome.SelectorNotFound && !string.IsNullOrWhiteSpace(candidateSha))
+                result = GateTestObligationTraitExclusionFollow.Follow(result, sources, orchestratorDirectory, candidateSha);
             if (result.Outcome == Outcome.Satisfied &&
                 sources.FirstOrDefault(source => source.Id == result.SourceId)?.CarriedFrom is { } from)
                 result = result with { CarryForward = new(goal.Id.Value, from, candidateSha!) };

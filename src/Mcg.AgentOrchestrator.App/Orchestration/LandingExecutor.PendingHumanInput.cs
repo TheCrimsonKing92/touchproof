@@ -38,8 +38,13 @@ internal static partial class LandingExecutor
             Console.WriteLine(line);
         foreach (var line in obligations.SelectMany(result => result.PackageResolutionProvenance))
             Console.WriteLine(line);
+        foreach (var result in obligations.Where(result =>
+            result.Outcome is GateTestObligationEvaluator.Outcome.TraitExcluded or GateTestObligationEvaluator.Outcome.SelectorNotFound &&
+            result.TraitExclusionProvenance.Length > 0))
+            Console.WriteLine(result.TraitExclusionProvenance);
         var obligationLines = obligations
-            .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
+            .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or
+                GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded))
             .Select(result =>
             {
                 var outcome = result.Outcome switch
