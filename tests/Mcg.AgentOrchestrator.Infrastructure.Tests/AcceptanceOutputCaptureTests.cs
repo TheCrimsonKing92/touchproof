@@ -15,7 +15,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
     {
         const string stdoutTarget = @"\\.\pipe\mcg-test-stdout";
         const string stderrTarget = @"\\.\pipe\mcg-test-stderr";
-        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
             ["dotnet", "test"],
             Path.GetTempPath(),
             stdoutTarget,
@@ -50,7 +50,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         {
             var limitNotifications = 0;
             await using var source = new MemoryStream(payload);
-            var result = await GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            var result = await AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                 source,
                 path,
                 limitBytes: 512,
@@ -87,7 +87,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         try
         {
             await using var source = new MemoryStream(payload);
-            var result = await GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            var result = await AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                 source,
                 path,
                 limitBytes: payload.Length + 1,
@@ -95,7 +95,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
                 onLimitReached: null,
                 CancellationToken.None);
 
-            var output = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+            var output = await GoalAcceptanceVerifierCaptureCustody.ReadCapturedFileWithRetryAsync(
                 path,
                 captureLimitReached: false);
 
@@ -120,7 +120,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         var delayRequested = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        var drain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             source,
             path,
             limitBytes: 1024,
@@ -159,7 +159,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         var payload = Encoding.UTF8.GetBytes("terminal flush still preserves exact output");
         await using var source = new HeldOpenAfterPayloadStream(payload);
         var delayRequests = 0;
-        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        var drain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             source,
             path,
             limitBytes: 1024,
@@ -204,10 +204,10 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         var stderrVisible = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var stdoutWatcher = WatchVisiblePayload(stdoutPath, stdoutPayload.Length, stdoutVisible);
         using var stderrWatcher = WatchVisiblePayload(stderrPath, stderrPayload.Length, stderrVisible);
-        var stdoutDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        var stdoutDrain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             stdoutSource, stdoutPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None,
             publicationInterval: TimeSpan.FromMilliseconds(50));
-        var stderrDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        var stderrDrain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             stderrSource, stderrPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None,
             publicationInterval: TimeSpan.FromMilliseconds(50));
         try
@@ -239,7 +239,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         var payload = Encoding.UTF8.GetBytes("consumed bytes survive drain cancellation");
         await using var source = new HeldOpenAfterPayloadStream(payload);
         using var cancellation = new CancellationTokenSource();
-        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+        var drain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
             source,
             path,
             limitBytes: 1024,
@@ -290,19 +290,19 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
                 arguments = ["/bin/sh", "-c", "dd if=/dev/zero bs=65536 count=16 2>/dev/null; read line"];
             }
 
-            var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, Path.GetTempPath());
+            var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, Path.GetTempPath());
             startInfo.RedirectStandardInput = true;
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start redirected capture producer.");
             var limitReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var stdoutDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            var stdoutDrain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                 process.StandardOutput.BaseStream,
                 stdoutPath,
                 limitBytes,
                 () => DateTimeOffset.UnixEpoch,
                 () => limitReached.TrySetResult(),
                 CancellationToken.None);
-            var stderrDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            var stderrDrain = AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                 process.StandardError.BaseStream,
                 stderrPath,
                 limitBytes,
@@ -339,7 +339,7 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
     {
         using var writer = new StringWriter();
 
-        GoalAcceptanceVerifier.EmitCaptureLimitReached(
+        GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached(
             "0123456789abcdef",
             Path.Combine("attempts", "run-42"),
             @"C:\temp\capture.out",

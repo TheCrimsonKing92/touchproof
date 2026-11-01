@@ -445,7 +445,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         string workingDirectory,
         string stdoutPipePath,
         string stderrPipePath) =>
-        GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+        GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
             command,
             workingDirectory,
             stdoutPipePath,

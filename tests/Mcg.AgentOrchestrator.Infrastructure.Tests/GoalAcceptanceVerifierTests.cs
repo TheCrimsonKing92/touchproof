@@ -206,7 +206,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     [Xunit.InlineData(0xB7)]
     public void GoalAcceptanceVerifierDecodesLegacyConsoleBytesWithoutReplacement(int legacyByte)
     {
-        var output = GoalAcceptanceVerifier.DecodeCapturedOutput(
+        var output = GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(
             [.. Encoding.ASCII.GetBytes("case:"), (byte)legacyByte, (byte)legacyByte, (byte)legacyByte]);
 
         Assert.StartsWith("case:", output, StringComparison.Ordinal);
@@ -220,7 +220,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_prefers_strict_UTF8_over_legacy_console_decoding")]
     public void GoalAcceptanceVerifierPrefersStrictUtf8OverLegacyConsoleDecoding()
     {
-        var output = GoalAcceptanceVerifier.DecodeCapturedOutput(Encoding.UTF8.GetBytes("case:···"));
+        var output = GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(Encoding.UTF8.GetBytes("case:···"));
 
         Assert.Equal("case:···", output);
         Assert.DoesNotContain("Â·", output, StringComparison.Ordinal);
@@ -233,8 +233,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var utf8 = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(expected)).ToArray();
         var utf16 = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(expected)).ToArray();
 
-        Assert.Equal(expected, GoalAcceptanceVerifier.DecodeCapturedOutput(utf8));
-        Assert.Equal(expected, GoalAcceptanceVerifier.DecodeCapturedOutput(utf16));
+        Assert.Equal(expected, GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(utf8));
+        Assert.Equal(expected, GoalAcceptanceVerifierCaptureCustody.DecodeCapturedOutput(utf16));
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_reads_legacy_capture_and_tolerates_missing_file")]
@@ -245,13 +245,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         {
             await File.WriteAllBytesAsync(path, [0xFA, 0xFA, 0xFA]);
 
-            var output = await GoalAcceptanceVerifier.ReadFileWithRetryAsync(path);
+            var output = await GoalAcceptanceVerifierCaptureCustody.ReadFileWithRetryAsync(path);
 
             Assert.DoesNotContain('\uFFFD', output);
             Assert.Equal(3, output.Length);
             Assert.Equal(
                 string.Empty,
-                await GoalAcceptanceVerifier.ReadFileWithRetryAsync(path + ".missing"));
+                await GoalAcceptanceVerifierCaptureCustody.ReadFileWithRetryAsync(path + ".missing"));
         }
         finally
         {
