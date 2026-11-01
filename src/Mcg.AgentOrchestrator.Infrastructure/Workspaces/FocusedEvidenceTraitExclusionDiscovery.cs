@@ -27,11 +27,15 @@ internal sealed class FocusedEvidenceTraitExclusionDiscovery(
         }
     }
 
+    internal bool HasMatchingDeclaration(string selector) => MatchingDeclarations(selector).Any();
+
+    private IEnumerable<TypeDeclarationSyntax> MatchingDeclarations(string selector) =>
+        declarations.Where(type => QualifiedName(type).Contains(selector, StringComparison.OrdinalIgnoreCase));
+
     internal IReadOnlyList<string>? ProveExcluded(string selector, IReadOnlyList<FocusedEvidenceFilterToken> tokens,
         IReadOnlyList<(string Key, string Value)> exclusions)
     {
-        var matched = declarations.Where(type => QualifiedName(type).Contains(selector, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(QualifiedName).ToArray();
+        var matched = MatchingDeclarations(selector).GroupBy(QualifiedName).ToArray();
         if (matched.Length == 0) return null;
         var reasons = new SortedSet<string>(StringComparer.Ordinal);
         var discovered = 0;

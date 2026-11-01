@@ -148,21 +148,86 @@ public sealed class GateTestObligationTraitExcludedTests
         fixture.AssertLanding(result, ["OrdinaryTests"]);
     }
 
-    [Fact]
-    public void PendingCheckAlongsideHostSelector_PreservesLandingHold()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PassedCheckAlongsideHostSelector_RegradesRemainingSelectors(bool misspelled)
     {
-        using var fixture = new Fixture(["HostTests", "policy check"]);
+        using var fixture = new Fixture(misspelled
+            ? ["HostTests", "policy check", "MisspeltTests"] : ["HostTests", "policy check"]);
         fixture.WriteAttempt();
-        fixture.AssertBaselineHold("HostTests", "policy check");
+        fixture.BindExecution();
+        fixture.WriteManifest(includePendingCheck: true);
+        fixture.WriteCheckOutcome(true);
+
+        var result = fixture.Evaluate();
+
+        Assert.Equal(misspelled ? GateTestObligationEvaluator.Outcome.SelectorNotFound
+            : GateTestObligationEvaluator.Outcome.TraitExcluded, result.Outcome);
+        if (misspelled) Assert.Equal(new[] { "MisspeltTests" }, result.Selectors);
+        AssertExclusion(fixture, result);
+        fixture.AssertLanding(result, misspelled ? ["MisspeltTests"] : []);
+    }
+
+    [Theory]
+    [InlineData("absent", true)]
+    [InlineData("excluded", true)]
+    [InlineData("ordinary", false)]
+    [InlineData("unproven", false)]
+    [InlineData("unfiltered", false)]
+    public void MultipleProjects_RequireProofOnlyFromEveryMatchingProject(string scenario, bool excluded)
+    {
+        var otherSource = scenario switch
+        {
+            "absent" => "public class OtherTests { [Xunit.Fact] public void Check() { } }",
+            "ordinary" => "namespace Other; public class HostTests { [Xunit.Fact] public void Check() { } }",
+            "unproven" => "namespace Other; " + HostSource.Replace("class HostTests",
+                "class HostTests : BaseTests", StringComparison.Ordinal) + " public class BaseTests { }",
+            _ => "namespace Other; " + HostSource
+        };
+        using var fixture = new Fixture(["HostTests"], additionalProjects:
+        [
+            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Other/Mcg.AgentOrchestrator.Infrastructure.Other.Tests.csproj",
+                scenario == "unfiltered" ? "public class OtherTests { }" : otherSource),
+            (scenario == "unfiltered"
+                ? "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"
+                : "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Empty/Mcg.AgentOrchestrator.Infrastructure.Empty.Tests.csproj",
+                scenario == "unfiltered" ? otherSource : "public class UnrelatedTests { }")
+        ]);
+        fixture.WriteAttempt();
+        fixture.AssertBaselineHold();
+        fixture.BindExecution();
+
+        var result = fixture.Evaluate();
+
+        if (excluded)
+        {
+            Assert.Equal(GateTestObligationEvaluator.Outcome.TraitExcluded, result.Outcome);
+            AssertExclusion(fixture, result);
+        }
+        else AssertUnexcludedHold(result, "HostTests");
+        fixture.AssertLanding(result, excluded ? [] : ["HostTests"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PendingCheckAlongsideHostSelector_PreservesLandingHold(bool misspelled)
+    {
+        using var fixture = new Fixture(misspelled
+            ? ["HostTests", "policy check", "MisspeltTests"] : ["HostTests", "policy check"]);
+        fixture.WriteAttempt();
         fixture.BindExecution();
         fixture.WriteManifest(includePendingCheck: true);
 
         var result = fixture.Evaluate();
 
-        Assert.Equal(GateTestObligationEvaluator.Outcome.SelectorNotFound, result.Outcome);
-        Assert.Equal(new[] { "policy check" }, result.Selectors);
+        Assert.Equal(misspelled ? GateTestObligationEvaluator.Outcome.SelectorNotFound
+            : GateTestObligationEvaluator.Outcome.Pending, result.Outcome);
+        var unresolved = misspelled ? new[] { "MisspeltTests" } : new[] { "policy check" };
+        Assert.Equal(unresolved, result.Selectors);
         AssertExclusion(fixture, result);
-        fixture.AssertLanding(result, ["policy check"]);
+        fixture.AssertLanding(result, unresolved);
     }
 
     private static void AssertExclusion(Fixture fixture, GateTestObligationEvaluator.Result result)
@@ -187,6 +252,7 @@ public sealed class GateTestObligationTraitExcludedTests
     {
         private const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
         private readonly ProspectiveEvidenceGateFixture _evidence = new();
+        private readonly List<string> _projects = [Project];
         private string _metadataPath = "";
         internal AgentOrchestratorKernel Kernel { get; }
         internal Goal Goal { get; }
@@ -195,7 +261,8 @@ public sealed class GateTestObligationTraitExcludedTests
         internal string AttemptId { get; private set; } = "";
         internal string ManifestPath => Path.Combine(_evidence.Root, "config", "acceptance-manifest.json");
 
-        internal Fixture(string[] selectors, string? source = null)
+        internal Fixture(string[] selectors, string? source = null,
+            (string Project, string Source)[]? additionalProjects = null)
         {
             Kernel = GateTestObligationIntakeTests.Seed(_evidence.Kernel, _evidence.Goal, selectors);
             Goal = Kernel.GetGoal(_evidence.Goal.Id);
@@ -204,6 +271,14 @@ public sealed class GateTestObligationTraitExcludedTests
             File.WriteAllText(Path.Combine(WorktreeRoot, Project), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(WorktreeRoot, Path.GetDirectoryName(Project)!, "HostTests.cs"),
                 (source ?? HostSource).Replace("\r\n", "\n", StringComparison.Ordinal));
+            foreach (var (project, projectSource) in additionalProjects ?? [])
+            {
+                var directory = Path.Combine(WorktreeRoot, Path.GetDirectoryName(project)!);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(WorktreeRoot, project), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+                File.WriteAllText(Path.Combine(directory, "OtherSource.cs"), projectSource);
+                _projects.Add(project);
+            }
             TestClassRenameEvidenceTests.Git(WorktreeRoot, "init", "-b", "main");
             TestClassRenameEvidenceTests.Git(WorktreeRoot, "config", "user.name", "Trait Exclusion Test");
             TestClassRenameEvidenceTests.Git(WorktreeRoot, "config", "user.email", "trait@example.invalid");
@@ -215,11 +290,8 @@ public sealed class GateTestObligationTraitExcludedTests
         internal void WriteManifest(string runner = "mtp", string[]? arguments = null, bool includePendingCheck = false)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ManifestPath)!);
-            var checks = new List<object>
-            {
-                new { name = "infrastructure tests", type = "dotnet-test",
-                    project = Project, runner, arguments = arguments ?? Array.Empty<string>() }
-            };
+            var checks = _projects.Select(project => (object)new { name = project, type = "dotnet-test",
+                project, runner, arguments = arguments ?? Array.Empty<string>() }).ToList();
             if (includePendingCheck) checks.Add(new { name = "policy check", type = "command",
                 command = "check-policy", arguments = Array.Empty<string>() });
             File.WriteAllText(ManifestPath, JsonSerializer.Serialize(new { checks }));
@@ -244,7 +316,17 @@ public sealed class GateTestObligationTraitExcludedTests
             var receipt = Assert.Single(ProspectiveEvidenceGateResolver.ReadAttempts(
                 _evidence.OrchestratorDirectory, Goal.Id, Candidate));
             Assert.Equal(WorktreeRoot, receipt.WorktreeRoot);
-            Assert.Single(receipt.Checks!.Declared);
+            Assert.Equal(_projects.Count, receipt.Checks!.Declared.Count);
+        }
+
+        internal void WriteCheckOutcome(bool passed)
+        {
+            GateTestObligationCheckOutcomeTests.WriteResult(_evidence, AttemptId, criteria:
+                [new { name = "policy check", passed }]);
+            var receipt = Assert.Single(ProspectiveEvidenceGateResolver.ReadAttempts(
+                _evidence.OrchestratorDirectory, Goal.Id, Candidate));
+            Assert.Equal(passed ? GateCheckSelectorMatcher.Outcome.Satisfied : GateCheckSelectorMatcher.Outcome.Failed,
+                GateCheckSelectorMatcher.Grade("policy check", receipt.Checks));
         }
 
         internal GateTestObligationEvaluator.Result Evaluate() => Assert.Single(
@@ -275,7 +357,8 @@ public sealed class GateTestObligationTraitExcludedTests
                     var line = Assert.Single(landing.ObligationLines);
                     Assert.Equal($"gate test obligation {Assert.Single(Goal.GateTestObligations).Id[..8]} " +
                         $"(brief v{Goal.AuthoritativeBrief.Version}) " +
-                        $"{(result.Outcome == GateTestObligationEvaluator.Outcome.Failed ? "failed" : "selector-not-found")}: " +
+                        $"{(result.Outcome == GateTestObligationEvaluator.Outcome.Failed ? "failed" :
+                            result.Outcome == GateTestObligationEvaluator.Outcome.Pending ? "pending" : "selector-not-found")}: " +
                         $"{string.Join(", ", unresolved)}; source {AttemptId}", line);
                     Assert.Equal(line, landing.HoldDescription);
                 }

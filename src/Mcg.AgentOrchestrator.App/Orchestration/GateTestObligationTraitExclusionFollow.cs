@@ -14,13 +14,19 @@ internal static class GateTestObligationTraitExclusionFollow
         var source = sources.FirstOrDefault(item => item.Id == result.SourceId);
         if (source?.Checks is not { } checks || string.IsNullOrWhiteSpace(source.WorktreeRoot)) return result;
 
+        var (evidence, pending, _) = ReadSelectorEvidence(result.Obligation.Selectors, source, orchestratorDirectory);
+        var candidates = evidence.Where(item => result.Selectors.Contains(item.Selector, StringComparer.Ordinal) &&
+            item.Passed + item.Failed + item.Superseded + item.Skipped == 0 && item.AmbiguousClassNames is null &&
+            GateCheckSelectorMatcher.Grade(item.Selector, checks) == GateCheckSelectorMatcher.Outcome.NotApplicable).ToArray();
+        if (candidates.Length == 0) return result;
+
         // The source is the live candidate worktree. HEAD must match the receipt;
         // this does not attest uncommitted edits in that worktree.
         var head = GitCli.Run(source.WorktreeRoot, "rev-parse", "HEAD");
         if (!head.Succeeded || head.DrainTimedOut ||
             !string.Equals(head.Output.Trim(), candidateSha, StringComparison.OrdinalIgnoreCase)) return result;
 
-        var projects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var projects = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (var check in checks.Declared.Where(check =>
             string.Equals(check.Type, "dotnet-test", StringComparison.OrdinalIgnoreCase)))
         {
@@ -33,35 +39,28 @@ internal static class GateTestObligationTraitExclusionFollow
             var excludes = AcceptanceCheckCommandBuilder.NeedsUnattendedHostIntegrationExclusion(check) &&
                 (AcceptanceCheckCommandBuilder.UsesMicrosoftTestingPlatform(check) ||
                     string.IsNullOrWhiteSpace(filter));
-            if (excludes)
-                projects.Add(check.Project.Replace('\\', '/'));
-            else if (!string.IsNullOrWhiteSpace(filter) || check.Arguments.Any(argument =>
-                argument.StartsWith("--filter", StringComparison.OrdinalIgnoreCase)))
-                return result;
+            if (!excludes && (!string.IsNullOrWhiteSpace(filter) || check.Arguments.Any(argument =>
+                argument.StartsWith("--filter", StringComparison.OrdinalIgnoreCase)))) return result;
+            var project = check.Project.Replace('\\', '/');
+            projects[project] = excludes && (!projects.TryGetValue(project, out var previous) || previous);
         }
-        if (projects.Count == 0) return result;
+        if (!projects.Values.Any(excludes => excludes)) return result;
 
-        var discoveries = projects.Select(project =>
-            FocusedEvidenceTraitExclusionDiscovery.Read(source.WorktreeRoot, project)).ToArray();
-        if (discoveries.Any(discovery => discovery is null)) return result;
+        var discoveries = projects.Select(project => (Excludes: project.Value,
+            Discovery: FocusedEvidenceTraitExclusionDiscovery.Read(source.WorktreeRoot, project.Key))).ToArray();
+        if (discoveries.Any(item => item.Discovery is null)) return result;
 
-        // Recheck all selectors: Grade's unmatched list omits pending checks and
-        // superseded-only evidence, which must not be mistaken for satisfied tests.
-        var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
-            result.Obligation.Selectors, source.Paths, orchestratorDirectory);
         var proven = new List<TraitExclusion>();
-        foreach (var item in evidence.Where(item => result.Selectors.Contains(item.Selector, StringComparer.Ordinal)))
+        foreach (var item in candidates)
         {
-            if (item.Passed + item.Failed + item.Superseded + item.Skipped > 0 ||
-                item.AmbiguousClassNames is not null ||
-                GateCheckSelectorMatcher.Grade(item.Selector, checks) != GateCheckSelectorMatcher.Outcome.NotApplicable) continue;
             var reasons = new SortedSet<string>(StringComparer.Ordinal);
             var covered = true;
-            foreach (var discovery in discoveries)
+            foreach (var (excludes, discovery) in discoveries)
             {
-                var proof = discovery!.ProveExcluded(item.Selector, [], [("Category", "HostIntegration")]);
-                // Null also means no matching class. Never infer coverage from
-                // a proof in just one of several potentially matching projects.
+                // Absence is distinct from a matching declaration whose exclusion cannot be proved.
+                // Use discovery's own matching rule; every matching project must supply a proof.
+                if (!discovery!.HasMatchingDeclaration(item.Selector)) continue;
+                var proof = excludes ? discovery.ProveExcluded(item.Selector, [], [("Category", "HostIntegration")]) : null;
                 if (proof is not { Count: > 0 })
                 {
                     covered = false;
@@ -69,20 +68,19 @@ internal static class GateTestObligationTraitExclusionFollow
                 }
                 reasons.UnionWith(proof);
             }
-            if (covered) proven.Add(new(item.Selector, reasons.ToArray()));
+            if (covered && reasons.Count > 0) proven.Add(new(item.Selector, reasons.ToArray()));
         }
         if (proven.Count == 0) return result;
 
         var excluded = proven.Select(item => item.Selector).ToHashSet(StringComparer.Ordinal);
-        var remaining = result.Selectors.Where(selector => !excluded.Contains(selector)).ToArray();
-        if (remaining.Length == 0 && evidence.All(item => excluded.Contains(item.Selector) ||
-            item.Satisfied && GateCheckSelectorMatcher.Grade(item.Selector, checks) is not
-                (GateCheckSelectorMatcher.Outcome.Pending or GateCheckSelectorMatcher.Outcome.Failed)))
-            return result with { Outcome = Outcome.TraitExcluded, TraitExclusions = proven };
+        var graded = Grade(result.Obligation, source.Id, evidence.Where(item =>
+            !excluded.Contains(item.Selector) && !pending.Contains(item.Selector)).ToArray());
+        if (graded.Outcome == Outcome.Satisfied)
+            return pending.Count == 0
+                ? result with { Outcome = Outcome.TraitExcluded, TraitExclusions = proven }
+                : result with { Outcome = Outcome.Pending,
+                    Selectors = result.Obligation.Selectors.Where(pending.Contains).ToArray(), TraitExclusions = proven };
 
-        // Keep the unresolved evidence visible even if Grade omitted it originally.
-        var unresolved = remaining.Concat(evidence.Where(item => !item.Satisfied && !excluded.Contains(item.Selector))
-            .Select(item => item.ReportedEntry)).Distinct(StringComparer.Ordinal).ToArray();
-        return result with { Selectors = unresolved, TraitExclusions = proven };
+        return result with { Outcome = graded.Outcome, Selectors = graded.Selectors, TraitExclusions = proven };
     }
 }
