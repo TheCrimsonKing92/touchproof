@@ -67,6 +67,7 @@ public sealed partial class BackgroundDispatchRunner
     public IWorkerBuildInvocationOperations? WorkerBuildInvocations { get; init; }
     public Func<bool>? ExecutionThrottlingOptOut { get; init; }
     public Func<IReadOnlyList<DeclaredToolHome>>? DeclaredToolHomes { get; init; }
+    public Func<string, NodeDependencyInstall?>? NodeDependencyInstall { get; init; }
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -353,7 +354,8 @@ public sealed partial class BackgroundDispatchRunner
                 .ToArray(),
             ClaudeCredentialSelection: credentialSelection,
             TaskIntentAdmission: taskIntentAdmission,
-            StartGatePath: startGatePath, OptOutExecutionThrottling: ExecutionThrottlingOptOut?.Invoke() == true);
+            StartGatePath: startGatePath, OptOutExecutionThrottling: ExecutionThrottlingOptOut?.Invoke() == true,
+            NodeDependencyInstall: NodeDependencyInstall?.Invoke(dispatch.WorkingDirectory));
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
