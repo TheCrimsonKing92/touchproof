@@ -483,8 +483,8 @@ public sealed partial class AgentOrchestratorKernel
                 StringComparison.Ordinal))
         {
             task.RecordCompletionVerdict(false, TaskOutcomeRules.DetachedWithoutWorkerResult.Token);
-            var detachedRounds = DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task);
-            if (detachedRounds <= DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit)
+            var detachedRounds = DetachedWithoutWorkerResultRounds.CountConsecutiveDetachedWithoutWorkerResultRounds(task);
+            if (detachedRounds <= DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(detachedRounds));
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
@@ -494,7 +494,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal,
                     taskId,
                     ProgressKind.TaskRetried,
-                    $"Dispatch was gracefully detached and exited without a WORKER_RESULT; task is ready to retry after bounded backoff (attempt {detachedRounds}/{DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit}): {task.LastDispatch.Command}");
+                    $"Dispatch was gracefully detached and exited without a WORKER_RESULT; task is ready to retry after bounded backoff (attempt {detachedRounds}/{DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit}): {task.LastDispatch.Command}");
                 RefreshGoalStatus(goal);
                 return;
             }
@@ -503,7 +503,7 @@ public sealed partial class AgentOrchestratorKernel
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
-                $"Dispatch detached-without-worker-result repeated {detachedRounds} consecutive time(s); automatic retry budget {DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit} exhausted: {task.LastDispatch.Command}");
+                $"Dispatch detached-without-worker-result repeated {detachedRounds} consecutive time(s); automatic retry budget {DetachedWithoutWorkerResultRounds.DetachedWithoutWorkerResultRetryLimit} exhausted: {task.LastDispatch.Command}");
             return;
         }
 
