@@ -72,7 +72,7 @@ public sealed class ConductorStartHandleIsolationTests
         var stdoutPath = value.GetProperty("stdoutPath").GetString()!;
         var stderrPath = value.GetProperty("stderrPath").GetString()!;
         Assert.Equal($"Conductor launched: pid {conductor.Id}; stdout log: {stdoutPath}" + Environment.NewLine +
-            "Check status: mcg-orchestrator.cmd conductor status" + Environment.NewLine, text);
+            "Check status: touchproof.cmd conductor status" + Environment.NewLine, text);
         Assert.Equal(Path.Combine(fixture.Root, ".orchestrator", "logs"), Path.GetDirectoryName(stdoutPath));
         Assert.Equal(Path.GetDirectoryName(stdoutPath), Path.GetDirectoryName(stderrPath));
         Assert.Matches(@"^operator-conduct-loop-daemon-\d{14}\.out\.log$", Path.GetFileName(stdoutPath));

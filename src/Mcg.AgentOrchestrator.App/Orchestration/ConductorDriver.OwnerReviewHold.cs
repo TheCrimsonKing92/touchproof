@@ -143,7 +143,7 @@ internal sealed partial class ConductorDriver
         "checks=" + string.Join(", ", acceptance.RequiredUnmetCriteria.Select(check => check.Name)) + Environment.NewLine +
         "changed-protected-fields=" + string.Join(Environment.NewLine, acceptance.RequiredUnmetCriteria.Select(check => OwnerReviewFields(check.OutputTail))) + Environment.NewLine +
         (fingerprint is null ? "" : $"fingerprint={fingerprint}{Environment.NewLine}") +
-        $"approve: .\\mcg-orchestrator.cmd approve-policy-change {prefix} {sha} --text-file <reason-file>" + Environment.NewLine +
+        $"approve: .\\touchproof.cmd approve-policy-change {prefix} {sha} --text-file <reason-file>" + Environment.NewLine +
         $"decline: cancel-goal {prefix} or abandon-goal {prefix}";
 
     private static string OwnerReviewFields(string? output)

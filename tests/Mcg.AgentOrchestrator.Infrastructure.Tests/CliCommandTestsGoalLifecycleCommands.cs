@@ -1013,7 +1013,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var help = CaptureConsole(() => Xunit.Assert.True(
             CliCommandHelp.TryPrintStartupHelp(["--help"])));
-        Xunit.Assert.Contains("Usage: mcg-orchestrator", help, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Usage: touchproof", help, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("operator-listen", help, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("operator-channel", help, StringComparison.OrdinalIgnoreCase);
         var error = Xunit.Assert.Throws<ArgumentException>(() =>
