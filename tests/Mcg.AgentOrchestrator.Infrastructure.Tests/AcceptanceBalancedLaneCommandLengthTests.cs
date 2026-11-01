@@ -18,12 +18,12 @@ public sealed class AcceptanceBalancedLaneCommandLengthTests : IDisposable
             var args = Arguments(lane);
             var spill = AcceptanceMtpFilterResponseFile.Plan(args);
             Assert.NotNull(spill.ResponseFilePath);
-            Assert.True(args.Sum(argument => argument.Length + 3) > GoalAcceptanceVerifier.MaxCmdCommandLineLength);
+            Assert.True(args.Sum(argument => argument.Length + 3) > AcceptanceCmdCommandLineLimit.MaxCmdCommandLineLength);
             var start = AcceptanceShellProcessStartInfo.Build(args, _root,
                 @"\\.\pipe\balanced-out", @"\\.\pipe\balanced-err", true, null, false, out _);
             if (OperatingSystem.IsWindows())
             {
-                Assert.InRange(start.Arguments.Length, 1, GoalAcceptanceVerifier.MaxCmdCommandLineLength);
+                Assert.InRange(start.Arguments.Length, 1, AcceptanceCmdCommandLineLimit.MaxCmdCommandLineLength);
                 Assert.Contains("@", start.Arguments);
                 Assert.Equal(spill.ResponseFileText, File.ReadAllText(spill.ResponseFilePath!));
             }

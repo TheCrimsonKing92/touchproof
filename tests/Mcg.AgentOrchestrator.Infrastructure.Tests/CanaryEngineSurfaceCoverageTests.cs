@@ -75,9 +75,11 @@ public class CanaryEngineSurfaceCoverageTests
     [InlineData("AcceptanceBalancedLanePacker")]
     [InlineData("AcceptanceBalancedLanePoolSettings")]
     [InlineData("AcceptanceClassDurationHistoryStore")]
+    [InlineData("AcceptanceCmdCommandLineLimit")]
+    [InlineData("CommandLineTooLongException")]
     [InlineData("AcceptanceLaneMembership")]
     [InlineData("AcceptanceTestClassSourceScanner")]
-    public void Indirect_balanced_lane_helpers_trigger_canary(string helper)
+    public void Indirect_acceptance_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
         var path = prefix + ".cs";
