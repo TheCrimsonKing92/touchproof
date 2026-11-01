@@ -7,10 +7,14 @@ internal static class AcceptanceRetryOutputEvidence
         IReadOnlyList<string> outputEvidence,
         ref int remainingEvidenceEntries)
     {
-        var retainedCount = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
-        for (var index = 0; index < retainedCount; index++)
+        var entryLimit = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
+        var retainedCount = 0;
+        for (; retainedCount < entryLimit; retainedCount++)
         {
-            evidence.Add(outputEvidence[index]);
+            var entry = AcceptanceRetryEvidenceBudget.BoundLine(outputEvidence[retainedCount]);
+            if (!AcceptanceRetryEvidenceBudget.FitsOutput(evidence, entry, outputEvidence.Count - retainedCount - 1))
+                break;
+            evidence.Add(entry);
         }
 
         remainingEvidenceEntries -= retainedCount;

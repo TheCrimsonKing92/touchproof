@@ -468,6 +468,7 @@ internal sealed partial class ConductorDriver
     private static List<string> ExtractConcreteRetryEvidence(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
         var evidence = new List<string>();
+        var budget = new AcceptanceRetryEvidenceBudget();
         var remainingEvidenceEntries = MaxCriterionRetryEvidenceLines;
         foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
@@ -512,6 +513,7 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
+                var receiptLineIndex = evidence.Count;
                 evidence.Add($"TRX receipt for partition \"{criterion.Name}\": {receipt.Path}");
                 if (receipt.Failures.Count == 0)
                 {
@@ -544,42 +546,13 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
-                var omittedFailures = 0;
-                foreach (var failure in attributableFailures)
-                {
-                    if (string.IsNullOrWhiteSpace(failure.TestName))
-                    {
-                        evidence.Add(
-                            $"detail unavailable: test identity unavailable for outcome \"{failure.Outcome}\" in partition \"{criterion.Name}\" at {receipt.Path}");
-                        continue;
-                    }
-
-                    if (remainingEvidenceEntries == 0)
-                    {
-                        omittedFailures++;
-                        continue;
-                    }
-
-                    evidence.Add(FormatTrxFailureEvidence(failure));
-                    remainingEvidenceEntries--;
-                }
-
-                if (omittedFailures > 0)
-                {
-                    evidence.Add($"{omittedFailures} more failures omitted — see {receipt.Path}.");
-                }
+                budget.AppendFailures(evidence, criterion.Name, receipt.Path, receiptLineIndex,
+                    attributableFailures, ref remainingEvidenceEntries);
             }
             AppendAssemblyCleanupStderrEvidence(evidence, criterion, testResultPaths);
         }
 
-        return evidence;
-    }
-
-    private static string FormatTrxFailureEvidence(AcceptanceTrxFailure failure)
-    {
-        var message = string.IsNullOrEmpty(failure.Message) ? "failure message unavailable" : failure.Message;
-        var stackTrace = string.IsNullOrEmpty(failure.StackTrace) ? "stack trace unavailable" : failure.StackTrace;
-        return $"[FAIL] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}";
+        return budget.Complete(evidence);
     }
 
     private static string DescribeTrxReadFailure(AcceptanceTrxReadStatus status) => status switch
