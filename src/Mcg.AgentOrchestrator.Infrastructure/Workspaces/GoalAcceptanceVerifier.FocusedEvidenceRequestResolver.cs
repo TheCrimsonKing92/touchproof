@@ -19,7 +19,8 @@ internal static partial class FocusedEvidenceRequestResolver
         string worktreePath,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
-        out FocusedEvidenceRejection rejection)
+        out FocusedEvidenceRejection rejection,
+        IClassDurationHistory? durationHistory = null)
     {
         if (GoPackageFocusedEvidence.Applies(engineSettings))
             return GoPackageFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
@@ -138,6 +139,7 @@ internal static partial class FocusedEvidenceRequestResolver
         var planned = new List<FocusedEvidencePlannedCheck>();
         var batchedCompatibleItems = false;
         var unbatchedReasons = new List<string>();
+        durationHistory ??= AcceptanceClassDurationHistoryAdapter.Read(worktreePath);
         foreach (var projectGroup in validated.GroupBy(item => item.Project, StringComparer.OrdinalIgnoreCase))
         {
             var projectUnbatchedReasons = new HashSet<string>(StringComparer.Ordinal);
@@ -169,7 +171,7 @@ internal static partial class FocusedEvidenceRequestResolver
                     }
                     else
                     {
-                        var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
+                        var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key, durationHistory);
                         planned.AddRange(packedGroups);
                         if (packedGroups.Count > 1)
                         {
@@ -260,7 +262,7 @@ internal static partial class FocusedEvidenceRequestResolver
         {
             executionReason += $"+unbatched:{string.Join(',', unbatchedReasons.OrderBy(reason => reason, StringComparer.Ordinal))}";
         }
-        checks = built;
+        checks = new FocusedEvidenceCheckPlan(built, durationHistory);
         coverage = new FocusedEvidenceCoverage(
             TargetToChecks: targetToChecks,
             ExecutionMode: hasFocusedFilters && hasMappedProjects
@@ -409,10 +411,10 @@ internal static partial class FocusedEvidenceRequestResolver
             originalToken,
             $"focused evidence source discovery failed: {exception.GetType().Name}: {exception.Message}");
 
-    private static CompilationUnitSyntax ParseCSharpRoot(string path) =>
+    internal static CompilationUnitSyntax ParseCSharpRoot(string path) =>
         CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot();
 
-    private static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className)
+    internal static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className)
     {
         var requestedName = className.Trim();
         if (declaration.Identifier.ValueText.Equals(requestedName, StringComparison.Ordinal))
@@ -621,7 +623,7 @@ internal static partial class FocusedEvidenceRequestResolver
             }
 
             var methodSelector = segments[^1];
-            if (FindFocusedEvidenceTestMethodNames(classFiles, className).Any(methodName =>
+            if (FocusedEvidenceMethodResolver.FindTestMethodNames(classFiles, className).Any(methodName =>
                     methodName.StartsWith(methodSelector, StringComparison.OrdinalIgnoreCase)))
             {
                 candidates.Add(new FocusedEvidenceFilterToken(
@@ -648,31 +650,4 @@ internal static partial class FocusedEvidenceRequestResolver
         return false;
     }
 
-    internal static IReadOnlyList<string> FindFocusedEvidenceTestMethodNames(
-        IReadOnlyList<string> classFiles,
-        string className)
-    {
-        return classFiles
-            .SelectMany(path => ParseCSharpRoot(path)
-                .DescendantNodes()
-                .OfType<TypeDeclarationSyntax>())
-            .Where(declaration => FocusedEvidenceTypeMatches(declaration, className))
-            .SelectMany(declaration => declaration.Members.OfType<MethodDeclarationSyntax>())
-            .Where(method => method.AttributeLists
-                .SelectMany(list => list.Attributes)
-                .Any(attribute => IsFocusedEvidenceTestAttribute(attribute.Name.ToString())))
-            .Select(method => method.Identifier.ValueText)
-            .ToArray();
-    }
-
-    internal static bool IsFocusedEvidenceTestAttribute(string attributeName)
-    {
-        var simpleName = attributeName.Split('.').Last();
-        if (simpleName.EndsWith("Attribute", StringComparison.Ordinal))
-        {
-            simpleName = simpleName[..^"Attribute".Length];
-        }
-
-        return simpleName is "Fact" or "Theory";
-    }
 }
