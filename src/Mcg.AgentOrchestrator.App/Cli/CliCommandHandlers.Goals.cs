@@ -568,20 +568,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 inlineReason ?? reasonFromFile,
                 answerSupersessions,
                 discardFailedRefinement: resetRefinement);
-            if (resetRefinement)
-                GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
-            GoalBriefRevisionReceipt.WriteSummary(result, resetRefinement);
-            Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
-            Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
-            Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
-            if (result.RefinedCriteriaReDerived)
-            {
-                Console.WriteLine("  refined acceptance criteria:");
-                for (var index = 0; index < goal.RefinedSpec!.AcceptanceCriteria.Count; index++)
-                {
-                    Console.WriteLine($"    {index + 1}. {goal.RefinedSpec.AcceptanceCriteria[index].Trim().ReplaceLineEndings(" ")}");
-                }
-            }
+            var refinementResetOutcome = resetRefinement
+                ? GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id)
+                : (OrchestratorStateOutboxRequeueOutcome?)null;
+            GoalBriefRevisionReceipt.Write(result, goal, resetRefinement, refinementResetOutcome);
             return true;
         }
 
@@ -1961,8 +1951,4 @@ private static GoalReplacementDisposition ParseGoalReplacementDisposition(string
         });
     }
 
-private static string FormatRevisionTaskIds(IReadOnlyList<TaskId> taskIds) =>
-    taskIds.Count == 0
-        ? "none"
-        : string.Join(", ", taskIds.Select(taskId => taskId.Value[..Math.Min(8, taskId.Value.Length)]));
 }

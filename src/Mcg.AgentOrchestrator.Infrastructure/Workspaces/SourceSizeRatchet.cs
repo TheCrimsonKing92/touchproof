@@ -579,7 +579,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b adds six conductor-start probe and operator-attention wiring lines;
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
-            new SourceClassCeiling("CliCommandHandlers", 11033, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11019, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -631,7 +631,7 @@ internal static class SourceSizeRatchet
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9291, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9290, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
