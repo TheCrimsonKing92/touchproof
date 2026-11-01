@@ -104,7 +104,7 @@ public sealed class OwnerPolicyApprovalRebaseTests : IDisposable
     {
         var changed = Run(repo, "diff", "--name-only", "main...HEAD", "--")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return GoalAcceptanceVerifier.TryClassifyManifestTrustWithGitForTests(
+        return OwnerProtectedConfigurationPolicy.TryClassifyManifestTrustWithGitForTests(
             repo, changed, AcceptanceGitTextResolver.Resolve, decisions, goalId, Head(repo));
     }
 

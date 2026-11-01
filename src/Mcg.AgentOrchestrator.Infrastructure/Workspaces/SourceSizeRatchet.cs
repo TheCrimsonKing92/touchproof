@@ -601,7 +601,8 @@ internal static class SourceSizeRatchet
             // Goal a9983773 adds 11 lane-plan call-site lines; record, publisher and reader live in separate types.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration: measured 8022 lines in the existing 27 partial files, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8022, 27),
+            // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 7742, 26),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -631,7 +632,7 @@ internal static class SourceSizeRatchet
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9291, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9290, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
