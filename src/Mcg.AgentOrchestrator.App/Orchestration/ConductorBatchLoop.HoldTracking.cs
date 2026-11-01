@@ -25,6 +25,9 @@ internal sealed partial class ConductorBatchLoop
         ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, observedAt, changedGoalIds);
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-outcome",
             () => driver.PassedGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
+        PassedGateHoldFaultIsolation.Run(goal, "reconcile-awaiting-verification-outcome",
+            () => driver.AwaitingVerificationGateAttention?.Reconcile(kernel.GetGoal(goal.Id),
+                outcome is ConductorAdvanceOutcome.Held { State: GoalLifecycleState.AwaitingVerification }));
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
             if (driver.SliceBatchParentExecutionGuard?.IsSliceBatchParent(goal) == true)

@@ -856,6 +856,11 @@ internal sealed partial class ConductorBatchLoop
                 driver.PassedGateHoldAttention?.ReconcileAll(heldReceiptGoals);
                 return true;
             });
+            RunJanitorialPhase("reconcile-awaiting-verification-waits", nextTick, () =>
+            {
+                driver.AwaitingVerificationGateAttention?.ReconcileAll(heldReceiptGoals);
+                return true;
+            });
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !intentBoundary.UnavailableGoalIds.Contains(g.Id.Value)
