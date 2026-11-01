@@ -16,10 +16,10 @@ internal static class AcceptanceRetryRoutingHoldGate
                 var reason = Describe(task, now);
                 return new(state, reason, $"operator-routing-hold:{task.Id.Value}:{hold.Deadline:O}")
                 {
-                    Decision = new("acceptance-retry-operator-routing", "Hold", 1, "routing-window-open", reason,
-                        [new("task", task.Id.Value), new("round_retry_at", $"{hold.RoundRetryAt:O}"),
-                         new("failure_recorded_at", $"{hold.FailureRecordedAt:O}"),
-                         new("deadline", $"{hold.Deadline:O}"), new("observed_at", $"{now:O}")])
+                    Decision = new PolicyDecisionRecord("acceptance-retry-operator-routing", "Hold", 1, "routing-window-open", reason,
+                        [new PolicyDecisionFact("task", task.Id.Value), new PolicyDecisionFact("round_retry_at", $"{hold.RoundRetryAt:O}"),
+                         new PolicyDecisionFact("failure_recorded_at", $"{hold.FailureRecordedAt:O}"),
+                         new PolicyDecisionFact("deadline", $"{hold.Deadline:O}"), new PolicyDecisionFact("observed_at", $"{now:O}")])
                 };
             }
         }
