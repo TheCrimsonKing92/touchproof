@@ -212,7 +212,7 @@ public sealed class AcceptanceOwnerProtectedFingerprintTests : IDisposable
         string[] callers =
         [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.OwnerProtectedConfiguration.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/OwnerProtectedConfigurationPolicy.OwnerProtectedDecision.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/OwnerProtectedConfigurationPolicy.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.OwnerReviewHold.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentCoordinator.cs"
         ];
