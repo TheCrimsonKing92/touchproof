@@ -47,12 +47,12 @@ public sealed partial class GoalAcceptanceVerifier
             : ResolveOwnerResultsRepositoryRoot(configuredPath);
         if (string.IsNullOrWhiteSpace(worktreePath))
         {
-            return configuredRoot ?? Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName);
+            return configuredRoot ?? Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName);
         }
 
         var candidateRoot = ResolveOwnerResultsRepositoryRoot(worktreePath);
         if (!candidateRoot.Equals(
-                Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName),
+                Path.Combine(Path.GetTempPath(), AcceptanceTempRootNames.OwnerResultsRootDirectoryName),
                 StringComparison.OrdinalIgnoreCase))
         {
             return candidateRoot;

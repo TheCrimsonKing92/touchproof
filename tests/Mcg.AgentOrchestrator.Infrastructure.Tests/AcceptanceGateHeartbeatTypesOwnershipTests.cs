@@ -34,7 +34,6 @@ public sealed class AcceptanceGateHeartbeatTypesOwnershipTests
         foreach (var filename in new[]
         {
             "GoalAcceptanceVerifier.cs",
-            "GoalAcceptanceVerifier.HeartbeatRunClass.cs",
             "GoalAcceptanceVerifier.CaptureLimit.cs"
         })
         {

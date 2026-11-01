@@ -68,7 +68,7 @@ internal sealed class AcceptanceBalancedLanePlanWriter
             .FirstOrDefault(name => target.EndsWith(": " + name, StringComparison.Ordinal));
         if (lane is null) return;
         lock (_sync)
-            _commands[lane] = new(lane, characters, GoalAcceptanceVerifier.MaxCmdCommandLineLength, responseFile);
+            _commands[lane] = new(lane, characters, AcceptanceCmdCommandLineLimit.MaxCmdCommandLineLength, responseFile);
     }
 
     internal void AddResidualSummary(ICollection<AcceptanceCheckResult> checks)

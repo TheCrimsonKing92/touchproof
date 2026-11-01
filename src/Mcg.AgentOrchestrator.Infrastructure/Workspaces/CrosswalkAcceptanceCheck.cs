@@ -16,7 +16,7 @@ internal sealed class CrosswalkAcceptanceCheck(
 {
     // Reserve cmd.exe/pwsh quoting, arguments and heartbeat pipe redirects outside the script.
     private const int CommandWrapperMargin = 691;
-    internal const int RunCommandLineLimit = MaxCmdCommandLineLength - CommandWrapperMargin;
+    internal const int RunCommandLineLimit = AcceptanceCmdCommandLineLimit.MaxCmdCommandLineLength - CommandWrapperMargin;
 
     internal static Task<AcceptanceCheckResult> RunOwnedAsync(
         AcceptanceManifestCheck check, string worktreePath,

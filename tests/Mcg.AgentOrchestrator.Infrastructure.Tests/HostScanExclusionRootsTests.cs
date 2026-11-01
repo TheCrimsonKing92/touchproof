@@ -21,11 +21,11 @@ public sealed class HostScanExclusionRootsTests
                 inputs.LocalApplicationData, null, inputs.TempPath, true),
             DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(null, null, null, inputs.TempPath, true),
             TempRootJanitor.ResolveLowIntegrityOwnedRootParent(inputs.LocalApplicationData),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.HermeticProfileRootDirectoryName),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.FocusedEvidenceBaselinesRootDirectoryName),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.OwnerResultsRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.HermeticProfileRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.OwnerResultsRootDirectoryName),
             Path.Combine(inputs.TempPath, DotnetBuildEnvironmentManager.LandingTestsRootDirectoryName),
-            GoalAcceptanceVerifier.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile)
+            AcceptanceTempRootNames.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile)
         }.Select(HostScanExclusionRoots.NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var actual = HostScanExclusionRoots.Compute(inputs);
@@ -52,7 +52,7 @@ public sealed class HostScanExclusionRootsTests
         var inputs = FixedInputs() with { NuGetPackagesOverride = Path.GetFullPath("/host-exclusion-tests/packages") };
         var roots = HostScanExclusionRoots.Compute(inputs);
         Assert.Contains(inputs.NuGetPackagesOverride, roots);
-        Assert.DoesNotContain(GoalAcceptanceVerifier.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile), roots);
+        Assert.DoesNotContain(AcceptanceTempRootNames.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile), roots);
     }
 
     [Fact]
