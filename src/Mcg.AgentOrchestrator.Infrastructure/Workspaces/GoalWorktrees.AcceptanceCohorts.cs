@@ -263,6 +263,8 @@ public static partial class GoalWorktrees
 
     internal static string ResolveRequiredRef(string workingDirectory, string reference)
     {
+        if (GitRevisionReader.Shared.TryResolve(workingDirectory, reference, out var objectId))
+            return AcceptanceCohortMemberBinding.NormalizeRevision(objectId, nameof(reference));
         var result = GitCli.Run(workingDirectory, "rev-parse", "--verify", reference);
         if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
         {

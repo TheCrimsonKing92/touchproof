@@ -12,6 +12,8 @@ internal static partial class ConductorGitRevisionReader
 
     internal static string ReadRequiredCommit(string worktreePath, string reference)
     {
+        if (GitRevisionReader.Shared.TryResolve(worktreePath, reference, out var objectId) &&
+            TryNormalize(objectId, out var resolved)) return resolved;
         var result = GitCli.Run(worktreePath, "rev-parse", "--verify", reference);
         var commit = result.Output.Trim();
         if (!result.Succeeded || !TryNormalize(commit, out var normalized))
