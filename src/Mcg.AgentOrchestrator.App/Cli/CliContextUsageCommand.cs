@@ -35,7 +35,10 @@ internal static class CliContextUsageCommand
                 {
                     output.WriteLine($"{row.Role} | {row.Model} | dispatches={row.DispatchCount} reported-input={row.ReportedInputCount} | " +
                         $"input={Format(row.Input)} cached={Format(row.Cached)} uncached={Format(row.Uncached)} " +
-                        $"output={Format(row.Output)} harness-overhead={Format(row.HarnessOverhead)}");
+                        $"output={Format(row.Output)} harness-overhead={Format(row.HarnessOverhead)} | " +
+                        $"missing-usage={row.MissingUsageCount} reasons=" +
+                        (row.MissingUsageReasons.Count == 0 ? "none" :
+                            string.Join(",", row.MissingUsageReasons.Select(reason => $"{reason.Key}={reason.Value}"))));
                 }
             }
             return 0;
