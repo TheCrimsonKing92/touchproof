@@ -4,7 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Retry contract: acquire asynchronously during initialization, never in a git observer.
 public sealed class HostCapacitySlotOnFirstGitTests : IDisposable
 {
-    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(60);
+    private const int HangGuardMilliseconds = 60_000;
+    private static readonly TimeSpan HangGuard = TimeSpan.FromMilliseconds(HangGuardMilliseconds);
     private readonly string root = Directory.CreateTempSubdirectory("slot-async-init-").FullName;
 
     [Fact]
@@ -102,7 +103,7 @@ public sealed class HostCapacitySlotOnFirstGitTests : IDisposable
         Assert.False(File.Exists(path));
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = HangGuardMilliseconds)]
     public async Task FourTimesCapacityOfGitAndNoGitFixturesAllComplete()
     {
         var budget = new HostCapacityTestBudget(2, _ => null);
