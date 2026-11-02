@@ -107,10 +107,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
     {
         var target = helper.GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(target);
-        object?[] arguments = helper == typeof(CliCommandHandlers) ? [Context(), path]
-            : target.GetParameters().Length == 2
-                ? [path, (Func<string, string[], GitCli.GitResult>)((directory, args) => GitCli.Run(directory, args))]
-                : [path];
+        object?[] arguments = helper == typeof(CliCommandHandlers) ? [Context(), path] : [path];
         try
         {
             return (string?)target.Invoke(null, arguments);

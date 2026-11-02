@@ -1192,7 +1192,7 @@ Note: {result.Note}
             var steeringInputsHash = BuildSteeringInputsHash(
                 running,
                 now,
-                TryResolveHead(running.WorkingDirectory, _gitRunner));
+                TryResolveHead(running.WorkingDirectory));
             var steerIdentity = $"glance-{steeringInputsHash}";
             var intent = new ProgressiveReviewSteerIntent(
                 Id: steerIdentity,
@@ -1456,16 +1456,14 @@ Corrective direction:
     private static string HashLines(IReadOnlyList<string> values) =>
         HashText(string.Join("\n", values));
 
-    private static string? TryResolveHead(string? worktree, Func<string, string[], GitCli.GitResult> gitRunner)
+    private static string? TryResolveHead(string? worktree)
     {
         if (string.IsNullOrWhiteSpace(worktree))
             return null;
 
         try
         {
-            if (GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head)) return head;
-            var result = gitRunner(worktree, ["rev-parse", "HEAD"]);
-            return result.Succeeded ? result.Output.Trim() : null;
+            return GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head) ? head : null;
         }
         catch
         {
