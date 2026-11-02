@@ -62,6 +62,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "failure-triage",
     "failure-clusters",
         "storage-health",
+        "gate-stats",
     "build-attribution",
     "intent-coverage",
     "remote-executors",

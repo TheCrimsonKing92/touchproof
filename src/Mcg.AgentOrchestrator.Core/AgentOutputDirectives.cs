@@ -90,6 +90,7 @@ public static class AgentOutputDirectives
                 "Each object requires criterion_index, evidence_key, availability, needed, and reason; needed is a non-empty string naming the evidence, never true or false. " +
                 "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
+                "store_ref alone suffices; omitted store uses its kind. " +
                 "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
                 "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. " +
                 "Evidence only the landed build or live host can show: availability=post-landing, owner=operator, no store or tests; it is a post-landing check and never holds landing. " +
@@ -300,6 +301,12 @@ public static class AgentOutputDirectives
             string? evidenceOwner = null;
             if (availability.Equals("retrievable", StringComparison.OrdinalIgnoreCase))
             {
+                if (storeReference is not null && !root.TryGetProperty("store", out _))
+                {
+                    store = storeReference.Kind;
+                    hasStore = true;
+                }
+
                 if (!hasStore)
                 {
                     return MalformedEvidenceRequest("retrievable evidence must name a non-empty store");

@@ -30,6 +30,8 @@ internal sealed record ConductorActivationBuild(
 
 internal sealed partial class ConductorContinuitySupervisor
 {
+    private FleetBuildAdoptionSummary? _fleetBuildAdoptionSummary;
+
     internal const string ActivationHealthyTicksEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_HEALTHY_TICKS";
     internal const int DefaultActivationHealthyTicks = 3;
     internal const string ActivationStallTimeoutEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_STALL_MINUTES";
@@ -346,6 +348,21 @@ internal sealed partial class ConductorContinuitySupervisor
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             TryAppendConductEvent($"HOME_BUILD_ADOPTION_PUBLISH_FAILED status={status} reason={Sanitize(ex.Message)}");
+        }
+        if (status == "adopted" && homeBuildPublisher is not null)
+        {
+            try
+            {
+                (_fleetBuildAdoptionSummary ??= new FleetBuildAdoptionSummary(
+                    OrchestratorProjectRegistry.CreateDefault(), TryAppendConductEvent, _timeProvider,
+                    homeRoot: OrchestratorHome.ResolveForProcess().SourceRootDirectory))
+                    .OnHomeAdopted(primaryBuild.CommitSha, now);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                System.Text.Json.JsonException or ArgumentException or InvalidOperationException)
+            {
+                TryAppendConductEvent($"FLEET_BUILD_ADOPTION_SUMMARY_FAILED commit={primaryBuild.CommitSha} reason={Sanitize(ex.Message)}");
+            }
         }
     }
 
