@@ -49,6 +49,7 @@ public sealed class PendingStoreSetupCliWriteTests : CliCommandTestBase
         { ["verify-manual"], true },
         { ["criterion-evidence-record"], true },
         { ["criterion-evidence-repair"], true },
+        { ["criterion-evidence-rephase"], true },
         { ["backlog-add", "--depends-on", "x"], true },
         { ["goals"], false },
         { ["conduct", "--loop"], false },
