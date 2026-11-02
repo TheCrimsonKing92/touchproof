@@ -38,7 +38,7 @@ internal sealed partial class ConductorBatchLoop
             foreach (var goal in state.OrderedEligible)
             {
                 state.Results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(goal, policy, reason),
+                    TrainEjectionReport.DescribeWaitingResult(driver, goal.Id, ParallelAcceptanceHeld(goal, policy, reason)),
                     null);
             }
 
@@ -533,8 +533,8 @@ internal sealed partial class ConductorBatchLoop
     {
         foreach (var goal in state.OrderedEligible)
         {
-            if (state.Results.ContainsKey(goal.Id.Value) ||
-                !driver.TryGetCohortGateHold(goal.Id, out var cohortHoldDetail))
+            if (TrainEjectionReport.RefreshHold(driver, goal.Id, state.Results) ||
+                !TrainEjectionReport.TryGetCohortMemberHold(driver, goal.Id, out var cohortHoldDetail))
             {
                 continue;
             }
@@ -795,10 +795,10 @@ internal sealed partial class ConductorBatchLoop
                     $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-fault goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
                     changedGoalLines);
             }
+            finally { TrainEjectionReport.RefreshHold(driver, goal.Id, state.Results); }
             if (suppressNewAcceptanceAdmission()) break;
         }
     }
-
     private void SummarizeAcceptanceDeferrals(
         ParallelAcceptanceBatchState state,
         int tick,

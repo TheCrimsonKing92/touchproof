@@ -51,12 +51,12 @@ internal sealed partial class ConductorBatchLoop
             TrackGoalHold(
                 kernel, goal,
                 held.State.ToString(),
-                held.Reason,
+                TrainEjectionReport.DescribeWaitingHold(driver, goal.Id, held.Reason),
                 observedAt,
                 held.Owner is ConductorHoldOwner.PullRequestReview ? TimeSpan.MaxValue : stallThreshold,
                 changedGoalIds,
                 tickLines,
-                held.StableIdentity,
+                held.StableIdentity ?? TrainEjectionReport.OriginalHoldReason(held),
                 driver,
                 conductEventLogWriter);
             return;

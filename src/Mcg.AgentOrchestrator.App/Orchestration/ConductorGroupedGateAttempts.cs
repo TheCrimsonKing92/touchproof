@@ -665,13 +665,15 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         try
         {
             var childResult = DescribeChildResult(attempt.ResultPath);
+            var train = childResult.Completed ? TrainEjectionReport.DescribeCompletion(
+                _stateDirectory ?? attempt.StateDirectory, attempt, childResult.Receipt) : null;
             var eventName = childResult.Completed
                 ? "ACCEPTANCE_COHORT_CHILD_COMPLETED" : "ACCEPTANCE_COHORT_RECONCILED_DEAD";
             _event($"{eventName} kind={attempt.Kind} attempt={attempt.AttemptId} " +
-                $"members={string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
-                $"identity={attempt.IdentityValue} owner={attempt.OwnerProcessId} reason={attempt.Detail} " +
+                $"members={train?.Members ?? string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
+                $"identity={train?.Identity ?? attempt.IdentityValue} owner={attempt.OwnerProcessId} reason={attempt.Detail} " +
                 childResult.Text + (childResult.Completed ? $" verdict={childResult.Verdict}" : "") +
-                (childResult.Receipt is { } receipt ? $" receipt={receipt}" : ""));
+                (childResult.Receipt is { } receipt ? $" receipt={receipt}" : "") + (train?.EjectedSuffix ?? ""));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
     }
