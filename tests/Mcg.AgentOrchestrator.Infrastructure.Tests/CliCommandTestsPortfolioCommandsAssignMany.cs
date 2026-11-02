@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each case owns its workspace, databases, ids file and console capture.
 public sealed class CliCommandTestsPortfolioCommandsAssignMany : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private const string GoalIdValue = "aaaaaaaa111111111111111111111111";
     private const string UnknownId = "not-a-member";
 

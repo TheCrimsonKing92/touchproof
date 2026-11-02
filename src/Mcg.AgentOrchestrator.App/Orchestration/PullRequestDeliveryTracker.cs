@@ -153,7 +153,7 @@ internal sealed class PullRequestDeliveryTracker
     private void StartReviewRound(Goal goal, GoalDeliveredForReview delivery, PullRequestStatus status)
     {
         if (status.ReviewDecision != "CHANGES_REQUESTED" || goal.Status != GoalStatus.Verified ||
-            goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url ||
+            !DeliveredForReviewHold.IsCurrent(goal) ||
             PullRequestLandingDelivery.HasRefreshStarted(goal) || PullRequestReviewRound.HasStarted(goal) ||
             PullRequestReviewRound.Stopped(goal) || !PullRequestReviewRound.Pending(goal, delivery.Url)) return;
         var boundary = PullRequestReviewRound.Boundary(goal, delivery.Url, ReviewBoundary(goal, delivery));
@@ -261,8 +261,7 @@ internal sealed class PullRequestDeliveryTracker
         // Recovery owns failed attempts and operator holds; drift never starts a retry loop.
         if (PullRequestLandingDelivery.RefreshStopped(goal) || PullRequestReviewRound.HasStarted(goal) ||
             PullRequestReviewRound.Stopped(goal) || PullRequestReviewRound.CapRecorded(goal, delivery.Url) ||
-            goal.Status != GoalStatus.Verified ||
-            goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url) return;
+            !DeliveredForReviewHold.IsCurrent(goal)) return;
         if (!Fetch(goal)) return;
         var remote = Git("rev-parse", "--verify", "refs/remotes/origin/" + _workspace.IntegrationBranch);
         if (!Ok(remote) || !IsRevision(remote.Output.Trim()))
@@ -301,8 +300,8 @@ internal sealed class PullRequestDeliveryTracker
     private static bool Ok(GitCli.GitResult result) => result.Succeeded && result.ProcessStarted && !result.DrainTimedOut;
     private static bool NegativeAncestry(GitCli.GitResult result) => result.ExitCode == 1 && result.ProcessStarted && !result.DrainTimedOut;
     private static bool IsRevision(string? value) => value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);
-    internal static bool IsEligible(Goal goal) => goal.DeliveredForReview is { } delivery &&
-        ((goal.Status == GoalStatus.Verified && goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url) ||
+    internal static bool IsEligible(Goal goal) => goal.DeliveredForReview is not null &&
+        (DeliveredForReviewHold.IsCurrent(goal) ||
          (goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
           PullRequestLandingDelivery.HasRefreshStarted(goal)) ||
          (goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded) &&

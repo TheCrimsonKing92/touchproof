@@ -9,6 +9,8 @@ using System.Text.Json;
 
 public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public void Cli_pending_renders_open_and_total_request_counts()
     {

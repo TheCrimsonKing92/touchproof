@@ -3,7 +3,6 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class TerminalContractRepairStreak
 {
     internal const string ResetNotePrefix = "TERMINAL_CONTRACT_REPAIR_STREAK_RESET ";
-    internal const string InvalidationPrefix = "Invalidated ";
 
     internal static bool IsStreakRecord(TaskVerificationRecord record) =>
         record.CompletionVerdictRule == TaskOutcomeRules.VerificationTerminalContractIncomplete.Token ||
@@ -14,7 +13,7 @@ internal static class TerminalContractRepairStreak
     internal static DateTimeOffset? LatestResetAt(IEnumerable<ProgressEvent> timeline, TaskId taskId) =>
         timeline.Where(evt => evt.TaskId == taskId &&
                 ((evt.Kind == ProgressKind.TaskNote && evt.Message.StartsWith(ResetNotePrefix, StringComparison.Ordinal)) ||
-                 (evt.Kind == ProgressKind.TaskRetried && evt.Message.StartsWith(InvalidationPrefix, StringComparison.Ordinal))))
+                 DownstreamInvalidationMessage.IsInvalidation(evt)))
             .Select(evt => (DateTimeOffset?)evt.OccurredAt)
             .Max();
 

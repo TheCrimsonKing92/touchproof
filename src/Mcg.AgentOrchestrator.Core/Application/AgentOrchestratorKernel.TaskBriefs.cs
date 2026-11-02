@@ -1333,9 +1333,7 @@ public sealed partial class AgentOrchestratorKernel
         evt.Kind == ProgressKind.TaskRetried && !IsDownstreamInvalidationRetryEvent(evt);
 
     private static bool IsDownstreamInvalidationRetryEvent(ProgressEvent evt) =>
-        evt.Message.StartsWith("Invalidated ", StringComparison.Ordinal) &&
-        evt.Message.Contains(" task because upstream ", StringComparison.Ordinal) &&
-        evt.Message.EndsWith(" was retried.", StringComparison.Ordinal);
+        DownstreamInvalidationMessage.IsInvalidation(evt);
 
     private static string DescribeAccumulatedRetryFeedbackStatus(
         IReadOnlyList<ProgressEvent> retryEvents,

@@ -643,7 +643,7 @@ internal static class SourceSizeRatchet
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
             // Goal 25775eef requires a thin re-phase entry point beside repair to supply the kernel clock
             // and goal lookup; validation and provenance remain owned by CriterionEvidenceRephase.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9286, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9284, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

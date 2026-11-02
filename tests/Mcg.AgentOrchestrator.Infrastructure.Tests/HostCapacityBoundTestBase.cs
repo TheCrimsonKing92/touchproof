@@ -1,8 +1,6 @@
 /// <summary>
-/// Base for fixtures whose cost is host capacity: real git subprocesses, real worktrees,
-/// SQLite state files and build-permit directories. Each test holds one slot of
-/// <see cref="HostCapacityTestBudget"/> for its whole body, so these families overlap at a
-/// bounded degree of parallelism instead of an unbounded one.
+/// Base for fixtures that hold one slot of <see cref="HostCapacityTestBudget"/> from
+/// asynchronous initialization until disposal. Declared no-git fixtures skip the budget.
 ///
 /// This replaces the removed all-or-nothing GoalWorktreeCleanupHooks serialization. It is
 /// deliberately weaker: it admits several tests at once and imposes no ordering, so it
@@ -21,10 +19,16 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     /// </summary>
     private protected virtual HostCapacityTestBudget CapacityBudget => HostCapacityTestBudget.Shared;
 
-    public virtual ValueTask InitializeAsync() => EnsureHostCapacityAsync();
+    // Conservative default: opt out only for fixtures whose scenarios never launch git.
+    // Keep the declaration with the fixture, rather than maintaining a central census list.
+    private protected virtual bool UsesGit => true;
 
-    /// <summary>One acquisition point for both eager fixtures and resource-using CLI helpers.</summary>
-    private protected async ValueTask EnsureHostCapacityAsync()
+    // Yield the runner thread while queued. Synchronous git observers must never acquire:
+    // blocked launch threads can prevent the async disposal that returns capacity.
+    public virtual ValueTask InitializeAsync() => UsesGit ? EnsureHostCapacityAsync() : ValueTask.CompletedTask;
+
+    /// <summary>One per-test acquisition shared by concurrent initialization calls.</summary>
+    private async ValueTask EnsureHostCapacityAsync()
     {
         Task<IAsyncDisposable> acquisition;
         lock (capacityGate)
@@ -44,9 +48,6 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
             ObjectDisposedException.ThrowIf(disposed, this);
         }
     }
-
-    private protected void EnsureHostCapacity() =>
-        EnsureHostCapacityAsync().GetAwaiter().GetResult();
 
     public virtual ValueTask DisposeAsync()
     {

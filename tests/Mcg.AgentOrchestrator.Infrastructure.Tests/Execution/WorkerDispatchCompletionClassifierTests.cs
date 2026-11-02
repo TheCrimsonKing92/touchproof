@@ -305,7 +305,7 @@ public sealed class WorkerDispatchCompletionClassifierTests
     }
 
     [Xunit.Fact]
-    public void ReconciliationOriginPrefersRecordedStdoutRule()
+    public void ReconciliationOriginIgnoresRecordedWorkerRules()
     {
         var classifier = CreateClassifier();
         var task = new TaskSpec(TaskId.New(), "Verify the work.", AgentRole.Tester);
@@ -328,7 +328,9 @@ public sealed class WorkerDispatchCompletionClassifierTests
             childExit,
             null);
 
-        Xunit.Assert.Equal("stdout-origin", rule);
+        Xunit.Assert.NotNull(rule);
+        Xunit.Assert.NotEqual("stdout-origin", rule);
+        Xunit.Assert.NotEqual("stderr-origin", rule);
     }
 
     private static WorkerDispatchCompletionClassifier CreateClassifier(

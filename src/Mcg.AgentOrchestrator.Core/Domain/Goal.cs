@@ -218,8 +218,7 @@ public sealed class Goal
             throw new InvalidOperationException("Only a verified goal can be delivered for review.");
         var previousDelivery = DeliveredForReview;
         var previousHold = CurrentHold;
-        var reason = $"delivered for review: {delivery.Url}";
-        if (delivery.ActingLogin is not null) reason += $" as {delivery.ActingLogin}";
+        var reason = DeliveredForReviewHold.Text(delivery);
         var progress = new ProgressEvent(Id, null, ProgressKind.GoalPolicyDecision, reason, delivery.DeliveredAt);
         DeliveredForReview = delivery;
         CurrentHold = new GoalHoldState(GoalHoldState.BuildIdentity("Verified", reason), "Verified", reason, delivery.DeliveredAt);

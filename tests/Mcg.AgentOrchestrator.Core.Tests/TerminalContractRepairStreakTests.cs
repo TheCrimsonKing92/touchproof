@@ -40,7 +40,7 @@ public sealed class TerminalContractRepairStreakTests
         var (task, _, _) = ThreeRecords();
         var first = task.VerificationHistory[0].CompletedAt;
         var second = task.VerificationHistory[1].CompletedAt;
-        var latest = Event(task.Id, ProgressKind.TaskRetried, "Invalidated latest", second);
+        var latest = Event(task.Id, ProgressKind.TaskRetried, "Invalidated Tester task because upstream Developer task abcd1234 was retried.", second);
         var older = Event(task.Id, ProgressKind.TaskNote, "TERMINAL_CONTRACT_REPAIR_STREAK_RESET older", first);
         Assert.Equal(second, TerminalContractRepairStreak.LatestResetAt([latest, older], task.Id));
         Assert.Equal(1, TerminalContractRepairStreak.Count([latest, older], task));
