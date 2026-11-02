@@ -41,7 +41,7 @@ public sealed partial class AgentOrchestratorKernel
     private void RequeueAnsweredTesterBlocker(Goal goal, TaskSpec task, string answer)
     {
         // The request is answered; remove its wait status before entering the normal retry policy.
-        task.SetStatus(WorkTaskStatus.Assigned);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.HumanInputRestoreRequeueAnsweredTesterBlocker);
         RetryTask(goal.Id, task.Id, answer, RetryCause.ContractClarification);
     }
 

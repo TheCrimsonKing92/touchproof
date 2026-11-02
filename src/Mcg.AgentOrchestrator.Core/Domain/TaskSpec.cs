@@ -172,8 +172,9 @@ public sealed partial class TaskSpec
     // This is durable attempt accounting, not the bounded receipt cache length.
     public int PreReviewEvidenceAttemptCount { get; private set; }
 
-    internal void AssignTo(AgentId agentId)
+    internal TaskStatusChange AssignTo(AgentId agentId)
     {
+        var from = Status;
         AssignedAgentId = agentId;
         Status = WorkTaskStatus.Assigned;
         WasCancelledByConductor = false;
@@ -182,6 +183,7 @@ public sealed partial class TaskSpec
             ClearLatestVerification();
             _passingVerificationClearedOnAssignment = true;
         }
+        return new TaskStatusChange(Id, from, Status);
     }
 
     // Transient notification for the kernel timeline; verification history stays durable.
@@ -199,16 +201,20 @@ public sealed partial class TaskSpec
         ConductorRoutingRevision = checked(ConductorRoutingRevision + 1);
     }
 
-    internal void SetStatus(WorkTaskStatus status)
+    internal TaskStatusChange SetStatus(WorkTaskStatus status)
     {
+        var from = Status;
         Status = status;
         WasCancelledByConductor = false;
+        return new TaskStatusChange(Id, from, Status);
     }
 
-    internal void SetConductorCancelledStatus()
+    internal TaskStatusChange SetConductorCancelledStatus()
     {
+        var from = Status;
         Status = WorkTaskStatus.Cancelled;
         WasCancelledByConductor = true;
+        return new TaskStatusChange(Id, from, Status);
     }
 
     internal TaskSnapshot ToSnapshot()
@@ -796,13 +802,15 @@ public sealed partial class TaskSpec
 
     internal void ClearLatestVerification() => LastVerification = null;
 
-    internal void ReinstateVerification(TaskVerificationRecord verification)
+    internal TaskStatusChange ReinstateVerification(TaskVerificationRecord verification)
     {
         if (!_verificationHistory.Any(item => ReferenceEquals(item, verification)))
             throw new InvalidOperationException("Only this task's retained verification can be reinstated.");
+        var from = Status;
         LastVerification = verification;
         Status = WorkTaskStatus.Completed;
         LatestRetryInherited = false;
+        return new TaskStatusChange(Id, from, Status);
     }
 
     internal void AdvanceVerifiedCandidateCoverage(string candidateSha)

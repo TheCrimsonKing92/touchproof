@@ -19,7 +19,7 @@ public sealed partial class AgentOrchestratorKernel
             task.ReleaseUnstartedRetryAdmission(task.LastDispatch!.DispatchedAt, _clock.UtcNow);
             task.ClearLastProcess();
             task.ClearLastDispatch();
-            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.UnstartedDispatchDiscardUnstartedDispatch);
             RefreshGoalStatus(goal);
         }
         Append(goal, taskId, ProgressKind.TaskNote, message);
@@ -33,7 +33,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("Preparation suppression requires the current unstarted running attempt.");
         task.ReleaseUnstartedRetryAdmission(dispatchedAt, _clock.UtcNow);
         task.ClearLastDispatch();
-        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.UnstartedDispatchDiscardUnstartedPreparedDispatch);
         RefreshGoalStatus(goal);
         Append(goal, taskId, ProgressKind.TaskNote, message);
     }

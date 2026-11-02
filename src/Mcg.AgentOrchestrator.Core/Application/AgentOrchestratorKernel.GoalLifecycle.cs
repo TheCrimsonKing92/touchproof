@@ -73,7 +73,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            task.AssignTo(agent.Id);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.AssignTo(agent.Id), TaskStatusTransitionRecorder.GoalLifecycleActivateGoal);
             assignments.Add(new TaskAssignment(task.Id, agent.Id, agent.Role));
             Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated {task.RequiredRole} task to {agent.Name}.");
         }
@@ -208,7 +208,7 @@ public sealed partial class AgentOrchestratorKernel
 
             if (agent is not null)
             {
-                task.AssignTo(agent.Id);
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.AssignTo(agent.Id), TaskStatusTransitionRecorder.GoalLifecycleAddTask);
                 GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleAddTask);
                 Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated {task.RequiredRole} task to {agent.Name}.");
             }
@@ -583,7 +583,7 @@ public sealed partial class AgentOrchestratorKernel
         else
         {
             var previousRetryAt = task.LatestRetryAt;
-            ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
+            ResetTaskForRetry(goal.Id, task, retryAt, retryCause, retryRoundKind);
             if (authoritativeRetryFeedback)
             {
                 task.RecordCriterionRetryFeedback([retryMessage], previousRetryAt);
@@ -813,7 +813,7 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
         task.SetInterruptedWorkCheckpoint(checkpoint);
-        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleRequeueInterruptedDispatch);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
@@ -1063,7 +1063,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var previousAgentId = task.AssignedAgentId?.Value ?? "none";
         var assignmentChanged = task.AssignedAgentId != agent.Id;
-        task.AssignTo(agent.Id);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.AssignTo(agent.Id), TaskStatusTransitionRecorder.GoalLifecycleRedelegateTask);
         if (assignmentChanged)
         {
             task.AdvanceConductorRoutingRevision();
@@ -1100,14 +1100,14 @@ public sealed partial class AgentOrchestratorKernel
             task.LastProcess is not null;
         var authorizedHarness = task.LastDispatch?.WorkerName;
         var assignmentChanged = task.AssignedAgentId != agent.Id;
-        task.AssignTo(agent.Id);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.AssignTo(agent.Id), TaskStatusTransitionRecorder.GoalLifecycleReassignTaskAgentAssign);
         if (assignmentChanged)
         {
             task.AdvanceConductorRoutingRevision();
         }
         if (preparedDispatchRequiresRebuild || authorizedAttemptUnaffected)
         {
-            task.SetStatus(WorkTaskStatus.Running);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.GoalLifecycleReassignTaskAgentRunning);
         }
 
         var routingEffect = authorizedAttemptUnaffected
@@ -1214,7 +1214,7 @@ public sealed partial class AgentOrchestratorKernel
             SubscriptionLimitEvidence.IsRecoverableSubscriptionLimitFailure(latest))
         {
             task.ClearLatestVerification();
-            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleAcknowledgeSubscriptionLimitReview);
         }
 
         Append(
@@ -1517,7 +1517,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        task.SetStatus(status);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(status), TaskStatusTransitionRecorder.GoalLifecycleReportTaskProgress);
 
         var kind = status switch
         {
@@ -1557,7 +1557,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is still running and cannot be escalated.");
         }
 
-        task.SetStatus(WorkTaskStatus.Failed);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Failed), TaskStatusTransitionRecorder.GoalLifecycleEscalateTaskFailure);
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskFailed, escalationMessage,
             CriteriaCorrectionSource.Escalation);
         Append(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
@@ -1569,7 +1569,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal failed because task {task.Id.Value[..8]} reached an explicit terminal escalation.");
     }
 
-    private static void ResetTaskForRetry(
+    private void ResetTaskForRetry(GoalId goalId,
         TaskSpec task,
         DateTimeOffset retryAt,
         RetryCause retryCause,
@@ -1583,7 +1583,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
         task.RecordRetry(retryAt, retryCause, retryRoundKind, inherited);
-        task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goalId, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleResetTaskForRetry);
     }
 
     private bool ReopenTerminalGoalWithNonTerminalTasks(Goal goal, string reason)
@@ -1641,7 +1641,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            ResetTaskForRetry(downstream, retryAt, retryCause, inherited: true);
+            ResetTaskForRetry(goal.Id, downstream, retryAt, retryCause, inherited: true);
             Append(
                 goal,
                 downstream.Id,
@@ -1690,7 +1690,7 @@ public sealed partial class AgentOrchestratorKernel
             var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
-            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause, inherited: true);
+            ResetTaskForRetry(goal.Id, downstream, reconciledAt, retriedTask.PendingRetryCause, inherited: true);
             Append(
                 goal,
                 downstream.Id,
@@ -1729,7 +1729,7 @@ public sealed partial class AgentOrchestratorKernel
             var repairTask = decision.RepairTaskId is { } repairTaskId
                 ? goal.FindTask(repairTaskId)
                 : null;
-            ResetTaskForRetry(downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause, inherited: true);
+            ResetTaskForRetry(goal.Id, downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause, inherited: true);
             var reason = decision.Disposition == VerifyingFindingDisposition.SupersededByCompletedRepair
                 ? $"completed Developer repair {repairTask!.Id.Value[..8]} produced candidate {decision.RepairedCandidate}"
                 : "a later verification superseded that stored verdict";
@@ -1951,7 +1951,7 @@ public sealed partial class AgentOrchestratorKernel
     private void RestoreTaskAfterSuppressedAnsweredInput(Goal goal, TaskId? taskId,
         HumanInputRequest request, int? completedRound, string? workerResultLogReference)
     {
-        HumanInputSuppression.RestoreTaskAfterSuppressedAnsweredInput(goal, taskId, request,
+        HumanInputSuppression.RestoreTaskAfterSuppressedAnsweredInput(_eventWriter, goal, taskId, request,
             completedRound, workerResultLogReference, (g, t, k, message) => Append(g, t, k, message));
         RefreshGoalStatus(goal);
     }
@@ -1970,7 +1970,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (taskId is not null)
         {
-            goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman), TaskStatusTransitionRecorder.GoalLifecycleHoldTaskForExistingHumanInput);
         }
 
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.WaitingForHuman), GoalStatusTransitionRecorder.GoalLifecycleHoldTaskForExistingHumanInput);
@@ -2051,7 +2051,7 @@ public sealed partial class AgentOrchestratorKernel
                         (task.LastDispatch is null || task.LastDispatch.BriefVersion != goal.AuthoritativeBrief.Version) &&
                         task.LastProcess is not { IsRunning: true })
                     {
-                        task.SetStatus(WorkTaskStatus.Failed);
+                        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Failed), TaskStatusTransitionRecorder.GoalLifecycleSubmitHumanInputCoreSuppressionThreshold);
                         Append(goal, task.Id, ProgressKind.TaskFailed,
                             $"Historical Planner answer retained for brief v{identity.BriefVersion}; retry planning against current brief v{goal.AuthoritativeBrief.Version}.");
                     }
@@ -2271,7 +2271,7 @@ public sealed partial class AgentOrchestratorKernel
         if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task) && task.LastProcess is not { IsRunning: true })
         {
             task.ClearLatestVerification();
-            task.SetStatus(WorkTaskStatus.Assigned);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInputObsoletePlanner);
             Append(goal, task.Id, ProgressKind.TaskNote, "Historical Planner evidence retained; planning must run against the current brief.");
             return;
         }
@@ -2291,7 +2291,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        task.SetStatus(restoredStatus);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(restoredStatus), TaskStatusTransitionRecorder.GoalLifecycleRestoreTaskAfterHumanInput);
         var message = refusedDispatch is not null
             ? $"Human input resolved; returned task to Assigned for redispatch; abandoned unstarted dispatch {refusedDispatch.LinkedDispatchAt:O} whose start retry admission refused."
             : $"Human input resolved; restored task status to {restoredStatus}.";
@@ -2320,7 +2320,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (request.TaskId is not null)
         {
-            goal.FindTask(request.TaskId).SetStatus(WorkTaskStatus.Running);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, goal.FindTask(request.TaskId).SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.GoalLifecycleDismissHumanInput);
         }
 
         RefreshGoalStatus(goal);

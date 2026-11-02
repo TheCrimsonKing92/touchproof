@@ -82,12 +82,15 @@ public sealed class GoalLifecycleEventWriterTests
 
             Xunit.Assert.Equal([
                 "GoalCreated",
+                "task-status-transition",
                 "TaskDelegated",
                 "goal-status-transition",
+                "task-status-transition",
                 "TaskDispatched",
                 "TaskVerified",
                 "TaskNote",
                 "TaskNote",
+                "task-status-transition",
                 "TaskCompleted",
                 "goal-status-transition",
                 "goal-status-transition",
