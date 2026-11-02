@@ -11,15 +11,32 @@ internal readonly record struct ContextUsageFigure(long? Value, string? UnknownR
 
 internal static class ContextUsageFigures
 {
+    internal static DispatchProviderUsage? RecordedUsage(TaskDispatchRecord dispatch) =>
+        dispatch.ContextPackageReceipt is { } receipt
+            ? new(receipt.InputTokens, receipt.CachedInputTokens, receipt.OutputTokens)
+            : dispatch.ProviderUsage;
+
+    internal static string MissingReasonCode(DispatchProviderUsage? usage)
+    {
+        if (usage is null)
+            return "not-recorded";
+        var reason = usage.InputTokens.UnknownReason;
+        var code = reason?.Split(':', 2)[0].Trim();
+        return string.IsNullOrWhiteSpace(code) ? "unspecified" : code;
+    }
+
     internal static ContextUsageFigure Provider(ProviderUsageValue value) =>
         value.State == ProviderUsageState.Reported
             ? new(value.Value)
             : new(null, value.UnknownReason);
 
-    internal static ContextUsageFigure Uncached(WorkerContextPackageReceipt receipt)
+    internal static ContextUsageFigure Uncached(WorkerContextPackageReceipt receipt) =>
+        Uncached(receipt.InputTokens, receipt.CachedInputTokens);
+
+    internal static ContextUsageFigure Uncached(ProviderUsageValue inputTokens, ProviderUsageValue cachedTokens)
     {
-        var input = Provider(receipt.InputTokens);
-        var cached = Provider(receipt.CachedInputTokens);
+        var input = Provider(inputTokens);
+        var cached = Provider(cachedTokens);
         return input.Value is { } inputValue && cached.Value is { } cachedValue
             ? new(inputValue - cachedValue)
             : new(null, input.UnknownReason ?? cached.UnknownReason);
