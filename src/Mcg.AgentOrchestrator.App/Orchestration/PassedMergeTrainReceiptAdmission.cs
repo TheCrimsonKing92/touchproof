@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -20,7 +21,9 @@ internal static class PassedMergeTrainReceiptAdmission
         Func<Goal, ConductorAutonomyPolicy, GateReadyCandidateProjectionResult> Project,
         Func<ConductorMergeTrainSelection, Goal[], ConductorAutonomyPolicy, ConductorMergeTrainRunResult> Land,
         Func<MergeTrainReceipt, string, AcceptanceRevalidationPlan>? PlanRevalidation = null,
-        Action<MergeTrainReceipt, AcceptanceRevalidationReceipt?>? RecordRevalidation = null);
+        Action<MergeTrainReceipt, AcceptanceRevalidationReceipt?>? RecordRevalidation = null,
+        Func<string, IReadOnlyList<MergeTrainEjection>>? ReadAttemptEjections = null,
+        Action<GoalId, string>? RecordDecision = null);
 
     internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) Apply(
         ConductorDriver driver,
@@ -44,7 +47,11 @@ internal static class PassedMergeTrainReceiptAdmission
                 (receipt, currentMain) => AcceptanceRevalidationPlanner.Plan(driver.ExecutionDirectory,
                     receipt.Identity.ObservedMainRevision, currentMain,
                     receipt.Identity.Members.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()),
-                (receipt, decision) => AcceptanceRevalidationReceipt.Record(driver.ExecutionDirectory, scopedGoals, receipt, decision)),
+                (receipt, decision) => AcceptanceRevalidationReceipt.Record(driver.ExecutionDirectory, scopedGoals, receipt, decision),
+                attemptId => MergeTrainAcceptanceStore.OpenReadOnly(Path.Combine(
+                    OrchestratorWorkspace.ForDirectory(driver.ExecutionDirectory).OrchestratorDirectory,
+                    "merge-train-acceptance.db")).ReadAttemptEjections(attemptId),
+                (goalId, reason) => kernel.RecordGoalPolicyDecision(goalId, reason)),
             policy, eligible, candidates, scopedGoals, results, tick, changedGoalLines, holds,
             reportedStaleReceiptIds, emitProgress, recordProgress, heldResult);
 
@@ -78,7 +85,7 @@ internal static class PassedMergeTrainReceiptAdmission
                     $"receipt={receipt.ReceiptId} moved={moved}");
             }
         }
-        foreach (var (selection, _) in operations.Find(
+        foreach (var (selection, receipt) in operations.Find(
                      candidates, ineligibleGoalIds, ReportStale, (receipt, observation) =>
                      {
                          var landingHeldRequestIds = new Dictionary<GoalId, string>();
@@ -151,6 +158,7 @@ internal static class PassedMergeTrainReceiptAdmission
                 changedGoalLines);
             if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
             {
+                ReportOmissions(operations, selection, receipt, tick, changedGoalLines, recordProgress);
                 try { if (run.Receipt is { } landed) operations.RecordRevalidation?.Invoke(landed, null); }
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
                 // Landing moved main, so the observations made before it no longer justify a hold.
@@ -179,5 +187,33 @@ internal static class PassedMergeTrainReceiptAdmission
         }
         return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
             candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
+    }
+
+    private static void ReportOmissions(Operations operations, ConductorMergeTrainSelection selection,
+        MergeTrainReceipt receipt, int tick, List<string> changedGoalLines,
+        Action<string, List<string>> recordProgress)
+    {
+        IReadOnlyList<MergeTrainEjection> ejections = [];
+        try
+        {
+            if ((receipt.GateAttemptId ?? receipt.Recheck?.TrainAttemptId) is { } attemptId)
+                ejections = operations.ReadAttemptEjections?.Invoke(attemptId) ?? [];
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
+        var omissions = PassedMergeTrainReceiptSelector.Omissions(selection, receipt, ejections);
+        if (omissions.Count == 0) return;
+        recordProgress($"TRAIN_RECEIPT_PARTIAL tick={tick} train={receipt.Identity.Value} receipt={receipt.ReceiptId} " +
+            $"landed={string.Join(',', selection.Members.Select(member => member.GoalId.Value[..8]))} " +
+            $"omitted={string.Join(',', omissions.Select(omission => $"{omission.GoalId.Value[..8]}:{omission.Reason}"))}",
+            changedGoalLines);
+        foreach (var omission in omissions)
+        {
+            try
+            {
+                operations.RecordDecision?.Invoke(omission.GoalId,
+                    $"merge train receipt {receipt.ReceiptId} landed without this goal: {omission.Reason}");
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
+        }
     }
 }

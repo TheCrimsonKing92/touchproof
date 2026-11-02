@@ -391,6 +391,27 @@ public sealed class MergeTrainAcceptanceStore
         transaction.Commit();
     }
 
+    public IReadOnlyList<MergeTrainEjection> ReadAttemptEjections(string trainAttemptId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT goal_id, reason, conflict_paths_json, detail FROM merge_train_ejections
+            WHERE train_attempt_id=$attempt ORDER BY ejection_id;
+            """;
+        command.Parameters.AddWithValue("$attempt", trainAttemptId);
+        using var reader = command.ExecuteReader();
+        var ejections = new List<MergeTrainEjection>();
+        while (reader.Read())
+        {
+            if (!Enum.TryParse<MergeTrainEjectionReason>(reader.GetString(1), out var reason) ||
+                !Enum.IsDefined(reason)) continue;
+            ejections.Add(new(new GoalId(reader.GetString(0)), reason,
+                JsonSerializer.Deserialize<string[]>(reader.GetString(2), JsonOptions) ?? [], reader.GetString(3)));
+        }
+        return ejections;
+    }
+
     public void PrepareLanding(MergeTrainReceipt receipt, string commitRevision, string? priorIntegrationRevision)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -542,6 +563,10 @@ public sealed class MergeTrainAcceptanceStore
         File.WriteAllText(verdictPath, JsonSerializer.Serialize(new
         {
             receipt.Identity.Value,
+            MemberGoalIds = receipt.Identity.Members.Select(member => member.GoalId.Value)
+                .Concat((receipt.GateAttemptId ?? receipt.Recheck?.TrainAttemptId) is { } attemptId
+                    ? ReadAttemptEjections(attemptId).Select(ejection => ejection.GoalId.Value) : [])
+                .Distinct(StringComparer.Ordinal).ToArray(),
             receipt.Outcome,
             receipt.GateExitCode,
             receipt.CompletedAt,
