@@ -23,8 +23,10 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         var budget = new HostCapacityTestBudget(1, _ => path);
         await using (var held = await budget.EnterAsync())
         {
-            var first = ConductorGitRevisionReader.ReadRequiredCommit(repo, "HEAD");
-            Assert.Equal(first, ConductorGitRevisionReader.ReadRequiredCommit(repo, "HEAD"));
+            var requireGitWorkTree = typeof(GoalWorktrees).GetMethod("RequireGitWorkTree",
+                BindingFlags.Static | BindingFlags.NonPublic, [typeof(string)])!.CreateDelegate<Action<string>>();
+            requireGitWorkTree(repo);
+            requireGitWorkTree(repo);
             CommitThroughHelper(repo, environment);
         }
 
@@ -34,7 +36,7 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         Assert.Equal(2, row.RootElement.GetProperty("git_subcommands").GetProperty("rev-parse").GetInt32());
         Assert.Equal(1, row.RootElement.GetProperty("git_subcommands").GetProperty("commit").GetInt32());
         Assert.Equal(3, callers.Count);
-        Assert.Equal(2, callers["src:Mcg.AgentOrchestrator.App.Orchestration.ConductorGitRevisionReader.ReadRequiredCommit|rev-parse"]);
+        Assert.Equal(2, callers["src:Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees.RequireGitWorkTree|rev-parse"]);
         Assert.Equal(1, callers[Key(nameof(CommitThroughHelper), "commit")]);
         Assert.Equal(0, callers["other"]);
         Assert.Equal(1, budget.AvailableSlots);
