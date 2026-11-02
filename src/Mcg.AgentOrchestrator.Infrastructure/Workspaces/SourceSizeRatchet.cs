@@ -210,7 +210,7 @@ internal static class SourceSizeRatchet
             // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
             // Goal f608f29b guards progressive-review paid restarts through EnvironmentContractGate before steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2546),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2544),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -672,7 +672,7 @@ internal static class SourceSizeRatchet
             // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
             // Goal f608f29b adds the three-line environment admission guard before progressive-review steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines, no added partial file.
-            new SourceClassCeiling("ConductorBatchLoop", 8974, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 8972, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
