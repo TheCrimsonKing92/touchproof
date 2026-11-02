@@ -13,10 +13,15 @@ internal static class GateStatsReader
 {
     internal sealed record LaneObservation(int Version, string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
     internal sealed record GateAttempt(string Id, DateTimeOffset RecordedAt, IReadOnlyDictionary<string, double> Classes);
-    private sealed record TrxFile(string Path, string Attempt, DateTimeOffset Time);
+    internal sealed record TestResult(string Class, string? Test, string? Outcome, double Seconds);
+    internal sealed record LaneRun(string Lane, int Run, IReadOnlyList<TestResult> Results);
+    internal sealed record GateRunAttempt(string Id, DateTimeOffset RecordedAt, IReadOnlyList<LaneRun> Runs);
+    private sealed record TrxFile(string Path, string Attempt, DateTimeOffset Time, string Lane);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Regex AttemptFile = new(
         @"^(?<attempt>.+-(?<time>\d{17})-[0-9a-f]{32})\.(?<lane>.+)\.trx$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex RunSuffix = new(@"^(?<lane>.+)-run-(?<run>\d+)$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     internal static IReadOnlyList<LaneObservation> ReadLaneObservations(string directory, out int skipped)
@@ -44,6 +49,47 @@ internal static class GateStatsReader
 
     internal static IReadOnlyList<GateAttempt> ReadGateAttempts(string directory, string? lane, int last, out int skipped)
     {
+        var groups = DiscoverAttempts(directory, lane, last, out skipped);
+        var attempts = new List<GateAttempt>();
+        foreach (var group in groups)
+        {
+            var totals = new Dictionary<string, double>(StringComparer.Ordinal);
+            foreach (var file in group)
+            {
+                var results = ReadTrx(file.Path);
+                if (results is null) { skipped++; continue; }
+                foreach (var result in results)
+                    totals[result.Class] = totals.GetValueOrDefault(result.Class) + result.Seconds;
+            }
+            attempts.Add(new(group.Key, group.First().Time, totals));
+        }
+        return attempts;
+    }
+
+    internal static IReadOnlyList<GateRunAttempt> ReadGateRuns(string directory, int last, out int skipped)
+    {
+        var groups = DiscoverAttempts(directory, null, last, out skipped);
+        var attempts = new List<GateRunAttempt>();
+        foreach (var group in groups)
+        {
+            var runs = new List<LaneRun>();
+            foreach (var file in group)
+            {
+                var suffix = RunSuffix.Match(file.Lane);
+                var run = 0;
+                if (suffix.Success && !int.TryParse(suffix.Groups["run"].Value, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out run)) { skipped++; continue; }
+                var results = ReadTrx(file.Path);
+                if (results is null) { skipped++; continue; }
+                runs.Add(new(suffix.Success ? suffix.Groups["lane"].Value : file.Lane, run, results));
+            }
+            attempts.Add(new(group.Key, group.First().Time, runs));
+        }
+        return attempts;
+    }
+
+    private static IGrouping<string, TrxFile>[] DiscoverAttempts(string directory, string? lane, int last, out int skipped)
+    {
         skipped = 0;
         var files = new List<TrxFile>();
         var root = Path.Combine(directory, "acceptance-gate-attempts");
@@ -56,23 +102,10 @@ internal static class GateStatsReader
             if (!DateTimeOffset.TryParseExact(match.Groups["time"].Value, "yyyyMMddHHmmssfff",
                 CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time))
             { skipped++; continue; }
-            files.Add(new(path, Path.Combine(goal, match.Groups["attempt"].Value), time));
+            files.Add(new(path, Path.Combine(goal, match.Groups["attempt"].Value), time, match.Groups["lane"].Value));
         }
-        var attempts = new List<GateAttempt>();
-        foreach (var group in files.GroupBy(file => file.Attempt, StringComparer.Ordinal)
-            .OrderByDescending(group => group.First().Time).ThenBy(group => group.Key, StringComparer.Ordinal).Take(last))
-        {
-            var totals = new Dictionary<string, double>(StringComparer.Ordinal);
-            foreach (var file in group)
-            {
-                var classes = ReadTrx(file.Path);
-                if (classes is null) { skipped++; continue; }
-                foreach (var (name, seconds) in classes)
-                    totals[name] = totals.GetValueOrDefault(name) + seconds;
-            }
-            attempts.Add(new(group.Key, group.First().Time, totals));
-        }
-        return attempts;
+        return files.GroupBy(file => file.Attempt, StringComparer.Ordinal)
+            .OrderByDescending(group => group.First().Time).ThenBy(group => group.Key, StringComparer.Ordinal).Take(last).ToArray();
     }
 
     private static string[] Entries(string directory, bool directories, ref int skipped)
@@ -85,7 +118,7 @@ internal static class GateStatsReader
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { skipped++; return []; }
     }
 
-    private static Dictionary<string, double>? ReadTrx(string path)
+    private static IReadOnlyList<TestResult>? ReadTrx(string path)
     {
         try
         {
@@ -97,25 +130,25 @@ internal static class GateStatsReader
                 .Where(element => element.Attribute("id") is not null)
                 .GroupBy(element => (string)element.Attribute("id")!, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-            var totals = new Dictionary<string, double>(StringComparer.Ordinal);
+            var results = new List<TestResult>();
             foreach (var result in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
             {
                 if (!TimeSpan.TryParse((string?)result.Attribute("duration"), CultureInfo.InvariantCulture, out var duration) ||
                     duration < TimeSpan.Zero) return null;
                 definitions.TryGetValue((string?)result.Attribute("testId") ?? "", out var definition);
+                var identity = AcceptanceTrxTestIdentityResolver.Resolve(result, definition);
                 var name = definition?.Descendants().FirstOrDefault(element => element.Name.LocalName == "TestMethod")
                     ?.Attribute("className")?.Value.Trim();
                 if (string.IsNullOrWhiteSpace(name))
                 {
-                    var identity = AcceptanceTrxTestIdentityResolver.Resolve(result, definition);
                     var selector = identity is null ? "" : AcceptanceTrxTestIdentityResolver.NormalizeSelector(identity);
                     var separator = selector.LastIndexOf('.');
                     if (separator <= 0) return null;
                     name = selector[..separator];
                 }
-                totals[name] = totals.GetValueOrDefault(name) + duration.TotalSeconds;
+                results.Add(new(name, identity, (string?)result.Attribute("outcome"), duration.TotalSeconds));
             }
-            return totals;
+            return results;
         }
         catch (Exception ex) when (ex is XmlException or IOException or UnauthorizedAccessException) { return null; }
     }
