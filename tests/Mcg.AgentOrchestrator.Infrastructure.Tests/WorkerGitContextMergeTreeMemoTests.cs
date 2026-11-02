@@ -189,7 +189,16 @@ public sealed class WorkerGitContextMergeTreeMemoTests
     [Fact]
     public void CreateForRepository_UnchangedPair_ProjectsTwiceWithOneLaunch()
     {
-        using var fixture = CleanFixture();
+        // Projection requires a landing resource; generic src/ files do not reserve one.
+        using var fixture = new AdditiveConflictGitFixture(
+        [
+            new("src/Mcg.AgentOrchestrator.Execution/Workers/MainOnly.cs", "base\n", "main\n", "base\n"),
+            new("src/Mcg.AgentOrchestrator.Execution/Workers/GoalOnly.cs", "base\n", "base\n", "goal\n")
+        ]);
+        var changedFiles = GoalWorktrees.ResolveChangedFilesAgainstHead(fixture.Repository, fixture.GoalId);
+        Assert.True(changedFiles.Succeeded, changedFiles.FailureReason);
+        Assert.Contains("ownership:shared-infrastructure:infrastructure/workers",
+            RepositoryLandingScopeNormalization.Normalize(changedFiles.Files).ResourceKeys);
         var launches = new MergeTreeCounter();
         var projector = GateReadyCandidateProjector.CreateForRepository(
             fixture.Repository, "main", reviewerMergeTreeGitRunner: launches.Run);
