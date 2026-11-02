@@ -9,6 +9,7 @@ internal sealed record ReviewerRoundTouchScope(
 internal sealed class WorkerGitContext
 {
     private readonly Func<string, int, string[], GitCli.GitResult> _reviewerMergeTreeGitRunner;
+    private readonly ReviewerMergeTreeStatusMemo? _mergeTreeMemo;
 
     private const int DiffSummaryMaxChars = 6000;
     internal const int ReviewerChangedFilePromptMaxFiles = 120;
@@ -19,11 +20,14 @@ internal sealed class WorkerGitContext
     internal const int DiffSummaryRetrievalMaxChars = DiffSummaryMaxChars;
 
     internal WorkerGitContext(
-        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null)
+        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null,
+        Func<string, string, string?>? reviewerMergeTreeCommitResolver = null)
     {
         _reviewerMergeTreeGitRunner = reviewerMergeTreeGitRunner ??
             ((workingDirectory, timeoutMilliseconds, arguments) =>
                 GitCli.Run(workingDirectory, timeoutMilliseconds, arguments));
+        _mergeTreeMemo = reviewerMergeTreeCommitResolver is null
+            ? null : new ReviewerMergeTreeStatusMemo(reviewerMergeTreeCommitResolver);
     }
 
     internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch)
@@ -234,6 +238,17 @@ internal sealed class WorkerGitContext
                 "Reviewer merge-tree status unavailable because the working directory is not a git workspace.");
         }
 
+        if (_mergeTreeMemo is null ||
+            !_mergeTreeMemo.TryResolveKey(workingDirectory, baseReference, headReference, out var key))
+            return RunReviewerMergeTree(workingDirectory, baseReference, headReference);
+        if (_mergeTreeMemo.TryGet(key, out var remembered)) return remembered;
+        var status = RunReviewerMergeTree(workingDirectory, key.Base, key.Head);
+        _mergeTreeMemo.Add(key, status);
+        return status;
+    }
+
+    private ReviewerMergeTreeStatus RunReviewerMergeTree(string workingDirectory, string baseReference, string headReference)
+    {
         var mergeTreeResult = _reviewerMergeTreeGitRunner(
             workingDirectory,
             GitCli.DefaultTimeoutMilliseconds,
