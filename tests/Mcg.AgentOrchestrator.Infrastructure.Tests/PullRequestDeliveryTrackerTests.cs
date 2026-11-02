@@ -15,7 +15,7 @@ public sealed class PullRequestDeliveryTrackerTests
         Assert.Equal(1, fixture.Forge.Reads);
         Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
         Assert.NotNull(fixture.Goal.CurrentHold);
-        Assert.Empty(fixture.Forge.Fetches);
+        Assert.Single(fixture.Forge.Fetches);
         Assert.Null(fixture.Fact());
         fixture.Merged();
         fixture.Elapsed = TimeSpan.FromMinutes(2);
@@ -23,7 +23,9 @@ public sealed class PullRequestDeliveryTrackerTests
         Assert.Contains(fixture.Goal.Id, fixture.Tick());
 
         Assert.Equal(2, fixture.Forge.Reads);
-        Assert.Equal(["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], Assert.Single(fixture.Forge.Fetches));
+        Assert.Equal(2, fixture.Forge.Fetches.Count);
+        Assert.All(fixture.Forge.Fetches, fetch =>
+            Assert.Equal(["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], fetch));
         Assert.Equal(fixture.Delivery.Candidate, fixture.Git("rev-parse", "main"));
         Assert.Equal(fixture.Delivery.Candidate, fixture.Git("rev-parse", "HEAD"));
         Assert.Equal("", fixture.Git("status", "--porcelain", "--untracked-files=no"));

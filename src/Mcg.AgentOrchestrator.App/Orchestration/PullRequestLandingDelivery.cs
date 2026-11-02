@@ -9,6 +9,20 @@ internal static class PullRequestLandingDelivery
 {
     private const string PendingRecordPrefix = "pull request delivery pending recording: ";
     internal const string ClosedUnmergedPrefix = "pull request closed unmerged: ";
+    internal const string RefreshStartedPrefix = "pull request refresh started: ";
+    internal const string RefreshStoppedPrefix = "pull request refresh stopped: ";
+
+    // Timeline order, rather than wall-clock comparison, also handles deliveries on a fixed clock.
+    internal static bool HasRefreshStarted(Goal goal) => SinceDelivery(goal)
+        .Any(item => item.Message.StartsWith(RefreshStartedPrefix, StringComparison.Ordinal));
+
+    private static IEnumerable<ProgressEvent> SinceDelivery(Goal goal) => goal.Timeline.Reverse()
+        .Where(item => item.Kind == ProgressKind.GoalPolicyDecision)
+        .TakeWhile(item => !IsDeliveredForReview(item.Message));
+
+    internal static bool RefreshStopped(Goal goal) => goal.DeliveredForReview is not null &&
+        (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded ||
+         SinceDelivery(goal).Any(item => item.Message.StartsWith(RefreshStoppedPrefix, StringComparison.Ordinal)));
     public static bool Applies(OrchestratorWorkspace? workspace) => workspace is { IsProjectScoped: true, Delivery: ProjectDelivery.PullRequest };
     public static bool IsDeliveredForReview(string reason) => reason.StartsWith("delivered for review: ", StringComparison.Ordinal);
 
@@ -26,6 +40,9 @@ internal static class PullRequestLandingDelivery
             return Result(reason, stateChanged: true);
         }
 
+        if (RefreshStopped(goal)) return Result("landing mutation blocked: pull request refresh stopped");
+        var refreshing = HasRefreshStarted(goal);
+        var previousDelivery = goal.DeliveredForReview;
         if (goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
             return Result($"delivered for review: {delivered.Url}" + ActingSuffix(delivered.ActingLogin));
         if (mutationBlocker?.Invoke() is { Length: > 0 } blocked)
@@ -59,6 +76,7 @@ internal static class PullRequestLandingDelivery
             return Fail($"pull request delivery failed: gh-failed: {ForgeDiagnosticRedactor.Redact(exception.Message)}");
         }
 
+        if (RefreshStopped(goal)) return Result("landing mutation blocked: pull request refresh stopped");
         var publication = publisher.Publish(request);
         if (!publication.Succeeded)
         {
@@ -82,6 +100,9 @@ internal static class PullRequestLandingDelivery
             return Result($"landing mutation blocked: delivered-for-review record write failed ({exception.GetType().Name})",
                 stateChanged: true);
         }
+        if (refreshing && previousDelivery is not null)
+            kernel.RecordGoalPolicyDecision(goal.Id,
+                $"pull request refreshed: {publication.Url} pushed={publication.PushedCommit} previous={previousDelivery.PushedCommit}");
         return Result($"delivered for review: {publication.Url}" + ActingSuffix(publication.ActingLogin), stateChanged: true);
     }
 
