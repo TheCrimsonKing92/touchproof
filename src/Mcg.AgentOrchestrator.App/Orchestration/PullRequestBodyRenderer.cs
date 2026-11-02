@@ -6,9 +6,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class PullRequestBodyRenderer
 {
-    // Redact path-shaped tokens conservatively, including relative paths and file URIs.
+    // Redact machine-local paths while preserving repository-relative paths.
     private static readonly Regex LocalPath = new(
-        "(?:file:[^\\s`\"<>]+|[A-Za-z]:[\\\\/][^\\r\\n`\"<>]*|\\\\\\\\[^\\s`\"<>]+|(?:~|\\.{1,2})?[\\\\/][^\\s`\"<>]+|[\\w.-]+[\\\\/][^\\s`\"<>]+)",
+        """(?:file:[^\s`"<>]+|(?<!\w)[A-Za-z]:[\\/][^\r\n`"<>]*|\\\\[^\s`"<>]+|(?<![\w./\\])~[\\/][^\s`"<>]+|(?<![\w./\\])[\\/](?:[A-Za-z][\\/])?(?i:users|home|documents and settings)[\\/][^\s`"<>]+)""",
         RegexOptions.CultureInvariant);
     private static readonly Regex UserDirectory = new(
         "(?i)[\\\\/](?:users|home|documents and settings)[\\\\/]([^\\\\/\\s`\"<>]+)", RegexOptions.CultureInvariant);
@@ -47,10 +47,15 @@ internal static class PullRequestBodyRenderer
         lines.Add("");
         lines.Add($"acceptance gate passed, attempt {attemptId}, checks: {string.Join(", ", checkNames.Select(Scrub))}");
         var body = string.Join(Environment.NewLine, lines);
+        ValidateContent(title, body, usernames);
+        return (title, body);
+    }
+
+    internal static void ValidateContent(string title, string body, IReadOnlyList<string> usernames)
+    {
         if (string.IsNullOrWhiteSpace(title) || LocalPath.IsMatch(body) ||
             body.Contains(".orchestrator", StringComparison.OrdinalIgnoreCase) ||
             usernames.Any(name => body.Contains(name, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Pull request content could not be rendered safely.");
-        return (title, body);
     }
 }
