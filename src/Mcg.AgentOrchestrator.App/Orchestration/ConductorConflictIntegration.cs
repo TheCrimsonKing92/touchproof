@@ -13,11 +13,12 @@ internal sealed class ConductorConflictIntegration(
     Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> retry,
     Func<Goal, DeveloperBranchIntegrationResult> inner,
     Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
-    Func<string, string?>? objectiveReader = null)
+    Func<string, string?>? objectiveReader = null, string? projectHomeDirectory = null)
 {
     internal const string OperationName = "conductor:conflict-integration";
     private sealed record Round(string OriginalHead, string MainSha, string[] ConflictPaths,
-        string DeveloperTaskId, string[] LandingGoalPrefixes, DateTimeOffset? RetryAt = null, bool Admitted = false);
+        string DeveloperTaskId, string[] LandingGoalPrefixes, DateTimeOffset? RetryAt = null, bool Admitted = false,
+        string? BuildCheck = null);
 
     internal (bool Started, string Detail) TryRecord(Goal goal)
     {
@@ -102,12 +103,13 @@ internal sealed class ConductorConflictIntegration(
             ?? throw new InvalidOperationException("Admitted integration worktree disappeared.");
         var candidate = Run(worktree, "rev-parse", "HEAD").Trim();
         string? failure;
-        try { failure = ValidateCandidate(worktree, round, candidate); }
+        string? buildOutput = null;
+        try { failure = ValidateCandidate(worktree, round, candidate, out buildOutput); }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         { failure = "validation unavailable: " + exception.Message; }
         if (failure is null)
         {
-            Save(goal, round, GoalOperationStatus.Completed);
+            Save(goal, round with { BuildCheck = buildOutput }, GoalOperationStatus.Completed);
             ConductorConflictIntegrationMarker.Remove(worktree);
             return null;
         }
@@ -119,8 +121,9 @@ internal sealed class ConductorConflictIntegration(
             "; the operator integrates main into the goal branch";
     }
 
-    private string? ValidateCandidate(string worktree, Round round, string head)
+    private string? ValidateCandidate(string worktree, Round round, string head, out string? buildOutput)
     {
+        buildOutput = null;
         if (ReadRef(worktree, "MERGE_HEAD") is not null) return "merge still in progress";
         Run(worktree, "merge-base", "--is-ancestor", round.OriginalHead, head);
         var commits = Run(worktree, "rev-list", "--first-parent", "--reverse", round.OriginalHead + ".." + head)
@@ -146,8 +149,9 @@ internal sealed class ConductorConflictIntegration(
                 line.StartsWith(">>>>>>> ", StringComparison.Ordinal) || line == "======="))
                 return "conflict marker check: " + path;
         }
-        var build = buildCheck is null ? RatchetConflictDispatchIntegration.BuildChangedProjects(worktree, round.OriginalHead, head) : buildCheck(worktree);
-        if (!build.Ran || build.ExitCode != 0) return "build check: " + VerificationTextBounds.BoundText(build.Output, path: null);
+        var build = buildCheck is null ? RatchetConflictDispatchIntegration.BuildChangedProjects(worktree, round.OriginalHead, head, projectHomeDirectory) : buildCheck(worktree);
+        buildOutput = VerificationTextBounds.BoundText(build.Output, path: null);
+        if ((!build.Ran || build.ExitCode != 0) && !ManifestCommandBuildCheck.IsNoBuildDeclared(build)) return "build check: " + buildOutput;
         return ReadRef(worktree, "HEAD") == head ? null : "candidate moved during build check";
     }
 
