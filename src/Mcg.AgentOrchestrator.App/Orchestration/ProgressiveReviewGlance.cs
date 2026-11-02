@@ -160,6 +160,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _liveChanges;
     private readonly Func<string, string?, string> _diffReader;
+    private readonly Func<string, string[], GitCli.GitResult> _gitRunner;
     private readonly Func<TaskProcessRecord?, string> _transcriptReader;
     private readonly Dictionary<string, RoundState> _rounds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DispatchState> _dispatches = new(StringComparer.Ordinal);
@@ -169,8 +170,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly HashSet<string> _fallbackSuppressionWindows = new(StringComparer.Ordinal);
     private bool _circuitDrainFailureReported;
 
-    internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
-        (dir, args) => GitCli.Run(dir, args);
+    private static GitCli.GitResult RunGitCli(string dir, string[] args) => GitCli.Run(dir, args);
 
     public ProgressiveReviewGlanceCoordinator(
         IProgressiveReviewGlanceRunner runner,
@@ -182,7 +182,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         Func<string, string?, string>? diffReader = null,
         Func<TaskProcessRecord?, string>? transcriptReader = null,
         IProgressiveReviewSteeringStore? steeringStore = null,
-        IProgressiveReviewGlanceCircuitStore? circuitStore = null)
+        IProgressiveReviewGlanceCircuitStore? circuitStore = null,
+        Func<string, string[], GitCli.GitResult>? gitRunner = null)
     {
         _runner = runner;
         _eventWriter = eventWriter;
@@ -196,7 +197,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
             throw new ArgumentOutOfRangeException(nameof(options), "Transcript growth bucket must be positive.");
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
-        _diffReader = diffReader ?? ReadDiff;
+        _gitRunner = gitRunner ?? RunGitCli;
+        _diffReader = diffReader ?? ((directory, baseCommit) => ReadDiff(directory, baseCommit, _gitRunner));
         _transcriptReader = transcriptReader ?? (process => ReadTranscriptTail(process, _options.TranscriptTailByteLimit));
         _steeringStore = steeringStore;
         _circuitStore = circuitStore ?? new InMemoryProgressiveReviewGlanceCircuitStore();
@@ -1591,27 +1593,32 @@ Corrective direction:
         return description[start..];
     }
 
-    internal static string ReadDiff(string workingDirectory, string? baseCommit)
+    internal static string ReadDiff(
+        string workingDirectory, string? baseCommit,
+        Func<string, string[], GitCli.GitResult>? gitRunner = null)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
         {
             return "diff unavailable: missing working directory";
         }
 
+        gitRunner ??= RunGitCli;
         var committed = string.IsNullOrWhiteSpace(baseCommit)
             ? string.Empty
-            : RunGit(workingDirectory, ["diff", $"{baseCommit}..HEAD", "--"]).Output;
-        var working = RunGit(workingDirectory, ["diff", "--"]).Output;
-        var staged = RunGit(workingDirectory, ["diff", "--cached", "--"]).Output;
-        var untracked = ReadUntrackedDiff(workingDirectory);
+            : gitRunner(workingDirectory, ["diff", $"{baseCommit}..HEAD", "--"]).Output;
+        var working = gitRunner(workingDirectory, ["diff", "--"]).Output;
+        var staged = gitRunner(workingDirectory, ["diff", "--cached", "--"]).Output;
+        var untracked = ReadUntrackedDiff(workingDirectory, gitRunner);
         // Prefix-bounded review prompts must preserve live dispatch work before older committed history.
         var combined = string.Join(Environment.NewLine, new[] { working, staged, untracked, committed }.Where(text => !string.IsNullOrWhiteSpace(text)));
         return string.IsNullOrWhiteSpace(combined) ? "(no diff content available)" : combined;
     }
 
-    internal static string ReadUntrackedDiff(string workingDirectory)
+    internal static string ReadUntrackedDiff(
+        string workingDirectory, Func<string, string[], GitCli.GitResult>? gitRunner = null)
     {
-        var result = RunGit(workingDirectory, ["ls-files", "--others", "--exclude-standard"]);
+        gitRunner ??= RunGitCli;
+        var result = gitRunner(workingDirectory, ["ls-files", "--others", "--exclude-standard"]);
         if (result.ExitCode != 0)
         {
             return string.Empty;

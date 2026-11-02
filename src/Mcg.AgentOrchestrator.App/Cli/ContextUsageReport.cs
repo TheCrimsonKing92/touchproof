@@ -13,7 +13,9 @@ internal sealed record ContextUsageRow(
     ContextUsageStat Cached,
     ContextUsageStat Uncached,
     ContextUsageStat Output,
-    ContextUsageStat HarnessOverhead);
+    ContextUsageStat HarnessOverhead,
+    int MissingUsageCount,
+    IReadOnlyDictionary<string, int> MissingUsageReasons);
 
 internal sealed record ContextUsageResult(
     DateTimeOffset? Since,
@@ -36,16 +38,23 @@ internal static class ContextUsageReport
         var rows = groups.Select(group =>
         {
             var receipts = group.Select(item => item.Dispatch.ContextPackageReceipt).ToArray();
+            var usage = group.Select(item => ContextUsageFigures.RecordedUsage(item.Dispatch)).ToArray();
+            var missing = usage.Where(value => value?.InputTokens.State != ProviderUsageState.Reported).ToArray();
+            var reasons = missing.GroupBy(ContextUsageFigures.MissingReasonCode, StringComparer.Ordinal)
+                .OrderBy(reason => reason.Key, StringComparer.Ordinal)
+                .ToDictionary(reason => reason.Key, reason => reason.Count(), StringComparer.Ordinal);
             return new ContextUsageRow(
                 group.Key.Role,
                 group.Key.Model,
                 group.Count(),
-                receipts.Count(receipt => receipt?.InputTokens.State == ProviderUsageState.Reported),
-                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.Provider(receipt.InputTokens).Value)),
-                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.Provider(receipt.CachedInputTokens).Value)),
-                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.Uncached(receipt).Value)),
-                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.Provider(receipt.OutputTokens).Value)),
-                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)));
+                usage.Count(value => value?.InputTokens.State == ProviderUsageState.Reported),
+                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.InputTokens).Value)),
+                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.CachedInputTokens).Value)),
+                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Uncached(value.InputTokens, value.CachedInputTokens).Value)),
+                Stat(usage.Select(value => value is null ? null : ContextUsageFigures.Provider(value.OutputTokens).Value)),
+                Stat(receipts.Select(receipt => receipt is null ? null : ContextUsageFigures.HarnessOverhead(receipt).Value)),
+                missing.Length,
+                reasons);
         })
         .OrderBy(row => row.Role, StringComparer.Ordinal)
         .ThenBy(row => row.Model == "unknown" ? 1 : 0)

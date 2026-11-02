@@ -35,10 +35,10 @@ internal sealed class GoalGitFactIndex(
 {
     internal const string GoalBranchRefPrefix = "refs/heads/goal/";
     private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
-    private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? GitRunner;
+    private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? RunGitCli;
 
-    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
-        (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
+    internal static GitCli.GitResult RunGitCli(string workingDirectory, IReadOnlyList<string> args) =>
+        GitCli.Run(workingDirectory, args.ToArray());
 
     internal GoalGitFactSnapshot Snapshot => new(
         isGitWorkTree,
@@ -62,7 +62,7 @@ internal sealed class GoalGitFactIndex(
         GoalBranchContentStateCache? branchContentStateCache = null,
         GoalGitFactSnapshotCache? snapshotCache = null)
     {
-        gitRunner ??= GitRunner;
+        gitRunner ??= RunGitCli;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
         var fingerprint = snapshotCache is null
             ? null

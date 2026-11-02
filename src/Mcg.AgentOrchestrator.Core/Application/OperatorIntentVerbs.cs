@@ -83,7 +83,8 @@ public sealed record AdjudicateOperatorIntentPayload(
     string? Cause = null,
     string? Reversibility = null,
     string? Precedent = null,
-    AdjudicationPreconditionFacts? Precondition = null);
+    AdjudicationPreconditionFacts? Precondition = null,
+    string? RulingText = null);
 
 public sealed record AdjudicationPreconditionFacts(
     string TaskStatus,

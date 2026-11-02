@@ -13,7 +13,6 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
     public void IntegrationCreationFailure_TombstonesPreparedGoalLandingIntents()
     {
         var repo = CreateAcceptanceCohortRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             AddAcceptanceManifest(repo);
@@ -41,12 +40,12 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-integration-create-failure", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
                 100, [], 0, [WritePassingTrx(repo, "receipt-integration-create-failure.trx")], ValidForLanding: true));
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args.Length == 3 &&
                 args[0] == "update-ref" &&
                 args[1] == $"refs/heads/{LandingExecutor.IntegrationBranchName}"
                     ? new GitCli.GitResult(1, string.Empty, "fixture integration creation failure")
-                    : GitCli.Run(workingDirectory, args);
+                    : GitCli.Run(workingDirectory, args));
 
             var result = LandingExecutor.ExecuteCohort(
                 kernel, [firstGoal, secondGoal], workspace, receipt, integration.CommitRevision, store,
@@ -62,7 +61,6 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             DeleteDirectory(repo);
         }
     }
@@ -71,7 +69,6 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
     public void MainCasFailure_RestoresIntegrationRef_AndLandsNeitherMember()
     {
         var repo = CreateAcceptanceCohortRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             AddAcceptanceManifest(repo);
@@ -105,7 +102,7 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
                 "receipt-cas", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
                 100, [], 0, [WritePassingTrx(repo, "receipt-cas.trx")], ValidForLanding: true));
             var moved = false;
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
             {
                 var isOldMerge = args.SequenceEqual(["merge", "--ff-only", integration.CommitRevision]);
                 var isMainCas = args.Length == 4 && args[0] == "update-ref" && args[1] == "refs/heads/main";
@@ -116,7 +113,7 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
                     Assert.Equal(0, movement.ExitCode);
                 }
                 return GitCli.Run(workingDirectory, args);
-            };
+            });
 
             var result = LandingExecutor.ExecuteCohort(
                 kernel, [firstGoal, secondGoal], workspace, receipt, integration.CommitRevision, store,
@@ -137,7 +134,6 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             DeleteDirectory(repo);
         }
     }

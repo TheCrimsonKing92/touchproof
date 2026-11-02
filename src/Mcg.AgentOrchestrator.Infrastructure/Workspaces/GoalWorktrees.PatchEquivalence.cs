@@ -79,7 +79,8 @@ public static partial class GoalWorktrees
                         return true;
                     }
                 }
-                else if (TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{integrationBranch}"], out var currentMain) &&
+                else if ((GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{integrationBranch}", out var currentMain) ||
+                          TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{integrationBranch}"], out currentMain)) &&
                          TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, currentMain, newHead))
                 {
                     evidence = $"goal-owned lines {oldBase}..{oldHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical";
@@ -143,7 +144,8 @@ public static partial class GoalWorktrees
     {
         resolved = string.Empty;
         return CommitShaPattern.IsMatch(sha) &&
-            TryReadGit(executionDirectory, ["rev-parse", "--verify", "--quiet", $"{sha}^{{commit}}"], out resolved) &&
+            (GitRevisionReader.Shared.TryResolve(executionDirectory, $"{sha}^{{commit}}", out resolved) ||
+             TryReadGit(executionDirectory, ["rev-parse", "--verify", "--quiet", $"{sha}^{{commit}}"], out resolved)) &&
             CommitShaPattern.IsMatch(resolved);
     }
 
@@ -193,7 +195,8 @@ public static partial class GoalWorktrees
             if (parents.Length != 3 ||
                 !string.Equals(parents[0], merge, StringComparison.OrdinalIgnoreCase) ||
                 parents.Any(parent => !CommitShaPattern.IsMatch(parent)) ||
-                !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{merge}^{{tree}}"], out var recordedTree) ||
+                !(GitRevisionReader.Shared.TryResolve(executionDirectory, $"{merge}^{{tree}}", out var recordedTree) ||
+                  TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{merge}^{{tree}}"], out recordedTree)) ||
                 !CommitShaPattern.IsMatch(recordedTree))
             {
                 refusalReason = unverifiable;

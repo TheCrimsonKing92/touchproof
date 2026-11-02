@@ -11,10 +11,10 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
     internal const string FailingTest = "Ns.CulpritTests.Fails";
     internal static readonly string[] DependencyClasses = ["Ns.DependentOneTests", "Ns.DependentTwoTests"];
     internal static readonly string[] ExpectedSelection = [FailingTest, .. DependencyClasses];
-    private static readonly string[] Paths = ["src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+    internal static readonly string[] Paths = ["src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
         "src/Mcg.AgentOrchestrator.Infrastructure/Second.cs",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CulpritTests.cs"];
-    private const string SharedPath = "src/Mcg.AgentOrchestrator.Infrastructure/Shared.cs";
+    internal const string SharedPath = "src/Mcg.AgentOrchestrator.Infrastructure/Shared.cs";
 
     [Theory]
     [InlineData(false)]
@@ -134,41 +134,23 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
 
     internal static void WithTrain(string mode, bool gateOnly, Action<Scenario> assert)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var prepared = MergeTrainRecheckFixtureTemplate.Copy(mode);
+        var repo = prepared.Repo;
         var cleanup = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
-            var sharedLines = Enumerable.Range(0, 40).Select(index => $"// line {index}").ToArray();
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(repo, SharedPath))!);
-            // Match the candidate line endings so A and C edit separate lines, not the whole file.
-            File.WriteAllText(Path.Combine(repo, SharedPath), string.Join('\n', sharedLines) + "\n");
-            Directory.CreateDirectory(Path.Combine(repo, "tests"));
-            File.WriteAllText(Path.Combine(repo, "tests/UnownedTests.cs"), "namespace Ns; public class UnownedTests { }");
-            RunGit(repo, "add", SharedPath, "tests/UnownedTests.cs");
-            RunGit(repo, "commit", "-m", "Seed independent and shared source");
             var kernel = new AgentOrchestratorKernel();
             var goals = Enumerable.Range(0, 3).Select(index =>
             {
-                var goal = CreateCompletedGoal(kernel, $"Focused recheck member {index}", repo);
+                var goal = kernel.CreateGoal(prepared.History.Members[index].GoalId,
+                    $"Focused recheck member {index}", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id,
+                    ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+                Assert.Equal(GoalStatus.Verified, goal.Status);
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
-                if (mode == "overlap" && index == 0)
-                {
-                    var lines = sharedLines.ToArray();
-                    lines[0] = "// A's change";
-                    CreateWorktreeCandidate(repo, goal.Id, SharedPath, string.Join('\n', lines) + "\n");
-                }
-                else
-                    CreateWorktreeCandidate(repo, goal.Id, Paths[index],
-                        index == 2 ? "namespace Ns; public class CulpritTests { }" : $"public class Member{index} {{ }}");
-                if (mode == "overlap" && index == 2)
-                {
-                    var lines = sharedLines.ToArray();
-                    lines[^1] = "// C's change";
-                    CreateWorktreeCandidate(repo, goal.Id, SharedPath, string.Join('\n', lines) + "\n");
-                }
                 return goal;
             }).ToArray();
             var failing = mode == "unattributed" ? "Ns.UnownedTests.Fails" : FailingTest;
@@ -231,7 +213,7 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
             var failed = Assert.Single(store.ReadReceiptsSince(DateTimeOffset.MinValue)
                 .Where(receipt => receipt.Outcome == MergeTrainGateOutcome.Failed));
             assert(new(repo, kernel, goals, driver, selection, result, store, failed, () => verifier.RunCount,
-                calls, dependencyCalls, trainCommit));
+                calls, dependencyCalls, trainCommit, prepared.History));
             AssertNoMergeTrainWorkspaces(repo);
         }
         finally { DeleteDirectory(repo); }
@@ -257,5 +239,6 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
     internal sealed record Scenario(string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals,
         ConductorDriver Driver, ConductorMergeTrainSelection Selection, ConductorMergeTrainRunResult Result,
         MergeTrainAcceptanceStore Store, MergeTrainReceipt Red, Func<int> FullGateCount,
-        List<Invocation> Calls, List<IReadOnlyList<string>> DependencyCalls, string? TrainCommit);
+        List<Invocation> Calls, List<IReadOnlyList<string>> DependencyCalls, string? TrainCommit,
+        MergeTrainRecheckFixtureTemplate.PreparedHistory Prepared);
 }

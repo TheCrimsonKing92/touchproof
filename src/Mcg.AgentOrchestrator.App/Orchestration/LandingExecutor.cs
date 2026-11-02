@@ -40,8 +40,29 @@ internal static partial class LandingExecutor
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     private const string PostLandingConfirmationReasonPrefix =
         "goal landed previously, then post-landing confirmation failed:";
-    internal static Func<string, string[], GitCli.GitResult> GitRunner { get; set; } =
-        (workingDirectory, args) => GitCli.Run(workingDirectory, args);
+    private static readonly AsyncLocal<Func<string, string[], GitCli.GitResult>?> GitRunnerOverride = new();
+
+    internal static Func<string, string[], GitCli.GitResult> GitRunner => GitRunnerOverride.Value ?? GitCli.Run;
+
+    // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
+    internal static IDisposable UseGitRunner(Func<string, string[], GitCli.GitResult> runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        var scope = new GitRunnerScope(GitRunnerOverride.Value);
+        GitRunnerOverride.Value = runner;
+        return scope;
+    }
+
+    private sealed class GitRunnerScope(Func<string, string[], GitCli.GitResult>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                GitRunnerOverride.Value = previous;
+        }
+    }
 
     public static LandingResult Execute(
         AgentOrchestratorKernel kernel,
@@ -1221,7 +1242,9 @@ internal static partial class LandingExecutor
         path.Replace('\\', '/').Trim().TrimStart('/');
 
     private static GitCli.GitResult RunGit(string workingDirectory, params string[] args) =>
-        GitRunner(workingDirectory, args);
+        GitRunnerOverride.Value is { } runner
+            ? runner(workingDirectory, args)
+            : GitCli.Run(workingDirectory, args);
 
     // Counts DISTINCT tasks with genuine verification failures. A task whose only failures were
     // transient empty-output dispatch flakes and whose latest verification passed was auto-recovered

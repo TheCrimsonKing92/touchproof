@@ -183,7 +183,8 @@ public static partial class GoalWorktrees
     private static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
         string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId, string mainHead)
     {
-        if (!TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out var oldHead) ||
+        if (!(GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{branch}", out var oldHead) ||
+              TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out oldHead)) ||
             !CommitShaPattern.IsMatch(mainHead) || !CommitShaPattern.IsMatch(oldHead) ||
             !HasMergeCommitsOutsideBase(executionDirectory, mainHead, oldHead) ||
             !TryReadCleanMergeTree(executionDirectory, mainHead, oldHead, out var tree))
@@ -369,6 +370,7 @@ public static partial class GoalWorktrees
 
     private static string? GetCurrentBranchName(string executionDirectory)
     {
+        if (GitRevisionReader.TryReadCurrentBranch(executionDirectory, out var current)) return current;
         var result = GitCli.Run(executionDirectory, "branch", "--show-current");
         var branch = result.Output.Trim();
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(branch) ? branch : null;

@@ -43,12 +43,61 @@ internal static class PullRequestBodyRenderer
         var safeHeading = Scrub(heading);
         if (safeHeading != title) lines.Add(safeHeading);
         lines.Add("");
+        var changeSummary = RenderChangeSummary(goal.Objective, Scrub);
+        if (changeSummary is not null)
+        {
+            lines.Add("## What this changes");
+            if (changeSummary.Length > 0)
+            {
+                lines.Add("");
+                lines.Add(changeSummary);
+            }
+            lines.Add("");
+        }
+        lines.Add("## Acceptance criteria");
+        lines.Add("");
         lines.AddRange(criteria.Select((criterion, index) => $"{index + 1}. {Scrub(criterion)}"));
+        lines.Add("");
+        lines.Add("## Gate");
         lines.Add("");
         lines.Add($"acceptance gate passed, attempt {attemptId}, checks: {string.Join(", ", checkNames.Select(Scrub))}");
         var body = string.Join(Environment.NewLine, lines);
         ValidateContent(title, body, usernames);
         return (title, body);
+    }
+
+    private static string? RenderChangeSummary(string objective, Func<string, string> scrub)
+    {
+        const int characterLimit = 3000;
+        var sourceLines = objective.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+        var headingIndex = Array.FindIndex(sourceLines,
+            line => line.StartsWith("## What to build", StringComparison.Ordinal));
+        if (headingIndex < 0) return null;
+
+        var summaryLines = sourceLines.Skip(headingIndex + 1)
+            .TakeWhile(line => !line.StartsWith("## ", StringComparison.Ordinal))
+            .Select(line =>
+            {
+                // Scrub trims whitespace; restore indentation so nested lists retain their structure.
+                var indentLength = line.Length - line.TrimStart().Length;
+                var safeLine = scrub(line);
+                return safeLine.Length == 0 ? "" : line[..indentLength] + safeLine;
+            }).ToArray();
+        var summary = string.Join(Environment.NewLine, summaryLines);
+        if (summary.Length <= characterLimit) return summary;
+
+        var retainedLines = new List<string>();
+        var retainedLength = 0;
+        foreach (var line in summaryLines)
+        {
+            // Reserve the separator and final ellipsis line before retaining each complete line.
+            var addedLength = line.Length + Environment.NewLine.Length;
+            if (retainedLength + addedLength + 1 > characterLimit) break;
+            retainedLines.Add(line);
+            retainedLength += addedLength;
+        }
+        retainedLines.Add("…");
+        return string.Join(Environment.NewLine, retainedLines);
     }
 
     internal static void ValidateContent(string title, string body, IReadOnlyList<string> usernames)

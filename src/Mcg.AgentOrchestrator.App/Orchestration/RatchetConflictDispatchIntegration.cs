@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class RatchetConflictDispatchIntegration(
     AgentOrchestratorKernel kernel, string executionDirectory, string integrationBranch,
-    string conductEventsLogPath, Func<string, OrchestratorBuildCheckResult>? buildCheck = null)
+    string conductEventsLogPath, Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
+    string? projectHomeDirectory = null)
 {
     private readonly FailedRoundCheckpointPreDispatch _inner = new(kernel, executionDirectory, integrationBranch);
 
@@ -39,11 +40,11 @@ internal sealed class RatchetConflictDispatchIntegration(
             check = new(false, -1, "Resolved merge parent identities could not be verified.");
         else
         {
-            try { check = buildCheck is null ? BuildChangedProjects(worktree, oldHead, newHead) : buildCheck(worktree); }
+            try { check = buildCheck is null ? BuildChangedProjects(worktree, oldHead, newHead, projectHomeDirectory) : buildCheck(worktree); }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             { check = new(false, -1, "Build check failed: " + exception.Message); }
         }
-        if (!check.Ran || check.ExitCode != 0)
+        if ((!check.Ran || check.ExitCode != 0) && !ManifestCommandBuildCheck.IsNoBuildDeclared(check))
         {
             var restored = TryRestore(worktree, goal.Id, oldHead, newHead);
             var output = VerificationTextBounds.BoundText(check.Output, path: null);
@@ -52,7 +53,8 @@ internal sealed class RatchetConflictDispatchIntegration(
         }
         ResolvedCandidateObligationRebinder.Rebind(kernel, goal, newHead);
         return new(DeveloperBranchIntegrationStatus.Integrated,
-            $"Conductor integrated main by ratchet ceiling conflict resolution at {newHead}.", [],
+            $"Conductor integrated main by ratchet ceiling conflict resolution at {newHead}." +
+                (ManifestCommandBuildCheck.IsNoBuildDeclared(check) ? Environment.NewLine + check.Output : ""), [],
             OriginalCandidateSha: oldHead, IntegratedMainSha: ids[2], ResultingCandidateSha: newHead);
     }
 
@@ -70,14 +72,21 @@ internal sealed class RatchetConflictDispatchIntegration(
         return result;
     }
 
-    internal static OrchestratorBuildCheckResult BuildChangedProjects(string worktree, string oldHead, string newHead)
+    internal static OrchestratorBuildCheckResult BuildChangedProjects(string worktree, string oldHead, string newHead,
+        string? projectHomeDirectory = null) => BuildChangedProjects(worktree, oldHead, newHead,
+            projectHomeDirectory, OrchestratorBuildEvidenceCheck.RunDefault, ManifestCommandBuildCheck.RunCommand);
+
+    internal static OrchestratorBuildCheckResult BuildChangedProjects(string worktree, string oldHead, string newHead,
+        string? projectHomeDirectory, Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> dotnetBuild,
+        Func<string[], string, TimeSpan, GoalAcceptanceVerifier.CommandResult> commandRunner)
     {
         var diff = GitCli.Run(worktree, "diff", "--name-only", "-z", oldHead, newHead);
         if (!diff.Succeeded) return new(false, -1, "Could not determine build scope: " + diff.Error);
         var projects = WorkerBuildEvidenceRequirement.FindRequiredProjects(worktree, AgentRole.Developer,
             diff.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries), []);
-        return projects.Count == 0 ? new(false, -1, "Could not determine changed projects for build check.")
-            : OrchestratorBuildEvidenceCheck.RunDefault(new(worktree, projects, TimeSpan.FromMinutes(7)));
+        return projects.Count == 0
+            ? ManifestCommandBuildCheck.Run(worktree, projectHomeDirectory, TimeSpan.FromMinutes(7), commandRunner)
+            : dotnetBuild(new(worktree, projects, TimeSpan.FromMinutes(7)));
     }
 
     private static bool TryRestore(string worktree, GoalId goalId, string oldHead, string newHead)

@@ -23,8 +23,12 @@ public sealed class PullRequestBodyPathRedactionTests
         {
             "Combat math coverage",
             "",
+            "## Acceptance criteria",
+            "",
             "1. The committed file `src/game/combat-math.test.ts` covers combat math.",
             "2. The diff adds only `src/game/combat-math.test.ts`.",
+            "",
+            "## Gate",
             "",
             "acceptance gate passed, attempt gate-attempt-1, checks: unit, lint"
         }), rendered.Body);

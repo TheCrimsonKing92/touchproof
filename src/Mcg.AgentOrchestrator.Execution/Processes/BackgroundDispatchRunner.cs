@@ -874,27 +874,26 @@ public sealed partial class BackgroundDispatchRunner
         }
         if (outcome.Verification is not null && outcome.DispatchAttemptAt is { } dispatchAttemptAt)
         {
-            var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == dispatchAttemptAt)
-                ?? throw new InvalidOperationException(
-                    $"Cannot record provider usage for unknown dispatch attempt {dispatchAttemptAt:O}.");
-            var receipt = dispatch.ContextPackageReceipt
-                ?? throw new InvalidOperationException(
-                    $"Dispatch attempt {dispatchAttemptAt:O} has no context package receipt.");
-            var measuredReceipt = receipt
-                .WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason)
-                .WithToolTranscriptCharacters(
-                    outcome.Verification.AuthoritativeStandardOutput?.Length ??
-                    outcome.Verification.StandardOutput.Length);
-            if (outcome.ProviderUsage is not null)
+            var matches = task.DispatchHistory.Where(candidate => candidate.DispatchedAt == dispatchAttemptAt).Take(2).ToArray();
+            // Missing telemetry targets must not fail process verification or reconciliation.
+            if (matches.Length == 1 && matches[0].ContextPackageReceipt is { } receipt)
             {
-                measuredReceipt = measuredReceipt.WithValidatedContext();
+                var measuredReceipt = receipt
+                    .WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason)
+                    .WithToolTranscriptCharacters(
+                        outcome.Verification.AuthoritativeStandardOutput?.Length ??
+                        outcome.Verification.StandardOutput.Length);
+                if (outcome.ProviderUsage is not null)
+                {
+                    measuredReceipt = measuredReceipt.WithValidatedContext();
+                }
+                kernel.RecordDispatchContextPackageReceipt(
+                    goalId,
+                    taskId,
+                    dispatchAttemptAt,
+                    measuredReceipt);
+                task = kernel.GetTask(goalId, taskId);
             }
-            kernel.RecordDispatchContextPackageReceipt(
-                goalId,
-                taskId,
-                dispatchAttemptAt,
-                measuredReceipt);
-            task = kernel.GetTask(goalId, taskId);
             if (task.LastDispatch?.DispatchedAt != dispatchAttemptAt)
             {
                 // Delayed telemetry belongs to the originating attempt, but its stale process and

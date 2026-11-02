@@ -684,7 +684,6 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
     public void AcceptanceQueuePlannerBatchesGoalBranchFactsOncePerPlan()
     {
         var repo = CreateSeededRepository();
-        var originalRunner = GoalGitFactIndex.GitRunner;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -695,7 +694,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             RunGit(repo, "branch", GoalWorktrees.BranchName(alsoPresent.Id));
             var batchedGitCalls = new List<string>();
 
-            GoalGitFactIndex.GitRunner = (workingDirectory, args) =>
+            Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner = (workingDirectory, args) =>
             {
                 if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(repo), StringComparison.OrdinalIgnoreCase))
                 {
@@ -714,10 +713,10 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                         string.Empty);
                 }
 
-                return originalRunner(workingDirectory, args);
+                return GitCli.Run(workingDirectory, args.ToArray());
             };
 
-            var plan = AcceptanceQueuePlanner.Build(kernel, repo, AutonomyPolicy.SupervisedAuto, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
+            var plan = AcceptanceQueuePlanner.Build(kernel, repo, AutonomyPolicy.SupervisedAuto, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, gitRunner);
 
             Assert.Equal(2, plan.Items.Count);
             Assert.Contains(plan.Items, item => item.GoalId == present.Id);
@@ -730,7 +729,6 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         }
         finally
         {
-            GoalGitFactIndex.GitRunner = originalRunner;
             DeleteDirectory(repo);
         }
     }
