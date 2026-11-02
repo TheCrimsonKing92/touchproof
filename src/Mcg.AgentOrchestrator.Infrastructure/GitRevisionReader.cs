@@ -32,6 +32,95 @@ internal sealed class GitRevisionReader : IDisposable
         timer = this.clock.CreateTimer(_ => ExpireIdle(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
+    // This is a fresh metadata read, independent of the cached revision-reader processes.
+    internal static bool TryReadCurrentBranch(string worktree, out string? branch)
+    {
+        branch = null;
+        try
+        {
+            foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" })
+                if (Environment.GetEnvironmentVariable(name) is not null) return false;
+
+            var root = Path.GetFullPath(worktree);
+            var gitDirectory = Path.Combine(root, ".git");
+            if (!Directory.Exists(gitDirectory))
+            {
+                var pointer = ReadBranchMetadataLine(gitDirectory);
+                if (pointer is null || !pointer.StartsWith("gitdir: ", StringComparison.Ordinal) || pointer.Length == 8)
+                    return false;
+                gitDirectory = Path.GetFullPath(pointer[8..], root);
+                if (!Directory.Exists(gitDirectory)) return false;
+            }
+
+            var headPath = Path.Combine(gitDirectory, "HEAD");
+            // A legacy symlink HEAD points at the branch ref, not a detached object ID.
+            if (new FileInfo(headPath).LinkTarget is not null) return false;
+            var head = ReadBranchMetadataLine(headPath);
+            if (head is null) return false;
+            if (IsBranchObjectId(head)) return true;
+
+            const string prefix = "ref: refs/heads/";
+            if (!head.StartsWith(prefix, StringComparison.Ordinal)) return false;
+            var nameSuffix = head[prefix.Length..];
+            if (!IsBranchRefName(nameSuffix)) return false;
+
+            // Git follows symbolic refs. Let it resolve chains rather than returning their first name.
+            var commonDirectory = gitDirectory;
+            var commonPath = Path.Combine(gitDirectory, "commondir");
+            if (File.Exists(commonPath))
+            {
+                var common = ReadBranchMetadataLine(commonPath);
+                if (common is null) return false;
+                commonDirectory = Path.GetFullPath(common, gitDirectory);
+                if (!Directory.Exists(commonDirectory)) return false;
+            }
+            var refPath = Path.Combine(commonDirectory, "refs", "heads", nameSuffix);
+            if (Directory.Exists(refPath)) return false;
+            if (File.Exists(refPath))
+            {
+                if (new FileInfo(refPath).LinkTarget is not null) return false;
+                var reference = ReadBranchMetadataLine(refPath);
+                if (reference is null || !IsBranchObjectId(reference)) return false;
+            }
+
+            // A missing loose ref is ordinary for both packed refs and unborn branches.
+            branch = nameSuffix;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string? ReadBranchMetadataLine(string path)
+    {
+        // Bound malformed files; larger or unsupported representations use the git fallback.
+        using var stream = File.OpenRead(path);
+        Span<byte> bytes = stackalloc byte[4097];
+        var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+        if (count > 4096) return null;
+        var line = new UTF8Encoding(false, true).GetString(bytes[..count]);
+        if (line.EndsWith("\r\n", StringComparison.Ordinal)) line = line[..^2];
+        else if (line.EndsWith('\n')) line = line[..^1];
+        return line.Length == 0 || line[0] == '\uFEFF' || line.IndexOfAny(['\r', '\n']) >= 0 ? null : line;
+    }
+
+    private static bool IsBranchObjectId(string line) =>
+        line.Length is 40 or 64 && line.All(Uri.IsHexDigit);
+
+    private static bool IsBranchRefName(string name)
+    {
+        if (name.Length == 0 || name == "@" || name.StartsWith('/') || name.EndsWith('/') || name.EndsWith('.') ||
+            char.IsWhiteSpace(name[0]) || char.IsWhiteSpace(name[^1]) ||
+            name.Contains("//", StringComparison.Ordinal) || name.Contains("..", StringComparison.Ordinal) ||
+            name.Contains("@{", StringComparison.Ordinal) ||
+            name.Any(c => c <= ' ' || c == '\u007f' || "~^:?*[\\".Contains(c)))
+            return false;
+        return name.Split('/').All(part => !part.StartsWith('.') && !part.EndsWith(".lock", StringComparison.Ordinal));
+    }
+
     internal bool TryResolve(string workingDirectory, string revision, out string objectId) =>
         TryResolve(workingDirectory, revision, GitCli.DefaultTimeoutMilliseconds, out objectId);
 

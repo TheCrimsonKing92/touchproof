@@ -369,6 +369,7 @@ public static partial class GoalWorktrees
 
     private static string? GetCurrentBranchName(string executionDirectory)
     {
+        if (GitRevisionReader.TryReadCurrentBranch(executionDirectory, out var current)) return current;
         var result = GitCli.Run(executionDirectory, "branch", "--show-current");
         var branch = result.Output.Trim();
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(branch) ? branch : null;
