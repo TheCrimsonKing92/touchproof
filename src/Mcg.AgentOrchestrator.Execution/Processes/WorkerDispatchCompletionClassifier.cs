@@ -420,12 +420,6 @@ internal sealed class WorkerDispatchCompletionClassifier
         DispatchRecoveryDecision? recoveryDecision)
     {
         var diagnosticStandardError = AppendDiagnostic(standardError, standardErrorDiagnostic ?? string.Empty);
-        var recordedOriginRule = TaskOutcomeClassifier.TryExtractRule(standardOutput) ??
-            TaskOutcomeClassifier.TryExtractRule(diagnosticStandardError);
-        if (!string.IsNullOrWhiteSpace(recordedOriginRule))
-        {
-            return recordedOriginRule;
-        }
 
         // PreserveInterruptedWork is the typed dirty-dispatch boundary that the failure classifier
         // reports as dirty-dispatch-recovery after a failed verification is recorded. Capture that

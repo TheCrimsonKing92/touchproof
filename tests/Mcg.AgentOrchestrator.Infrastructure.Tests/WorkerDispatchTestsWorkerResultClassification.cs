@@ -3275,7 +3275,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.True(verification.WorkerResultPresent);
         Assert.True(verification.HasCommittedChanges);
         Assert.True(verification.ReconciledToSuccess);
-        Assert.Equal(originRule, verification.ReconciliationOriginRule);
+        Assert.Equal("dirty-dispatch-recovery", verification.ReconciliationOriginRule);
         AssertExitCode(process.ExitCodePath, 1);
         Assert.False(GitCli.IsWorktreeDirty(worktree));
         Assert.Equal("src/Feature.cs", ReadGit(worktree, ["show", "--pretty=", "--name-only", "HEAD"]));
@@ -3285,7 +3285,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(TaskOutcomeClass.ReconciledToSuccess, classified.OutcomeClass);
         Assert.Contains("rule=committed-worker-result-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
         Assert.Contains("outcome_class=reconciled-to-success", classified.ClassifierReceipt, StringComparison.Ordinal);
-        Assert.Contains($"origin_rule={originRule}", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("origin_rule=dirty-dispatch-recovery", classified.ClassifierReceipt, StringComparison.Ordinal);
         Assert.Contains("exit_code=0; root_exit_code=1", classified.ClassifierReceipt, StringComparison.Ordinal);
         Assert.Contains("child_exit_code=0", classified.ClassifierReceipt, StringComparison.Ordinal);
     }
