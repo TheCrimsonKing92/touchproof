@@ -105,8 +105,13 @@ public sealed class GoalStatusTransitionEventTests
             fixture.Goal.Id, fixture.Task.Id, GoalStatus.Verifying, WorkTaskStatus.Completed);
 
         Assert.Empty(fixture.ReadEvents().Skip(start));
-        var effect = Assert.Single(deferred.SnapshotEffects());
+        var effects = deferred.SnapshotEffects();
+        Assert.Collection(effects,
+            entry => Assert.Equal(GoalCreationLifecycleEffectKind.TaskStatusTransition, entry.Kind),
+            entry => Assert.Equal(GoalCreationLifecycleEffectKind.GoalStatusTransition, entry.Kind));
+        var effect = effects[1];
         Assert.Equal(GoalCreationLifecycleEffectKind.GoalStatusTransition, effect.Kind);
+        effects[0].DeliverIdempotently(fixture.Writer);
         effect.DeliverIdempotently(fixture.Writer);
         deferred.CompleteDeliveryTo(fixture.Writer);
         Assert.True(fixture.Kernel.ReconcileGoalAcceptanceVerified(fixture.Goal.Id, "Acceptance passed."));

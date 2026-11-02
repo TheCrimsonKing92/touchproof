@@ -46,8 +46,7 @@ internal static class RemoteBuildCandidateCommit
 
     internal static WorktreeTreeDigestGitStep RunGit(string root, Dictionary<string, string>? environment, string[] args)
     {
-        string[] flags = ["-c", "core.fsmonitor=false", "-c", "core.longpaths=true", "-c", "gc.auto=0", "-c", "maintenance.auto=false"];
-        var result = GitCli.RunWithEnvironment(root, environment ?? new(), flags.Concat(args).ToArray());
+        var result = GitCli.RunWithEnvironment(root, environment ?? new(), args);
         return new(result.ExitCode, result.Output, result.Error.Split('\n', 2)[0], result.DrainTimedOut || !result.ProcessStarted);
     }
     private static bool Hash(string value) => value.Length is 40 or 64 && value.All(Uri.IsHexDigit);

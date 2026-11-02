@@ -144,6 +144,15 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["site"] = site;
         });
 
+    public void AppendTaskStatusTransition(GoalId goalId, TaskId taskId, WorkTaskStatus from, WorkTaskStatus to, string site) =>
+        Append(goalId, "task-status-transition", obj =>
+        {
+            obj["taskId"] = taskId.Value;
+            obj["from"] = from.ToString();
+            obj["to"] = to.ToString();
+            obj["site"] = site;
+        });
+
     public void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) =>
         Append(goalId, "CriteriaCorrectionIgnored", obj =>
         {

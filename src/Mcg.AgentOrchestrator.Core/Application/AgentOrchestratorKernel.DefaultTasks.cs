@@ -135,7 +135,7 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         task.SetInterruptedDispatchRecovery(null);
 
-        task.SetStatus(authoritativeTaskStatus.Value);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(authoritativeTaskStatus.Value), TaskStatusTransitionRecorder.DefaultTasksConcludeInterruptedDispatchRecovery);
 
         if (authoritativeGoalStatus.Value != GoalStatus.Active)
         {

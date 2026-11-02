@@ -13,7 +13,7 @@ public sealed partial class AgentOrchestratorKernel
         if (reinstatement is null) return null;
 
         EnsureGoalCanResumeWork(goal);
-        task.ReinstateVerification(reinstatement.PriorVerification);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.ReinstateVerification(reinstatement.PriorVerification), TaskStatusTransitionRecorder.UnchangedCandidateReinstatementReinstateUnchangedCandidateVerdict);
         Append(goal, taskId, ProgressKind.TaskUpdated, reinstatement.Render());
         RefreshGoalStatus(goal);
         return reinstatement;

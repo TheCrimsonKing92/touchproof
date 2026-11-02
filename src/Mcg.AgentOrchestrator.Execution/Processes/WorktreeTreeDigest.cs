@@ -82,15 +82,14 @@ internal static class WorktreeTreeDigest
         var start = new ProcessStartInfo("git")
         {
             WorkingDirectory = root,
-            UseShellExecute = false,
-            CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var arg in new[] { "-c", "core.fsmonitor=false", "-c", "core.longpaths=true", "-c", "gc.auto=0", "-c", "maintenance.auto=false" }.Concat(args))
+        foreach (var arg in args)
             start.ArgumentList.Add(arg);
         if (environment is not null)
             foreach (var (key, value) in environment) start.Environment[key] = value;
+        GitCli.ApplyLaunchSettings(start, readCommand: false);
         return RunProcess(start, 60_000, PipeDrain.DefaultTimeoutMilliseconds);
     }
 

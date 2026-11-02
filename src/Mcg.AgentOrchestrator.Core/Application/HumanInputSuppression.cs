@@ -71,7 +71,7 @@ internal static class HumanInputSuppression
             $"alreadyAnsweredRequest={answeredRequest?.Id.Value ?? "none"}");
     }
 
-    internal static void RestoreTaskAfterSuppressedAnsweredInput(
+    internal static void RestoreTaskAfterSuppressedAnsweredInput(IGoalLifecycleEventWriter writer,
         Goal goal,
         TaskId? taskId,
         HumanInputRequest request,
@@ -85,7 +85,7 @@ internal static class HumanInputSuppression
             {
                 if (task.Status != WorkTaskStatus.Completed)
                 {
-                    task.SetStatus(WorkTaskStatus.Failed);
+                    TaskStatusTransitionRecorder.Record(writer, goal.Id, task.SetStatus(WorkTaskStatus.Failed), TaskStatusTransitionRecorder.HumanInputSuppressionRestoreTaskAfterSuppressedAnsweredInputFailed);
 
                     if (request.SuppressionCount == Threshold)
                     {
@@ -103,7 +103,7 @@ internal static class HumanInputSuppression
             }
             else if (task.Status != WorkTaskStatus.Completed)
             {
-                task.SetStatus(WorkTaskStatus.Assigned);
+                TaskStatusTransitionRecorder.Record(writer, goal.Id, task.SetStatus(WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.HumanInputSuppressionRestoreTaskAfterSuppressedAnsweredInputAssigned);
             }
         }
 

@@ -6,6 +6,9 @@ internal static class GitCli
 {
     internal static Action<string>? LaunchObserver;
 
+    [ThreadStatic]
+    internal static Action<ProcessStartInfo>? StartInfoObserver;
+
     // 60 000 ms covers the longest observed per-call timeout in use across the codebase.
     internal const int DefaultTimeoutMilliseconds = 60_000;
 
@@ -19,13 +22,27 @@ internal static class GitCli
     //  - core.fsmonitor=false / gc.auto=0 / maintenance.auto=false: never spawn a background daemon
     //    that could inherit the output pipe or keep a lock alive after git returns.
     //  - core.longpaths=true: keep revision/path arguments usable from deeply nested fixture worktrees.
-    private static readonly string[] HardeningConfig =
+    public static IReadOnlyList<string> HardeningArguments { get; } = Array.AsReadOnly<string>(
     [
         "-c", "core.fsmonitor=false",
         "-c", "core.longpaths=true",
         "-c", "gc.auto=0",
         "-c", "maintenance.auto=false",
-    ];
+    ]);
+
+    // Apply once, after caller arguments and environment, immediately before launch.
+    internal static void ApplyLaunchSettings(ProcessStartInfo startInfo, bool readCommand)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        for (var index = 0; index < HardeningArguments.Count; index++)
+            startInfo.ArgumentList.Insert(index, HardeningArguments[index]);
+        startInfo.CreateNoWindow = true;
+        startInfo.UseShellExecute = false;
+        if (readCommand) startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+
+        try { StartInfoObserver?.Invoke(startInfo); }
+        catch (Exception) { /* Launch telemetry must not change the git result. */ }
+    }
 
     public readonly record struct GitResult(
         int ExitCode,
@@ -96,12 +113,8 @@ internal static class GitCli
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 RedirectStandardInput = standardInput is not null,
-                UseShellExecute = false,
-                CreateNoWindow = true,
                 WorkingDirectory = workingDirectory
             };
-            foreach (var config in HardeningConfig)
-                startInfo.ArgumentList.Add(config);
             foreach (var arg in args)
                 startInfo.ArgumentList.Add(arg);
 
@@ -121,7 +134,7 @@ internal static class GitCli
 
             // Read-only commands (status/diff/log) skip the index.lock, so recovery inspection can
             // never take or block on it; write commands take their required locks regardless.
-            startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+            ApplyLaunchSettings(startInfo, readCommand: true);
 
             using var process = Process.Start(startInfo);
             if (process is null)
