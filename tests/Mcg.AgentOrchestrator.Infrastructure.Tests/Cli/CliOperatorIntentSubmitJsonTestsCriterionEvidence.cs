@@ -21,6 +21,9 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
     [Fact]
     public Task Repair_Json_PreservesRecordAndHumanText() => CheckSingle("criterion-evidence-repair");
 
+    [Fact]
+    public Task Rephase_Json_PreservesRecordAndHumanText() => CheckSingle("criterion-evidence-rephase");
+
     private static async Task CheckSingle(string verb)
     {
         using var fixture = await Fixture.Create();
@@ -29,7 +32,7 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
         Assert.Equal(0, human.ExitCode);
         Assert.Empty(human.Error);
         var textRecord = Assert.Single(await fixture.Intents(fixture.TextWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
-        var targetLine = verb == "criterion-evidence-record" ? "" :
+        var targetLine = verb is "criterion-evidence-record" or "criterion-evidence-rephase" ? "" :
             $"Target: criterion 1 (v1) criterion-v1-0 Requirement 1{Environment.NewLine}";
         Assert.Equal(QueuedLine(textRecord) + Environment.NewLine + targetLine + Warning + Environment.NewLine, human.Output);
 
@@ -48,6 +51,10 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
         Assert.Equal(OperatorIntentStatus.Pending, jsonRecord.Status);
         Assert.Equal("same-key", jsonRecord.IdempotencyKey);
         Assert.NotEqual(textRecord.Id, jsonRecord.Id);
+        if (verb == "criterion-evidence-rephase")
+            Assert.Equal(new CriterionEvidenceRephaseOperatorIntentPayload("criterion-v1-0",
+                CriterionObservationKind.Runtime, "activation checked", "promoted service", "check later"),
+                JsonSerializer.Deserialize<CriterionEvidenceRephaseOperatorIntentPayload>(jsonRecord.PayloadJson, OperatorIntentJson.Options));
         // Compare every stored field except generated identity and creation time.
         Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", CreatedAt = default }),
             JsonSerializer.Serialize(jsonRecord with { Id = "", CreatedAt = default }));
@@ -125,6 +132,7 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
     [InlineData("criterion-evidence-map")]
     [InlineData("criterion-evidence-record")]
     [InlineData("criterion-evidence-repair")]
+    [InlineData("criterion-evidence-rephase")]
     public async Task Json_DoesNotAdmitUnknownFlags(string verb)
     {
         using var fixture = await Fixture.Create();
@@ -138,6 +146,81 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
         Assert.Empty(stdout);
         Assert.Empty(stderr);
         Assert.Empty(await fixture.Intents(fixture.JsonWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
+    }
+
+    [Fact]
+    public async Task Rephase_PendingOperatorDuty_AppliesAndPersistsThroughCoordinator()
+    {
+        using var fixture = await Fixture.Create(operatorOwned: true);
+        Assert.Single(fixture.Goal.LandingPrerequisiteObligations);
+        var submitted = fixture.Run(fixture.Arguments("criterion-evidence-rephase", "1", "rephase"), fixture.TextWorkspace);
+        Assert.Equal(0, submitted.ExitCode);
+        var store = fixture.Intents(fixture.TextWorkspace);
+        var intent = Assert.Single(await store.ListForGoalAsync(fixture.Goal.Id.Value));
+        var coordinator = new OperatorIntentCoordinator(store);
+
+        var result = coordinator.ExecutePending(fixture.Kernel, fixture.Goal);
+
+        Assert.True(result.MutatedGoalState);
+        Assert.Contains("result=applied-pending-commit", Assert.Single(result.ProgressLines));
+        var duty = Assert.Single(fixture.Goal.CriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidencePhase.PostLanding, duty.Phase);
+        Assert.Equal(new CriterionObservationScope(CriterionObservationKind.Runtime,
+            "activation checked", "promoted service"), duty.ObservationScope);
+        Assert.Contains("tester@example", duty.Provenance);
+        Assert.Contains("check later", duty.Provenance);
+        Assert.Empty(fixture.Goal.LandingPrerequisiteObligations);
+        var repository = new SqliteOrchestratorStateRepository(fixture.TextWorkspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        coordinator.CompletePersisted([fixture.Goal.Id]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+        var snapshot = await repository.LoadGoalAsync(fixture.Goal.Id);
+        Assert.NotNull(snapshot);
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], [])).GetGoal(fixture.Goal.Id);
+        Assert.Empty(restored.LandingPrerequisiteObligations);
+        Assert.Equal(CriterionEvidencePhase.PostLanding, Assert.Single(restored.CriterionEvidenceObligations).Phase);
+    }
+
+    [Fact]
+    public async Task Rephase_SatisfiedDuty_RejectsAndPreservesStoredObligation()
+    {
+        using var fixture = await Fixture.Create(operatorOwned: true);
+        fixture.Kernel.RecordCriterionEvidence(fixture.Goal.Id, "criterion-v1-0", CriterionEvidenceOwner.Operator,
+            Candidate, "passed", "operator observation", true, "Checked");
+        Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(fixture.Goal.CriterionEvidenceObligations).State);
+        var before = JsonSerializer.Serialize(fixture.Goal.CriterionEvidenceObligations);
+        var repository = new SqliteOrchestratorStateRepository(fixture.TextWorkspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var submitted = fixture.Run(fixture.Arguments("criterion-evidence-rephase", "1", "refuse"), fixture.TextWorkspace);
+        Assert.Equal(0, submitted.ExitCode);
+        var store = fixture.Intents(fixture.TextWorkspace);
+        var intent = Assert.Single(await store.ListForGoalAsync(fixture.Goal.Id.Value));
+
+        var result = new OperatorIntentCoordinator(store).ExecutePending(fixture.Kernel, fixture.Goal);
+
+        Assert.False(result.MutatedGoalState);
+        Assert.Contains("Satisfied", Assert.Single(result.ProgressLines));
+        Assert.Equal(OperatorIntentStatus.Rejected, (await store.GetAsync(intent.Id))!.Status);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Goal.CriterionEvidenceObligations));
+        await repository.SaveAsync(fixture.Kernel);
+        var snapshot = await repository.LoadGoalAsync(fixture.Goal.Id);
+        Assert.NotNull(snapshot);
+        Assert.Equal(before, JsonSerializer.Serialize(snapshot.CriterionEvidenceObligations));
+    }
+
+    [Theory]
+    [InlineData("unknown", false)]
+    [InlineData("99", false)]
+    [InlineData("runtime", true)]
+    public async Task Rephase_InvalidPositionals_ReportsUsageAndEnqueuesNothing(string kind, bool omitReason)
+    {
+        using var fixture = await Fixture.Create();
+        string[] values = ["criterion-v1-0", kind, "condition", "target"];
+        if (!omitReason) values = [.. values, "reason"];
+        var error = Assert.Throws<ArgumentException>(() => fixture.Run(
+            ["criterion-evidence-rephase", "--goal", fixture.Goal.Id.Value, .. values], fixture.TextWorkspace));
+        Assert.Equal(CliCommandHelp.CriterionEvidenceRephaseUsage, error.Message);
+        Assert.Empty(await fixture.Intents(fixture.TextWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
     }
 
     private static string[] AssertBatch(SubmitResult result, IReadOnlyList<OperatorIntentRecord> ordered)
@@ -200,23 +283,27 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
     {
         private readonly string _root = CreateTempDirectory();
         private readonly AgentOrchestratorKernel _kernel = new();
+        public AgentOrchestratorKernel Kernel => _kernel;
         public OrchestratorWorkspace TextWorkspace { get; }
         public OrchestratorWorkspace JsonWorkspace { get; }
         public Goal Goal { get; }
 
-        private Fixture()
+        private Fixture(bool operatorOwned)
         {
             TextWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(_root, "text-state"));
             JsonWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(_root, "json-state"));
             Goal = _kernel.CreateGoal("Criterion submit envelopes");
             _kernel.RecordGoalRefinement(Goal.Id, new RefinedSpec("Three criteria",
                 Enumerable.Range(1, 3).Select(number => $"Requirement {number}").ToArray(),
-                VerificationClass.TestVerifiable, [], []));
+                VerificationClass.TestVerifiable, [], [])
+            {
+                OperatorOwnedAcceptanceCriteria = operatorOwned ? ["Requirement 1"] : []
+            });
         }
 
-        public static async Task<Fixture> Create()
+        public static async Task<Fixture> Create(bool operatorOwned = false)
         {
-            var fixture = new Fixture();
+            var fixture = new Fixture(operatorOwned);
             foreach (var workspace in new[] { fixture.TextWorkspace, fixture.JsonWorkspace })
             {
                 StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -233,6 +320,7 @@ public sealed class CliOperatorIntentSubmitJsonTestsCriterionEvidence : CliTaskQ
                 "criterion-evidence-map" => ["--criterion", numbers, "operator", "observation", "finding", Candidate],
                 "criterion-evidence-record" => ["criterion-v1-0", "operator", Candidate, "receipt", "observation", "passed", "Checked"],
                 "criterion-evidence-repair" => ["malformed", "--criterion", numbers, "operator", "observation", "finding", Candidate, "Repair"],
+                "criterion-evidence-rephase" => ["criterion-v1-0", "runtime", "activation checked", "promoted service", "check later"],
                 _ => throw new ArgumentOutOfRangeException(nameof(verb))
             };
             return [verb, "--goal", Goal.Id.Value[..8], .. values, "--idempotency-key", key,

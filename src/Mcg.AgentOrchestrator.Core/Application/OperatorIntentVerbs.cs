@@ -18,6 +18,7 @@ public static class OperatorIntentVerbs
     public const string CriterionEvidenceMap = "criterion-evidence-map";
     public const string CriterionEvidenceRecord = "criterion-evidence-record";
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
+    public const string CriterionEvidenceRephase = "criterion-evidence-rephase";
     public const string LessonRecord = "lesson-record";
     public const string LessonRetire = "lesson-retire";
     public const string DirectiveRecord = "directive-record";
@@ -128,4 +129,11 @@ public sealed record CriterionEvidenceRepairOperatorIntentPayload(
     string RequiredScope,
     string FindingStableId,
     string CandidateSha,
+    string Reason);
+
+public sealed record CriterionEvidenceRephaseOperatorIntentPayload(
+    string ObligationId,
+    CriterionObservationKind ScopeKind,
+    string Condition,
+    string Target,
     string Reason);

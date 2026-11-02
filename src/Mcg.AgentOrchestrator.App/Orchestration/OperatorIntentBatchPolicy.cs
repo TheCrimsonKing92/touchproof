@@ -9,7 +9,8 @@ public static class OperatorIntentBatchPolicy
     public static bool CanShareTick(string verb) => verb is
         OperatorIntentVerbs.CriterionEvidenceMap or
         OperatorIntentVerbs.CriterionEvidenceRecord or
-        OperatorIntentVerbs.CriterionEvidenceRepair;
+        OperatorIntentVerbs.CriterionEvidenceRepair or
+        OperatorIntentVerbs.CriterionEvidenceRephase;
 
     internal static bool IsClarificationAnswer(OperatorIntentRecord intent)
     {

@@ -2576,6 +2576,10 @@ public sealed partial class AgentOrchestratorKernel
     public void BindPostLandingPublication(GoalId goalId, GoalPromotionFact publication) =>
         GetGoal(goalId).BindPostLandingPublication(publication);
 
+    public CriterionEvidenceObligation RephaseCriterionEvidenceObligation(
+        GoalId goalId, string obligationId, CriterionObservationScope? scope, string actor, string reason) =>
+        GetGoal(goalId).RephaseCriterionEvidenceObligation(obligationId, scope, actor, reason, _clock.UtcNow);
+
     public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
         GoalId goalId,
         string malformedObligationId,

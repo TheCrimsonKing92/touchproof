@@ -284,6 +284,8 @@ internal static class CliCommandHelp
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
     public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
 
+    public const string CriterionEvidenceRephaseUsage = "Usage: criterion-evidence-rephase --goal <goal-prefix> <obligation-id> <repositorystate|runtime> <condition> <target> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
+
     private static readonly CommandHelpEntry CriterionEvidenceMap = new(
         CriterionEvidenceMapUsage,
         "Queue a candidate-bound criterion ownership mapping for the conductor.",
@@ -298,6 +300,11 @@ internal static class CliCommandHelp
         CriterionEvidenceRepairUsage,
         "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
         ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceRephase = new(
+        CriterionEvidenceRephaseUsage,
+        "Queue an attributed decision to move one pending Operator obligation to PostLanding with an explicit observation scope.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
@@ -1174,6 +1181,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("criterion-evidence-record", StringComparison.OrdinalIgnoreCase))
         {
             entry = CriterionEvidenceRecord;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-rephase", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceRephase;
             return true;
         }
 

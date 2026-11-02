@@ -541,6 +541,12 @@ internal sealed partial class OperatorIntentCoordinator
                     receipt.Observation,
                     duty?.Phase == CriterionEvidencePhase.PostLanding ? intent.Actor : null);
                 return;
+            case OperatorIntentVerbs.CriterionEvidenceRephase:
+                var rephase = Deserialize<CriterionEvidenceRephaseOperatorIntentPayload>(intent);
+                kernel.RephaseCriterionEvidenceObligation(goal.Id, rephase.ObligationId,
+                    new CriterionObservationScope(rephase.ScopeKind, rephase.Condition, rephase.Target),
+                    intent.Actor, rephase.Reason);
+                return;
             case OperatorIntentVerbs.CriterionEvidenceRepair:
                 var repair = Deserialize<CriterionEvidenceRepairOperatorIntentPayload>(intent);
                 kernel.RepairMalformedCriterionEvidenceObligation(
