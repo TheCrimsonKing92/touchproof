@@ -176,16 +176,15 @@ public sealed class LandingExecutorTestsRootCheckout
     public void InspectionFailuresHoldBeforePublication(string command, int exit, bool drainTimeout, string output)
     {
         var repo = CreateGitRepository();
-        var previous = LandingExecutor.GitRunner;
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/landed.txt");
             var main = ReadGit(repo, "rev-parse", "main");
             RunGit(repo, "branch", LandingExecutor.IntegrationBranchName, main);
-            LandingExecutor.GitRunner = (root, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((root, args) =>
                 args[0] == command && (command == "status" || args.Contains("--diff-filter=A"))
                     ? new GitCli.GitResult(exit, output, "fixture failure", drainTimeout)
-                    : GitCli.Run(root, args);
+                    : GitCli.Run(root, args));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -199,7 +198,6 @@ public sealed class LandingExecutorTestsRootCheckout
         }
         finally
         {
-            LandingExecutor.GitRunner = previous;
             TryDeleteDirectory(repo);
         }
     }

@@ -62,18 +62,16 @@ public sealed class PullRequestDeliveryTrackerOutcomeTests
         var tip = fixture.Git("rev-parse", "main");
         var runner = LandingExecutor.GitRunner;
         var attempted = false;
-        try
+        using (LandingExecutor.UseGitRunner((root, args) =>
         {
-            LandingExecutor.GitRunner = (root, args) =>
-            {
-                if ((failure == "update" && args[0] == "update-ref") || (failure == "checkout" && args[0] == "read-tree"))
-                { attempted = true; return new GitCli.GitResult(1, "", "injected local failure"); }
-                return runner(root, args);
-            };
+            if ((failure == "update" && args[0] == "update-ref") || (failure == "checkout" && args[0] == "read-tree"))
+            { attempted = true; return new GitCli.GitResult(1, "", "injected local failure"); }
+            return runner(root, args);
+        }))
+        {
             fixture.Merged();
             fixture.Tick();
         }
-        finally { LandingExecutor.GitRunner = runner; }
         Assert.Equal(failure is "update" or "checkout", attempted);
         Assert.Equal(GoalStatus.Completed, fixture.Goal.Status);
         Assert.Equal(fixture.Delivery.Candidate, fixture.Fact()!.PromotedMainRevision);
