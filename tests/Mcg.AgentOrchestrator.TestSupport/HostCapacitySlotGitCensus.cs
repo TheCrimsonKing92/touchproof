@@ -181,6 +181,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
             methodName = source?.Name ?? type.Name;
             if (source is not null) type = source.DeclaringType!;
         }
+        var staticInitializerLambda = methodName.StartsWith("<.cctor>b__", StringComparison.Ordinal);
         methodName = SourceMethodName(methodName);
         while (type.DeclaringType is { } parent && type.IsDefined(typeof(CompilerGeneratedAttribute), false))
             type = parent;
@@ -190,6 +191,9 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         if (outermost == typeof(GitCli)) return new(null, IsLaunchBoundary: true);
         if (type.FullName == "InfrastructureTestSupport" &&
             methodName.StartsWith("RunGitProbe", StringComparison.Ordinal)) return new(null, IsLaunchBoundary: true);
+
+        // Attribute static-initializer delegates to the method invoking them.
+        if (staticInitializerLambda) return default;
 
         var names = new Stack<string>();
         for (var current = type; current is not null; current = current.DeclaringType)

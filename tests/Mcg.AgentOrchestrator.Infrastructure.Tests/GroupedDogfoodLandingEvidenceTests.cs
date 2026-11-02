@@ -241,9 +241,10 @@ public sealed class GroupedDogfoodLandingEvidenceTests : AcceptanceCohortWorkflo
         Assert.Contains("content-bound", rejected.Reason);
     }
 
-    private static Fixture CreateFixture(bool train, bool olderFailure, bool finalized = true)
+    internal static Fixture CreateFixture(bool train, bool olderFailure, bool finalized = true)
     {
-        var root = CreateAcceptanceCohortRepository();
+        var prepared = DogfoodFixtureTemplate.Copy();
+        var root = prepared.Repo;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -257,13 +258,11 @@ public sealed class GroupedDogfoodLandingEvidenceTests : AcceptanceCohortWorkflo
                 "", DateTimeOffset.UtcNow));
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Grouped projection", ["Human observation"],
                 VerificationClass.RealWorldDependent, [], []) { OperatorOwnedAcceptanceCriteria = ["Human observation"] });
-            var main = RunGitOutput(root, "rev-parse", "main").Trim();
-            var first = CreateCandidate(root, goal.Id.Value, "src/First.cs", "first");
-            var second = CreateCandidate(root, GoalId.New().Value, "src/Second.cs", "second");
-            RunGit(root, "merge", "--no-ff", "-m", "Combine first member", first.Revision);
-            RunGit(root, "merge", "--no-ff", "-m", "Combine second member", second.Revision);
-            var promoted = RunGitOutput(root, "rev-parse", "HEAD").Trim();
-            var tree = RunGitOutput(root, "rev-parse", "HEAD^{tree}").Trim();
+            var main = prepared.Main;
+            var first = (GoalId: goal.Id, Revision: prepared.FirstCandidate);
+            var second = (GoalId: prepared.SecondGoalId, Revision: prepared.SecondCandidate);
+            var promoted = prepared.Promoted;
+            var tree = prepared.Tree;
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             Directory.CreateDirectory(workspace.OrchestratorDirectory);
             var trx = WritePassingTrx(root, "passing.trx");
@@ -300,13 +299,13 @@ public sealed class GroupedDogfoodLandingEvidenceTests : AcceptanceCohortWorkflo
             GoalOperationJournal.RecordLandingIntent(root, goal, GoalWorktrees.BranchName(goal.Id),
                 $"{(train ? "train" : "cohort")}/{group}", promoted, train ? "LandingExecutor.ExecuteMergeTrain" : "LandingExecutor.ExecuteCohort",
                 boundMainRevision: main, previousIntegrationRevision: main);
-            return new(root, kernel, goal, workspace, train, group, first.Revision, tree, main, promoted, artifact);
+            return new(root, kernel, goal, workspace, train, group, first.Revision, second.Revision, tree, main, promoted, artifact);
         }
         catch { DeleteDirectory(root); throw; }
     }
 
-    private sealed record Fixture(string Root, AgentOrchestratorKernel Kernel, Goal Goal, OrchestratorWorkspace Workspace,
-        bool Train, string Group, string Candidate, string Tree, string Main, string Promoted, string Artifact) : IDisposable
+    internal sealed record Fixture(string Root, AgentOrchestratorKernel Kernel, Goal Goal, OrchestratorWorkspace Workspace,
+        bool Train, string Group, string Candidate, string SecondCandidate, string Tree, string Main, string Promoted, string Artifact) : IDisposable
     {
         private string Database => Path.Combine(Workspace.OrchestratorDirectory,
             Train ? "merge-train-acceptance.db" : "cohort-acceptance.db");
