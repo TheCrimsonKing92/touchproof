@@ -15,8 +15,8 @@ internal static class ConductorAuthorBriefGrounding
         var normalizedAnswer = Normalize(answerText);
         var normalizedCitations = briefCitations.Select(citation => Normalize(citation)).ToArray();
         if (normalizedCitations.Any(citation => citation.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 5 ||
-                !normalizedBrief.Contains(citation, StringComparison.Ordinal) ||
-                !normalizedAnswer.Contains(citation, StringComparison.Ordinal))) return false;
+                !normalizedBrief.Contains(citation, StringComparison.Ordinal)) ||
+            !normalizedCitations.Any(citation => normalizedAnswer.Contains(citation, StringComparison.Ordinal))) return false;
 
         var briefTokens = Tokens(normalizedBrief).ToHashSet(StringComparer.Ordinal);
         // Only explicit scope declarations grant directory membership; a mention alone does not.
