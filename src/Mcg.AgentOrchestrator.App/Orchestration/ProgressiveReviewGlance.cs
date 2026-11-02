@@ -1463,6 +1463,7 @@ Corrective direction:
 
         try
         {
+            if (GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head)) return head;
             var result = gitRunner(worktree, ["rev-parse", "HEAD"]);
             return result.Succeeded ? result.Output.Trim() : null;
         }

@@ -165,7 +165,7 @@ internal static class SourceSizeRatchet
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 378),
             // Goal 4ff31b70 (ConductorDriver size relief) moved git and lease helpers unchanged to this partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 130),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 127),
             // Goal 4ff31b70 (ConductorDriver size relief) moved pre-review evidence routing unchanged to this partial.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 182),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 646),
@@ -551,7 +551,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
-            new SourceClassCeiling("ConductorDriver", 14384, 70),
+            new SourceClassCeiling("ConductorDriver", 14381, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

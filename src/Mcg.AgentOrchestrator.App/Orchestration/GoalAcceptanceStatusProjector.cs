@@ -259,8 +259,7 @@ public static class GoalAcceptanceStatusProjector
     {
         try
         {
-            var result = GitCli.Run(path, "rev-parse", "HEAD");
-            return result.Succeeded ? result.Output.Trim() : null;
+            return GitRevisionReader.Shared.TryResolve(path, "HEAD", out var head) ? head : null;
         }
         catch
         {
