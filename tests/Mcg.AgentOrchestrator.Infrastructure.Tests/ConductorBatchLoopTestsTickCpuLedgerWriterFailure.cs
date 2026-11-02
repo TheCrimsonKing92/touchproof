@@ -65,6 +65,9 @@ public sealed class ConductorBatchLoopTestsTickCpuLedgerWriterFailure(ITestOutpu
             match.Groups["name"].Value.StartsWith("cpu", StringComparison.Ordinal)
                 ? match.Value : match.Groups["name"].Value + "=<clock>");
         line = Regex.Replace(line, @"(?<=slowest=)[a-f0-9]{8,32}:\d+ms:", "<id>:<clock>ms:");
+        // Step entries read name:wall_ms:cpu_ms:count; the fixture's CPU is fake, the wall clock is real.
+        line = Regex.Replace(line, @"(?<=[=,])(?<step>[a-z][a-z0-9-]*):\d+:(?<cpu>\d+):(?<count>\d+)(?=[, ]|$)",
+            "${step}:<clock>:${cpu}:${count}");
         return Regex.Replace(line, @"\b(goal|task)=[a-f0-9]{8,32}\b", "$1=<id>");
     }
 }
