@@ -69,7 +69,9 @@ public sealed record AnswerOperatorIntentPayload(
     string Text,
     OperatorActorKind ActorKind,
     IReadOnlyList<string>? EvidenceReferences = null,
-    string? Precedent = null);
+    string? Precedent = null,
+    string? RouteRole = null,
+    string? RouteCause = null);
 
 public sealed record AdjudicateOperatorIntentPayload(
     string Shape,

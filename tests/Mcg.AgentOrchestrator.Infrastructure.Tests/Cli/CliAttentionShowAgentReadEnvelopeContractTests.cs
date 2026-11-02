@@ -187,7 +187,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 scoped += item.Id == seed.Clarification.Id
                     ? "[choose-path] Choose path\r\n    Clarification body\r\n"
                     : $"[{seed.Decision.Id[..8]}] (Decision) Goal decision\r\n";
-            scoped += "Answer with: attention answer abc10000 <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)\r\n";
+            scoped += "Answer with: attention answer abc10000 <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest); for a ruling that needs a code change add --route developer [--cause <cause>] --evidence <ref>\r\n";
             // Decisions reads persisted state; this fixture has only in-memory goals.
             Assert.False(File.Exists(seed.Workspace.SqliteStatePath));
             var decisions = "Decisions (0):\r\n  none\r\nHidden decisions: 1 (goal-missing=1)\r\n\r\n";

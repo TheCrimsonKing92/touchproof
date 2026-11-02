@@ -26,6 +26,20 @@ internal sealed partial class OperatorIntentCoordinator
         if (payload.ActorKind != intent.ActorKind)
             throw new InvalidOperationException("Answer actor kind does not match intent actor kind.");
         var decisions = _decisions ?? throw new InvalidOperationException("Answer decision store is not configured.");
+        TaskSpec? developer = null;
+        AdjudicateOperatorIntentPayload? route = null;
+        if (payload.RouteRole is not null)
+        {
+            if (!string.Equals(payload.RouteRole, "developer", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Answer route accepts only developer.");
+            developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer)
+                ?? throw new KeyNotFoundException($"Developer task was not found for goal '{goal.Id.Value}'.");
+            route = new AdjudicateOperatorIntentPayload("route", payload.Text, payload.EvidenceReferences ?? [],
+                0, string.Empty, payload.RouteCause ?? nameof(RetryCause.ContractClarification));
+            var reason = (_adjudication ?? throw new InvalidOperationException("Operator adjudication is not configured."))
+                .RouteRejection(goal, developer, intent, route, _utcNow());
+            if (reason is not null) throw new InvalidOperationException(reason);
+        }
         var priorDecision = decisions.GetDecisionStateAsync($"answer-{intent.Id}").GetAwaiter().GetResult();
         if (priorDecision?.Receipt is { } priorReceipt)
         {
@@ -46,7 +60,9 @@ internal sealed partial class OperatorIntentCoordinator
                     $"answered {payload.TargetKind}:{payload.TargetId}", _utcNow()).GetAwaiter().GetResult();
                 if (!effect.Applied)
                     throw new InvalidOperationException($"Answer decision effect was rejected: {effect.Receipt.Result}");
-                RecordAnswerTimeline(kernel, goal, intent, payload, priorReceipt);
+                if (route is not null) ApplyAnswerRoute(kernel, goal, developer!, intent, route);
+                RecordAnswerTimeline(kernel, goal, intent, payload, priorReceipt,
+                    route is null ? "applied" : "applied; routed developer");
             }
             catch (Exception ex)
             {
@@ -60,6 +76,7 @@ internal sealed partial class OperatorIntentCoordinator
             FrozenFactRuling.TryParse(payload.Text) is null)
             throw new InvalidOperationException("frozen-fact-ruling-malformed: answer must contain every structured ruling field.");
 
+        var routeOnly = false;
         switch (payload.TargetKind)
         {
             case OperatorAnswerTargetKind.Clarification:
@@ -70,6 +87,11 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new KeyNotFoundException($"Clarification '{payload.TargetId}' was not found for goal '{goal.Id.Value}'.");
                 if (CollaborationItemLifecycle.IsTerminal(item.Status))
                 {
+                    if (route is not null)
+                    {
+                        routeOnly = true;
+                        break;
+                    }
                     if (item.ResolvedAt is not { } resolvedAt || resolvedAt < intent.ClaimedAt ||
                         item.AuthoritativeAnswer is not { } authoritativeAnswer ||
                         authoritativeAnswer.BriefVersion is not { } answerBriefVersion ||
@@ -108,6 +130,11 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new KeyNotFoundException($"Human-input request '{payload.TargetId}' was not found for goal '{goal.Id.Value}'.");
                 if (request.IsCompleted)
                 {
+                    if (route is not null)
+                    {
+                        routeOnly = true;
+                        break;
+                    }
                     if (request.AnsweredAt is not { } answeredAt || answeredAt < intent.ClaimedAt ||
                         !string.Equals(request.Answer, payload.Text.Trim(), StringComparison.Ordinal))
                         throw new InvalidOperationException($"Human-input request '{payload.TargetId}' is already answered.");
@@ -127,8 +154,11 @@ internal sealed partial class OperatorIntentCoordinator
 
         try
         {
-            var receipt = RecordAnswerDecision(decisions, goal, intent, payload);
-            RecordAnswerTimeline(kernel, goal, intent, payload, receipt);
+            var receipt = routeOnly ? null : RecordAnswerDecision(decisions, goal, intent, payload);
+            if (route is not null) ApplyAnswerRoute(kernel, goal, developer!, intent, route);
+            RecordAnswerTimeline(kernel, goal, intent, payload, receipt,
+                routeOnly ? "answer-already-recorded; routed developer" :
+                route is null ? "applied" : "applied; routed developer");
         }
         catch (Exception ex)
         {
@@ -136,14 +166,28 @@ internal sealed partial class OperatorIntentCoordinator
         }
     }
 
+    private void ApplyAnswerRoute(AgentOrchestratorKernel kernel, Goal goal, TaskSpec developer,
+        OperatorIntentRecord intent, AdjudicateOperatorIntentPayload route)
+    {
+        _adjudication!.Apply(kernel, goal, developer, intent, route, _utcNow(), recordTimeline: false);
+    }
+
+    private static string AnswerOutcome(Goal goal, OperatorIntentRecord intent)
+    {
+        if (intent.Verb != OperatorIntentVerbs.Answer) return string.Empty;
+        var outcome = goal.Timeline.FirstOrDefault(entry => entry.OperatorIntentApplied?.IntentId == intent.Id)
+            ?.OperatorIntentApplied?.Outcome;
+        return outcome is null or "applied" ? string.Empty : " " + outcome;
+    }
+
     private static void RecordAnswerTimeline(
         AgentOrchestratorKernel kernel, Goal goal, OperatorIntentRecord intent,
-        AnswerOperatorIntentPayload payload, DecisionReceipt receipt)
+        AnswerOperatorIntentPayload payload, DecisionReceipt? receipt, string outcome = "applied")
     {
         kernel.RecordOperatorIntentApplied(goal.Id, intent.Id, intent.Verb, null, intent.Actor, intent.Channel,
             intent.AuthenticationAssurance,
             $"{BuildApplicationMarker(intent)} verb=answer target={payload.TargetKind}:{payload.TargetId}",
-            intent.ActorKind, decisionId: receipt.Id, outcome: "applied");
+            intent.ActorKind, decisionId: receipt?.Id, outcome: outcome);
     }
 
     private DecisionReceipt RecordAnswerDecision(
@@ -194,14 +238,14 @@ internal sealed partial class OperatorIntentCoordinator
         if (goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == answer.Id))
         {
             _store.CompleteAsync(answer.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                $"Applied; recovered durable answer intent {answer.Id}.", _utcNow()).GetAwaiter().GetResult();
+                $"Applied; recovered durable answer intent {answer.Id}." + AnswerOutcome(goal, answer), _utcNow()).GetAwaiter().GetResult();
             lines.Add($"OPERATOR_INTENT id={answer.Id} verb=answer goal={goal.Id.Value[..8]} result=applied-recovered");
             return true;
         }
         try
         {
             ApplyAnswer(kernel, goal, answer);
-            AddPendingCompletion(goal.Id.Value, answer.Id, $"Applied answer to goal {goal.Id.Value[..8]}.");
+            AddPendingCompletion(goal.Id.Value, answer.Id, $"Applied answer to goal {goal.Id.Value[..8]}." + AnswerOutcome(goal, answer));
             lines.Add($"OPERATOR_INTENT id={answer.Id} verb=answer goal={goal.Id.Value[..8]} result=applied-pending-commit");
             mutated = true;
         }

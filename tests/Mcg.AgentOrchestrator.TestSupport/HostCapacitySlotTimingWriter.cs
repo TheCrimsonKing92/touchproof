@@ -19,24 +19,32 @@ public static class HostCapacitySlotTimingWriter
         catch (Exception) { return "<unknown>"; }
     }
 
-    public static void TryAppend(string destination, string? testName, double waitMs, double heldMs, int slotCount)
+    public static void TryAppend(string destination, string? testName, double waitMs, double heldMs, int slotCount,
+        HostCapacitySlotGitCensus.GitLaunchDelta? git = null)
     {
         try
         {
             var missingIdentity = string.IsNullOrWhiteSpace(testName) || testName == "<unknown>";
             if (missingIdentity) Diagnose(destination, "current test identity unavailable; recording <unknown>");
-            var line = JsonSerializer.Serialize(new
+            var row = new Dictionary<string, object?>
             {
-                test_name = missingIdentity ? "<unknown>" : testName,
-                wait_ms = waitMs, held_ms = heldMs, slot_count = slotCount, process_id = Environment.ProcessId
-            });
+                ["test_name"] = missingIdentity ? "<unknown>" : testName,
+                ["wait_ms"] = waitMs, ["held_ms"] = heldMs,
+                ["slot_count"] = slotCount, ["process_id"] = Environment.ProcessId
+            };
+            if (git is not null)
+            {
+                row["git_launches"] = git.Launches;
+                row["git_subcommands"] = git.Subcommands;
+            }
+            var line = JsonSerializer.Serialize(row);
             // SharedJsonlFile also excludes concurrent writers across processes for the whole append.
             lock (AppendLock) SharedJsonlFile.AppendLine(destination, line);
         }
         catch (Exception error) { Diagnose(destination, error.GetType().Name + ": " + error.Message); }
     }
 
-    private static void Diagnose(string destination, string cause)
+    internal static void Diagnose(string destination, string cause)
     {
         try { Console.Error.WriteLine($"Host-capacity slot timing '{destination}': {cause}"); }
         catch (Exception) { /* Telemetry must never change a test verdict, including stderr failures. */ }

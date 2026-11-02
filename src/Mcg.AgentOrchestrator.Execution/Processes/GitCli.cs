@@ -4,6 +4,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class GitCli
 {
+    internal static Action<string>? LaunchObserver;
+
     // 60 000 ms covers the longest observed per-call timeout in use across the codebase.
     internal const int DefaultTimeoutMilliseconds = 60_000;
 
@@ -125,6 +127,8 @@ internal static class GitCli
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
+            var observer = LaunchObserver;
+            if (observer is not null) NotifyLaunch(observer, args);
 
             // Drain on dedicated threads, never the thread pool. Under parallel test load the pool can be
             // fully blocked; a pool-dependent async read then never starts inside the drain window and
@@ -188,6 +192,12 @@ internal static class GitCli
         {
             return new GitResult(1, string.Empty, ex.Message, ProcessStarted: processStarted);
         }
+    }
+
+    private static void NotifyLaunch(Action<string> observer, string[] args)
+    {
+        try { observer(args.Length > 0 ? args[0] : string.Empty); }
+        catch (Exception) { /* Launch telemetry must not change the git result. */ }
     }
 
     private static void TryKillTree(Process process)

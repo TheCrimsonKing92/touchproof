@@ -10,7 +10,7 @@ public sealed class PullRequestDeliveryTrackerOutcomeTests
     public void Closed_unmerged_escalates_once_and_can_later_merge()
     {
         using var fixture = new PullRequestTrackingTestFixture();
-        fixture.Forge.Json = """{"state":"CLOSED","mergedAt":null,"mergeCommit":null,"closedAt":"2026-10-31T12:00:00Z","url":"https://github.com/octo/sample/pull/7"}""";
+        fixture.Forge.Json = """{"state":"CLOSED","mergedAt":null,"mergeCommit":null,"closedAt":"2026-10-31T12:00:00Z","url":"https://github.com/octo/sample/pull/7","reviewDecision":null,"latestReviews":[]}""";
         var reason = "pull request closed unmerged: " + PullRequestLandingTestFixture.Url;
         Assert.Contains(fixture.Goal.Id, fixture.Tick());
         Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
