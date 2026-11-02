@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized because these tests own and restore process-wide Git discovery overrides.
@@ -41,7 +42,11 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
         if (relative)
         {
             var target = File.ReadAllText(entry)[8..].TrimEnd('\r', '\n');
-            File.WriteAllText(entry, "gitdir: " + Path.GetRelativePath(linked, target) + "\n");
+            // Git hides .git on Windows; open the existing file instead of recreating it.
+            using var stream = File.Open(entry, FileMode.Open, FileAccess.Write);
+            var bytes = Encoding.UTF8.GetBytes("gitdir: " + Path.GetRelativePath(linked, target) + "\n");
+            stream.Write(bytes);
+            stream.SetLength(stream.Position);
         }
         AssertConfirmed(linked);
     }
