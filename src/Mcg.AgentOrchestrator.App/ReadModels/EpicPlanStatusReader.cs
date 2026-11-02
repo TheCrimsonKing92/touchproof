@@ -93,7 +93,7 @@ internal static class EpicPlanStatusReader
             var events = goal.Timeline.OrderByDescending(item => item.OccurredAt).ToArray();
             var reason = goal.Status == GoalStatus.Parked
                 ? events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision &&
-                    item.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))?.Message
+                    GoalParkResolution.IsParkResolution(item.Message))?.Message
                 : events.FirstOrDefault(item => item.Kind == ProgressKind.TaskFailed)?.Message;
             if (string.IsNullOrWhiteSpace(reason))
                 reason = events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision)?.Message;

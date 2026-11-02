@@ -153,7 +153,7 @@ internal static class VerifiedAcceptanceEscalationDecision
     internal static bool ClearsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt) =>
         evt.Kind is ProgressKind.TaskRetried or ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded
         || (evt.Kind is ProgressKind.HumanInputRequested or ProgressKind.GoalPolicyDecision
-            && evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+            && GoalParkResolution.IsParkResolution(evt.Message))
         || (evt.Kind == ProgressKind.GoalPolicyDecision
             && evt.Message.StartsWith(ConductorBatchLoop.SetAsideSelfClearDecisionPrefix, StringComparison.Ordinal))
         || evt.Kind == ProgressKind.HumanInputReceived;

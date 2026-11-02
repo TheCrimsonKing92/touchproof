@@ -1256,7 +1256,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Park);
-        var resolution = BuildGoalParkResolution(parkReason);
+        var resolution = GoalParkResolution.Build(parkReason);
         CompleteOpenHumanInputRequestsForGoal(goal.Id, resolution);
         Append(goal, null, ProgressKind.GoalPolicyDecision, resolution);
         return goal;
@@ -2431,13 +2431,13 @@ public sealed partial class AgentOrchestratorKernel
         foreach (var evt in goal.Timeline)
         {
             if (evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                GoalParkResolution.IsParkResolution(evt.Message))
             {
                 latestParkDecisionAt = evt.OccurredAt;
             }
             else if (evt.Kind == ProgressKind.HumanInputReceived)
             {
-                if (evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                if (GoalParkResolution.IsParkResolution(evt.Message))
                 {
                     continue;
                 }
@@ -2456,8 +2456,8 @@ public sealed partial class AgentOrchestratorKernel
             return goal.Timeline
                 .LastOrDefault(evt =>
                     evt.Kind == ProgressKind.GoalPolicyDecision &&
-                    evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
-                ?.Message ?? "Goal parked.";
+                    GoalParkResolution.IsParkResolution(evt.Message))
+                ?.Message ?? GoalParkResolution.Fallback;
         }
 
         if (goal.Status != GoalStatus.WaitingForHuman)
@@ -2469,10 +2469,8 @@ public sealed partial class AgentOrchestratorKernel
             .Where(request => request.GoalId == goal.Id && !request.IsCompleted)
             .OrderByDescending(request => request.RequestedAt)
             .Select(request => request.Question)
-            .FirstOrDefault(question => question.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(GoalParkResolution.IsParkResolution);
     }
-
-    private static string BuildGoalParkResolution(string reason) => $"Goal parked: {reason}";
 
     public Goal GetGoal(GoalId goalId)
     {

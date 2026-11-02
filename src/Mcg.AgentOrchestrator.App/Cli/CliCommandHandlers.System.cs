@@ -78,8 +78,8 @@ internal static partial class CliCommandHandlers
             var resolution = goal.Timeline
                 .LastOrDefault(evt =>
                     evt.Kind == ProgressKind.GoalPolicyDecision &&
-                    evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
-                ?.Message ?? "Goal parked.";
+                    GoalParkResolution.IsParkResolution(evt.Message))
+                ?.Message ?? GoalParkResolution.Fallback;
             resolved += store.ResolveOpenForGoalAsync(goal.Id.Value, resolution).GetAwaiter().GetResult();
         }
 
