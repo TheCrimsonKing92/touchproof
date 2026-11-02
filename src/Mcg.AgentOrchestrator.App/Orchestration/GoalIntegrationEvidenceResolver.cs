@@ -23,8 +23,8 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     private readonly Dictionary<GoalId, GoalIntegrationEvidence?> _cache = [];
     internal bool IsAvailable { get; private set; }
 
-    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
-        (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
+    private static GitCli.GitResult RunGitCli(string workingDirectory, IReadOnlyList<string> args) =>
+        GitCli.Run(workingDirectory, args.ToArray());
 
     private GoalIntegrationEvidenceResolver(
         string executionDirectory,
@@ -45,7 +45,7 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         string? knownMainSha = null,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
-        gitRunner ??= GitRunner;
+        gitRunner ??= RunGitCli;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
         var mainSha = string.IsNullOrWhiteSpace(knownMainSha)
             ? ResolveMainSha(fullExecutionDirectory, integrationBranch, gitRunner)

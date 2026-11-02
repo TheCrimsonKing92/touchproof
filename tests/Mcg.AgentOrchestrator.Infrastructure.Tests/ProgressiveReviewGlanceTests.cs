@@ -2175,10 +2175,9 @@ public sealed class ProgressiveReviewGlanceTests
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-diff-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(root, "src"));
         File.WriteAllText(Path.Combine(root, "src", "NewFile.cs"), "public sealed class NewFile {}\n");
-        var saved = ProgressiveReviewGlanceCoordinator.RunGit;
         try
         {
-            ProgressiveReviewGlanceCoordinator.RunGit = (_, args) =>
+            Func<string, string[], GitCli.GitResult> gitRunner = (_, args) =>
             {
                 if (args.SequenceEqual(["ls-files", "--others", "--exclude-standard"]))
                 {
@@ -2188,7 +2187,7 @@ public sealed class ProgressiveReviewGlanceTests
                 return new GitCli.GitResult(0, string.Empty, string.Empty);
             };
 
-            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base");
+            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base", gitRunner);
 
             Xunit.Assert.Contains("diff --git a/src/NewFile.cs b/src/NewFile.cs", diff, StringComparison.Ordinal);
             Xunit.Assert.Contains("+++ b/src/NewFile.cs", diff, StringComparison.Ordinal);
@@ -2196,7 +2195,6 @@ public sealed class ProgressiveReviewGlanceTests
         }
         finally
         {
-            ProgressiveReviewGlanceCoordinator.RunGit = saved;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -2207,10 +2205,9 @@ public sealed class ProgressiveReviewGlanceTests
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-diff-order-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "new.txt"), "untracked live work\n");
-        var saved = ProgressiveReviewGlanceCoordinator.RunGit;
         try
         {
-            ProgressiveReviewGlanceCoordinator.RunGit = (_, args) => args switch
+            Func<string, string[], GitCli.GitResult> gitRunner = (_, args) => args switch
             {
                 ["ls-files", "--others", "--exclude-standard"] => new GitCli.GitResult(0, "new.txt\n", string.Empty),
                 ["diff", "--"] => new GitCli.GitResult(0, "WORKING LIVE EDIT", string.Empty),
@@ -2219,7 +2216,7 @@ public sealed class ProgressiveReviewGlanceTests
                 _ => new GitCli.GitResult(0, string.Empty, string.Empty)
             };
 
-            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base");
+            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base", gitRunner);
 
             var untrackedIndex = diff.IndexOf("untracked live work", StringComparison.Ordinal);
             var workingIndex = diff.IndexOf("WORKING LIVE EDIT", StringComparison.Ordinal);
@@ -2233,7 +2230,6 @@ public sealed class ProgressiveReviewGlanceTests
         }
         finally
         {
-            ProgressiveReviewGlanceCoordinator.RunGit = saved;
             Directory.Delete(root, recursive: true);
         }
     }

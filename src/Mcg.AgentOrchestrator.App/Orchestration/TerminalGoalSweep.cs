@@ -401,16 +401,6 @@ internal static partial class TerminalGoalSweep
 
     internal const int MaxMergeEvidenceTerminalizationsPerSweep = 25;
 
-    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner
-    {
-        get => GoalGitFactIndex.GitRunner;
-        set
-        {
-            GoalGitFactIndex.GitRunner = value;
-            GoalIntegrationEvidenceResolver.GitRunner = value;
-        }
-    }
-
     public static TerminalGoalSweepResult Run(
         AgentOrchestratorKernel kernel,
         string executionDirectory, string integrationBranch,
@@ -425,7 +415,7 @@ internal static partial class TerminalGoalSweep
         CohortAcceptanceStore? cohortAcceptanceStore = null,
         bool reclaimGoalRoots = false)
     {
-        gitRunner ??= GitRunner;
+        gitRunner ??= GoalGitFactIndex.RunGitCli;
         var gitRunnerIdentity = gitRunner;
         var gitSpawnCounter = new GitSpawnCounter();
         using var gitSpawnCounterScope = new GitSpawnCounterScope(gitSpawnCounter);
