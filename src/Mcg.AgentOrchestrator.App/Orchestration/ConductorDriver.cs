@@ -116,6 +116,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult> _writeEscalation;
     private readonly Action<Goal, GoalLifecycleState> _resolveParkedWaitEscalations;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
+    private readonly ChangeRiskClassificationMemo _changeRiskMemo = new();
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
@@ -931,23 +932,7 @@ internal sealed partial class ConductorDriver
         };
 
         _classifyChangeRisk = goal =>
-        {
-            try
-            {
-                var branch = GoalWorktrees.BranchName(goal.Id);
-                var result = GitCli.Run(dir, "diff", "--name-only", $"{workspace.IntegrationBranch}...{branch}");
-                if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output)) return null;
-                var files = result.Output
-                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                var summary = RepositoryChangeClassifier.Classify(files);
-                var riskClass = LandingDecisionEngine.ClassifyRisk(summary);
-                return (ChangeRiskTier)(int)riskClass;
-            }
-            catch
-            {
-                return null;
-            }
-        };
+            _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
