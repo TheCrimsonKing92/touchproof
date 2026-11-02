@@ -206,15 +206,20 @@ internal sealed class WorkerDispatchCompletionClassifier
         bool requireNoBlockers = false,
         DispatchRoleOutputCapability? roleCapability = null)
     {
-        if (WorkerResultParser.TryParseSuccessfulResult(
-                $"{standardOutput}\n{standardError}",
+        var resultText = WorkerResultParser.TryParseResult(standardOutput, out _, out _)
+            ? standardOutput
+            : WorkerResultParser.TryParseResult(standardError, out _, out _)
+                ? standardError
+                : null;
+        if (resultText is not null)
+        {
+            return WorkerResultParser.TryParseSuccessfulResult(
+                resultText,
                 out _,
                 out _,
                 allowNoChangedFiles,
                 requireNoBlockers,
-                allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly))
-        {
-            return true;
+                allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly);
         }
 
         foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
