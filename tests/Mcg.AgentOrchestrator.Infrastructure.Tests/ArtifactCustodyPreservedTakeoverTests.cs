@@ -2,7 +2,6 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
 public sealed class ArtifactCustodyPreservedTakeoverTests : DotnetBuildEnvironmentManagerRootedTestBase
 {
     private const string EvidenceFileName = "retained.trx";
