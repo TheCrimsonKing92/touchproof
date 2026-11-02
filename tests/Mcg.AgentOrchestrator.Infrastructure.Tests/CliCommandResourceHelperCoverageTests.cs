@@ -28,7 +28,7 @@ public sealed class CliCommandResourceHelperCoverageTests
     };
 
     [Fact]
-    public async Task EveryDeclaredResourceHelperAcquiresOnlyAtItsFirstGitLaunch()
+    public async Task EveryDeclaredResourceHelperUsesOnlyItsInitializedCapacity()
     {
         var helpers = typeof(CliCommandTestBase).GetMethods(
                 BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Static |
@@ -44,7 +44,7 @@ public sealed class CliCommandResourceHelperCoverageTests
         var root = Directory.CreateTempSubdirectory("helper-slot-coverage-").FullName;
         try
         {
-            await using (var setup = new CliCommandSlotProbe(new HostCapacityTestBudget(1, _ => null)))
+            await using (var setup = new CliCommandSlotProbe(new HostCapacityTestBudget(1, _ => null), usesGit: true))
             {
                 await setup.InitializeAsync();
                 CliAcceptanceGitRepositoryTemplate.CopyTo(root);
@@ -55,8 +55,28 @@ public sealed class CliCommandResourceHelperCoverageTests
                 Assert.False(method.IsStatic, $"{method} cannot own an instance lease while static.");
                 var budget = new HostCapacityTestBudget(1, _ => null);
                 var held = await budget.EnterAsync();
-                var probe = new CliCommandSlotProbe(budget);
-                await probe.InitializeAsync();
+                var launchesGit = method.Name is "DirtyGoalWorktree" or "EnsureGitRepository" or
+                    "RunGit" or "RunGitOutput";
+                var probe = new CliCommandSlotProbe(budget, usesGit: launchesGit);
+                var initialization = probe.InitializeAsync().AsTask();
+                try
+                {
+                    if (launchesGit)
+                    {
+                        // Admission is awaited before any helper runs; no launch thread waits.
+                        Assert.False(initialization.IsCompleted);
+                        Assert.Equal(1, probe.AcquisitionRequests);
+                        await held.DisposeAsync();
+                    }
+                    await initialization.WaitAsync(HangGuard);
+                }
+                catch
+                {
+                    await held.DisposeAsync();
+                    await initialization.WaitAsync(HangGuard);
+                    await probe.DisposeAsync();
+                    throw;
+                }
                 using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
                 var starts = 0;
                 var startedWithCapacity = false;
@@ -66,8 +86,6 @@ public sealed class CliCommandResourceHelperCoverageTests
                     startedWithCapacity = probe.AcquisitionRequests == 1 && budget.AvailableSlots == 0;
                     return false; // Observe the real start boundary without mutating any repository.
                 });
-                var launchesGit = method.Name is "DirtyGoalWorktree" or "EnsureGitRepository" or
-                    "RunGit" or "RunGitOutput";
                 // Keep every original null/default-argument scenario. Give git helpers an owned
                 // path and explicit arguments so null validation cannot hide the launch boundary.
                 var arguments = method.GetParameters()
@@ -93,17 +111,10 @@ public sealed class CliCommandResourceHelperCoverageTests
                 {
                     if (launchesGit)
                     {
-                        var reached = await Task.WhenAny(probe.AcquisitionRequested.Task, invocation).WaitAsync(HangGuard);
-                        Assert.True(reached == probe.AcquisitionRequested.Task, $"{method} bypassed first-git acquisition.");
-                        Assert.Equal(1, launches.Count); // No helper-driven acquisition before git.
-                        Assert.False(invocation.IsCompleted, $"{method} launched without capacity.");
-                        Assert.Equal(0, Volatile.Read(ref starts));
-                        Assert.Equal(1, probe.AcquisitionRequests);
-                        Assert.Equal(0, budget.AvailableSlots);
-                        await held.DisposeAsync();
                         Assert.IsType<InvalidOperationException>(await invocation.WaitAsync(HangGuard));
+                        Assert.Equal(1, launches.Count);
                         Assert.Equal(1, starts);
-                        Assert.True(startedWithCapacity, $"{method} must acquire at its first git launch.");
+                        Assert.True(startedWithCapacity, $"{method} must use its asynchronously initialized slot.");
                         Assert.Equal(1, probe.AcquisitionRequests);
                         Assert.Equal(0, budget.AvailableSlots); // Held until fixture disposal.
                     }

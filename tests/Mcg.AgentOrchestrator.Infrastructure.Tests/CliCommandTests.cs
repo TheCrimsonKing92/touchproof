@@ -10,7 +10,7 @@ using System.Text.Json.Nodes;
 
 public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 {
-    public override ValueTask InitializeAsync() => ValueTask.CompletedTask;
+    public override ValueTask InitializeAsync() => base.InitializeAsync();
 
     private protected WorktreeCleanupContext CreateIsolatedCleanupContext(
         OrchestratorWorkspace workspace,

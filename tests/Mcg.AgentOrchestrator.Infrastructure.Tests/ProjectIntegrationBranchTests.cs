@@ -8,6 +8,8 @@ using static InfrastructureTestSupport;
 // Parallel-safe: unique registry/workspace roots and AsyncLocal console capture.
 public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void Registry_CustomBranch_RoundTripsIntoWorkspace()
     {

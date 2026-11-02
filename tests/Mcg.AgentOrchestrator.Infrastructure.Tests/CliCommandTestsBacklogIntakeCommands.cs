@@ -10,6 +10,8 @@ using System.Text.Json;
 
 public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "Cli_backlog_add_keeps_body_text_grouped_before_file_flag")]
     public void CliBacklogAddKeepsBodyTextGroupedBeforeFileFlag()
     {

@@ -33,13 +33,13 @@ public sealed class CliCommandSlotDeferralTests
     }
 
     [Fact]
-    public async Task FirstResourceHelperTakesOneSlotSecondReusesItAndDisposalReturnsItOnce()
+    public async Task InitializationTakesOneSlotHelpersReuseItAndDisposalReturnsItOnce()
     {
         var budget = new HostCapacityTestBudget(2, _ => null);
-        var probe = new CliCommandSlotProbe(budget);
+        var probe = new CliCommandSlotProbe(budget, usesGit: true);
         await probe.InitializeAsync();
-        Assert.Equal(2, budget.AvailableSlots);
-        Assert.Equal(0, probe.AcquisitionRequests);
+        Assert.Equal(1, budget.AvailableSlots);
+        Assert.Equal(1, probe.AcquisitionRequests);
         try
         {
             Assert.Contains("git version", probe.FirstHelper());
@@ -57,28 +57,22 @@ public sealed class CliCommandSlotDeferralTests
         Assert.Equal(2, budget.AvailableSlots);
         await probe.DisposeAsync();
         Assert.Equal(2, budget.AvailableSlots);
-        Assert.Throws<ObjectDisposedException>(() => probe.SecondHelper());
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await probe.InitializeAsync());
     }
 
     [Fact]
-    public async Task OverlappingFirstHelpersShareOnePendingAcquisition()
+    public async Task OverlappingInitializationsShareOnePendingAcquisition()
     {
         var budget = new HostCapacityTestBudget(1, _ => null);
         var held = await budget.EnterAsync();
-        var probe = new CliCommandSlotProbe(budget);
-        await probe.InitializeAsync();
-        var first = Task.Run(() => probe.FirstHelper());
+        var probe = new CliCommandSlotProbe(budget, usesGit: true);
+        var first = probe.InitializeAsync().AsTask();
         await probe.AcquisitionRequested.Task.WaitAsync(HangGuard);
-        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var second = Task.Run(() =>
-        {
-            secondStarted.SetResult();
-            probe.SecondHelper();
-        });
+        var second = probe.InitializeAsync().AsTask();
         try
         {
-            await secondStarted.Task.WaitAsync(HangGuard);
             Assert.False(first.IsCompleted);
+            Assert.False(second.IsCompleted);
             Assert.Equal(1, probe.AcquisitionRequests);
         }
         finally

@@ -192,7 +192,6 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         startInfo.ArgumentList.Add(argument);
     }
 
-    HostCapacitySlotGitCensus.BeforeLaunch();
     if (OperatingSystem.IsWindows() && startProcess is null)
     {
         return RunGitProbeWithOwnedFileCapture(

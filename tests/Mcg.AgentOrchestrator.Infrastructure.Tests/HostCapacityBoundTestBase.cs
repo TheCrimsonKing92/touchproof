@@ -1,6 +1,6 @@
 /// <summary>
 /// Base for fixtures that hold one slot of <see cref="HostCapacityTestBudget"/> from
-/// their first observed git launch until disposal. Tests without git never take a slot.
+/// asynchronous initialization until disposal. Declared no-git fixtures skip the budget.
 ///
 /// This replaces the removed all-or-nothing GoalWorktreeCleanupHooks serialization. It is
 /// deliberately weaker: it admits several tests at once and imposes no ordering, so it
@@ -8,20 +8,10 @@
 /// </summary>
 public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
 {
-    private static readonly AsyncLocal<HostCapacityBoundTestBase?> CurrentOwner = new();
     private readonly object capacityGate = new();
     private Task<IAsyncDisposable>? capacityAcquisition;
     private Task? capacityDisposal;
     private bool disposed;
-
-    static HostCapacityBoundTestBase() =>
-        HostCapacitySlotGitCensus.RegisterAcquisitionResolver(() =>
-        {
-            var owner = CurrentOwner.Value ?? Xunit.TestContext.Current.TestClassInstance as HostCapacityBoundTestBase;
-            return owner is null ? null : owner.EnsureHostCapacity;
-        });
-
-    protected HostCapacityBoundTestBase() => CurrentOwner.Value = this;
 
     /// <summary>
     /// The budget this fixture draws from. Overridden only by the controls that verify the
@@ -29,9 +19,15 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     /// </summary>
     private protected virtual HostCapacityTestBudget CapacityBudget => HostCapacityTestBudget.Shared;
 
-    public virtual ValueTask InitializeAsync() => ValueTask.CompletedTask;
+    // Conservative default: opt out only for fixtures whose scenarios never launch git.
+    // Keep the declaration with the fixture, rather than maintaining a central census list.
+    private protected virtual bool UsesGit => true;
 
-    /// <summary>One per-test acquisition shared by concurrent first git launches.</summary>
+    // Yield the runner thread while queued. Synchronous git observers must never acquire:
+    // blocked launch threads can prevent the async disposal that returns capacity.
+    public virtual ValueTask InitializeAsync() => UsesGit ? EnsureHostCapacityAsync() : ValueTask.CompletedTask;
+
+    /// <summary>One per-test acquisition shared by concurrent initialization calls.</summary>
     private async ValueTask EnsureHostCapacityAsync()
     {
         Task<IAsyncDisposable> acquisition;
@@ -52,12 +48,6 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
             ObjectDisposedException.ThrowIf(disposed, this);
         }
     }
-
-    // Blocking the launching thread is safe: the semaphore is process-local and this test
-    // holds no other capacity slot, so it cannot form a circular slot wait. Continuations
-    // use ConfigureAwait(false); acquisition does not need the blocked runner context.
-    private void EnsureHostCapacity() =>
-        EnsureHostCapacityAsync().GetAwaiter().GetResult();
 
     public virtual ValueTask DisposeAsync()
     {

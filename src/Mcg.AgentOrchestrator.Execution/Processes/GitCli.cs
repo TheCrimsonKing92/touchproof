@@ -5,7 +5,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class GitCli
 {
     internal static Action<string>? LaunchObserver;
-    internal static Action? LaunchStarting;
 
     // 60 000 ms covers the longest observed per-call timeout in use across the codebase.
     internal const int DefaultTimeoutMilliseconds = 60_000;
@@ -124,10 +123,6 @@ internal static class GitCli
             // never take or block on it; write commands take their required locks regardless.
             startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
 
-            // Test instrumentation can wait for capacity before a child exists. Counting
-            // remains post-start so failed starts keep their existing census semantics.
-            try { Volatile.Read(ref LaunchStarting)?.Invoke(); }
-            catch (Exception) { /* Test instrumentation must not change the git result. */ }
             using var process = Process.Start(startInfo);
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
