@@ -29,8 +29,7 @@ internal static partial class CliCommandHandlers
             .ToList();
 
     internal static bool IsSpecClarification(CollaborationItem item) =>
-        !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
-        item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal);
+        SpecClarificationKey.IsSpecClarification(item.CorrelationKey);
 
     internal static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix) =>
         AttentionReadGoalSelection.Resolve(kernel, goalPrefix);

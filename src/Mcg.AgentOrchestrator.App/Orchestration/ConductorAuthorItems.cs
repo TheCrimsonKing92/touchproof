@@ -21,7 +21,7 @@ internal static class ConductorAuthorItems
         {
             if (item.Type != CollaborationItemType.Clarification ||
                 !string.Equals(item.GoalId, goal.Id.Value, StringComparison.Ordinal) ||
-                item.CorrelationKey?.StartsWith("spec-clarification:", StringComparison.Ordinal) != true ||
+                !SpecClarificationKey.IsSpecClarification(item.CorrelationKey) ||
                 CollaborationItemLifecycle.IsTerminal(item.Status) ||
                 item.AuthoritativeAnswer is not null || HasQueuedHumanAnswer(intents, OperatorAnswerTargetKind.Clarification, item.Id))
                 continue;

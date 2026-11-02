@@ -80,7 +80,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (assignments.Count > 0)
         {
-            goal.SetStatus(GoalStatus.Active);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleActivateGoal);
         }
 
         return new DelegationPlan(goal.Id, assignments);
@@ -209,7 +209,7 @@ public sealed partial class AgentOrchestratorKernel
             if (agent is not null)
             {
                 task.AssignTo(agent.Id);
-                goal.SetStatus(GoalStatus.Active);
+                GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleAddTask);
                 Append(goal, task.Id, ProgressKind.TaskDelegated, $"Delegated {task.RequiredRole} task to {agent.Name}.");
             }
         }
@@ -638,7 +638,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.SetStatus(GoalStatus.Active);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleReopenVerifyingGoalAfterAcceptanceAttemptInvalidated);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reopenReason);
         return true;
     }
@@ -652,7 +652,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleNormalizePrematureCompletedGoalForAcceptance);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -688,7 +688,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleReconcileGoalVerificationStatus);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -712,7 +712,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' cannot enter Verifying until all task verification gates have passed.");
         }
 
-        goal.SetStatus(GoalStatus.Verifying);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verifying), GoalStatusTransitionRecorder.GoalLifecycleBeginGoalAcceptanceVerification);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -726,7 +726,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.ClearAcceptanceFailure();
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleReconcileGoalAcceptanceVerified);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -753,7 +753,7 @@ public sealed partial class AgentOrchestratorKernel
             mainHeadSha,
             checkAttributions,
             baselineAttestation);
-        goal.SetStatus(GoalStatus.AcceptanceFailed);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.AcceptanceFailed), GoalStatusTransitionRecorder.GoalLifecycleReconcileGoalAcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -765,7 +765,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             return false;
         }
-        goal.SetStatus(GoalStatus.AcceptanceFailed);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.AcceptanceFailed), GoalStatusTransitionRecorder.GoalLifecycleRouteRecordedAcceptanceFailure);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -900,7 +900,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleRestoreVerifiedForClassifiedAcceptanceFailure);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -937,7 +937,7 @@ public sealed partial class AgentOrchestratorKernel
 
         goal.ClearAcceptanceFailure();
         goal.ResetAcceptanceIdentityStale();
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleRestoreVerifiedForSupersededAcceptanceFailure);
         Append(
             goal,
             null,
@@ -957,7 +957,7 @@ public sealed partial class AgentOrchestratorKernel
         goal.ResetAutomaticAcceptanceRetryCount();
         goal.ResetAcceptanceIdentityStale();
         var operatorRegateCount = goal.IncrementOperatorAcceptanceRegateCount();
-        goal.SetStatus(GoalStatus.Verified);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.GoalLifecycleRetryAcceptanceGate);
         Append(
             goal,
             null,
@@ -1255,7 +1255,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is already {goal.Status}.");
         }
 
-        goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Park);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Park), GoalStatusTransitionRecorder.ApplyExplicitDispositionPark);
         var resolution = GoalParkResolution.Build(parkReason);
         CompleteOpenHumanInputRequestsForGoal(goal.Id, resolution);
         Append(goal, null, ProgressKind.GoalPolicyDecision, resolution);
@@ -1286,9 +1286,9 @@ public sealed partial class AgentOrchestratorKernel
             { OutcomeKind: "Escalated", LifecycleState: nameof(GoalLifecycleState.Verified),
               EscalationKind: nameof(Conductor.ConductorEscalationKind.BackgroundAcceptanceFailed) or
                   nameof(Conductor.ConductorEscalationKind.AcceptanceVerificationFailed) };
-        goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Unpark);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Unpark), GoalStatusTransitionRecorder.ApplyExplicitDispositionUnpark);
         if (resumeAcceptanceEscalation)
-            goal.SetStatus(GoalStatus.Active);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleUnparkGoal);
         else if (hadExplicitDisposition && !IsTerminalGoalStatus(goal.Status) &&
             goal.Status is not (GoalStatus.Verifying or GoalStatus.AcceptanceFailed))
             RefreshGoalStatus(goal, allowParkedRefresh: true);
@@ -1352,7 +1352,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' cannot complete from Verifying until every task is terminal.");
         }
 
-        goal.SetStatus(GoalStatus.Completed);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Completed), GoalStatusTransitionRecorder.GoalLifecycleCompleteGoal);
         Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
         return goal;
     }
@@ -1409,7 +1409,7 @@ public sealed partial class AgentOrchestratorKernel
                 $"integrateSha={normalizedIntegrateSha}");
         }
 
-        goal.SetStatus(GoalStatus.Completed);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Completed), GoalStatusTransitionRecorder.GoalLifecycleCompleteGoalFromMergeEvidence);
         if (!recoveringFromReceipt)
         {
             Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
@@ -1493,7 +1493,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' has running dispatch process(es): {taskList}. Cancel or refresh them before stopping the goal.");
         }
 
-        goal.SetStatus(terminalStatus);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(terminalStatus), GoalStatusTransitionRecorder.GoalLifecycleStopGoal);
         Append(
             goal,
             null,
@@ -1561,7 +1561,7 @@ public sealed partial class AgentOrchestratorKernel
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskFailed, escalationMessage,
             CriteriaCorrectionSource.Escalation);
         Append(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
-        goal.SetStatus(GoalStatus.Failed);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Failed), GoalStatusTransitionRecorder.GoalLifecycleEscalateTaskFailure);
         Append(
             goal,
             null,
@@ -1595,7 +1595,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.SetStatus(GoalStatus.Active);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleReopenTerminalGoalWithNonTerminalTasks);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }
@@ -1608,7 +1608,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        goal.SetStatus(GoalStatus.Active);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.GoalLifecycleReopenAcceptanceFailedGoalWithRetry);
         goal.DeferAcceptanceFailureForRetry();
         goal.ResetAcceptanceIdentityStale();
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
@@ -1973,7 +1973,7 @@ public sealed partial class AgentOrchestratorKernel
             goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
         }
 
-        goal.SetStatus(GoalStatus.WaitingForHuman);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.WaitingForHuman), GoalStatusTransitionRecorder.GoalLifecycleHoldTaskForExistingHumanInput);
     }
 
     private void ResetAnsweredHumanInputSuppressionStreaks(
@@ -1994,6 +1994,15 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
         bool supersedeSiblings = true)
+        => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false);
+
+    private void SubmitHumanInputCore(
+        HumanInputRequestId requestId,
+        string answer,
+        IReadOnlyList<string>? gatedDeliverableIds,
+        HumanInputAnswerOrigin origin,
+        bool supersedeSiblings,
+        bool isAutoDefaulted)
     {
         lock (_humanInputRequestLock)
         {
@@ -2010,28 +2019,13 @@ public sealed partial class AgentOrchestratorKernel
                 answeredAt,
                 gatedDeliverableIds,
                 origin,
-                briefVersion: goal.AuthoritativeBrief.Version);
+                briefVersion: goal.AuthoritativeBrief.Version,
+                isAutoDefaulted: isAutoDefaulted);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
-            var siblings = _humanInputRequests.Values
-                .Where(candidate =>
-                    supersedeSiblings &&
-                    candidate.Id != request.Id &&
-                    candidate.GoalId == request.GoalId &&
-                    candidate.TaskId == request.TaskId &&
-                    candidate.Kind == request.Kind &&
-                    !candidate.IsCompleted &&
-                    candidate.HasSameIdentity(request))
-                .OrderBy(candidate => candidate.RequestedAt)
-                .ToList();
-            foreach (var sibling in siblings)
-            {
-                sibling.CompleteAsSuperseded(
-                    answer,
-                    answeredAt,
-                    request.Id,
-                    goal.AuthoritativeBrief.Version);
-            }
+            var siblingCount = HumanInputSubmission.CompleteSiblings(
+                _humanInputRequests.Values, request, answer, answeredAt,
+                goal.AuthoritativeBrief.Version, supersedeSiblings, isAutoDefaulted);
 
             TaskSpec? answeredTesterToRequeue = null;
             if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
@@ -2070,9 +2064,9 @@ public sealed partial class AgentOrchestratorKernel
 
             RefreshGoalStatus(goal);
 
-            var siblingReceipt = siblings.Count == 0
+            var siblingReceipt = siblingCount == 0
                 ? string.Empty
-                : $" Resolved {siblings.Count} sibling duplicate request(s).";
+                : $" Resolved {siblingCount} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
             if (answeredTesterToRequeue is not null)
                 RequeueAnsweredTesterBlocker(goal, answeredTesterToRequeue, answer);
@@ -2348,7 +2342,7 @@ public sealed partial class AgentOrchestratorKernel
 
             if (goal.Status != GoalStatus.Parked)
             {
-                goal.SetStatus(GoalStatus.Parked);
+                GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Parked), GoalStatusTransitionRecorder.GoalLifecycleSweepParkedGoalHumanWaits);
                 Append(goal, null, ProgressKind.GoalPolicyDecision, parkResolution);
             }
 
@@ -2374,7 +2368,8 @@ public sealed partial class AgentOrchestratorKernel
 
             if (request.IsAutoDefaultable && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
             {
-                SubmitHumanInput(request.Id, request.SuggestedDefaultAnswer);
+                SubmitHumanInputCore(request.Id, request.SuggestedDefaultAnswer, null,
+                    HumanInputAnswerOrigin.Operator, supersedeSiblings: true, isAutoDefaulted: true);
                 resolved.Add(new HumanWaitPolicyResult(request.Id, request.GoalId, request.TaskId, request.Kind, HumanWaitPolicyResolution.Defaulted));
                 continue;
             }

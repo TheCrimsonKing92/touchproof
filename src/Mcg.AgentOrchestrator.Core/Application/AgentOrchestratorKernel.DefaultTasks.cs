@@ -139,7 +139,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (authoritativeGoalStatus.Value != GoalStatus.Active)
         {
-            goal.SetStatus(authoritativeGoalStatus.Value);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(authoritativeGoalStatus.Value), GoalStatusTransitionRecorder.DefaultTasksConcludeInterruptedDispatchRecovery);
             return;
         }
 

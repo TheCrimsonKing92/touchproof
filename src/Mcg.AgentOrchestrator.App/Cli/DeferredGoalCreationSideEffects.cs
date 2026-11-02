@@ -39,7 +39,8 @@ internal enum GoalCreationLifecycleEffectKind
     ProgressiveReviewGlanceReceipt,
     ProgressiveReviewGlanceGuardReceipt,
     ProgressiveReviewGlanceCircuitReceipt,
-    ProgressiveReviewGlanceSummary
+    ProgressiveReviewGlanceSummary,
+    GoalStatusTransition
 }
 
 internal sealed record GoalCreationLifecycleEffect(
@@ -189,6 +190,7 @@ internal static class GoalCreationSideEffectDelivery
 internal static class GoalCreationLifecycleEffectDelivery
 {
     internal sealed record TextPayload(string Value);
+    internal sealed record StatusTransitionPayload(GoalStatus From, GoalStatus To, string Site);
     internal sealed record TextPairPayload(string First, string Second);
     internal sealed record TextTriplePayload(string First, string Second, string Third);
     internal sealed record TextListPayload(IReadOnlyList<string> Values, string Text);
@@ -325,6 +327,10 @@ internal static class GoalCreationLifecycleEffectDelivery
                     summary.Invalid,
                     summary.TotalTokens);
                 break;
+            case GoalCreationLifecycleEffectKind.GoalStatusTransition:
+                var transition = GoalCreationSideEffectDelivery.DeserializePayload<StatusTransitionPayload>(effect.PayloadJson);
+                writer.AppendGoalStatusTransition(goalId, transition.From, transition.To, transition.Site);
+                break;
             default:
                 throw new InvalidOperationException($"Unsupported goal-creation lifecycle effect '{effect.Kind}'.");
         }
@@ -388,6 +394,9 @@ internal sealed class DeferredGoalLifecycleEventWriter : IGoalLifecycleEventWrit
 
     public void AppendTimelineEvent(ProgressEvent value) =>
         Append(GoalCreationLifecycleEffectKind.TimelineEvent, value.GoalId, value, writer => writer.AppendTimelineEvent(value));
+
+    public void AppendGoalStatusTransition(GoalId goalId, GoalStatus from, GoalStatus to, string site) =>
+        Append(GoalCreationLifecycleEffectKind.GoalStatusTransition, goalId, new GoalCreationLifecycleEffectDelivery.StatusTransitionPayload(from, to, site), writer => writer.AppendGoalStatusTransition(goalId, from, to, site));
 
     public void AppendGoalCreated(GoalId goalId, string objective) =>
         Append(GoalCreationLifecycleEffectKind.GoalCreated, goalId, new GoalCreationLifecycleEffectDelivery.TextPayload(objective), writer => writer.AppendGoalCreated(goalId, objective));

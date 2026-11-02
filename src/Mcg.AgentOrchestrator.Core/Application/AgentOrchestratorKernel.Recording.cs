@@ -1742,7 +1742,7 @@ public sealed partial class AgentOrchestratorKernel
         dispatch = dispatch with { InconclusiveRoundInputs = TesterInconclusiveRoundInputsReader.Capture(goal, task, dispatch.CandidateIdentity) };
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
-        goal.SetStatus(GoalStatus.Active);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.RecordingRecordTaskDispatch);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
     }
 
@@ -2025,7 +2025,7 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         TaskProcessStartRecording.Record(task, process);
         if (!IsReopenProtectedGoalStatus(goal.Status))
-            goal.SetStatus(GoalStatus.Active);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.RecordingRecordTaskProcessStarted);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
     }
 

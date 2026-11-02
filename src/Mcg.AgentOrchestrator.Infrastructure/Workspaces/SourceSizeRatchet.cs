@@ -588,7 +588,7 @@ internal static class SourceSizeRatchet
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
-            new SourceClassCeiling("CliCommandHandlers", 11030, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11029, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -643,7 +643,8 @@ internal static class SourceSizeRatchet
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
             // Goal 25775eef requires a thin re-phase entry point beside repair to supply the kernel clock
             // and goal lookup; validation and provenance remain owned by CriterionEvidenceRephase.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9284, 28),
+            // Goal 843fc2d0: one-line kernel recording seam for TaskGraphRepair status transitions.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9280, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

@@ -113,7 +113,7 @@ internal sealed class OwnerQuestionReadModel(
                     continue;
                 }
                 if (item.GoalId is null ||
-                    item.CorrelationKey?.StartsWith("spec-clarification:", StringComparison.Ordinal) != true) continue;
+                    !SpecClarificationKey.IsSpecClarification(item.CorrelationKey)) continue;
                 candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId!,
                     OwnerQuestionKind.Clarification,
                     Field(item.Body, "Question:") ?? item.Subject,
