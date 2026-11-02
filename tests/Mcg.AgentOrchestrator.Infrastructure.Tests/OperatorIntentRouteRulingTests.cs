@@ -251,7 +251,8 @@ public sealed class OperatorIntentRouteRulingTests
         internal async Task<AdjudicateOperatorIntentPayload> PreparePayload(string? ruling)
         {
             Directory.CreateDirectory(Workspace.OrchestratorDirectory);
-            await new SqliteOrchestratorStateRepository(Path.Combine(Workspace.OrchestratorDirectory, "state.db"))
+            StateDbMigrations.EnsureUpToDate(Workspace.SqliteStatePath);
+            await new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath)
                 .SaveAsync(Kernel);
             var note = Path.Combine(Root, "note.md");
             File.WriteAllText(note, "Apply the bounded correction.");
@@ -284,7 +285,7 @@ public sealed class OperatorIntentRouteRulingTests
             Assert.Equal(OperatorIntentStatus.Rejected, rejected!.Status);
             Assert.Contains(reason, rejected.Outcome, StringComparison.Ordinal);
             Assert.Equal(WorkTaskStatus.Failed, Task.Status);
-            Assert.Null(Task.PendingRetryCause);
+            Assert.Equal(RetryCause.Unknown, Task.PendingRetryCause);
             Assert.Null(Task.LatestRetryAt);
             Assert.Empty(Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
             Assert.Empty(Kernel.HumanInputRequests);
