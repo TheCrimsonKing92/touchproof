@@ -31,7 +31,7 @@ public static class CriterionOwnershipDerivation
         {
             var topicKey = $"ownership-v{briefVersion}-revision-{issue.CriterionIndex}";
             questions.Add(new RefinedSpecOpenQuestion(
-                $"spec-clarification:{goalId.Value}:{topicKey}",
+                SpecClarificationKey.Build(goalId, topicKey),
                 $"{issue.Diagnostic} Revise the versioned criterion to declare one authoritative evidence owner. " +
                 "For an existing criterion, an explicit criterion-evidence-map repair may declare its evidence owner.",
                 "ownership-lifecycle", "Open", TopicKey: topicKey,

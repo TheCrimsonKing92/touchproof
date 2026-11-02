@@ -549,7 +549,9 @@ internal static class SourceSizeRatchet
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
             // Goal 5ca3f5c0: six PR-tracker wiring lines, no added partial file.
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
-            new SourceClassCeiling("ConductorDriver", 14380, 70),
+            // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
+            // extracting only its initializer would separate ownership from the outcome it classifies.
+            new SourceClassCeiling("ConductorDriver", 14384, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -586,7 +588,7 @@ internal static class SourceSizeRatchet
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
-            new SourceClassCeiling("CliCommandHandlers", 11030, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11029, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -642,7 +644,7 @@ internal static class SourceSizeRatchet
             // Goal 25775eef requires a thin re-phase entry point beside repair to supply the kernel clock
             // and goal lookup; validation and provenance remain owned by CriterionEvidenceRephase.
             // Goal 843fc2d0: one-line kernel recording seam for TaskGraphRepair status transitions.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9285, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9280, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -676,7 +678,9 @@ internal static class SourceSizeRatchet
             // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
             // Goal f608f29b adds the three-line environment admission guard before progressive-review steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines, no added partial file.
-            new SourceClassCeiling("ConductorBatchLoop", 8972, 56),
+            // Goal 38a48117 exempts the review owner at the existing hold-tracking call;
+            // the added comment explains why the tracker still needs the hold record.
+            new SourceClassCeiling("ConductorBatchLoop", 8973, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

@@ -62,7 +62,7 @@ internal delegate Task<CollaborationItem> CollaborationItemRaise(
 internal sealed partial class GoalRefinementService
 {
     // Correlation key prefix used to look up open clarification items for a goal.
-    internal const string CorrelationKeyPrefix = "spec-clarification:";
+    internal const string CorrelationKeyPrefix = SpecClarificationKey.Prefix;
 
     private readonly IModelProviderRegistry _providers;
     private readonly ModelFunctionCatalog _catalog;
@@ -1170,7 +1170,7 @@ internal sealed partial class GoalRefinementService
     private static string BuildCorrelationKey(GoalId goalId, string topicKey)
     {
         // Stable by topic so a regenerated equivalent fork refreshes the same collaboration item.
-        return $"{CorrelationKeyPrefix}{goalId.Value}:{NormalizeTopicKey(topicKey, null, topicKey)}";
+        return SpecClarificationKey.Build(goalId, NormalizeTopicKey(topicKey, null, topicKey));
     }
 
     private static string BuildClarificationSubject(string topicKey) =>

@@ -54,11 +54,13 @@ public sealed class AgentOutputDirectivesStoreRefTests
     }
 
     [Fact]
-    public void ReferenceDoesNotReplaceRequiredStore()
+    public void ReferenceSuppliesOmittedStore()
     {
         var parsed = Parse("retrievable", Reference, includeStore: false);
-        Assert.Null(parsed.Directive);
-        Assert.Equal("Malformed PLANNER_EVIDENCE_REQUEST: retrievable evidence must name a non-empty store.", parsed.Diagnostic);
+        Assert.Null(parsed.Diagnostic);
+        var payload = Assert.IsType<PlannerEvidencePayload>(parsed.Directive!.PlannerEvidence);
+        Assert.Equal("goal-events", payload.Store);
+        Assert.Equal("goal-events", parsed.Directive.StoreReference!.Kind);
     }
 
     [Theory]

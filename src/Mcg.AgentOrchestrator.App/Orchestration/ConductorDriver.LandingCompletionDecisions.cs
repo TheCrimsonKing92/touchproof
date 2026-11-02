@@ -118,7 +118,11 @@ internal sealed partial class ConductorDriver
             return null;
         if (decision.Action == LandingCompletionAction.Hold)
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason) { Decision = landResult.Decision.Decision ?? decision.ToRecord() });
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason)
+                {
+                    Owner = kind == "delivered-for-review" ? ConductorHoldOwner.PullRequestReview : ConductorHoldOwner.None,
+                    Decision = landResult.Decision.Decision ?? decision.ToRecord()
+                });
         if (kind == "ownership-hold")
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, decision.Reason) { Decision = landResult.Decision.Decision ?? decision.ToRecord() });

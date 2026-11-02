@@ -119,7 +119,7 @@ public static class FindingStagnationTracker
         var prefix = FindingStagnationDecision.FingerprintPrefix(goal.Id, stableId);
         var rulingAt = requests.Where(request => request.GoalId == goal.Id && request.IsCompleted &&
                 !request.WasDismissed && request.QuestionFingerprint.StartsWith(prefix, StringComparison.Ordinal) &&
-                request.AuthoritativeAnswer?.Origin == HumanInputAnswerOrigin.Operator)
+                request.AuthoritativeAnswer is { Origin: HumanInputAnswerOrigin.Operator, IsAutoDefaulted: false })
             .Select(request => request.AnsweredAt ?? DateTimeOffset.MinValue).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var resolvedAt = goal.Timeline.Where(evt => evt.Kind == ProgressKind.HumanInputSuperseded &&
                 evt.HumanInputSuperseded?.ResolvedStableIds.Contains(stableId, StringComparer.Ordinal) == true)

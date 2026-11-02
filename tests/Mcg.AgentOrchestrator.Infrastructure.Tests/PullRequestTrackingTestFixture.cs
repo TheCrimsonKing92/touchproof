@@ -15,9 +15,12 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
     internal SqliteOrchestratorStateRepository Repository { get; }
     internal PullRequestDeliveryTracker Tracker { get; }
     internal List<ConductorLandingReceipt> Receipts { get; } = [];
+    internal PullRequestReviewConflictCheck ConflictCheck { get; }
 
-    internal PullRequestTrackingTestFixture()
+    internal PullRequestTrackingTestFixture(PullRequestReviewConflictCheck? conflictCheck = null)
     {
+        ConflictCheck = conflictCheck ?? new((_, _) => Task.FromResult(new WorkerProcessRunResult(0,
+            "{\"conflict\":false,\"summary\":\"\"}", "")));
         Repository = new(Workspace.SqliteStatePath);
         Repository.SaveAsync(Kernel).GetAwaiter().GetResult();
         Assert.False(Delivery.Land().MainAdvanced);
@@ -29,8 +32,14 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
 
     internal PullRequestDeliveryTracker CreateTracker(OrchestratorWorkspace? workspace = null) =>
         new(Kernel, workspace ?? Workspace, new GitHubPullRequestStatusReader(Forge), Forge, Attention,
-            elapsed: () => Elapsed, landingSink: Receipts.Add);
-    internal IReadOnlySet<GoalId> Tick() => Tracker.Service([Goal]);
+            elapsed: () => Elapsed, landingSink: Receipts.Add, conflictCheck: ConflictCheck);
+    internal IReadOnlySet<GoalId> Tick()
+    {
+        var changed = Tracker.Service([Goal]);
+        // Hang bound only: wait for the fake check completion event before the next service pass.
+        ConflictCheck.PendingTask(Goal.Id)?.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+        return changed;
+    }
     internal void Merged() => Forge.Json = JsonSerializer.Serialize(new
     {
         state = "MERGED", mergedAt = "2026-10-31T12:00:00Z", mergeCommit = new { oid = Delivery.Candidate },
@@ -46,7 +55,7 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
     internal CollaborationItem[] ReconcileItems() => Attention.GetAttentionQueueAsync().GetAwaiter().GetResult()
         .Where(item => item.CorrelationKey?.StartsWith("pull-request-reconcile:", StringComparison.Ordinal) == true).ToArray();
     internal GoalPromotionFact? Fact() => Repository.ReadPromotionFactAsync(Goal.Id).GetAwaiter().GetResult();
-    public void Dispose() => Delivery.Dispose();
+    public void Dispose() { ConflictCheck.Abandon(Goal.Id); Delivery.Dispose(); }
 
     internal sealed class Runner : IForgeProcessRunner
     {

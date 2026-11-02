@@ -49,7 +49,8 @@ public sealed class GuidanceTextBudgetTests
         // Explicit post-landing operator-check guidance adds 168 chars over the 4403 gate-owned evidence ceiling.
         // needed-as-string clarification adds 71 chars.
         // Typed brief-amendment schema and ruling/re-emission guidance add 339 chars; measured total is 4981.
-        new("Planner directive", 4981, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
+        // Omitted-store derivation wording adds exactly 55 chars (4981 -> 5036).
+        new("Planner directive", 5036, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
         // Planner standing rules are loaded inline or through the Planner context artifact.
         new("PlannerStandingRules", 289, () => AgentOutputDirectives.PlannerStandingRules),
         // Developer standing rules are loaded inline or through rule.md in every Developer brief.

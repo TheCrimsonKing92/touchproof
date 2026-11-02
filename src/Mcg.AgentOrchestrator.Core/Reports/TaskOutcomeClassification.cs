@@ -202,14 +202,19 @@ public static class TaskOutcomeClassifier
 
     public static string? TryExtractRule(string? message)
     {
-        if (string.IsNullOrWhiteSpace(message) ||
-            !message.Contains(ClassifierPrefix, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(message))
         {
             return null;
         }
 
-        var ruleIndex = message.IndexOf(RulePrefix, StringComparison.OrdinalIgnoreCase);
-        if (ruleIndex < 0)
+        var prefixIndex = message.IndexOf(ClassifierPrefix, StringComparison.OrdinalIgnoreCase);
+        if (prefixIndex < 0)
+        {
+            return null;
+        }
+
+        var ruleIndex = prefixIndex + ClassifierPrefix.Length;
+        if (!message.AsSpan(ruleIndex).StartsWith(RulePrefix, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }

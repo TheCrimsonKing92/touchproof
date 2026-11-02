@@ -6,6 +6,7 @@ using Xunit;
 public static class HostCapacitySlotTimingWriter
 {
     public const string VariableName = "MCG_TEST_SLOT_TIMING_FILE";
+    public const int GitCallerLimit = 20;
     private static readonly object AppendLock = new();
 
     public static string CurrentTestName()
@@ -36,6 +37,11 @@ public static class HostCapacitySlotTimingWriter
             {
                 row["git_launches"] = git.Launches;
                 row["git_subcommands"] = git.Subcommands;
+                var callers = (git.Callers ?? new Dictionary<string, int>())
+                    .OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Take(GitCallerLimit).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                callers["other"] = git.Launches - callers.Values.Sum();
+                row["git_callers"] = callers;
             }
             var line = JsonSerializer.Serialize(row);
             // SharedJsonlFile also excludes concurrent writers across processes for the whole append.

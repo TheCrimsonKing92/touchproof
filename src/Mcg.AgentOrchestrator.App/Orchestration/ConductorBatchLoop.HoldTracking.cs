@@ -47,12 +47,13 @@ internal sealed partial class ConductorBatchLoop
                 return;
             }
 
+            // The pull request tracker needs the hold record, but owns its progress so it never stalls.
             TrackGoalHold(
                 kernel, goal,
                 held.State.ToString(),
                 held.Reason,
                 observedAt,
-                stallThreshold,
+                held.Owner is ConductorHoldOwner.PullRequestReview ? TimeSpan.MaxValue : stallThreshold,
                 changedGoalIds,
                 tickLines,
                 held.StableIdentity,
