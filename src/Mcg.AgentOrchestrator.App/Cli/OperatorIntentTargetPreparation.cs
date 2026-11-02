@@ -72,7 +72,7 @@ internal static class OperatorIntentTargetPreparation
                 (task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed) &&
                 task.LastProcess is not { IsRunning: true })))
         {
-            gitRunner ??= GoalGitFactIndex.GitRunner;
+            gitRunner ??= GoalGitFactIndex.RunGitCli;
             GitCli.GitResult ReadGit(string directory, IReadOnlyList<string> args)
             {
                 var result = gitRunner(directory, args);
