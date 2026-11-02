@@ -255,6 +255,10 @@ if (CliGateCancelCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliGateCancelCommand.Run(startupArgs, workspace));
 }
+if (CliObligationRebindCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliObligationRebindCommand.Run(startupArgs, workspace));
+}
 
 if (CliEscapeCommands.IsCommand(startupArgs))
 {

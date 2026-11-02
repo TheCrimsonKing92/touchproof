@@ -1795,6 +1795,15 @@ public sealed partial class AgentOrchestratorKernel
             resumeCommand).Request;
     }
 
+    public HumanInputRequest RecordAnsweredOperatorHumanInput(GoalId goalId, string question, string answer)
+    {
+        lock (_humanInputRequestLock)
+        {
+            return AnsweredOperatorHumanInputRecorder.Record(GetGoal(goalId), question, answer, _clock.UtcNow,
+                _humanInputRequests, (g, t, k, message) => Append(g, t, k, message));
+        }
+    }
+
     public HumanInputRequestCreationResult RequestHumanInputDeduplicated(
         GoalId goalId,
         TaskId? taskId,
@@ -1968,20 +1977,8 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     private void ResetAnsweredHumanInputSuppressionStreaks(
-        GoalId goalId,
-        TaskId? taskId,
-        HumanInputRequestId? exceptRequestId)
-    {
-        foreach (var request in _humanInputRequests.Values.Where(candidate =>
-                     candidate.GoalId == goalId &&
-                     candidate.TaskId == taskId &&
-                     candidate.IsCompleted &&
-                     !candidate.WasDismissed &&
-                     candidate.Id != exceptRequestId))
-        {
-            request.ResetSuppressionCount();
-        }
-    }
+        GoalId goalId, TaskId? taskId, HumanInputRequestId? exceptRequestId) =>
+        HumanInputSuppression.ResetAnsweredStreaks(_humanInputRequests.Values, goalId, taskId, exceptRequestId);
 
     internal void ResetAnsweredHumanInputSuppressionStreaks(GoalId goalId, TaskId taskId)
     {

@@ -5,6 +5,20 @@ internal static class HumanInputSuppression
 {
     internal const int Threshold = 3;
 
+    internal static void ResetAnsweredStreaks(IEnumerable<HumanInputRequest> requests,
+        GoalId goalId, TaskId? taskId, HumanInputRequestId? exceptRequestId)
+    {
+        foreach (var request in requests.Where(candidate =>
+                     candidate.GoalId == goalId &&
+                     candidate.TaskId == taskId &&
+                     candidate.IsCompleted &&
+                     !candidate.WasDismissed &&
+                     candidate.Id != exceptRequestId))
+        {
+            request.ResetSuppressionCount();
+        }
+    }
+
     internal static void AppendContradictoryRecordAdvisoryIfNeeded(Goal goal, HumanInputRequest request,
         IEnumerable<HumanInputRequest> requests, Action<Goal, TaskId?, ProgressKind, string> append)
     {
