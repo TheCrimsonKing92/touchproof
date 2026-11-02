@@ -17,6 +17,59 @@ internal sealed class GateReadyProjectionCache
 
     internal int Count { get { lock (_gate) return _entries.Count; } }
 
+    internal static GateReadyCandidateProjectionResult ProjectUncached(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        Func<Goal, GoalLifecycleFacts> getFacts,
+        Func<Goal, bool> isVerificationGateSatisfied,
+        Func<Goal, ChangeRiskTier?> classifyChangeRisk,
+        GateReadyCandidateProjector? projector)
+    {
+        GoalLifecycleState lifecycleState;
+        try
+        {
+            lifecycleState = GoalLifecycle.ResolveState(goal, getFacts(goal));
+        }
+        catch
+        {
+            return new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.LifecycleNotReady);
+        }
+
+        bool gateSatisfied;
+        try
+        {
+            gateSatisfied = isVerificationGateSatisfied(goal);
+        }
+        catch
+        {
+            return new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.GateNotReady);
+        }
+
+        ChangeRiskTier? changeRiskTier;
+        ConductorTransitionDecision? autoPromotionDisposition;
+        try
+        {
+            changeRiskTier = classifyChangeRisk(goal);
+            autoPromotionDisposition = changeRiskTier.HasValue
+                ? policy.GetTransitionDecision(GoalLifecycleState.Merged, changeRiskTier.Value)
+                : null;
+        }
+        catch
+        {
+            changeRiskTier = null;
+            autoPromotionDisposition = null;
+        }
+
+        var input = new GateReadyCandidateInput(
+            goal.Id,
+            lifecycleState,
+            gateSatisfied,
+            changeRiskTier,
+            autoPromotionDisposition);
+        return projector?.Project(input) ??
+            new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.RevisionUnknown);
+    }
+
     internal static Key CreateKey(Goal goal, ConductorAutonomyPolicy policy, Heads heads, GoalLifecycleFacts facts) =>
         new(goal.Id, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(goal.ToSnapshot()))),
             heads, JsonSerializer.Serialize(new
