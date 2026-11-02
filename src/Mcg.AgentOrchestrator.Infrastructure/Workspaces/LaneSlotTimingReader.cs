@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class LaneSlotTimingReader
 {
     internal const string VariableName = "MCG_TEST_SLOT_TIMING_FILE";
-    internal sealed record LaneSlotTotals(double WaitMs, double HeldMs, int SlotCount);
+    internal sealed record LaneSlotTotals(double WaitMs, double HeldMs, int SlotCount, long? GitLaunches = null);
     internal sealed record Reading(
         IReadOnlyDictionary<string, Dictionary<string, double>> WaitsByFile,
         LaneSlotTotals? Totals, string? UnavailableReason)
@@ -53,6 +53,7 @@ internal static class LaneSlotTimingReader
         var diagnostics = new List<string>();
         var counts = new SortedSet<int>();
         double totalWait = 0, totalHeld = 0;
+        long? gitLaunches = null;
         foreach (var trxPath in trxPaths ?? [])
         {
             string path;
@@ -69,6 +70,7 @@ internal static class LaneSlotTimingReader
                 continue;
             }
             var skipped = 0;
+            var invalidGitLaunches = 0;
             foreach (var line in lines)
             {
                 try
@@ -90,14 +92,24 @@ internal static class LaneSlotTimingReader
                     totalWait += wait;
                     totalHeld += held;
                     counts.Add(count);
+                    if (row.TryGetProperty("git_launches", out var launches))
+                    {
+                        if (launches.ValueKind == JsonValueKind.Number && launches.TryGetInt64(out var value)
+                            && value >= 0 && value <= long.MaxValue - gitLaunches.GetValueOrDefault())
+                            gitLaunches = gitLaunches.GetValueOrDefault() + value;
+                        else
+                            invalidGitLaunches++;
+                    }
                 }
                 catch (JsonException) { skipped++; }
             }
             if (skipped > 0) diagnostics.Add($"slot-timing-skipped:{path}:{skipped} invalid lines");
+            if (invalidGitLaunches > 0)
+                diagnostics.Add($"slot-timing-git-launches-invalid:{path}:{invalidGitLaunches} lines");
         }
         if (counts.Count > 1)
             diagnostics.Add($"slot-timing-inconsistent-counts:{string.Join(",", counts)}");
-        return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max),
+        return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max, gitLaunches),
             diagnostics.Count == 0 ? null : string.Join("; ", diagnostics));
     }
 

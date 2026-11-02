@@ -65,9 +65,11 @@ public sealed class HostCapacityTestBudget
         var started = clock.GetTimestamp();
         var destination = environment(HostCapacitySlotTimingWriter.VariableName);
         var testName = string.IsNullOrEmpty(destination) ? null : HostCapacitySlotTimingWriter.CurrentTestName();
+        HostCapacitySlotGitCensus.EnsureInstalled(destination);
         await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
         var acquired = clock.GetTimestamp();
-        return new Slot(slots, destination, testName, started, acquired, SlotCount, clock);
+        var gitWindow = testName is null ? null : HostCapacitySlotGitCensus.Shared.Open(testName);
+        return new Slot(slots, destination, testName, started, acquired, SlotCount, clock, gitWindow);
     }
 
     /// <summary>
@@ -98,7 +100,8 @@ public sealed class HostCapacityTestBudget
     }
 
     private sealed class Slot(SemaphoreSlim slots, string? destination, string? testName,
-        long started, long acquired, int slotCount, TimeProvider clock) : IAsyncDisposable
+        long started, long acquired, int slotCount, TimeProvider clock,
+        HostCapacitySlotGitCensus.Window? gitWindow) : IAsyncDisposable
     {
         private SemaphoreSlim? held = slots;
 
@@ -108,11 +111,12 @@ public sealed class HostCapacityTestBudget
             var released = Interlocked.Exchange(ref held, null);
             if (released is not null)
             {
+                var git = gitWindow?.Close();
                 released.Release();
                 if (!string.IsNullOrEmpty(destination))
                     HostCapacitySlotTimingWriter.TryAppend(destination, testName,
                         clock.GetElapsedTime(started, acquired).TotalMilliseconds,
-                        clock.GetElapsedTime(acquired, disposed).TotalMilliseconds, slotCount);
+                        clock.GetElapsedTime(acquired, disposed).TotalMilliseconds, slotCount, git);
             }
             return ValueTask.CompletedTask;
         }

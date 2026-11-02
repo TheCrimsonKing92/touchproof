@@ -73,6 +73,7 @@ internal static class GateLaneReceiptLedger
                 row["slot_wait_ms"] = slotTiming.WaitMs;
                 row["slot_held_ms"] = slotTiming.HeldMs;
                 row["slot_count"] = slotTiming.SlotCount;
+                if (slotTiming.GitLaunches is { } launches) row["slot_git_launches"] = launches;
             }
             if (snapshot?.SlotTimingUnavailableReason is { } slotReason)
                 row["slot_timing_unavailable_reason"] = slotReason;
