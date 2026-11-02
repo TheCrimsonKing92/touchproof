@@ -5,6 +5,18 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleGateLanePlanReader
 {
+    internal static string? ArtifactPath(string heartbeatPath, string attemptId)
+    {
+        if (string.IsNullOrWhiteSpace(attemptId) || !Path.IsPathRooted(heartbeatPath)) return null;
+        try
+        {
+            var directory = Path.GetDirectoryName(heartbeatPath);
+            return string.IsNullOrWhiteSpace(directory) ? null :
+                Path.Combine(directory, attemptId + AcceptanceGateLanePlan.ArtifactSuffix);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return null; }
+    }
+
     internal AcceptanceGateLanePlan? Read(string artifactPath, string expectedAttemptId)
     {
         if (string.IsNullOrWhiteSpace(expectedAttemptId)) return null;

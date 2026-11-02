@@ -127,7 +127,12 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 .Where(id => id.Length > 0).OrderBy(id => id.Substring(14, 17), StringComparer.Ordinal).LastOrDefault() ?? "";
             var planEvent = gate.Events.LastOrDefault(item => item.Get("phase") == "lane-plan" &&
                 AttemptFromHeartbeat(item.Get("heartbeat")) == currentAttempt);
-            var plan = planEvent is null ? null : planReader?.Read(planEvent.Get("heartbeat"), currentAttempt);
+            var planPath = planEvent is not null ? planEvent.Get("heartbeat") : gate.Events
+                .Select(item => item.Get("heartbeat"))
+                .Where(path => AttemptFromHeartbeat(path) == currentAttempt)
+                .Select(path => OwnerConsoleGateLanePlanReader.ArtifactPath(path, currentAttempt))
+                .LastOrDefault(path => path is not null);
+            var plan = planPath is null ? null : planReader?.Read(planPath, currentAttempt);
             var skipped = plan?.Skipped.ToDictionary(row => row.Name, row => row.Reason, StringComparer.Ordinal);
             var attempts = gate.Events.Select(item => AttemptFromHeartbeat(item.Get("heartbeat")))
                 .Where(id => id.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
