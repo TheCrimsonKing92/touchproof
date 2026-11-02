@@ -24,17 +24,20 @@ internal static class ProgramHealthEvaluator
             ? FormattableString.Invariant($"Nothing landed for {Duration(minutes)}; {held.Length} passed {Plural("train", held.Length)} held, oldest {ShortReceipt(top.ReceiptId)} for {topMinutes} min ({string.Join(",", top.MemberGoalIds.Select(id => Prefix(id.ToLowerInvariant())))}).")
             : FormattableString.Invariant($"Nothing landed for {Duration(minutes)}; {snapshot.VerifiedGoals} Verified {Plural("goal", snapshot.VerifiedGoals)} and {current.Length} passed {Plural("train", current.Length)} waiting.");
         return new(conditions.ToArray(), topBlocker, minutes, current.Length, held.Length,
-            snapshot.VerifiedGoals, topMinutes, diagnosis);
+            snapshot.VerifiedGoals, topMinutes, diagnosis, snapshot.AwaitingOwnerReview);
     }
 
     internal static string FormatAlert(ProgramHealthSnapshot snapshot, ProgramHealthAssessment assessment)
     {
         var lastLanding = snapshot.LastLandingAt?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) ?? "none";
-        return FormattableString.Invariant($"PROGRAM_HEALTH_ALERT conditions={string.Join(",", assessment.Conditions)} topBlocker={assessment.TopBlocker} minutesSinceLanding={assessment.MinutesSinceLanding} lastLanding={lastLanding} currentReceipts={assessment.CurrentReceipts} overThreshold={assessment.OverThreshold} verifiedGoals={assessment.VerifiedGoals} diagnosis={assessment.Diagnosis}");
+        return FormattableString.Invariant($"PROGRAM_HEALTH_ALERT conditions={string.Join(",", assessment.Conditions)} topBlocker={assessment.TopBlocker} minutesSinceLanding={assessment.MinutesSinceLanding} lastLanding={lastLanding} currentReceipts={assessment.CurrentReceipts} overThreshold={assessment.OverThreshold} verifiedGoals={assessment.VerifiedGoals}{OwnerReviewField(assessment)} diagnosis={assessment.Diagnosis}");
     }
 
     internal static string FormatCleared(string previousKey, ProgramHealthAssessment assessment) =>
-        FormattableString.Invariant($"PROGRAM_HEALTH_CLEARED previous={previousKey} minutesSinceLanding={assessment.MinutesSinceLanding} currentReceipts={assessment.CurrentReceipts} verifiedGoals={assessment.VerifiedGoals}");
+        FormattableString.Invariant($"PROGRAM_HEALTH_CLEARED previous={previousKey} minutesSinceLanding={assessment.MinutesSinceLanding} currentReceipts={assessment.CurrentReceipts} verifiedGoals={assessment.VerifiedGoals}{OwnerReviewField(assessment)}");
+
+    private static string OwnerReviewField(ProgramHealthAssessment assessment) => assessment.AwaitingOwnerReview > 0
+        ? FormattableString.Invariant($" awaitingOwnerReview={assessment.AwaitingOwnerReview}") : string.Empty;
 
     private static int Minutes(TimeSpan duration) => (int)Math.Floor(duration.TotalMinutes);
     private static string Duration(int minutes) => minutes < 60

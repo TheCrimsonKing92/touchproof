@@ -39,6 +39,28 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
 
     internal ConductorInvariantObservationReader? InvariantReader { get; } = invariantReader;
 
+    internal void EvaluateWithInvariants(IReadOnlyCollection<Goal> goals, string? integrationHead)
+    {
+        if (InvariantReader is { } reader) Evaluate(goals, integrationHead, reader.Read);
+        else Evaluate(goals, integrationHead);
+    }
+
+    internal void Evaluate(IReadOnlyCollection<Goal> goals, string? integrationHead,
+        Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?>? observe = null)
+    {
+        if (integrationHead is null && observe is null) return;
+        try
+        {
+            var snapshotGoals = goals.ToArray();
+            var awaitingOwnerReview = snapshotGoals.Where(DeliveredForReviewHold.IsCurrent).Select(goal => goal.Id).ToHashSet();
+            Evaluate(snapshotGoals.Select(goal => (goal.Id, goal.Status)).ToArray(), integrationHead, observe, awaitingOwnerReview);
+        }
+        catch
+        {
+            // Goal projection is advisory, just like receipt and invariant reads.
+        }
+    }
+
     internal void EvaluateWithInvariants(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead)
     {
         if (InvariantReader is { } reader) Evaluate(goals, integrationHead, reader.Read);
@@ -47,6 +69,11 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
 
     internal void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,
         Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?>? observe = null)
+        => Evaluate(goals, integrationHead, observe, null);
+
+    private void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,
+        Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?>? observe,
+        IReadOnlySet<GoalId>? awaitingOwnerReview)
     {
         if (integrationHead is null && observe is null) return;
         try
@@ -57,7 +84,7 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
             try
             {
                 if (integrationHead is not null)
-                    try { EvaluateUnderLock(goals, integrationHead); } catch { /* Advisory, independently of invariants. */ }
+                    try { EvaluateUnderLock(goals, integrationHead, awaitingOwnerReview); } catch { /* Advisory, independently of invariants. */ }
                 if (observe is not null)
                     try { EvaluateInvariantsUnderLock(goals, integrationHead, observe); } catch { /* Advisory, including observation reads. */ }
             }
@@ -69,7 +96,8 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
         }
     }
 
-    private void EvaluateUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string integrationHead)
+    private void EvaluateUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string integrationHead,
+        IReadOnlySet<GoalId>? awaitingOwnerReview)
     {
         var now = clock.GetUtcNow();
         var state = Load();
@@ -92,7 +120,8 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
             .SelectMany(goal => receiptReader(goal.Id)).ToArray();
         var snapshot = new ProgramHealthSnapshot(now, state["lastLandingAt"]?.GetValue<DateTimeOffset>(),
             state["observedSince"]!.GetValue<DateTimeOffset>(), integrationHead,
-            goals.Count(goal => goal.Status == GoalStatus.Verified), receipts);
+            goals.Count(goal => goal.Status == GoalStatus.Verified && awaitingOwnerReview?.Contains(goal.Id) != true), receipts,
+            goals.Count(goal => goal.Status == GoalStatus.Verified && awaitingOwnerReview?.Contains(goal.Id) == true));
         var assessment = ProgramHealthEvaluator.Evaluate(snapshot, ProgramHealthThresholds.Read(policyReader()));
         var activeKey = state["activeKey"]?.GetValue<string>();
         string? detail = null;
