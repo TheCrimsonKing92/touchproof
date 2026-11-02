@@ -489,7 +489,7 @@ public sealed record HumanInputRequestCreationResult(
 
 public sealed record HumanInputRequestCounts(int Total, int Open);
 
-// Owns submission preconditions and receipt-before-completion publication for gate evidence.
+// Owns submission preconditions, duplicate completion and receipt-before-completion publication for gate evidence.
 internal static class HumanInputSubmission
 {
     internal static HumanInputRequest GetPendingRequest(
@@ -502,6 +502,34 @@ internal static class HumanInputSubmission
             throw new InvalidOperationException(
                 $"Human input request '{requestId}' has already been answered — use supersede to correct it.");
         return request;
+    }
+
+    internal static int CompleteSiblings(
+        IEnumerable<HumanInputRequest> requests, HumanInputRequest request,
+        string answer, DateTimeOffset answeredAt, int briefVersion,
+        bool supersedeSiblings, bool isAutoDefaulted)
+    {
+        var siblings = requests
+            .Where(candidate =>
+                supersedeSiblings &&
+                candidate.Id != request.Id &&
+                candidate.GoalId == request.GoalId &&
+                candidate.TaskId == request.TaskId &&
+                candidate.Kind == request.Kind &&
+                !candidate.IsCompleted &&
+                candidate.HasSameIdentity(request))
+            .OrderBy(candidate => candidate.RequestedAt)
+            .ToList();
+        foreach (var sibling in siblings)
+        {
+            sibling.CompleteAsSuperseded(
+                answer,
+                answeredAt,
+                request.Id,
+                briefVersion,
+                isAutoDefaulted: isAutoDefaulted);
+        }
+        return siblings.Count;
     }
 
     internal static bool TryCompleteGateEvidence(

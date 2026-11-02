@@ -2023,26 +2023,9 @@ public sealed partial class AgentOrchestratorKernel
                 isAutoDefaulted: isAutoDefaulted);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
-            var siblings = _humanInputRequests.Values
-                .Where(candidate =>
-                    supersedeSiblings &&
-                    candidate.Id != request.Id &&
-                    candidate.GoalId == request.GoalId &&
-                    candidate.TaskId == request.TaskId &&
-                    candidate.Kind == request.Kind &&
-                    !candidate.IsCompleted &&
-                    candidate.HasSameIdentity(request))
-                .OrderBy(candidate => candidate.RequestedAt)
-                .ToList();
-            foreach (var sibling in siblings)
-            {
-                sibling.CompleteAsSuperseded(
-                    answer,
-                    answeredAt,
-                    request.Id,
-                    goal.AuthoritativeBrief.Version,
-                    isAutoDefaulted: isAutoDefaulted);
-            }
+            var siblingCount = HumanInputSubmission.CompleteSiblings(
+                _humanInputRequests.Values, request, answer, answeredAt,
+                goal.AuthoritativeBrief.Version, supersedeSiblings, isAutoDefaulted);
 
             TaskSpec? answeredTesterToRequeue = null;
             if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
@@ -2081,9 +2064,9 @@ public sealed partial class AgentOrchestratorKernel
 
             RefreshGoalStatus(goal);
 
-            var siblingReceipt = siblings.Count == 0
+            var siblingReceipt = siblingCount == 0
                 ? string.Empty
-                : $" Resolved {siblings.Count} sibling duplicate request(s).";
+                : $" Resolved {siblingCount} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
             if (answeredTesterToRequeue is not null)
                 RequeueAnsweredTesterBlocker(goal, answeredTesterToRequeue, answer);
