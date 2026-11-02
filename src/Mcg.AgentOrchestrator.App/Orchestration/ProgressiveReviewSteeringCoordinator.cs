@@ -953,8 +953,7 @@ Evidence: {intent.MisdirectionEvidence}
     {
         try
         {
-            var result = GitCli.Run(worktree, "rev-parse", "HEAD");
-            return result.ExitCode == 0 ? result.Output.Trim() : null;
+            return GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head) ? head : null;
         }
         catch
         {

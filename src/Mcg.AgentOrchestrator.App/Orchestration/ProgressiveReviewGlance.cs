@@ -1461,8 +1461,7 @@ Corrective direction:
 
         try
         {
-            var result = RunGit(worktree, ["rev-parse", "HEAD"]);
-            return result.Succeeded ? result.Output.Trim() : null;
+            return GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head) ? head : null;
         }
         catch
         {
