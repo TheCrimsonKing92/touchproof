@@ -1795,6 +1795,28 @@ public sealed partial class AgentOrchestratorKernel
             resumeCommand).Request;
     }
 
+    // Publish only a completed, goal-scoped record; recording operator evidence
+    // must never hold tasks or refresh (and potentially reopen) goal status.
+    public HumanInputRequest RecordAnsweredOperatorHumanInput(GoalId goalId, string question, string answer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+        lock (_humanInputRequestLock)
+        {
+            var goal = GetGoal(goalId);
+            if (IsReopenProtectedGoalStatus(goal.Status))
+                throw new InvalidOperationException("Cannot record operator evidence on a terminal goal.");
+            var now = _clock.UtcNow;
+            var request = new HumanInputRequest(HumanInputRequestId.New(), goalId, taskId: null,
+                question, now, HumanWaitKind.Other, isAutoDefaultable: false, isDismissible: false);
+            request.Complete(answer, now, origin: HumanInputAnswerOrigin.Operator,
+                briefVersion: goal.AuthoritativeBrief.Version);
+            Append(goal, null, ProgressKind.HumanInputReceived, answer);
+            _humanInputRequests.Add(request.Id, request);
+            return request;
+        }
+    }
+
     public HumanInputRequestCreationResult RequestHumanInputDeduplicated(
         GoalId goalId,
         TaskId? taskId,

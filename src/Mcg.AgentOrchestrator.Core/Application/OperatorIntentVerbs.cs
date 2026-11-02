@@ -7,6 +7,7 @@ public static class OperatorIntentVerbs
     public const string GoalNote = "goal-note";
     public const string ProviderReset = "provider-reset";
     public const string GateCancel = "gate-cancel";
+    public const string ObligationRebind = "obligation-rebind";
     public const string GoalIsolation = "goal-isolation";
     public const string Progress = "progress";
     public const string Retry = "retry";
@@ -47,6 +48,7 @@ public sealed record ExecutorSetEnabledOperatorIntentPayload(string ExecutorId, 
 public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
 public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
 public sealed record GateCancelOperatorIntentPayload(string Reason, string? AttemptId);
+public sealed record ObligationRebindOperatorIntentPayload(string OldClass, string NewClass, string Reason);
 
 public enum OperatorActorKind
 {
