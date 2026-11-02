@@ -31,6 +31,7 @@ internal static partial class CliCriterionEvidenceIntents
                         ?? throw new ArgumentException("Observation metadata is required.") : null
             },
             OperatorIntentVerbs.CriterionEvidenceRepair => BuildCriterionEvidenceRepairPayload(values, target!.Value.Index, target.Value.Version),
+            OperatorIntentVerbs.CriterionEvidenceRephase => BuildCriterionEvidenceRephasePayload(values),
             _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
         };
         var intentId = Guid.NewGuid().ToString("N");
@@ -187,6 +188,15 @@ internal static partial class CliCriterionEvidenceIntents
 
         return new CriterionEvidenceRepairOperatorIntentPayload(
             values[0], index, version, owner, values[2], values[3], values[4], values[5]);
+    }
+
+    private static CriterionEvidenceRephaseOperatorIntentPayload BuildCriterionEvidenceRephasePayload(IReadOnlyList<string> values)
+    {
+        if (values.Count != 5 || !Enum.TryParse<CriterionObservationKind>(values[1], true, out var kind) ||
+            !Enum.IsDefined(kind))
+            throw new ArgumentException(CliCommandHelp.CriterionEvidenceRephaseUsage);
+
+        return new CriterionEvidenceRephaseOperatorIntentPayload(values[0], kind, values[2], values[3], values[4]);
     }
 
     public static void PrintStatus(

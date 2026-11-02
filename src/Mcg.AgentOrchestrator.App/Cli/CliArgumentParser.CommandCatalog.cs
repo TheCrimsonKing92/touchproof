@@ -180,6 +180,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "criterion-evidence-map",
     "criterion-evidence-record",
     "criterion-evidence-repair",
+    "criterion-evidence-rephase",
     "verifications",
     "tasks",
     "task",

@@ -52,6 +52,8 @@ public sealed class PlannerCommandSelectorValidationTests
     [InlineData("GateTests.Check(value: 2)")]
     [InlineData("Namespace.GateTests")]
     [InlineData("Check")]
+    // custom-runner file.ts: old classification command via whitespace; new classification identity.
+    [InlineData("custom-runner file.ts")]
     public void TestIdentitiesStayUnchangedWithoutResolvingManifest(string selector)
     {
         using var fixture = new Fixture();
@@ -93,7 +95,6 @@ public sealed class PlannerCommandSelectorValidationTests
     [InlineData(" NPM\tunknown ")]
     [InlineData("pytest tests/test_game.py::choice")]
     [InlineData("node check(value: 2)")]
-    [InlineData("custom-runner file.ts")]
     public void RunnerVerbsAndWhitespaceCommandsRequireDeclarations(string selector)
     {
         using var fixture = new Fixture();
