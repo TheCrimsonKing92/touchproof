@@ -206,35 +206,48 @@ internal sealed class GitRevisionReader : IDisposable
         var text = new UTF8Encoding(false, true).GetString(bytes, 0, count);
         if (text.Contains('\0') || text.StartsWith('\uFEFF')) return false;
         var section = "";
+        var repositoryFormatVersion = "0";
+        var hasObjectFormat = false;
         foreach (var raw in text.Split('\n'))
         {
-            var line = raw.Trim();
+            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
+            // Git's config whitespace is ASCII; do not normalize malformed input into valid syntax.
+            if (line.Any(c => c is not (' ' or '\t') && (char.IsControl(c) || char.IsWhiteSpace(c)))) return false;
+            line = line.Trim(' ', '\t');
             if (line.Length == 0 || line[0] is '#' or ';') continue;
             // Includes, quoted subsections/values and continuations require Git's parser.
             if (line.Contains('"') || line.Contains('\\')) return false;
-            line = line.Split(['#', ';'], 2)[0].TrimEnd();
+            line = line.Split(['#', ';'], 2)[0].TrimEnd(' ', '\t');
             if (line.StartsWith('['))
             {
                 if (!line.EndsWith(']')) return false;
-                section = line[1..^1].ToLowerInvariant();
-                if (section.Length == 0 || !section.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ||
-                    section is "include" or "includeif") return false;
+                section = line[1..^1];
+                if (section.Length == 0 || !section.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
+                section = section.ToLowerInvariant();
+                if (section is "include" or "includeif") return false;
                 continue;
             }
             var separator = line.IndexOf('=');
             if (section.Length == 0 || separator < 1) return false;
-            var key = line[..separator].TrimEnd().ToLowerInvariant();
-            var value = line[(separator + 1)..].Trim().ToLowerInvariant();
-            if (!char.IsAsciiLetter(key[0]) || !key.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
+            var key = line[..separator].TrimEnd(' ', '\t');
+            var value = line[(separator + 1)..].Trim(' ', '\t');
+            if (key.Length == 0 || !char.IsAsciiLetter(key[0]) ||
+                !key.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
+            key = key.ToLowerInvariant();
             if (section == "core")
             {
-                if (key == "worktree" || key == "bare" && value != "false" ||
+                if (key == "worktree" || key == "bare" && !value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
                     key == "repositoryformatversion" && value is not ("0" or "1")) return false;
+                if (key == "repositoryformatversion") repositoryFormatVersion = value;
             }
-            if (section == "extensions" && !(key == "objectformat" && value is "sha1" or "sha256" ||
-                key == "worktreeconfig" && value is "true" or "false")) return false;
+            if (section == "extensions")
+            {
+                if (key == "objectformat" && value is "sha1" or "sha256") hasObjectFormat = true;
+                else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
+            }
         }
-        return true;
+        return !hasObjectFormat || repositoryFormatVersion == "1";
     }
 
     private static string? ReadBranchMetadataLine(string path)

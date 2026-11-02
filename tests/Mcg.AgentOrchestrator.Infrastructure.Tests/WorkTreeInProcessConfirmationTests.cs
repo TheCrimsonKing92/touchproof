@@ -173,6 +173,15 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     [InlineData("[core]\n repositoryformatversion = 999\n")]
     [InlineData("[core]\n bare = nonsense\n")]
     [InlineData("[other]\n value = invalid\\escape\n")]
+    [InlineData("[user]\n \u212Aey = x\n")]
+    [InlineData("[\u212Aeys]\n value = x\n")]
+    [InlineData("[core]\n repositoryformatversion = 1\n[extensions]\n objectformat = SHA1\n")]
+    [InlineData("[core]\n repositoryformatversion = 0\n[extensions]\n objectformat = sha1\n")]
+    [InlineData("[core]\n repositoryformatversion = 1\n[extensions]\n objectformat = sha1\n[core]\n repositoryformatversion = 0\n")]
+    [InlineData("[user]\n \f name = x\n")]
+    [InlineData("[user]\n name\u00A0 = x\n")]
+    [InlineData("[user]\n name\r = x\n")]
+    [InlineData("[core]\n bare = false\u00A0\n")]
     public void ConfigurationUncertainty_IsReadFreshAndUsesProbe(string config)
     {
         var repo = CreateRepository();
@@ -184,6 +193,18 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
         if (oracle.Succeeded && oracle.Output.Trim() == "true") Require(repo);
         else Assert.Throws<InvalidOperationException>(() => Require(repo));
         launches.AssertCommands("rev-parse");
+    }
+
+    [Theory]
+    [InlineData("[CoRe]\n BaRe = FaLsE\n[ExTeNsIoNs]\n WoRkTrEeCoNfIg = FaLsE\n")]
+    [InlineData("\t[core]\r\n\tbare\t=\tfalse\t# comment\r\n")]
+    [InlineData("[core]\n repositoryformatversion = 1\n[extensions]\n objectformat = sha1\n")]
+    [InlineData("[extensions]\n objectformat = sha1\n[core]\n repositoryformatversion = 0\n repositoryformatversion = 1\n")]
+    public void ConfigurationSupportedSyntax_ConfirmsWithoutProbe(string config)
+    {
+        var repo = CreateRepository();
+        File.AppendAllText(Path.Combine(repo, ".git", "config"), config);
+        AssertConfirmed(repo);
     }
 
     [Fact]
