@@ -1994,6 +1994,15 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
         bool supersedeSiblings = true)
+        => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false);
+
+    private void SubmitHumanInputCore(
+        HumanInputRequestId requestId,
+        string answer,
+        IReadOnlyList<string>? gatedDeliverableIds,
+        HumanInputAnswerOrigin origin,
+        bool supersedeSiblings,
+        bool isAutoDefaulted)
     {
         lock (_humanInputRequestLock)
         {
@@ -2010,28 +2019,13 @@ public sealed partial class AgentOrchestratorKernel
                 answeredAt,
                 gatedDeliverableIds,
                 origin,
-                briefVersion: goal.AuthoritativeBrief.Version);
+                briefVersion: goal.AuthoritativeBrief.Version,
+                isAutoDefaulted: isAutoDefaulted);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
-            var siblings = _humanInputRequests.Values
-                .Where(candidate =>
-                    supersedeSiblings &&
-                    candidate.Id != request.Id &&
-                    candidate.GoalId == request.GoalId &&
-                    candidate.TaskId == request.TaskId &&
-                    candidate.Kind == request.Kind &&
-                    !candidate.IsCompleted &&
-                    candidate.HasSameIdentity(request))
-                .OrderBy(candidate => candidate.RequestedAt)
-                .ToList();
-            foreach (var sibling in siblings)
-            {
-                sibling.CompleteAsSuperseded(
-                    answer,
-                    answeredAt,
-                    request.Id,
-                    goal.AuthoritativeBrief.Version);
-            }
+            var siblingCount = HumanInputSubmission.CompleteSiblings(
+                _humanInputRequests.Values, request, answer, answeredAt,
+                goal.AuthoritativeBrief.Version, supersedeSiblings, isAutoDefaulted);
 
             TaskSpec? answeredTesterToRequeue = null;
             if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
@@ -2070,9 +2064,9 @@ public sealed partial class AgentOrchestratorKernel
 
             RefreshGoalStatus(goal);
 
-            var siblingReceipt = siblings.Count == 0
+            var siblingReceipt = siblingCount == 0
                 ? string.Empty
-                : $" Resolved {siblings.Count} sibling duplicate request(s).";
+                : $" Resolved {siblingCount} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
             if (answeredTesterToRequeue is not null)
                 RequeueAnsweredTesterBlocker(goal, answeredTesterToRequeue, answer);
@@ -2374,7 +2368,8 @@ public sealed partial class AgentOrchestratorKernel
 
             if (request.IsAutoDefaultable && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
             {
-                SubmitHumanInput(request.Id, request.SuggestedDefaultAnswer);
+                SubmitHumanInputCore(request.Id, request.SuggestedDefaultAnswer, null,
+                    HumanInputAnswerOrigin.Operator, supersedeSiblings: true, isAutoDefaulted: true);
                 resolved.Add(new HumanWaitPolicyResult(request.Id, request.GoalId, request.TaskId, request.Kind, HumanWaitPolicyResolution.Defaulted));
                 continue;
             }
