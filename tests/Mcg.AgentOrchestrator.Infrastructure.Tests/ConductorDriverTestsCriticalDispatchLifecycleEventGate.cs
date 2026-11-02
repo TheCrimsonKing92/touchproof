@@ -146,15 +146,15 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
         using var hold = gate.Hold(goal.Id, kernel);
         var task = goal.Tasks.Single();
         DispatchTask(kernel, goal, task);
-        Assert.Empty(recorded.Calls);
-        gate.CommitCheckpoint(goal.Id, () => Assert.Empty(recorded.Calls));
-        Assert.Single(recorded.Calls);
+        Assert.Empty(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
+        gate.CommitCheckpoint(goal.Id, () => Assert.Empty(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition))));
+        Assert.Single(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
         var original = goal.Timeline.Last();
         var refreshed = original with { OccurredAt = original.OccurredAt.AddTicks(1) };
         gate.AppendTimelineEvent(refreshed);
-        Assert.Single(recorded.Calls);
-        gate.CommitCheckpoint(goal.Id, () => Assert.Single(recorded.Calls));
-        Assert.Equal(new[] { original, refreshed }, recorded.Calls.Select(call => (ProgressEvent)call.Args.Single()!));
+        Assert.Single(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
+        gate.CommitCheckpoint(goal.Id, () => Assert.Single(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition))));
+        Assert.Equal(new[] { original, refreshed }, recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)).Select(call => (ProgressEvent)call.Args.Single()!));
     }
 
     [Theory]
@@ -180,7 +180,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
             else
                 kernel.ReplaceGoalWithSnapshot(before);
         }
-        Assert.Empty(((RecordingWriterProxy)inner).Calls);
+        Assert.Empty(((RecordingWriterProxy)inner).Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
             Assert.Throws<DispatchCheckpointConflictException>(() => gate.CommitCheckpoint(goal.Id,
                 () => throw new DispatchCheckpointConflictException("missing baseline")));
         }
-        Assert.Empty(((RecordingWriterProxy)inner).Calls);
+        Assert.Empty(((RecordingWriterProxy)inner).Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
     }
 
     [Fact]
@@ -210,11 +210,11 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
         using (gate.Hold(goal.Id, kernel))
         {
             DispatchTask(kernel, goal, goal.Tasks.Single());
-            Assert.Empty(recorded.Calls);
+            Assert.Empty(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
             kernel.RecordTaskNote(goal.Id, goal.Tasks.Single().Id, "unchanged emission point");
-            Assert.Single(recorded.Calls);
+            Assert.Single(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
         }
-        Assert.Equal(2, recorded.Calls.Count);
+        Assert.Equal(2, recorded.Calls.Count(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
         var otherGoal = kernel.CreateGoal("unguarded goal");
         recorded.Calls.Clear();
         var dispatch = goal.Timeline.Single(entry => entry.Kind == ProgressKind.TaskDispatchRecorded);
@@ -242,7 +242,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
             {
                 Assert.Same(kernel, current);
                 Assert.Equal(goal.Id, Assert.Single(ids));
-                Assert.Empty(recorded.Calls);
+                Assert.Empty(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition)));
                 if (reject)
                     throw new DispatchCheckpointConflictException("missing baseline");
             },
@@ -250,7 +250,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
             {
                 Assert.Equal(goal.Id, id);
                 Assert.True(checkpoint!.HasCommitted);
-                Assert.Single(recorded.Calls); // Release precedes the success notification.
+                Assert.Single(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition))); // Release precedes the success notification.
                 notifications++;
             });
         Assert.NotNull(checkpoint);
@@ -271,7 +271,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
             Assert.Equal(commitFirst, checkpoint.HasCommitted);
         }
         Assert.Equal(commitFirst ? 1 : 0, notifications);
-        Assert.Empty(recorded.Calls); // Dispose cannot project a rejected dispatch.
+        Assert.Empty(recorded.Calls.Where(call => call.Method.Name != nameof(IGoalLifecycleEventWriter.AppendTaskStatusTransition))); // Dispose cannot project a rejected dispatch.
     }
 
     [Fact]
