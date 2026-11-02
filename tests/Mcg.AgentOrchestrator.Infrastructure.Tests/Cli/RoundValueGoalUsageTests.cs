@@ -234,7 +234,10 @@ public sealed class RoundValueGoalUsageTests : CliTaskQueryTestSupport
     [InlineData("--by-check")]
     public void ByGoal_InvalidSelectionOrSliceCombination_WritesOnlyUsageAndExitsNonzero(params string[] extra)
     {
-        var kernel = Kernel(Goal(GoalA, GoalStatus.Active), Goal("aaaabbbbbbbbbbbbbbbbbbbbbbbbbbbb", GoalStatus.Active));
+        var kernel = Kernel(
+            Goal(GoalA, GoalStatus.Active, Task("dev-a", AgentRole.Developer, "model")),
+            Goal("aaaabbbbbbbbbbbbbbbbbbbbbbbbbbbb", GoalStatus.Active,
+                Task("dev-b", AgentRole.Developer, "model")));
         WithRepository(kernel, (repository, root) =>
         {
             string stdout = "";
@@ -253,7 +256,7 @@ public sealed class RoundValueGoalUsageTests : CliTaskQueryTestSupport
     [Fact]
     public void Build_NoDispatches_KeepsUnknownTokensAndNumericZeroCounts()
     {
-        var kernel = Kernel(Goal(GoalA, GoalStatus.Active));
+        var kernel = Kernel(Goal(GoalA, GoalStatus.Active, Task("dev", AgentRole.Developer, "model")));
         var slice = Build(kernel);
         Assert.Empty(slice.Rows);
         Assert.Equal(new RoundValueGoalUsageFigures(null, null, null, 0, 0, 0, 0), slice.Landed.Sums);
