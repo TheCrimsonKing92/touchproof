@@ -44,8 +44,8 @@ internal static partial class CliCommandHandlers
         Func<int>? deliverAttentionResolution = null)
     {
         var resolved = deliverAttentionResolution is not null ? deliverAttentionResolution() : CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
-            .ResolveOpenForGoalAsync(outcome.GoalId.Value, $"Goal parked: {command.Reason}").GetAwaiter().GetResult();
-        Console.WriteLine($"Goal parked {outcome.GoalId.Value[..8]}.");
+            .ResolveOpenForGoalAsync(outcome.GoalId.Value, GoalParkResolution.Build(command.Reason)).GetAwaiter().GetResult();
+        Console.WriteLine(GoalParkResolution.BuildConfirmation(outcome.GoalId.Value[..8]));
         Console.WriteLine($"Cancelled running dispatches: {cancelledCount}");
         Console.WriteLine($"Resolved human waits: {outcome.ResolvedHumanWaits}");
         Console.WriteLine($"Resolved attention items: {resolved}");

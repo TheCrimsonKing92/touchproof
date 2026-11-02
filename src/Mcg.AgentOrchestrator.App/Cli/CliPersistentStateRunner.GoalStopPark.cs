@@ -29,7 +29,7 @@ internal static partial class CliPersistentStateRunner
         {
             outcome = TransactGoalParkState(repository, goalId,
                 kernel => CliCommandHandlers.ApplyGoalParkStopAliasWithoutRendering(command, kernel, goalId, receipts),
-                $"Goal parked: {command.Reason}", out pendingMessageId);
+                GoalParkResolution.Build(command.Reason), out pendingMessageId);
         }
         catch (Exception ex) when (receipts.Count > 0)
         {

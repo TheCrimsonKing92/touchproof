@@ -23,7 +23,6 @@ public sealed class PullRequestChangesRequestedTests
         var submitted = fixture.Goal.DeliveredForReview!.DeliveredAt.AddMinutes(1);
         Open(fixture, "CHANGES_REQUESTED", Review("alice", submitted, "Please fix \"this\"."));
         var tasks = fixture.Goal.Tasks.Count;
-        var hold = fixture.Goal.CurrentHold;
 
         Assert.Contains(fixture.Goal.Id, tracker.Service([fixture.Goal]));
 
@@ -35,10 +34,10 @@ public sealed class PullRequestChangesRequestedTests
         Assert.Contains("alice: \"Please fix \"\"this\"\".\"", item.Body);
         Assert.Contains("Project decider: " + expected, item.Body);
         Assert.Contains(PullRequestLandingTestFixture.Url, item.Body);
-        Assert.Contains("A Developer round from reviews is not yet automatic.", item.Body);
+        Assert.Contains("A Developer review round addresses this batch.", item.Body);
         Assert.Equal(tasks, fixture.Goal.Tasks.Count);
-        Assert.Equal(hold, fixture.Goal.CurrentHold);
-        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        Assert.Null(fixture.Goal.CurrentHold);
+        Assert.Equal(GoalStatus.Active, fixture.Goal.Status);
     }
 
     [Fact]
@@ -264,7 +263,8 @@ public sealed class PullRequestChangesRequestedTests
         }
         else
         {
-            Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+            Assert.Equal(GoalStatus.Active, fixture.Goal.Status);
+            Assert.True(PullRequestReviewRound.Stopped(fixture.Goal));
             Assert.Null(fixture.Fact());
         }
     }

@@ -16,7 +16,8 @@ internal static class PlannerCommandSelectorValidation
     internal static string? Refusal(IEnumerable<string> selectors, Goal goal, TaskSpec task,
         Func<Goal, TaskSpec, IReadOnlyList<DeclaredGateCheck>>? source)
     {
-        var commands = selectors.Where(IsCommandLine).ToArray();
+        // Declared-check matches are accepted either way; identities need no check-source lookup.
+        var commands = selectors.Where(StartsWithRunner).ToArray();
         if (commands.Length == 0) return null;
 
         var checks = (source ?? Volatile.Read(ref defaultSource))?.Invoke(goal, task) ?? [];
@@ -27,24 +28,19 @@ internal static class PlannerCommandSelectorValidation
             : string.Join(", ", checks.Select(check => $"'{check.Name}'"));
         return $"Planner gate test obligation selectors match no declared gate check: {string.Join(", ", unmatched.Select(selector => $"'{selector}'"))}. " +
             $"Declared check names: {declared}. " +
+            "On declared-command stacks, test identities use <test file>::<test name> or the bare test name; " +
+            "on .NET, use the class or Namespace.Class.Method. " +
             "A whole-suite criterion such as \"existing checks pass\" is proven by the gate verdict and needs no test obligation. " +
             "Name a declared check or omit the gate test obligation for that criterion, then replan.";
     }
 
-    private static bool IsCommandLine(string selector)
+    private static bool StartsWithRunner(string selector)
     {
         var text = selector.Trim();
         var end = 0;
         while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
-        if (text[..end].ToLowerInvariant() is "npm" or "npx" or "pnpm" or "yarn" or "bunx" or
-            "node" or "dotnet" or "go" or "cargo" or "pwsh" or "pytest" or "make" or "busted")
-            return true;
-        if (end == text.Length || text.Contains("::", StringComparison.Ordinal)) return false;
-
-        // Exact .NET theory rows are established test identities, including argument spaces.
-        var arguments = text.IndexOf('(');
-        if (arguments > 0 && text.EndsWith(')') && !text[..arguments].Any(char.IsWhiteSpace))
-            return false;
-        return true;
+        return text[..end].ToLowerInvariant() is "npm" or "npx" or "pnpm" or "yarn" or "bunx" or
+            "node" or "dotnet" or "go" or "cargo" or "pwsh" or "pytest" or "make" or "busted" or
+            "tsc" or "vitest" or "jest" or "bun" or "deno" or "crosswalk-test" or "python";
     }
 }
