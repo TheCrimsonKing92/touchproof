@@ -20,6 +20,7 @@ public sealed class CliHandledVerbRegistryTests
     [InlineData("goal-delivery-retry")]
     [InlineData("approve-policy-change")]
     [InlineData("cancel-dispatch")]
+    [InlineData("obligation-rebind")]
     [InlineData("criterion-evidence-map")]
     [InlineData("criterion-evidence-record")]
     [InlineData("criterion-evidence-repair")]

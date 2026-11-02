@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -89,9 +90,11 @@ internal sealed class PullRequestDeliveryTracker
         {
             case PullRequestStatusKind.Open:
                 _unavailable.Remove(goal.Id);
+                RecordChangesRequested(goal, delivery, status);
                 if (!PullRequestLandingDelivery.HasRefreshStarted(goal)) Refresh(goal, delivery);
                 return;
             case PullRequestStatusKind.ClosedUnmerged:
+                ResolveChangesRequested(goal, "pull request closed unmerged");
                 _unavailable.Remove(goal.Id);
                 if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
                     _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "closed unmerged " + delivery.Url);
@@ -103,6 +106,7 @@ internal sealed class PullRequestDeliveryTracker
                 _kernel.RecordGoalPolicyDecision(goal.Id, reason);
                 return;
             case PullRequestStatusKind.Merged:
+                ResolveChangesRequested(goal, "pull request merged");
                 if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
                     _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "merged " + delivery.Url);
                 if (!IsRevision(status.MergeCommit)) { Unavailable(goal, "merged response has no usable merge commit"); return; }
@@ -111,6 +115,36 @@ internal sealed class PullRequestDeliveryTracker
             default: throw new InvalidOperationException("Unknown pull request tracking outcome.");
         }
     }
+
+    private void RecordChangesRequested(Goal goal, GoalDeliveredForReview delivery, PullRequestStatus status)
+    {
+        if (status.ReviewDecision != "CHANGES_REQUESTED")
+        { ResolveChangesRequested(goal, "pull request review decision is no longer changes requested"); return; }
+        // Use timeline order to scope refreshes to this delivery, including on a fixed clock.
+        var boundary = goal.Timeline.Reverse().Where(item => item.Kind == ProgressKind.GoalPolicyDecision)
+            .TakeWhile(item => !PullRequestLandingDelivery.IsDeliveredForReview(item.Message))
+            .Where(item => item.Message.StartsWith(PullRequestLandingDelivery.RefreshStartedPrefix, StringComparison.Ordinal))
+            .Select(item => item.OccurredAt).Append(delivery.DeliveredAt).Max();
+        var batch = (status.ChangesRequested ?? []).Where(review => review.SubmittedAt > boundary)
+            .OrderBy(review => review.Login, StringComparer.Ordinal).ThenBy(review => review.SubmittedAt).ToArray();
+        if (batch.Length == 0) return;
+        var latest = batch.Max(review => review.SubmittedAt).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var prefix = "pull request changes requested: " + delivery.Url + " ";
+        if (goal.Timeline.Any(item => item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.StartsWith(prefix, StringComparison.Ordinal) &&
+            item.Message.EndsWith(" latest=" + latest, StringComparison.Ordinal))) return;
+        var reviewers = string.Join(",", batch.Select(review => review.Login).Distinct(StringComparer.Ordinal));
+        var decider = _workspace.DeliveryDecider ?? status.Repository!.Split('/')[0];
+        var excerpts = string.Join("; ", batch.Select(review => $"{review.Login}: \"{review.Body.Replace("\"", "\"\"")}\""));
+        _attention.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Pull request changes requested",
+            ForgeDiagnosticRedactor.Redact($"{delivery.Url}. Project decider: {decider}. Reviews: {excerpts}. " +
+                "A Developer round from reviews is not yet automatic."), "pr-changes-requested:" + goal.Id.Value)
+            .GetAwaiter().GetResult();
+        _kernel.RecordGoalPolicyDecision(goal.Id, $"{prefix}reviewers={reviewers} latest={latest}");
+    }
+
+    private void ResolveChangesRequested(Goal goal, string reason) =>
+        _attention.TryResolveAsync("pr-changes-requested:" + goal.Id.Value, reason).GetAwaiter().GetResult();
 
     private void Land(Goal goal, GoalDeliveredForReview delivery, string merge)
     {

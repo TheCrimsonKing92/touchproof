@@ -21,12 +21,13 @@ public sealed class GitHubPullRequestStatusReaderTests
         string? closedAt, PullRequestStatusKind expected)
     {
         var runner = new Runner { Response = new(true, 0, JsonSerializer.Serialize(new
-        { state, mergedAt, mergeCommit = commit is null ? null : new { oid = commit }, closedAt, url = Url }), "") };
+        { state, mergedAt, mergeCommit = commit is null ? null : new { oid = commit }, closedAt, url = Url,
+            reviewDecision = (string?)null, latestReviews = Array.Empty<object>() }), "") };
         var result = new GitHubPullRequestStatusReader(runner).Read(Path.GetTempPath(), 7);
         Assert.Equal(expected, result.Kind);
         if (expected == PullRequestStatusKind.Merged) Assert.Equal(Commit, result.MergeCommit);
         if (expected == PullRequestStatusKind.Unavailable) Assert.False(string.IsNullOrWhiteSpace(result.Reason));
-        Assert.Equal(["pr", "view", "7", "--repo", "octo/sample", "--json", "state,mergedAt,mergeCommit,closedAt,url"], runner.GhArguments);
+        Assert.Equal(["pr", "view", "7", "--repo", "octo/sample", "--json", "state,mergedAt,mergeCommit,closedAt,url,reviewDecision,latestReviews"], runner.GhArguments);
     }
 
     [Theory]

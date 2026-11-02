@@ -159,6 +159,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "note",
     "gate-satisfied",
     "gate-cancel",
+    "obligation-rebind",
     "verification-plan",
     "brief",
     "execute-dispatch",

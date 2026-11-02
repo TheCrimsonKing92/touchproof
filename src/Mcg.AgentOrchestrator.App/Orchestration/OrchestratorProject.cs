@@ -19,5 +19,6 @@ public sealed record OrchestratorProject(string Name, string RootDirectory)
 
     public OrchestratorWorkspace ResolveWorkspace(string? tenantName = null) =>
         OrchestratorWorkspace.ForProject(Name, RootDirectory, tenantName: tenantName,
-            integrationBranch: IntegrationBranch, dataRootDirectory: DataRootDirectory) with { Delivery = Delivery, ForgeIdentity = ForgeIdentity };
+            integrationBranch: IntegrationBranch, dataRootDirectory: DataRootDirectory) with
+        { Delivery = Delivery, DeliveryDecider = DeliveryDecider, ForgeIdentity = ForgeIdentity };
 }

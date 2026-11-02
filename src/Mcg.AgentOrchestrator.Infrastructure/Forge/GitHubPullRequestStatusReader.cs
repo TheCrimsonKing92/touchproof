@@ -23,7 +23,7 @@ public sealed class GitHubPullRequestStatusReader(IForgeProcessRunner runner) : 
             if (!GitHubRemote.TryParse(origin.StandardOutput.Trim(), out var repository))
                 return Unavailable("origin is not a supported GitHub repository URL");
             var response = runner.Run("gh", ["pr", "view", number.ToString(CultureInfo.InvariantCulture),
-                "--repo", repository!, "--json", "state,mergedAt,mergeCommit,closedAt,url"],
+                "--repo", repository!, "--json", "state,mergedAt,mergeCommit,closedAt,url,reviewDecision,latestReviews"],
                 root, environment, TimeSpan.FromSeconds(30));
             if (!Ok(response)) return Unavailable("gh pr view: " + Diagnostic(response));
             using var document = JsonDocument.Parse(response.StandardOutput);
@@ -49,14 +49,19 @@ public sealed class GitHubPullRequestStatusReader(IForgeProcessRunner runner) : 
                 uri.Query.Length != 0 || uri.Fragment.Length != 0 ||
                 !uri.AbsolutePath.Equals($"/{repository}/pull/{number}", StringComparison.OrdinalIgnoreCase)))
                 return Unavailable("gh response url does not match origin and pull request number");
+            if (!GitHubPullRequestReviewReader.TryRead(row, out var reviewDecision, out var changesRequested))
+                return Unavailable("gh response has invalid review fields");
             return state.GetString() switch
             {
                 "OPEN" when commit is null && mergedAt.ValueKind == JsonValueKind.Null && closedAt.ValueKind == JsonValueKind.Null =>
-                    new(PullRequestStatusKind.Open, Url: address, Repository: repository),
+                    new(PullRequestStatusKind.Open, Url: address, Repository: repository,
+                        ReviewDecision: reviewDecision, ChangesRequested: changesRequested),
                 "MERGED" when commit is not null && mergedAt.ValueKind == JsonValueKind.String =>
-                    new(PullRequestStatusKind.Merged, commit, address, Repository: repository),
+                    new(PullRequestStatusKind.Merged, commit, address, Repository: repository,
+                        ReviewDecision: reviewDecision, ChangesRequested: changesRequested),
                 "CLOSED" when commit is null && mergedAt.ValueKind == JsonValueKind.Null && !string.IsNullOrWhiteSpace(address) =>
-                    new(PullRequestStatusKind.ClosedUnmerged, Url: address, Repository: repository),
+                    new(PullRequestStatusKind.ClosedUnmerged, Url: address, Repository: repository,
+                        ReviewDecision: reviewDecision, ChangesRequested: changesRequested),
                 _ => Unavailable("gh response has unknown state or contradictory terminal fields")
             };
         }

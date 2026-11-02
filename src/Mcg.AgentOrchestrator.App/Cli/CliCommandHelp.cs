@@ -29,7 +29,7 @@ internal static class CliCommandHelp
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--idempotency-key <key>] [--json]";
+    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--route developer [--cause <RetryCause>]] [--idempotency-key <key>] [--json]";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -351,7 +351,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Attention = new(
         AttentionUsage,
         "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
-        ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--idempotency-key", "--help", "-h"]);
+        ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AbandonGoal = new(
         AbandonGoalUsage,
@@ -700,6 +700,10 @@ internal static class CliCommandHelp
         ImpactReplayUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
         ["--since", "--limit", "--out", "--floor", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    private static readonly CommandHelpEntry ObligationRebind = new(
+        ObligationRebindUsage, "Queue an operator class rebind for a pending gate test obligation at the current brief on the next tick.",
+        ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry GateCancel = new(
         GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
         ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
@@ -1317,6 +1321,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("gate-cancel", StringComparison.OrdinalIgnoreCase))
         {
             entry = GateCancel;
+            return true;
+        }
+        if (args[0].Equals("obligation-rebind", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ObligationRebind;
             return true;
         }
         if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))

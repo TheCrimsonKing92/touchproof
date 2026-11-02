@@ -465,7 +465,7 @@ internal static partial class CliCommandHandlers
 
                     if (printedClarification)
                     {
-                        Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)");
+                        Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest); for a ruling that needs a code change add --route developer [--cause <cause>] --evidence <ref>");
                     }
 
                     return changed;

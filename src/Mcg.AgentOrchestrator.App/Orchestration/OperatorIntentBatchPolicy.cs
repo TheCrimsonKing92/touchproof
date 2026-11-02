@@ -20,7 +20,7 @@ public static class OperatorIntentBatchPolicy
         try
         {
             return JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
-                ?.TargetKind == OperatorAnswerTargetKind.Clarification;
+                is { TargetKind: OperatorAnswerTargetKind.Clarification, RouteRole: null };
         }
         catch (JsonException) { return false; }
         catch (NotSupportedException) { return false; }
