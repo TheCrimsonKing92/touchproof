@@ -23,7 +23,8 @@ public static partial class GoalWorktrees
         if (!onMain.Succeeded || onMain.DrainTimedOut ||
             !HasMergeCommitsOutsideBase(executionDirectory, mainParent, oldHead) ||
             !TryReadCleanMergeTree(executionDirectory, mainParent, oldHead, out var mergedTree) ||
-            !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{newHead}^{{tree}}"], out var newTree) ||
+            !(GitRevisionReader.Shared.TryResolve(executionDirectory, $"{newHead}^{{tree}}", out var newTree) ||
+              TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{newHead}^{{tree}}"], out newTree)) ||
             !string.Equals(mergedTree, newTree, StringComparison.OrdinalIgnoreCase)) return false;
 
         evidence = $"squashed-merge-commits: {newHead} single parent {mainParent} on {integrationBranch}; " +

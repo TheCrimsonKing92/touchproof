@@ -16,7 +16,16 @@ public sealed class DispatchScopeTemplateEquivalenceTests(WorkerBuildScopeDispat
         foreach (var worktree in new[] { false, true })
         {
             Assert.Equal(Git(fresh, worktree, "branch", "--show-current"), Git(copy, worktree, "branch", "--show-current"));
-            Assert.Equal(Git(fresh, worktree, "rev-parse", "HEAD^{tree}"), Git(copy, worktree, "rev-parse", "HEAD^{tree}"));
+            var freshTree = Git(fresh, worktree, "rev-parse", "HEAD^{tree}");
+            var copyTree = Git(copy, worktree, "rev-parse", "HEAD^{tree}");
+            if (!string.Equals(freshTree, copyTree, StringComparison.Ordinal))
+            {
+                var comparison = FixtureTreeListingComparison.Compare(
+                    Git(fresh, worktree, "ls-tree", "-r", "HEAD"),
+                    Git(copy, worktree, "ls-tree", "-r", "HEAD"));
+                Assert.Fail(FixtureTreeListingComparison.FailureMessage(
+                    worktree ? "goal worktree" : "main", freshTree, copyTree, comparison));
+            }
         }
         var registration = NormalizePaths(Git(fresh, false, "worktree", "list", "--porcelain"), fresh);
         Assert.Contains("worktree $fixture/.orchestrator-worktrees/", registration);

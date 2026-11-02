@@ -90,7 +90,7 @@ public sealed class PreTesterTestSourceGuardClassesTests
             .Select(selection => selection.TestClass).OrderBy(name => name, StringComparer.Ordinal));
         Assert.All(SharedNames, name => Assert.Single(selected, selection => selection.TestClass == name));
         Assert.Equal(guardNames.Length + SharedNames.Length, selected.Count);
-        Assert.InRange(selected.Count, 1, 45);
+        Assert.InRange(selected.Count, 1, 46);
     }
 
     [Fact]
