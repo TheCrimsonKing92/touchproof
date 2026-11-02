@@ -43,24 +43,38 @@ public static partial class GoalWorktrees
                        j.first_seen_utc, j.last_seen_utc, j.last_operation, j.skip_count, j.escalated_at_utc
                 FROM worktree_cleanup_backoff b
                 LEFT JOIN worktree_cleanup_journal j ON j.path = b.path
-                ORDER BY b.path;
+                UNION ALL
+                SELECT j.path, j.last_reason, NULL,
+                       j.first_seen_utc, j.last_seen_utc, j.last_operation, j.skip_count, j.escalated_at_utc
+                FROM worktree_cleanup_journal j
+                WHERE j.escalated_at_utc IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM worktree_cleanup_backoff b WHERE b.path = j.path)
+                ORDER BY 1;
                 """;
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
                 var path = reader.GetString(0);
                 var reason = reader.GetString(1);
-                if (!DateTimeOffset.TryParse(reader.GetString(2), out var skipUntilUtc))
+                var journalOnly = reader.IsDBNull(2);
+                var escalatedAtUtc = ReadOptionalDateTimeOffset(reader, 7);
+                var skipUntilUtc = default(DateTimeOffset);
+                if (journalOnly ? escalatedAtUtc is null :
+                    !DateTimeOffset.TryParse(reader.GetString(2), out skipUntilUtc))
                 {
                     continue;
                 }
 
                 var firstSeenUtc = ReadOptionalDateTimeOffset(reader, 3) ??
-                    skipUntilUtc - CleanupBackoffDurationFor(reason, hooks);
+                    (journalOnly ? escalatedAtUtc!.Value : skipUntilUtc - CleanupBackoffDurationFor(reason, hooks));
                 var lastSeenUtc = ReadOptionalDateTimeOffset(reader, 4) ?? firstSeenUtc;
+                if (journalOnly)
+                {
+                    // No retry is scheduled; retain the last observation as the timestamp.
+                    skipUntilUtc = lastSeenUtc;
+                }
                 var lastOperation = reader.IsDBNull(5) ? "(recorded)" : reader.GetString(5);
                 var failureCount = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
-                var escalatedAtUtc = ReadOptionalDateTimeOffset(reader, 7);
                 var now = hooks.CleanupUtcNow();
                 var age = now - firstSeenUtc;
                 if (age < TimeSpan.Zero)
@@ -68,7 +82,7 @@ public static partial class GoalWorktrees
                     age = TimeSpan.Zero;
                 }
 
-                var remaining = skipUntilUtc - now;
+                var remaining = journalOnly ? TimeSpan.Zero : skipUntilUtc - now;
                 if (remaining < TimeSpan.Zero)
                 {
                     remaining = TimeSpan.Zero;
@@ -90,6 +104,14 @@ public static partial class GoalWorktrees
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(executionDirectory, "cleanup-status:read", ex, hooks);
+        }
+
+        foreach (var debt in debts)
+        {
+            if (debt.EscalatedAtUtc is not null)
+            {
+                EnsureCleanupDebtAttention(debt.Path, debt.Reason, debt, goalId: null, hooks);
+            }
         }
 
         return debts;
@@ -270,6 +292,10 @@ public static partial class GoalWorktrees
             if (observation.EscalatedNow)
             {
                 RaiseCleanupDebtAttention(path, reason, observation.Debt, goalId, hooks);
+            }
+            else if (observation.Debt.EscalatedAtUtc is not null)
+            {
+                EnsureCleanupDebtAttention(path, reason, observation.Debt, goalId, hooks);
             }
 
             WarnCleanupFailure(
@@ -474,12 +500,12 @@ public static partial class GoalWorktrees
     {
         try
         {
-            WithCleanupBackoffConnection(
+            var observation = WithCleanupBackoffConnection(
                 path,
                 cleanupStateRoot,
                 conn =>
                 {
-                    _ = RecordCleanupDebtObserved(
+                    return RecordCleanupDebtObserved(
                         conn,
                         path,
                         operation,
@@ -487,6 +513,10 @@ public static partial class GoalWorktrees
                         incrementFailureCount: false,
                         hooks: hooks);
                 });
+            if (observation.Debt.EscalatedAtUtc is not null)
+            {
+                EnsureCleanupDebtAttention(path, backoff.Reason, observation.Debt, goalId: null, hooks);
+            }
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
@@ -605,6 +635,31 @@ public static partial class GoalWorktrees
         exception.Message.StartsWith(
             "State database journal mode must be WAL;",
             StringComparison.Ordinal);
+
+    private static void EnsureCleanupDebtAttention(
+        string path,
+        string reason,
+        GoalWorktreeCleanupDebt debt,
+        GoalId? goalId,
+        GoalWorktreeCleanupHooks hooks)
+    {
+        try
+        {
+            var items = CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path, hooks))
+                .GetAttentionQueueAsync().GetAwaiter().GetResult();
+            if (items.Any(item => item.CorrelationKey == CleanupAttentionCorrelationKey(path)))
+            {
+                // Preserve goal-specific retry text and avoid repeating escalation diagnostics.
+                return;
+            }
+
+            RaiseCleanupDebtAttention(path, reason, debt, goalId, hooks);
+        }
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
+        {
+            WarnCleanupFailure(path, "cleanup-debt-attention-raise", ex, hooks);
+        }
+    }
 
     private static void RaiseCleanupDebtAttention(
         string path,
