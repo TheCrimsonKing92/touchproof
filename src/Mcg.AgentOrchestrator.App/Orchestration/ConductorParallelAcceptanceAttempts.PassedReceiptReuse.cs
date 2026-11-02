@@ -44,8 +44,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     // A delivery hold also owns a passed receipt, but is not an operator-adjudication hold.
     private static bool IsDeliveredReceiptForRegate(Goal goal, ConductorParallelAcceptanceAttempt attempt, string? candidate) =>
-        goal.Status == GoalStatus.Verified && goal.DeliveredForReview is { } delivery &&
-        goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url &&
+        DeliveredForReviewHold.IsCurrent(goal) && goal.DeliveredForReview is { } delivery &&
         attempt is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed, ReconciledAt: not null,
             SupersededBy: null, ReplayLandedAt: null, RegateRequestedAt: null } &&
         attempt.GoalId == goal.Id.Value && attempt.Kind == GateDispatchKind && attempt.AttemptId == delivery.GateAttemptId &&

@@ -7,8 +7,7 @@ internal static class OwnerConsoleDeliveredForReviewText
 {
     internal static string? For(Goal goal)
     {
-        if (goal.Status != GoalStatus.Verified || goal.DeliveredForReview is not { } delivery ||
-            goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url ||
+        if (!DeliveredForReviewHold.IsCurrent(goal) || goal.DeliveredForReview is not { } delivery ||
             goal.Timeline.Any(item => item.Kind == ProgressKind.GoalPolicyDecision &&
                 item.OccurredAt >= delivery.DeliveredAt && item.Message == PullRequestLandingDelivery.ClosedUnmergedPrefix + delivery.Url))
             return null;
