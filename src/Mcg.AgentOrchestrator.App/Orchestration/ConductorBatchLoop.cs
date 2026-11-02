@@ -851,11 +851,9 @@ internal sealed partial class ConductorBatchLoop
                 escalatedGoals.Remove(id);
                 goalProjectionCache.Invalidate(new GoalId(id));
             }
-            RunJanitorialPhase("track-pull-request-deliveries", nextTick, () =>
-            {
-                hostedChangedGoalIds = hostedChangedGoalIds.Concat(driver.PullRequestDeliveryTracker?.Service(heldReceiptGoals) ?? new HashSet<GoalId>()).ToHashSet();
-                return true;
-            });
+            hostedChangedGoalIds = RunJanitorialPhase("track-pull-request-deliveries", nextTick,
+                () => ConductorPullRequestTracking.Service(driver.PullRequestDeliveryTracker, heldReceiptGoals,
+                    hostedChangedGoalIds, excludedGoals, setAsideGoals, escalatedGoals, goalProjectionCache)) ?? hostedChangedGoalIds;
             ConductorGateAttention.ReconcileAll(driver, heldReceiptGoals,
                 (phase, action) => RunJanitorialPhase(phase, nextTick, action));
             var scopedGoals = kernel.Goals

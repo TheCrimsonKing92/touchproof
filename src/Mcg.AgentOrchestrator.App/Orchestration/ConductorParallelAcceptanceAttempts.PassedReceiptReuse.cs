@@ -27,8 +27,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var latest = TryReadLatest(goal.Id.Value);
             if (latest is null || latest.AttemptId != expectedAttemptId) return false;
             var attempt = ReadCanonicalAttempt(latest.MetadataPath, goal.Id.Value);
-            if (IsCapacityReservingAttempt(attempt) ||
-                PassedGateRegateAdmission.Resolve(goal, attempt, currentCandidate()) is null ||
+            if (IsCapacityReservingAttempt(attempt)) return false;
+            var candidate = currentCandidate();
+            if ((PassedGateRegateAdmission.Resolve(goal, attempt, candidate) is null &&
+                 !(cause == ConductorEvidenceSupersessionCause.CandidateChanged &&
+                   IsDeliveredReceiptForRegate(goal, attempt, candidate))) ||
                 !string.Equals(attempt.BranchHeadSha, expectedCandidate, StringComparison.OrdinalIgnoreCase)) return false;
             WriteAttemptFile(attempt with
             {
@@ -38,6 +41,16 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return true;
         }
     }
+
+    // A delivery hold also owns a passed receipt, but is not an operator-adjudication hold.
+    private static bool IsDeliveredReceiptForRegate(Goal goal, ConductorParallelAcceptanceAttempt attempt, string? candidate) =>
+        goal.Status == GoalStatus.Verified && goal.DeliveredForReview is { } delivery &&
+        goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url &&
+        attempt is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed, ReconciledAt: not null,
+            SupersededBy: null, ReplayLandedAt: null, RegateRequestedAt: null } &&
+        attempt.GoalId == goal.Id.Value && attempt.Kind == GateDispatchKind && attempt.AttemptId == delivery.GateAttemptId &&
+        string.Equals(attempt.BranchHeadSha, delivery.PushedCommit, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(attempt.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase);
 
     private static bool HasSameReplayScope(ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate) =>

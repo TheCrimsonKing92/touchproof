@@ -29,15 +29,24 @@ internal sealed class ConductorTickStepLedger
         "activation-probe-record", "priority-order", "hold-cohort-members", "hold-lone-ready",
         "priority-guard", "deferral-summary", "admission-pre-batch", "begin-tick"
     });
+    internal static readonly IReadOnlyList<string> PrepNames = Array.AsReadOnly(new[]
+    {
+        "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt",
+        "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold",
+        "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-retry-priority",
+        "prep-interaction-keys", "prep-probe-backoff"
+    });
     private static readonly AsyncLocal<ConductorTickStepLedger?> Current = new();
     private readonly Func<TimeSpan> _cpu;
     private readonly Action<string>? _probe;
     private readonly int _ownerThread = Environment.CurrentManagedThreadId;
     private readonly object _gate = new();
-    private readonly Dictionary<string, (long Ticks, long WallTicks, long Calls)> _steps = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (long Ticks, long WallTicks, long Calls, long InclusiveTicks, long InclusiveWallTicks)> _steps = new(StringComparer.Ordinal);
     private readonly Stack<Frame> _frames = new();
     private bool _active;
     private long _goalsHydrated, _metadataRows, _terminalJournalStats, _backlogRows, _readinessEvaluations;
+    private long _projectionCount, _slowestProjectionTicks;
+    private string? _slowestProjectionGoalId;
 
     internal ConductorTickStepLedger(Func<TimeSpan> cpu, Action<string>? probe = null)
     {
@@ -65,7 +74,7 @@ internal sealed class ConductorTickStepLedger
             if (active)
             {
                 var old = ledger._steps.GetValueOrDefault(name);
-                ledger._steps[name] = (old.Ticks, old.WallTicks, old.Calls + 1);
+                ledger._steps[name] = (old.Ticks, old.WallTicks, old.Calls + 1, old.InclusiveTicks, old.InclusiveWallTicks);
                 // Other threads still count calls; their process CPU overlaps the owner's
                 // scopes and must not be added to this partition of the phase.
                 frame = Environment.CurrentManagedThreadId == ledger._ownerThread
@@ -96,13 +105,49 @@ internal sealed class ConductorTickStepLedger
                     }
                     var old = ledger._steps[name];
                     ledger._steps[name] = (old.Ticks + elapsed - frame.ChildTicks,
-                        old.WallTicks + Math.Max(0, wallElapsed - frame.ChildWallTicks), old.Calls);
+                        old.WallTicks + Math.Max(0, wallElapsed - frame.ChildWallTicks), old.Calls,
+                        old.InclusiveTicks + elapsed, old.InclusiveWallTicks + wallElapsed);
                 }
             }
         }
     }
 
     internal static void Measure(string name, Action action) => Measure(name, () => { action(); return true; });
+
+    // ProjectAll projects each yielded goal synchronously before asking for the next.
+    // Observing that interval keeps projection execution and its ordering untouched.
+    internal static IEnumerable<Goal> ObserveProjections(IEnumerable<Goal> goals)
+    {
+        var ledger = Current.Value;
+        return ledger is null ? goals : ledger.ObserveProjectionIntervals(goals);
+    }
+
+    private IEnumerable<Goal> ObserveProjectionIntervals(IEnumerable<Goal> goals)
+    {
+        foreach (var goal in goals)
+        {
+            var timer = ConductorBatchLoop.StartDiagnosticTimer();
+            try { yield return goal; }
+            finally
+            {
+                var ticks = timer.Elapsed.Ticks;
+                lock (_gate)
+                {
+                    if (_active)
+                    {
+                        _projectionCount++;
+                        if (Environment.CurrentManagedThreadId == _ownerThread &&
+                            (_slowestProjectionGoalId is null || ticks > _slowestProjectionTicks ||
+                             (ticks == _slowestProjectionTicks && string.CompareOrdinal(goal.Id.Value, _slowestProjectionGoalId) < 0)))
+                        {
+                            _slowestProjectionGoalId = goal.Id.Value;
+                            _slowestProjectionTicks = ticks;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     internal static IReadOnlyList<T> CountMetadataRows<T>(IReadOnlyList<T> rows)
     {
@@ -167,12 +212,25 @@ internal sealed class ConductorTickStepLedger
             var steps = string.Join(',', AdmissionNames.Select(name =>
             {
                 var value = _steps.GetValueOrDefault(name);
-                var wallMs = value.WallTicks / TimeSpan.TicksPerMillisecond;
+                // Prep children are reported separately, so the parent remains inclusive
+                // here without adding those child durations to the phase a second time.
+                var wallMs = (name == "grouped-admission-prep" ? value.InclusiveWallTicks : value.WallTicks) / TimeSpan.TicksPerMillisecond;
+                var cpuTicks = name == "grouped-admission-prep" ? value.InclusiveTicks : value.Ticks;
                 attributedMs += wallMs;
-                return FormattableString.Invariant($"{name}:{wallMs}:{value.Ticks / TimeSpan.TicksPerMillisecond}:{value.Calls}");
+                return FormattableString.Invariant($"{name}:{wallMs}:{cpuTicks / TimeSpan.TicksPerMillisecond}:{value.Calls}");
             }));
             var remainder = Math.Max(0, elapsed.Ticks / TimeSpan.TicksPerMillisecond - attributedMs);
-            return FormattableString.Invariant($"admission_steps={steps} unattributed_ms={remainder}");
+            long prepWallTicks = 0;
+            var prepSteps = string.Join(',', PrepNames.Select(name =>
+            {
+                var value = _steps.GetValueOrDefault(name);
+                prepWallTicks += value.InclusiveWallTicks;
+                return FormattableString.Invariant($"{name}:{value.InclusiveWallTicks / TimeSpan.TicksPerMillisecond}:{value.InclusiveTicks / TimeSpan.TicksPerMillisecond}:{value.Calls}");
+            }));
+            var prepRemainder = Math.Max(0, _steps.GetValueOrDefault("grouped-admission-prep").InclusiveWallTicks - prepWallTicks) / TimeSpan.TicksPerMillisecond;
+            var slowest = _slowestProjectionGoalId is null ? "none:0" :
+                FormattableString.Invariant($"{_slowestProjectionGoalId[..8]}:{_slowestProjectionTicks / TimeSpan.TicksPerMillisecond}");
+            return FormattableString.Invariant($"admission_steps={steps} unattributed_ms={remainder} prep_steps={prepSteps} prep_projection_count={_projectionCount} prep_projection_slowest={slowest} prep_unattributed_ms={prepRemainder}");
         }
     }
 

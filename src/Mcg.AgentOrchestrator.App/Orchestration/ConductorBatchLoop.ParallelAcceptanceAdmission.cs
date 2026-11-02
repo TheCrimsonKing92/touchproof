@@ -276,34 +276,34 @@ internal sealed partial class ConductorBatchLoop
         HashSet<GoalId> changedGoalIds,
         Func<bool> suppressNewAcceptanceAdmission)
     {
-        state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
+        state.OrderedEligible = ConductorTickStepLedger.Measure("prep-cohort-receipts", () => ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines));
         // Reconcile child ejections before projections or implication-key exclusions can hide them.
-        state.OrderedEligible = MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines);
-        var speculativeCandidates = GroupedAdmissionCandidateProjection.ProjectAll(
-            state.OrderedEligible, driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines));
+        state.OrderedEligible = ConductorTickStepLedger.Measure("prep-train-reconcile", () => MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines));
+        var speculativeCandidates = ConductorTickStepLedger.Measure("prep-projection", () => GroupedAdmissionCandidateProjection.ProjectAll(
+            ConductorTickStepLedger.ObserveProjections(state.OrderedEligible), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)));
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
-        state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
+        state.AcceptanceCensus = ConductorTickStepLedger.Measure("prep-census", () => CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
-            changedGoalLines, blockAdmissionOnFailure: true);
-        EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
+            changedGoalLines, blockAdmissionOnFailure: true));
+        ConductorTickStepLedger.Measure("prep-plan-receipt", () => EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
             preWalkIntentChangedGoalIds, eligible, state.OrderedEligible, speculativeCandidates,
             state.LiveAttempts, state.ActiveCohortCapacity, state.AcceptanceCensus, driver, policy,
-            completedGoals, escalatedGoals, kernel, tick);
+            completedGoals, escalatedGoals, kernel, tick));
         state.LiveAttemptGoalIds = state.LiveAttempts.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
-        var activeCohortMemberGoalIds = driver.GetActiveCohortGateMemberGoalIds((memberGoalIds, detail) =>
+        var activeCohortMemberGoalIds = ConductorTickStepLedger.Measure("prep-cohort-members", () => driver.GetActiveCohortGateMemberGoalIds((memberGoalIds, detail) =>
         {
             var memberIds = memberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
             EmitProgress(
                 $"ACCEPTANCE_COHORT_INFLIGHT tick={tick} goal={memberIds[0][..8]} " +
                 $"members={string.Join(',', memberIds.Select(id => id[..8]))} {detail}");
-        });
+        }));
         state.CohortEligible = state.OrderedEligible
             .Where(goal => !state.LiveAttemptGoalIds.Contains(goal.Id.Value) &&
                            !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
-        state.ProductionCandidates = GroupedAdmissionCandidateFilter.Filter(ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
-            speculativeCandidates, state.CohortEligible, state.LiveAttemptGoalIds, activeCohortMemberGoalIds), kernel.Goals, activeCohortMemberGoalIds);
-        foreach (var goal in state.CohortEligible.ToArray())
+        state.ProductionCandidates = ConductorTickStepLedger.Measure("prep-obligation-filter", () => GroupedAdmissionCandidateFilter.Filter(ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
+            speculativeCandidates, state.CohortEligible, state.LiveAttemptGoalIds, activeCohortMemberGoalIds), kernel.Goals, activeCohortMemberGoalIds));
+        ConductorTickStepLedger.Measure("prep-merge-conflict", () => { foreach (var goal in state.CohortEligible.ToArray())
         {
             if (state.Results.ContainsKey(goal.Id.Value) ||
                 speculativeCandidates.First(candidate => candidate.GoalId == goal.Id).ProjectionResult is not
@@ -317,37 +317,37 @@ internal sealed partial class ConductorBatchLoop
             state.CohortEligible = state.CohortEligible.Where(candidate => candidate.Id != goal.Id).ToArray();
             RecordParallelAcceptanceProgress(
                 $"ADMISSION tick={tick} result=escalated reason=pre-landing-merge-conflict goal={goal.Id.Value[..8]}", changedGoalLines);
-        }
+        }});
         var trainAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
-        (state.CohortEligible, state.ProductionCandidates) = PassedCohortReceiptApprovalHoldAdmission.ApplyBeforeGating(
+        (state.CohortEligible, state.ProductionCandidates) = ConductorTickStepLedger.Measure("prep-approval-hold", () => PassedCohortReceiptApprovalHoldAdmission.ApplyBeforeGating(
             driver, policy, kernel, state.CohortEligible, state.ProductionCandidates, scopedGoals, preWalkIntentChangedGoalIds,
             goal => IsParallelAcceptanceInputEligible(goal, driver, kernel, completedGoals, escalatedGoals),
             state.LiveAttemptGoalIds.Concat(activeCohortMemberGoalIds).ToHashSet(StringComparer.Ordinal),
             state.Results, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), suppressNewAcceptanceAdmission,
-            goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds);
-        (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
-            driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel);
-        CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel);
+            goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds));
+        (state.CohortEligible, state.ProductionCandidates) = ConductorTickStepLedger.Measure("prep-train-receipts", () => LandPassedMergeTrainReceiptsBeforeAdmission(
+            driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel));
+        ConductorTickStepLedger.Measure("prep-follower-receipts", () => CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel));
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission()
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
-            : ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds);
+            : ConductorTickStepLedger.Measure("prep-oldest-waiter", () => ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds));
         state.TransientRetryPriorityGoal = !suppressNewAcceptanceAdmission() &&
             (driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)
-            ? SelectTransientRetryPriorityGoal(kernel, driver, state.CohortEligible, policy,
+            ? ConductorTickStepLedger.Measure("prep-retry-priority", () => SelectTransientRetryPriorityGoal(kernel, driver, state.CohortEligible, policy,
                 state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes,
-                state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, state.Results, tick, changedGoalLines)
+                state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, state.Results, tick, changedGoalLines))
             : null;
-        var interactionOnlyKeys = driver.ReadInteractionOnlyMemberKeys();
+        var interactionOnlyKeys = ConductorTickStepLedger.Measure("prep-interaction-keys", () => driver.ReadInteractionOnlyMemberKeys());
         var interactionOnlyGoalIds = speculativeCandidates
             .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready ready &&
                 interactionOnlyKeys.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
                     candidate.GoalId, ready.Projection.CandidateRevision)))
             .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal);
-        var workspaceProbeBackoffGoalIds = speculativeCandidates
+        var workspaceProbeBackoffGoalIds = ConductorTickStepLedger.Measure("prep-probe-backoff", () => speculativeCandidates
             .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready ready &&
             driver.ParallelAcceptanceAttemptCoordinator.TryReadWorkspaceProbeBackoff(ConductorParallelAcceptanceCandidate.Create(
                 kernel.GetGoal(candidate.GoalId), 0, ready.Projection.LandingPaths, ready.Projection.BranchRevision, ready.Projection.MainRevision), out _))
-            .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal);
+            .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal));
         state.CohortEligible = state.CohortEligible
             .Where(goal => !interactionOnlyGoalIds.Contains(goal.Id.Value) && !workspaceProbeBackoffGoalIds.Contains(goal.Id.Value)).ToArray();
         state.ProductionCandidates = state.ProductionCandidates

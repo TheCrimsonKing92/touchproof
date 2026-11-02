@@ -19,6 +19,7 @@ internal sealed class PullRequestDeliveryTracker
     private readonly Action<GoalId>? _refreshJournal;
     private readonly Func<string?>? _mutationBlocker;
     private readonly Action<ConductorLandingReceipt>? _landingSink;
+    private readonly ConductorParallelAcceptanceAttemptCoordinator? _acceptanceAttempts;
     private readonly object _sync = new();
     private readonly Dictionary<GoalId, TimeSpan> _attempts = [];
     private readonly Dictionary<GoalId, string> _unavailable = [];
@@ -28,7 +29,8 @@ internal sealed class PullRequestDeliveryTracker
         IPullRequestStatusReader reader, IForgeProcessRunner runner, ICollaborationItemStore attention,
         IGoalLifecycleEventWriter? eventWriter = null, IOperatorChannel? channel = null, IClock? clock = null,
         Func<TimeSpan>? elapsed = null, Action<GoalId>? refreshJournal = null, Func<string?>? mutationBlocker = null,
-        Action<ConductorLandingReceipt>? landingSink = null)
+        Action<ConductorLandingReceipt>? landingSink = null,
+        ConductorParallelAcceptanceAttemptCoordinator? acceptanceAttempts = null)
     {
         _kernel = kernel;
         _workspace = workspace;
@@ -43,6 +45,7 @@ internal sealed class PullRequestDeliveryTracker
         _refreshJournal = refreshJournal;
         _mutationBlocker = mutationBlocker;
         _landingSink = landingSink;
+        _acceptanceAttempts = acceptanceAttempts;
     }
 
     internal IReadOnlySet<GoalId> Service(IEnumerable<Goal> goals)
@@ -84,9 +87,14 @@ internal sealed class PullRequestDeliveryTracker
         if (_mutationBlocker?.Invoke() is { Length: > 0 }) return;
         switch (status.Kind)
         {
-            case PullRequestStatusKind.Open: _unavailable.Remove(goal.Id); return;
+            case PullRequestStatusKind.Open:
+                _unavailable.Remove(goal.Id);
+                if (!PullRequestLandingDelivery.HasRefreshStarted(goal)) Refresh(goal, delivery);
+                return;
             case PullRequestStatusKind.ClosedUnmerged:
                 _unavailable.Remove(goal.Id);
+                if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
+                    _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "closed unmerged " + delivery.Url);
                 var reason = PullRequestLandingDelivery.ClosedUnmergedPrefix + delivery.Url;
                 if (goal.Timeline.Any(item => item.Kind == ProgressKind.GoalPolicyDecision &&
                     item.OccurredAt >= delivery.DeliveredAt && item.Message == reason)) return;
@@ -95,6 +103,8 @@ internal sealed class PullRequestDeliveryTracker
                 _kernel.RecordGoalPolicyDecision(goal.Id, reason);
                 return;
             case PullRequestStatusKind.Merged:
+                if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
+                    _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "merged " + delivery.Url);
                 if (!IsRevision(status.MergeCommit)) { Unavailable(goal, "merged response has no usable merge commit"); return; }
                 Land(goal, delivery, status.MergeCommit!);
                 return;
@@ -107,51 +117,17 @@ internal sealed class PullRequestDeliveryTracker
         var root = _workspace.ExecutionDirectory;
         var branch = _workspace.IntegrationBranch;
         var remote = "refs/remotes/origin/" + branch;
-        var environment = new Dictionary<string, string>
-        {
-            ["GIT_CEILING_DIRECTORIES"] = Directory.GetParent(Path.GetFullPath(root))?.FullName ?? root,
-            ["GIT_TERMINAL_PROMPT"] = "0"
-        };
-        var fetch = _runner.Run("git", ["fetch", "--no-tags", "origin", $"+refs/heads/{branch}:{remote}"],
-            root, environment, TimeSpan.FromSeconds(60));
-        if (!fetch.Started || fetch.TimedOut || fetch.ExitCode != 0)
-        { Unavailable(goal, $"trunk fetch failed: exit={fetch.ExitCode} timedOut={fetch.TimedOut}: {fetch.StandardError}"); return; }
+        if (!Fetch(goal)) return;
         var onTrunk = Git("merge-base", "--is-ancestor", merge, remote);
         if (!Ok(onTrunk)) { Unavailable(goal, "merge commit not confirmed on fetched trunk"); return; }
         var parent = Git("rev-parse", "--verify", merge + "^1");
-        var local = Git("rev-parse", "--verify", "refs/heads/" + branch);
-        if (!Ok(parent) || !IsRevision(parent.Output.Trim()) || !Ok(local) || !IsRevision(local.Output.Trim()))
-        { Unavailable(goal, "could not resolve merge parent or local integration tip"); return; }
+        if (!Ok(parent) || !IsRevision(parent.Output.Trim()))
+        { Unavailable(goal, "could not resolve merge parent"); return; }
         var changes = Git("diff", "--name-only", "-z", parent.Output.Trim(), merge);
         if (!Ok(changes)) { Unavailable(goal, "could not read merged file scope"); return; }
-        var tip = local.Output.Trim();
-        var contains = Git("merge-base", "--is-ancestor", merge, tip);
-        if (!Ok(contains) && !NegativeAncestry(contains))
-        { Unavailable(goal, "could not establish local merge ancestry"); return; }
-        string? reconcile = null;
-        if (!Ok(contains))
-        {
-            var forward = Git("merge-base", "--is-ancestor", tip, merge);
-            if (!Ok(forward) && !NegativeAncestry(forward))
-            { Unavailable(goal, "could not establish fast-forward ancestry"); return; }
-            if (!Ok(forward)) reconcile = "local integration branch diverges";
-            else
-            {
-                var guard = RootCheckoutLandingGuard.Inspect(LandingExecutor.GitRunner, root, branch, tip, merge);
-                if (guard.Outcome == RootCheckoutLandingGuard.Outcome.Hold) reconcile = guard.Reason;
-                else if (!Ok(LandingExecutor.UpdateRef(root, branch, merge, tip))) reconcile = "local ref update failed";
-                else if (guard.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
-                    RootCheckoutLandingGuard.IsOnBranch(LandingExecutor.GitRunner, root, branch) &&
-                    !Ok(Git("read-tree", "-m", "-u", tip, merge))) reconcile = "local checkout synchronization failed";
-            }
-        }
-        var key = $"pull-request-reconcile:{goal.Id.Value}:{merge}";
-        if (reconcile is not null && !_attention.ListAsync(goal.Id.Value).GetAwaiter().GetResult().Any(item => item.CorrelationKey == key))
-            _attention.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Reconcile local checkout after pull request merge",
-                ForgeDiagnosticRedactor.Redact($"Reconcile local checkout in {root} ({_workspace.ProjectName}), branch {branch}. " +
-                    $"Observed local commit {tip}; pull request merge commit {merge}; {delivery.Url}. {reconcile}. " +
-                    "Reconcile the checkout without resetting or force-updating the branch."),
-                key).GetAwaiter().GetResult();
+        var forward = PullRequestTrunkFastForward.Advance(root, branch, merge);
+        if (forward.Unavailable is { } unavailable) { Unavailable(goal, unavailable); return; }
+        Reconcile(goal, delivery, merge, forward);
         LandingExecutor.RecordSuccessfulPromotion(_workspace, _kernel, [(goal.Id, delivery.PushedCommit)],
             parent.Output.Trim(), merge, GoalPromotionFact.PullRequestMergedProvenance, _clock);
         var message = $"Pull request merged: {delivery.Url} at {merge}";
@@ -167,12 +143,69 @@ internal sealed class PullRequestDeliveryTracker
         _unavailable.Remove(goal.Id);
     }
 
+    private bool Fetch(Goal goal)
+    {
+        var root = _workspace.ExecutionDirectory;
+        var branch = _workspace.IntegrationBranch;
+        var environment = new Dictionary<string, string>
+        {
+            ["GIT_CEILING_DIRECTORIES"] = Directory.GetParent(Path.GetFullPath(root))?.FullName ?? root,
+            ["GIT_TERMINAL_PROMPT"] = "0"
+        };
+        var fetch = _runner.Run("git", ["fetch", "--no-tags", "origin", $"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+            root, environment, TimeSpan.FromSeconds(60));
+        if (fetch.Started && !fetch.TimedOut && fetch.ExitCode == 0) return true;
+        Unavailable(goal, $"trunk fetch failed: exit={fetch.ExitCode} timedOut={fetch.TimedOut}: {fetch.StandardError}");
+        return false;
+    }
+
+    private void Refresh(Goal goal, GoalDeliveredForReview delivery)
+    {
+        // Recovery owns failed attempts and operator holds; drift never starts a retry loop.
+        if (PullRequestLandingDelivery.RefreshStopped(goal) || goal.Status != GoalStatus.Verified ||
+            goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url) return;
+        if (!Fetch(goal)) return;
+        var remote = Git("rev-parse", "--verify", "refs/remotes/origin/" + _workspace.IntegrationBranch);
+        if (!Ok(remote) || !IsRevision(remote.Output.Trim()))
+        { Unavailable(goal, "could not resolve fetched trunk tip"); return; }
+        var trunk = remote.Output.Trim();
+        var contains = Git("merge-base", "--is-ancestor", trunk, delivery.PushedCommit);
+        if (Ok(contains)) return;
+        if (!NegativeAncestry(contains)) { Unavailable(goal, "could not establish pushed commit ancestry"); return; }
+        var forward = PullRequestTrunkFastForward.Advance(_workspace.ExecutionDirectory, _workspace.IntegrationBranch, trunk);
+        if (forward.Unavailable is { } unavailable) { Unavailable(goal, unavailable); return; }
+        if (forward.Reconcile is not null) { Reconcile(goal, delivery, trunk, forward); return; }
+        var refresh = $"{PullRequestLandingDelivery.RefreshStartedPrefix}{delivery.Url} trunk={trunk} previous={delivery.PushedCommit}";
+        var attempt = _acceptanceAttempts?.TryReadLatest(goal.Id.Value);
+        if (attempt is null || !_acceptanceAttempts!.TryInvalidatePassedReceipt(goal, attempt.AttemptId,
+            delivery.PushedCommit, ConductorEvidenceSupersessionCause.CandidateChanged, refresh, () =>
+            {
+                var candidate = Git("rev-parse", "--verify", GoalWorktreeLayout.BranchName(goal.Id));
+                return Ok(candidate) ? candidate.Output.Trim() : null;
+            }))
+        { Unavailable(goal, "could not invalidate delivered gate receipt for pull request refresh"); return; }
+        _kernel.RecordGoalPolicyDecision(goal.Id, refresh);
+        _kernel.ClearGoalHold(goal.Id);
+    }
+
+    private void Reconcile(Goal goal, GoalDeliveredForReview delivery, string target, PullRequestTrunkFastForward.Result forward)
+    {
+        var key = $"pull-request-reconcile:{goal.Id.Value}:{target}";
+        if (forward.Reconcile is null || _attention.ListAsync(goal.Id.Value).GetAwaiter().GetResult().Any(item => item.CorrelationKey == key)) return;
+        _attention.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Reconcile local checkout after pull request merge",
+            ForgeDiagnosticRedactor.Redact($"Reconcile local checkout in {_workspace.ExecutionDirectory} ({_workspace.ProjectName}), branch {_workspace.IntegrationBranch}. " +
+                $"Observed local commit {forward.LocalTip}; pull request merge commit {target}; {delivery.Url}. {forward.Reconcile}. " +
+                "Reconcile the checkout without resetting or force-updating the branch."), key).GetAwaiter().GetResult();
+    }
+
     private GitCli.GitResult Git(params string[] args) => LandingExecutor.GitRunner(_workspace.ExecutionDirectory, args);
     private static bool Ok(GitCli.GitResult result) => result.Succeeded && result.ProcessStarted && !result.DrainTimedOut;
     private static bool NegativeAncestry(GitCli.GitResult result) => result.ExitCode == 1 && result.ProcessStarted && !result.DrainTimedOut;
     private static bool IsRevision(string? value) => value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);
-    private static bool IsEligible(Goal goal) => goal.Status == GoalStatus.Verified &&
-        goal.DeliveredForReview is { } delivery && goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url;
+    internal static bool IsEligible(Goal goal) => goal.DeliveredForReview is { } delivery &&
+        ((goal.Status == GoalStatus.Verified && goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url) ||
+         (goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
+          PullRequestLandingDelivery.HasRefreshStarted(goal)));
     private void Unavailable(Goal goal, string reason)
     {
         reason = ForgeDiagnosticRedactor.Redact(reason);
