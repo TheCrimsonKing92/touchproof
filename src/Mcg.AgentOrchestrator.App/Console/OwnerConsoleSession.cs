@@ -240,7 +240,7 @@ internal sealed class OwnerConsoleSession(
             question.ProposedDefault is null ? null : $"default: {question.ProposedDefault}"
         }.Where(field => field is not null);
         var stewardGuidance = question.Kind == OwnerQuestionKind.StewardHold
-            ? $" | view only | CLI: mcg-orchestrator.cmd retry --goal {question.GoalId} <task-number> <message> or mcg-orchestrator.cmd adjudicate --goal {question.GoalId} <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>"
+            ? $" | view only | CLI: touchproof.cmd retry --goal {question.GoalId} <task-number> <message> or touchproof.cmd adjudicate --goal {question.GoalId} <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>"
             : string.Empty;
         Announce($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
     }

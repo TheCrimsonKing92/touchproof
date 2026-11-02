@@ -218,7 +218,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     // Matches FormatOwnerReviewEscalation, including its multiline command payload.
     private const string OwnerReviewDetail = "owner-review-hold goal=11111111 candidate=0123456789012345678901234567890123456789\n" +
         "checks=owner approval\nchanged-protected-fields=conductor policy\nfingerprint=internal-fingerprint\n" +
-        "approve: .\\mcg-orchestrator.cmd approve-policy-change 11111111 0123456789012345678901234567890123456789 --text-file <reason-file>\n" +
+        "approve: .\\touchproof.cmd approve-policy-change 11111111 0123456789012345678901234567890123456789 --text-file <reason-file>\n" +
         "decline: cancel-goal 11111111 or abandon-goal 11111111";
 
     [Theory]

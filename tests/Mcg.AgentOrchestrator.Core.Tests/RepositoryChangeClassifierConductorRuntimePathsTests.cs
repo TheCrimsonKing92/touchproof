@@ -26,6 +26,7 @@ public sealed class RepositoryChangeClassifierConductorRuntimePathsTests
     [Xunit.InlineData("scripts/resolve-run-dir.ps1")]
     [Xunit.InlineData("scripts/Update-AppDllGitHeadMarker.ps1")]
     [Xunit.InlineData("mcg-orchestrator.cmd")]
+    [Xunit.InlineData("touchproof.cmd")]
     public void ConductorRuntimePathsRequireRelaunch(string path)
     {
         Assert.True(RepositoryChangeClassifier.Classify([path]).RequiresConductorRelaunch, path);
