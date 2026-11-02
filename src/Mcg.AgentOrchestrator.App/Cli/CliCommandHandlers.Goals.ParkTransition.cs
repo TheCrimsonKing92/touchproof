@@ -73,8 +73,8 @@ internal static partial class CliCommandHandlers
 
                 var resolvedAttentionItems = deliverAttentionResolution is not null ? deliverAttentionResolution() :
                     CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ResolveOpenForGoalAsync(
-                    outcome.GoalId.Value, $"Goal parked: {command.Reason}").GetAwaiter().GetResult();
-                Console.WriteLine($"Goal parked {outcome.GoalId.Value[..8]}.");
+                    outcome.GoalId.Value, GoalParkResolution.Build(command.Reason)).GetAwaiter().GetResult();
+                Console.WriteLine(GoalParkResolution.BuildConfirmation(outcome.GoalId.Value[..8]));
                 if (outcome.Disposition == GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches)
                 {
                     Console.WriteLine($"Live dispatches still running: {outcome.LiveDispatches.Count}");

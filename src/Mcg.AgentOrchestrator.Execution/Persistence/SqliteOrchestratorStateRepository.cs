@@ -2047,7 +2047,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
     private static bool IsSyntheticParkedHumanWaitCompletion(HumanInputRequestSnapshot snapshot) =>
         !snapshot.WasDismissed &&
-        snapshot.Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
+        GoalParkResolution.IsParkResolution(snapshot.Answer);
 
     public async Task<IReadOnlyList<QuarantinedGoalSummary>> ListQuarantinedGoalRowsAsync(CancellationToken cancellationToken = default)
     {

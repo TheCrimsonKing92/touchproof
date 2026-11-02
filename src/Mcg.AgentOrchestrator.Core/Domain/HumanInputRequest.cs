@@ -152,7 +152,7 @@ public sealed class HumanInputRequest
     public bool IsSyntheticParkedHumanWaitCompletion =>
         IsCompleted &&
         !WasDismissed &&
-        Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
+        GoalParkResolution.IsParkResolution(Answer);
 
     internal void Complete(
         string answer,
