@@ -212,6 +212,9 @@ public static partial class GoalWorktrees
                 (CommitShaPattern.IsMatch(automaticTree ?? string.Empty) &&
                  !string.Equals(recordedTree, automaticTree, StringComparison.OrdinalIgnoreCase)))
             {
+                if (CommitShaPattern.IsMatch(automaticTree ?? string.Empty) &&
+                    IsRatchetOnlyResolution(executionDirectory, baseSha, merge, parents, recordedTree, automaticTree!))
+                    continue;
                 refusalReason = $"integration-merge-not-clean; merge={merge}";
                 return false;
             }
@@ -223,6 +226,48 @@ public static partial class GoalWorktrees
         }
 
         return true;
+    }
+
+    private static bool IsRatchetOnlyResolution(
+        string directory, string baseSha, string merge, string[] parents, string recordedTree, string automaticTree)
+    {
+        // Include conflicts even when their resolution happens to match the automatic tree.
+        var conflicts = GitCli.Run(directory, "merge-tree", "--write-tree", "--name-only", "--no-messages",
+            parents[1], parents[2]);
+        if (!conflicts.ProcessStarted || conflicts.DrainTimedOut || conflicts.ExitCode is not (0 or 1))
+            return false;
+        var conflictLines = conflicts.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (conflictLines.Length == 0 ||
+            !string.Equals(conflictLines[0], automaticTree, StringComparison.OrdinalIgnoreCase) ||
+            (conflicts.ExitCode == 1 && conflictLines.Length == 1)) return false;
+
+        var differences = GitCli.Run(directory, "diff", "--no-ext-diff", "--no-textconv", "--name-only",
+            "--no-renames", automaticTree, recordedTree);
+        if (!differences.ProcessStarted || !differences.Succeeded || differences.DrainTimedOut) return false;
+        var resolutionPaths = conflictLines.Skip(1).Concat(
+            differences.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).ToArray();
+        if (resolutionPaths.Length == 0 ||
+            resolutionPaths.Any(path => !string.Equals(path, SourceSizeRatchet.SourcePath, StringComparison.Ordinal)))
+            return false;
+
+        // Parent order is not provenance: exactly one parent must be outside the goal range.
+        string? goalParent = null;
+        var mainParents = 0;
+        foreach (var parent in parents.Skip(1))
+        {
+            var ancestor = GitCli.Run(directory, "merge-base", "--is-ancestor", parent, baseSha);
+            if (!ancestor.ProcessStarted || ancestor.DrainTimedOut || ancestor.ExitCode is not (0 or 1)) return false;
+            if (ancestor.ExitCode == 0) mainParents++;
+            else
+            {
+                if (goalParent is not null) return false;
+                goalParent = parent;
+            }
+        }
+
+        return mainParents == 1 && goalParent is not null &&
+            TryReadChangedLines(directory, goalParent, merge, out var ratchetChanges, SourceSizeRatchet.SourcePath) &&
+            IntegrationOnlyCandidateDrift.CompareChanges([], ratchetChanges);
     }
 
     private static bool TryReadGit(string executionDirectory, string[] arguments, out string output)
