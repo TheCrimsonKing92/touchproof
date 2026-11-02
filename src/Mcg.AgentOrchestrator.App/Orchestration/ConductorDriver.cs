@@ -983,7 +983,7 @@ internal sealed partial class ConductorDriver
             PullRequestDeliveryTracker = new(kernel, workspace, new GitHubPullRequestStatusReader(new ForgeProcessRunner()),
                 new ForgeProcessRunner(), CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
                 eventWriter, channel, refreshJournal: RefreshJournal, mutationBlocker: () => LandingMutationBlocker?.Invoke(),
-                landingSink: receipt => SuccessfulLandingSink?.Invoke(receipt), acceptanceAttempts: _parallelAcceptanceAttemptCoordinator);
+                landingSink: receipt => SuccessfulLandingSink?.Invoke(receipt), acceptanceAttempts: _parallelAcceptanceAttemptCoordinator, conflictCheck: PullRequestReviewConflictCheck.CreateDefault(workspace));
         ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
             goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,

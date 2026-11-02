@@ -51,8 +51,8 @@ internal static class PullRequestReviewRound
         return boundary;
     }
 
-    internal static string Guidance(string url, int round, IReadOnlyList<PullRequestChangesRequest> batch) =>
+    internal static string Guidance(string url, int round, IReadOnlyList<PullRequestChangesRequest> batch, string? ruling = null) =>
         $"Pull request review round {round}: {url}\n" + string.Join("\n\n", batch.Select(review =>
             $"Reviewer: {review.Login}\nSubmittedAt: {review.SubmittedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)}\n{review.Body}")) +
-        "\n\n" + Instruction;
+        "\n\n" + (ruling is null ? "" : "Decider ruling: " + ruling + "\n\n") + Instruction;
 }
