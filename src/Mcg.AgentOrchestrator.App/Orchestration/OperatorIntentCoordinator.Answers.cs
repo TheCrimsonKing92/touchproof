@@ -82,8 +82,7 @@ internal sealed partial class OperatorIntentCoordinator
             case OperatorAnswerTargetKind.Clarification:
                 var item = decisions.ListAsync(goal.Id.Value).GetAwaiter().GetResult()
                     .FirstOrDefault(candidate => candidate.Id == payload.TargetId);
-                if (item is null || string.IsNullOrWhiteSpace(item.CorrelationKey) ||
-                    !item.CorrelationKey.StartsWith("spec-clarification:", StringComparison.Ordinal))
+                if (item is null || !SpecClarificationKey.IsSpecClarification(item.CorrelationKey))
                     throw new KeyNotFoundException($"Clarification '{payload.TargetId}' was not found for goal '{goal.Id.Value}'.");
                 if (CollaborationItemLifecycle.IsTerminal(item.Status))
                 {

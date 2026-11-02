@@ -33,7 +33,7 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
         if (File.Exists(Path.Combine(orchestratorDirectory, "collaboration-items.db")))
         {
             var items = await CollaborationItemStore.OpenExisting(orchestratorDirectory).ListAsync(goalId, token);
-            foreach (var item in items.Where(item => item.CorrelationKey?.StartsWith("spec-clarification:", StringComparison.Ordinal) == true &&
+            foreach (var item in items.Where(item => SpecClarificationKey.IsSpecClarification(item.CorrelationKey) &&
                          CollaborationItemLifecycle.IsTerminal(item.Status)))
                 candidates.Add(new(item.Id, "spec clarification before Planner dispatch", Question(item.Body) ?? item.Subject,
                     item.ResolvedAt ?? item.RaisedAt,
