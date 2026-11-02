@@ -36,6 +36,7 @@ internal static class CliReadOnlyCommandRunner
         CliInspectionQueryCommand.IsInspectionQueryCommand(args) ||
         CliBacklogQueryCommand.IsBacklogQueryCommand(args) ||
         CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args) ||
+        CliProvenanceQueryCommand.IsProvenanceQueryCommand(args) ||
         CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args);
 
     internal static bool TryExecute(
@@ -233,6 +234,14 @@ internal static class CliReadOnlyCommandRunner
         if (CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args))
         {
             CliMonitorGoalQueryCommand.Execute(args, stateRepository, workspace, agents, workerProfiles, diagnosticsClock);
+            changed = false;
+            return true;
+        }
+
+        if (CliProvenanceQueryCommand.IsProvenanceQueryCommand(args))
+        {
+            CliProvenanceQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles);
             changed = false;
             return true;
         }

@@ -46,6 +46,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["operator-inbox"] = [["operator-inbox"], ["operator-inbox", "abc10000"], ["operator-inbox", "abc10000", "--show-acknowledged"]],
             ["durations"] = [["durations"], ["durations", "--by-model", "--since", "2026-10-01"]],
             ["dispatch-value"] = [["dispatch-value"], ["dispatch-value", "--since", "2026-10-01"]],
+            ["provenance"] = [["provenance"]],
             ["brief"] = [["brief", "abc10000", "1"], ["brief", "--goal", "abc10000", "1"]]
         };
 

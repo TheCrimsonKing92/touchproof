@@ -574,7 +574,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(methodStart >= 0, "Could not find ExecuteGoalScopedTaskMutationCommand.");
 
         var methodEnd = source.IndexOf(
-            "private static bool ExecuteProvenanceWithoutFullHydration",
+            "private static bool HasInlineGoalPrefixForGoalScopedTaskMutation",
             methodStart,
             StringComparison.Ordinal);
 
