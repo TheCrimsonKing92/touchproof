@@ -159,7 +159,8 @@ public sealed class HumanInputRequest
         DateTimeOffset answeredAt,
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
-        int briefVersion = 1)
+        int briefVersion = 1,
+        bool isAutoDefaulted = false)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -173,7 +174,8 @@ public sealed class HumanInputRequest
             answer.Trim(),
             answeredAt,
             origin,
-            BriefVersion: briefVersion));
+            BriefVersion: briefVersion,
+            IsAutoDefaulted: isAutoDefaulted));
         WasDismissed = false;
         ResetSuppressionCountForAnswerRevision();
         foreach (var deliverableId in gatedDeliverableIds ?? [])
@@ -313,9 +315,10 @@ public sealed class HumanInputRequest
         string answer,
         DateTimeOffset answeredAt,
         HumanInputRequestId answeredRequestId,
-        int briefVersion = 1)
+        int briefVersion = 1,
+        bool isAutoDefaulted = false)
     {
-        Complete(answer, answeredAt, briefVersion: briefVersion);
+        Complete(answer, answeredAt, briefVersion: briefVersion, isAutoDefaulted: isAutoDefaulted);
         SupersededByRequestId = answeredRequestId;
     }
 
@@ -460,7 +463,8 @@ public sealed record HumanInputAnswerRecord(
     DateTimeOffset AnsweredAt,
     HumanInputAnswerOrigin Origin = HumanInputAnswerOrigin.Operator,
     string? SupersededByAnswerId = null,
-    int? BriefVersion = null)
+    int? BriefVersion = null,
+    bool IsAutoDefaulted = false)
 {
     public bool IsRetracted => SupersededByAnswerId is not null;
 }
@@ -485,7 +489,7 @@ public sealed record HumanInputRequestCreationResult(
 
 public sealed record HumanInputRequestCounts(int Total, int Open);
 
-// Owns submission preconditions and receipt-before-completion publication for gate evidence.
+// Owns submission preconditions, duplicate completion and receipt-before-completion publication for gate evidence.
 internal static class HumanInputSubmission
 {
     internal static HumanInputRequest GetPendingRequest(
@@ -498,6 +502,34 @@ internal static class HumanInputSubmission
             throw new InvalidOperationException(
                 $"Human input request '{requestId}' has already been answered — use supersede to correct it.");
         return request;
+    }
+
+    internal static int CompleteSiblings(
+        IEnumerable<HumanInputRequest> requests, HumanInputRequest request,
+        string answer, DateTimeOffset answeredAt, int briefVersion,
+        bool supersedeSiblings, bool isAutoDefaulted)
+    {
+        var siblings = requests
+            .Where(candidate =>
+                supersedeSiblings &&
+                candidate.Id != request.Id &&
+                candidate.GoalId == request.GoalId &&
+                candidate.TaskId == request.TaskId &&
+                candidate.Kind == request.Kind &&
+                !candidate.IsCompleted &&
+                candidate.HasSameIdentity(request))
+            .OrderBy(candidate => candidate.RequestedAt)
+            .ToList();
+        foreach (var sibling in siblings)
+        {
+            sibling.CompleteAsSuperseded(
+                answer,
+                answeredAt,
+                request.Id,
+                briefVersion,
+                isAutoDefaulted: isAutoDefaulted);
+        }
+        return siblings.Count;
     }
 
     internal static bool TryCompleteGateEvidence(

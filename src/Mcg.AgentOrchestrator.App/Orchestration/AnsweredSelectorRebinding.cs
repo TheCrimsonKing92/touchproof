@@ -29,7 +29,7 @@ internal static class AnsweredSelectorRebinding
         Goal goal, GateTestObligation obligation, IEnumerable<HumanInputRequest> requests) =>
         requests.Where(request => request.GoalId == goal.Id && !request.WasDismissed)
             .Select(request => new { Request = request, Answer = request.AuthoritativeAnswer })
-            .Where(item => item.Answer is { Origin: HumanInputAnswerOrigin.Operator } &&
+            .Where(item => item.Answer is { Origin: HumanInputAnswerOrigin.Operator, IsAutoDefaulted: false } &&
                 item.Answer.BriefVersion == obligation.BriefVersion)
             .OrderBy(item => item.Answer!.AnsweredAt)
             .ThenBy(item => item.Answer!.Id, StringComparer.Ordinal)

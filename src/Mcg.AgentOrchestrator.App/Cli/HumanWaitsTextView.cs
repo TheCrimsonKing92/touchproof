@@ -32,7 +32,8 @@ internal static class HumanWaitsTextView
             Console.WriteLine($"  [{request.Kind}] {request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={request.TaskId?.Value[..8] ?? "goal"} age={ageSeconds}s");
             if (request.IsCompleted)
             {
-                var status = request.WasDismissed ? "dismissed" : "answered";
+                var status = request.WasDismissed ? "dismissed" :
+                    request.AuthoritativeAnswer is { IsAutoDefaulted: true } ? "auto-defaulted" : "answered";
                 Console.WriteLine($"    status: {status} at {request.AnsweredAt:u}");
                 if (!string.IsNullOrWhiteSpace(request.Answer))
                     Console.WriteLine($"    resolution: {request.Answer}");
