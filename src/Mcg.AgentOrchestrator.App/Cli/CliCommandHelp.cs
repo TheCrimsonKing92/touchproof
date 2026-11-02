@@ -109,7 +109,7 @@ internal static class CliCommandHelp
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
-    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
+    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--by-goal [--goal <goal-id-prefix>]] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string DirectiveUsage = "Usage: directive record --kind intake|pacing|scope --text-file <path> [--expires-at <utc> | --until-handoff] [--actor-kind human|agent] [--operator-actor <actor>] [--idempotency-key <key>] [--json] | directive retire <id> --reason <text> [--json] | directive handoff [--note <text>] [--json]";
@@ -735,7 +735,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
         "Report productive, expected overhead and wasted rounds by terminal goal cohort; default window is 7 days.",
-        ["--since", "--until", "--json", "--by-skill", "--by-check", "--baseline-since", "--baseline-until", "--help", "-h"]);
+        ["--since", "--until", "--json", "--by-skill", "--by-check", "--by-goal", "--goal", "--baseline-since", "--baseline-until", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lesson = new(
         LessonUsage,
