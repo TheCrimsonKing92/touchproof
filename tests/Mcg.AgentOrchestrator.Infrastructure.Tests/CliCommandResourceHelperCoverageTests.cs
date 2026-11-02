@@ -76,7 +76,7 @@ public sealed class CliCommandResourceHelperCoverageTests
                 if (launchesGit) arguments[0] = root;
                 if (method.Name is "RunGit" or "RunGitOutput") arguments[1] = new[] { "--version" };
                 object? result = null;
-                var invocation = Task.Run(() => Record.ExceptionAsync(async () =>
+                var invocation = Task.Run(async () => await Record.ExceptionAsync(async () =>
                 {
                     try
                     {
