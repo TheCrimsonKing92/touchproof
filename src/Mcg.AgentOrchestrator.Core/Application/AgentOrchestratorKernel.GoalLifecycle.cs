@@ -1994,6 +1994,15 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
         bool supersedeSiblings = true)
+        => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false);
+
+    private void SubmitHumanInputCore(
+        HumanInputRequestId requestId,
+        string answer,
+        IReadOnlyList<string>? gatedDeliverableIds,
+        HumanInputAnswerOrigin origin,
+        bool supersedeSiblings,
+        bool isAutoDefaulted)
     {
         lock (_humanInputRequestLock)
         {
@@ -2010,7 +2019,8 @@ public sealed partial class AgentOrchestratorKernel
                 answeredAt,
                 gatedDeliverableIds,
                 origin,
-                briefVersion: goal.AuthoritativeBrief.Version);
+                briefVersion: goal.AuthoritativeBrief.Version,
+                isAutoDefaulted: isAutoDefaulted);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
             var siblings = _humanInputRequests.Values
@@ -2030,7 +2040,8 @@ public sealed partial class AgentOrchestratorKernel
                     answer,
                     answeredAt,
                     request.Id,
-                    goal.AuthoritativeBrief.Version);
+                    goal.AuthoritativeBrief.Version,
+                    isAutoDefaulted: isAutoDefaulted);
             }
 
             TaskSpec? answeredTesterToRequeue = null;
@@ -2374,7 +2385,8 @@ public sealed partial class AgentOrchestratorKernel
 
             if (request.IsAutoDefaultable && !string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer))
             {
-                SubmitHumanInput(request.Id, request.SuggestedDefaultAnswer);
+                SubmitHumanInputCore(request.Id, request.SuggestedDefaultAnswer, null,
+                    HumanInputAnswerOrigin.Operator, supersedeSiblings: true, isAutoDefaulted: true);
                 resolved.Add(new HumanWaitPolicyResult(request.Id, request.GoalId, request.TaskId, request.Kind, HumanWaitPolicyResolution.Defaulted));
                 continue;
             }

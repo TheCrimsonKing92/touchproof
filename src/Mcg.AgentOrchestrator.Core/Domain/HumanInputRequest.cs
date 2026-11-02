@@ -159,7 +159,8 @@ public sealed class HumanInputRequest
         DateTimeOffset answeredAt,
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
-        int briefVersion = 1)
+        int briefVersion = 1,
+        bool isAutoDefaulted = false)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -173,7 +174,8 @@ public sealed class HumanInputRequest
             answer.Trim(),
             answeredAt,
             origin,
-            BriefVersion: briefVersion));
+            BriefVersion: briefVersion,
+            IsAutoDefaulted: isAutoDefaulted));
         WasDismissed = false;
         ResetSuppressionCountForAnswerRevision();
         foreach (var deliverableId in gatedDeliverableIds ?? [])
@@ -313,9 +315,10 @@ public sealed class HumanInputRequest
         string answer,
         DateTimeOffset answeredAt,
         HumanInputRequestId answeredRequestId,
-        int briefVersion = 1)
+        int briefVersion = 1,
+        bool isAutoDefaulted = false)
     {
-        Complete(answer, answeredAt, briefVersion: briefVersion);
+        Complete(answer, answeredAt, briefVersion: briefVersion, isAutoDefaulted: isAutoDefaulted);
         SupersededByRequestId = answeredRequestId;
     }
 
@@ -460,7 +463,8 @@ public sealed record HumanInputAnswerRecord(
     DateTimeOffset AnsweredAt,
     HumanInputAnswerOrigin Origin = HumanInputAnswerOrigin.Operator,
     string? SupersededByAnswerId = null,
-    int? BriefVersion = null)
+    int? BriefVersion = null,
+    bool IsAutoDefaulted = false)
 {
     public bool IsRetracted => SupersededByAnswerId is not null;
 }

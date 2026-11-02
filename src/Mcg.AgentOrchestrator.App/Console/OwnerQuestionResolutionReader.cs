@@ -26,9 +26,11 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
             var stage = task is null ? request.Kind == HumanWaitKind.SpecClarification ?
                 "spec clarification before Planner dispatch" : "goal clarification" :
                 $"{task.RequiredRole} clarification on task {Prefix(task.Id.Value)}";
+            var autoDefault = request.AuthoritativeAnswer is { IsAutoDefaulted: true } answer ? answer : null;
             candidates.Add(new(request.Id.Value, stage, request.Question, request.AnsweredAt ?? request.RequestedAt,
-                request.SupersededByRequestId is not null ? "Superseded" : request.WasDismissed ? "Dismissed" : "Cleared",
-                OperatorAnswerTargetKind.HumanInput));
+                request.SupersededByRequestId is not null ? "Superseded" : request.WasDismissed ? "Dismissed" :
+                    autoDefault is not null ? "Auto-defaulted" : "Cleared",
+                OperatorAnswerTargetKind.HumanInput, autoDefault));
         }
         if (File.Exists(Path.Combine(orchestratorDirectory, "collaboration-items.db")))
         {
@@ -68,7 +70,7 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
             .OfType<OwnerConductEvent>().Select(item => OwnerGoalLifecycleEvent.WithRole(item, roles)).ToArray();
         return candidates.Select(candidate =>
         {
-            var answered = answers.TryGetValue(candidate.Id, out var answer);
+            var answered = answers.TryGetValue(candidate.Id, out var answer) && candidate.AutoDefault is null;
             var at = answered ? answer.Intent.CompletedAt!.Value : candidate.At;
             var next = events.Where(item => item.Timestamp > at && item.Detail.StartsWith("TaskDispatched", StringComparison.Ordinal))
                 .OrderBy(item => item.Timestamp).FirstOrDefault();
@@ -76,8 +78,8 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
                 $"{OwnerEventFields.Field(next, "role") ?? "Worker"} started at {Local(next.Timestamp)}";
             return new OwnerQuestionResolution(candidate.Id, goalId, OwnerGoalTitle.Full(goal.Objective), candidate.Stage,
                 candidate.Question, answered ? "Answered" : candidate.Outcome,
-                answered ? Actor(answer.Intent) : "resolving actor not recorded", at,
-                answered ? answer.Payload.Text : null, answered ? answer.Payload.EvidenceReferences ?? [] : [], nextText);
+                answered ? Actor(answer.Intent) : candidate.AutoDefault is not null ? "the stale-wait policy" : "resolving actor not recorded", at,
+                answered ? answer.Payload.Text : candidate.AutoDefault?.Text, answered ? answer.Payload.EvidenceReferences ?? [] : [], nextText);
         }).OrderByDescending(item => item.ResolvedAt).ToArray();
     }
 
@@ -114,5 +116,5 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
         return string.Join("\n", result).TrimEnd();
     }
     private sealed record Candidate(string Id, string Stage, string Question, DateTimeOffset At, string Outcome,
-        OperatorAnswerTargetKind TargetKind);
+        OperatorAnswerTargetKind TargetKind, HumanInputAnswerRecord? AutoDefault = null);
 }
