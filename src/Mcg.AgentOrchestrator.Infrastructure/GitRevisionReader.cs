@@ -243,15 +243,13 @@ internal sealed class GitRevisionReader : IDisposable
             var info = new ProcessStartInfo("git")
             {
                 WorkingDirectory = AppContext.BaseDirectory,
-                UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardInputEncoding = new UTF8Encoding(false)
             };
-            // GitCli owns the launch contract; these private settings mirror its HardeningConfig.
-            foreach (var arg in new[] { "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
-                "-c", "gc.auto=0", "-c", "maintenance.auto=false", "--git-dir=" + gitDirectory,
+            // GitCli applies the shared launch contract to the persistent reader too.
+            foreach (var arg in new[] { "--git-dir=" + gitDirectory,
                 "cat-file", "--batch-check" }) info.ArgumentList.Add(arg);
-            info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+            GitCli.ApplyLaunchSettings(info, readCommand: true);
             var process = ProcessTreeGuiSuppression.Start(info);
             var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion);
             try
