@@ -200,7 +200,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             command,
             environmentContract + "; capture=owned-file-handles; inheritedHandles=stdout,stderr",
             beforeOwnedCaptureRead,
-            beforeOwnedExitObservation);
+            beforeOwnedExitObservation,
+            arguments.Count > 0 ? arguments[0] : string.Empty);
     }
 
     startInfo.RedirectStandardInput = true;
@@ -239,6 +240,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 };
         }
 
+        HostCapacitySlotGitCensus.RecordProbeLaunch(arguments.Count > 0 ? arguments[0] : string.Empty);
         childProcessId = process.Id;
         try
         {
@@ -366,7 +368,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     string command,
     string environmentContract,
     Action<string, string>? beforeCaptureRead,
-    Action<OwnedProcessGroup.SuspendedProcessStart>? beforeExitObservation)
+    Action<OwnedProcessGroup.SuspendedProcessStart>? beforeExitObservation,
+    string subcommand)
 {
     var repositoryDirectory = Path.GetFullPath(workingDirectory);
     // Capture files must live outside the probed repository tree. Seeded-repository fixtures
@@ -398,6 +401,7 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
             standardErrorPath);
         process = launch.Process;
         processStarted = true;
+        HostCapacitySlotGitCensus.RecordProbeLaunch(subcommand);
         standardOutputStream = OpenRetainedCaptureStream(standardOutputPath);
         standardErrorStream = OpenRetainedCaptureStream(standardErrorPath);
         command = FormatCommand(startInfo.FileName, startInfo.ArgumentList);
