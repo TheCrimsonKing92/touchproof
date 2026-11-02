@@ -159,6 +159,7 @@ internal sealed partial class ConductorDriver
     internal PassedGateHoldAttention? PassedGateHoldAttention { get; set; }
     internal PullRequestDeliveryTracker? PullRequestDeliveryTracker { get; set; }
     internal AwaitingVerificationGateAttention? AwaitingVerificationGateAttention { get; set; }
+    internal StalledEvidenceWaitAttention? StalledEvidenceWaitAttention { get; set; }
     internal Func<IEnumerable<Goal>, IReadOnlyList<string>>? RefreshHeldGateReceipts { get; set; }
     internal readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
