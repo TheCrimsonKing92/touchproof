@@ -8,6 +8,20 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
 
     public static HostCapacitySlotGitCensus Shared { get; } = new(HostCapacitySlotTimingWriter.CurrentTestName);
 
+    private static Func<Action?>? currentTestAcquisition;
+
+    // Installed independently of the optional census destination: capacity applies even
+    // when no telemetry is requested. Resolve the owner in the launching ExecutionContext.
+    public static void RegisterAcquisitionResolver(Func<Action?> resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+        if (Interlocked.CompareExchange(ref currentTestAcquisition, resolver, null) is not null)
+            throw new InvalidOperationException("The test capacity acquisition resolver is already registered.");
+        Interlocked.CompareExchange(ref GitCli.LaunchStarting, BeforeLaunch, null);
+    }
+
+    public static void BeforeLaunch() => Volatile.Read(ref currentTestAcquisition)?.Invoke()?.Invoke();
+
     public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands);
 
     public static bool EnsureInstalled(string? destination) =>

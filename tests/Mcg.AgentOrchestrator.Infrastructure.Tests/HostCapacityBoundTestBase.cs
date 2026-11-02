@@ -1,8 +1,6 @@
 /// <summary>
-/// Base for fixtures whose cost is host capacity: real git subprocesses, real worktrees,
-/// SQLite state files and build-permit directories. Each test holds one slot of
-/// <see cref="HostCapacityTestBudget"/> for its whole body, so these families overlap at a
-/// bounded degree of parallelism instead of an unbounded one.
+/// Base for fixtures that hold one slot of <see cref="HostCapacityTestBudget"/> from
+/// their first observed git launch until disposal. Tests without git never take a slot.
 ///
 /// This replaces the removed all-or-nothing GoalWorktreeCleanupHooks serialization. It is
 /// deliberately weaker: it admits several tests at once and imposes no ordering, so it
@@ -10,10 +8,20 @@
 /// </summary>
 public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
 {
+    private static readonly AsyncLocal<HostCapacityBoundTestBase?> CurrentOwner = new();
     private readonly object capacityGate = new();
     private Task<IAsyncDisposable>? capacityAcquisition;
     private Task? capacityDisposal;
     private bool disposed;
+
+    static HostCapacityBoundTestBase() =>
+        HostCapacitySlotGitCensus.RegisterAcquisitionResolver(() =>
+        {
+            var owner = CurrentOwner.Value ?? Xunit.TestContext.Current.TestClassInstance as HostCapacityBoundTestBase;
+            return owner is null ? null : owner.EnsureHostCapacity;
+        });
+
+    protected HostCapacityBoundTestBase() => CurrentOwner.Value = this;
 
     /// <summary>
     /// The budget this fixture draws from. Overridden only by the controls that verify the
@@ -21,10 +29,10 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     /// </summary>
     private protected virtual HostCapacityTestBudget CapacityBudget => HostCapacityTestBudget.Shared;
 
-    public virtual ValueTask InitializeAsync() => EnsureHostCapacityAsync();
+    public virtual ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    /// <summary>One acquisition point for both eager fixtures and resource-using CLI helpers.</summary>
-    private protected async ValueTask EnsureHostCapacityAsync()
+    /// <summary>One per-test acquisition shared by concurrent first git launches.</summary>
+    private async ValueTask EnsureHostCapacityAsync()
     {
         Task<IAsyncDisposable> acquisition;
         lock (capacityGate)
@@ -45,7 +53,10 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
         }
     }
 
-    private protected void EnsureHostCapacity() =>
+    // Blocking the launching thread is safe: the semaphore is process-local and this test
+    // holds no other capacity slot, so it cannot form a circular slot wait. Continuations
+    // use ConfigureAwait(false); acquisition does not need the blocked runner context.
+    private void EnsureHostCapacity() =>
         EnsureHostCapacityAsync().GetAwaiter().GetResult();
 
     public virtual ValueTask DisposeAsync()
