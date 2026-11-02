@@ -9,6 +9,7 @@ internal static class CliReadOnlyCommandRunner
         EpicOutcomeMigrationProposals.IsCommand(args) ||
         CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
         CliStorageHealthQueryCommand.IsStorageHealthQueryCommand(args) ||
+        CliGateStatsQueryCommand.IsGateStatsQueryCommand(args) ||
         CliBuildAttributionQueryCommand.IsBuildAttributionQueryCommand(args) ||
         CliOperatorIntentCoverageQueryCommand.IsIntentCoverageQueryCommand(args) ||
         CliRemoteExecutorsQueryCommand.IsCommand(args) ||
@@ -54,6 +55,7 @@ internal static class CliReadOnlyCommandRunner
         if (EpicOutcomeMigrationProposals.IsCommand(args)) { EpicOutcomeMigrationProposals.Execute(args, workspace); changed = false; return true; }
         if (CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args)) { CliFailureClustersQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliStorageHealthQueryCommand.IsStorageHealthQueryCommand(args)) { CliStorageHealthQueryCommand.Execute(args, workspace); changed = false; return true; }
+        if (CliGateStatsQueryCommand.IsGateStatsQueryCommand(args)) { CliGateStatsQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliBuildAttributionQueryCommand.IsBuildAttributionQueryCommand(args)) { CliBuildAttributionQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliOperatorIntentCoverageQueryCommand.IsIntentCoverageQueryCommand(args)) { CliOperatorIntentCoverageQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRemoteExecutorsQueryCommand.IsCommand(args)) { CliRemoteExecutorsQueryCommand.Execute(args, workspace); changed = false; return true; }
