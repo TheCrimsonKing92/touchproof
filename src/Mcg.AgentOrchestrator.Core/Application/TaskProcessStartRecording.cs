@@ -3,7 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 // Owns the task-local transition from a prepared dispatch to its matching running process.
 internal static class TaskProcessStartRecording
 {
-    internal static void Record(TaskSpec task, TaskProcessRecord process)
+    internal static void Record(IGoalLifecycleEventWriter writer, GoalId goalId, TaskSpec task, TaskProcessRecord process)
     {
         if (task.LastDispatch is null)
         {
@@ -27,6 +27,6 @@ internal static class TaskProcessStartRecording
             string.IsNullOrWhiteSpace(receipt.ReservationOwnerId));
         if (ownerlessAdmission is not null)
             task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
-        task.SetStatus(WorkTaskStatus.Running);
+        TaskStatusTransitionRecorder.Record(writer, goalId, task.SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.TaskProcessStartRecordingRecord);
     }
 }

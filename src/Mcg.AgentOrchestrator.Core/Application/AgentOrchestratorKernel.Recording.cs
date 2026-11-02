@@ -107,7 +107,7 @@ public sealed partial class AgentOrchestratorKernel
             task.ClearLastDispatch();
             task.ClearLastProcess();
             task.ClearLatestVerification();
-            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultStaleDispatch);
             Append(
                 goal,
                 taskId,
@@ -413,7 +413,7 @@ public sealed partial class AgentOrchestratorKernel
             {
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
-                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultTerminalContractRepair);
                 Append(goal, taskId, ProgressKind.TaskRetried,
                     $"{task.RequiredRole} terminal contract repair {repairs}/{VerificationContractRepairLimit}; same-role retry: {outcome.EvidenceSummary}");
                 RefreshGoalStatus(goal);
@@ -440,7 +440,7 @@ public sealed partial class AgentOrchestratorKernel
             var recoverableLimitFailures = SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task);
             task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
             task.ClearLatestVerification();
-            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultSubscriptionLimit);
             var message = recoverableLimitFailures >= DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold
                 ? $"Dispatch hit a recoverable subscription usage limit {recoverableLimitFailures} time(s); review model, profile, or timing before redispatch: {task.LastDispatch.Command}"
                 : $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch.Command}";
@@ -458,7 +458,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
-                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultProviderConnectivity);
                 Append(
                     goal,
                     taskId,
@@ -488,7 +488,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(detachedRounds));
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
-                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultDetachedWithoutWorkerResult);
                 Append(
                     goal,
                     taskId,
@@ -514,7 +514,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(interruptionFailures));
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
                 task.ClearLatestVerification();
-                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned), TaskStatusTransitionRecorder.RecordingRecordDispatchExecutionResultProviderInterruption);
                 Append(
                     goal,
                     taskId,
@@ -1741,7 +1741,7 @@ public sealed partial class AgentOrchestratorKernel
         };
         dispatch = dispatch with { InconclusiveRoundInputs = TesterInconclusiveRoundInputsReader.Capture(goal, task, dispatch.CandidateIdentity) };
         task.RecordDispatch(dispatch);
-        task.SetStatus(WorkTaskStatus.Running);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.RecordingRecordTaskDispatch);
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.RecordingRecordTaskDispatch);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
     }
@@ -1968,7 +1968,7 @@ public sealed partial class AgentOrchestratorKernel
             .FirstOrDefault();
         if (target is not null && target.Status is WorkTaskStatus.Failed or WorkTaskStatus.Completed)
         {
-            ResetTaskForRetry(target, _clock.UtcNow, retryCause: receipt.Cause);
+            ResetTaskForRetry(goal.Id, target, _clock.UtcNow, retryCause: receipt.Cause);
             Append(goal, target.Id, ProgressKind.TaskRetried, $"{marker}; routed from held task {heldTask.Id.Value}.");
         }
 
@@ -2023,7 +2023,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        TaskProcessStartRecording.Record(task, process);
+        TaskProcessStartRecording.Record(_eventWriter, goal.Id, task, process);
         if (!IsReopenProtectedGoalStatus(goal.Status))
             GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.RecordingRecordTaskProcessStarted);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
@@ -2149,11 +2149,11 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordProcess(process);
         if (process.WasCancelledByConductor)
         {
-            task.SetConductorCancelledStatus();
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetConductorCancelledStatus(), TaskStatusTransitionRecorder.RecordingRecordTaskProcessCancelledConductor);
         }
         else
         {
-            task.SetStatus(WorkTaskStatus.Cancelled);
+            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Cancelled), TaskStatusTransitionRecorder.RecordingRecordTaskProcessCancelled);
         }
         goal.RestoreAcceptanceFailureAfterRetryCancellation();
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
@@ -2215,7 +2215,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        task.SetStatus(WorkTaskStatus.Completed);
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Completed), TaskStatusTransitionRecorder.RecordingTryCompleteTaskWithPassingVerification);
         Append(goal, task.Id, ProgressKind.TaskCompleted, message);
         ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);
         return true;
