@@ -117,6 +117,8 @@ public sealed class ObligationRebindVerbTests
     [InlineData("Fixture.OldTests", "NewTests")]
     [InlineData("OldTests", "Fixture.NewTests")]
     [InlineData("OldTests", "OldTests")]
+    [InlineData("\u00C4OldTests", "NewTests")]
+    [InlineData("OldTests", "\u00C4NewTests")]
     [InlineData("@OldTests", "NewTests")]
     [InlineData("OldTests ", "NewTests")]
     [InlineData("\\u004FldTests", "NewTests")]
