@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    internal void RecordGoalStatusTransition(GoalStatusChange change, string site) => GoalStatusTransitionRecorder.Record(_eventWriter, change, site);
     private void RefreshGoalStatus(Goal goal, bool allowParkedRefresh = false)
     {
         ReconcileAssignedPassingVerification(goal);
@@ -27,17 +28,17 @@ public sealed partial class AgentOrchestratorKernel
                 candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
                 HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
-            goal.SetStatus(GoalStatus.WaitingForHuman);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.WaitingForHuman), GoalStatusTransitionRecorder.InternalStateRefreshGoalStatusBlockingHumanWait);
             return;
         }
 
         if (goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
         {
-            goal.SetStatus(GoalStatus.Verified);
+            GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Verified), GoalStatusTransitionRecorder.InternalStateRefreshGoalStatusAllGatesPassed);
             return;
         }
 
-        goal.SetStatus(GoalStatus.Active);
+        GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.InternalStateRefreshGoalStatusResumeActive);
     }
 
     private static bool IsTerminalGoalStatus(GoalStatus status) =>
