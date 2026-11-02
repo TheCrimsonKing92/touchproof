@@ -90,15 +90,16 @@ public sealed class PullRequestBodyPathRedactionTests
     }
 
     [Theory]
-    [InlineData(".orchestrator/goal-events/x.jsonl")]
-    [InlineData("docs/.orchestrator/goal-events/x.jsonl")]
-    [InlineData("ghp_example_access_string")]
-    public void Render_ProhibitedWord_RedactsEntireWord(string word)
+    [InlineData(".orchestrator/goal-events/x.jsonl", "1. Inspect [redacted]")]
+    [InlineData("docs/.orchestrator/goal-events/x.jsonl", "1. Inspect [redacted]")]
+    [InlineData("ghp_example_access_string", "1. Inspect `[redacted]`.")]
+    public void Render_ProhibitedWord_RedactsEntireWord(string word, string expectedCriterion)
     {
         var rendered = PullRequestBodyRenderer.Render(CriterionGoal($"Inspect `{word}`."),
             "gate-attempt-1", ["unit"]);
 
-        Assert.Contains("1. Inspect `[redacted]`.", rendered.Body);
+        // Orchestrator words include surrounding punctuation; forge tokens do not.
+        Assert.Contains(expectedCriterion, rendered.Body.Split(Environment.NewLine));
         Assert.DoesNotContain(word, rendered.Body, StringComparison.OrdinalIgnoreCase);
     }
 
