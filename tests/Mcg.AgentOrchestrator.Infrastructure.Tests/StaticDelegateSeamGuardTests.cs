@@ -183,8 +183,10 @@ public sealed class StaticDelegateSeamGuardTests
         Assert.Equal(new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goalId.Value[..8]}"), evidence);
     }
 
-    [Fact]
-    public void ProgressiveReviewGlanceReadsEveryDiffThroughInjectedRunner()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProgressiveReviewGlanceReadsEveryDiffThroughInjectedRunner(bool throughConstructor)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-injected-glance-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -207,7 +209,34 @@ public sealed class StaticDelegateSeamGuardTests
                 });
             }
 
-            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base", Fake);
+            string diff;
+            if (throughConstructor)
+            {
+                var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+                var kernel = new AgentOrchestratorKernel();
+                var task = new TaskSpec(new TaskId("injected-git-task"), "Implement feature.", AgentRole.Developer);
+                var goal = kernel.CreateGoal(new GoalId("injected-git-goal"), "Review injected diff", [task]);
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskDispatch(goal.Id, task.Id,
+                    new TaskDispatchRecord("codex-cli", "codex exec", root, now, BaseCommit: "base"));
+                var reviewer = new CapturingGlanceRunner();
+                var coordinator = new ProgressiveReviewGlanceCoordinator(
+                    reviewer, NullGoalLifecycleEventWriter.Instance,
+                    new CollaborationItemStore(Path.Combine(root, "items.db")),
+                    new ProgressiveReviewGlanceOptions(ChangedFileThreshold: 1),
+                    utcNow: () => now,
+                    liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["new.txt"], ["new.txt"], 0),
+                    transcriptReader: _ => "transcript",
+                    gitRunner: Fake);
+
+                _ = coordinator.Observe(kernel, [goal]);
+
+                diff = Assert.Single(reviewer.Calls).DiffExcerpt;
+            }
+            else
+            {
+                diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base", Fake);
+            }
 
             Assert.Equal(new[]
             {
@@ -224,6 +253,19 @@ public sealed class StaticDelegateSeamGuardTests
     }
 
     private static GitCli.GitResult Success(string output) => new(0, output, string.Empty);
+
+    private sealed class CapturingGlanceRunner : IProgressiveReviewGlanceRunner
+    {
+        public List<ProgressiveReviewGlanceInputs> Calls { get; } = [];
+
+        public Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
+            ProgressiveReviewGlanceInputs inputs, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(inputs);
+            return Task.FromResult(new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.OnTrack, "ok", "ok"));
+        }
+    }
 
     private static IReadOnlyList<Seam> Scan(params (string Path, SyntaxTree Tree)[] sources)
     {

@@ -384,6 +384,7 @@ internal sealed record TerminalGoalSweepCacheSweepFacts(
 
 internal static partial class TerminalGoalSweep
 {
+    private static readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> DefaultGitRunner = GoalGitFactIndex.RunGitCli;
     private static readonly AsyncLocal<GitSpawnCounter?> CurrentGitSpawnCounter = new();
 
     private sealed class GitSpawnCounter
@@ -415,7 +416,7 @@ internal static partial class TerminalGoalSweep
         CohortAcceptanceStore? cohortAcceptanceStore = null,
         bool reclaimGoalRoots = false)
     {
-        gitRunner ??= GoalGitFactIndex.RunGitCli;
+        gitRunner ??= DefaultGitRunner;
         var gitRunnerIdentity = gitRunner;
         var gitSpawnCounter = new GitSpawnCounter();
         using var gitSpawnCounterScope = new GitSpawnCounterScope(gitSpawnCounter);
