@@ -1795,25 +1795,12 @@ public sealed partial class AgentOrchestratorKernel
             resumeCommand).Request;
     }
 
-    // Publish only a completed, goal-scoped record; recording operator evidence
-    // must never hold tasks or refresh (and potentially reopen) goal status.
     public HumanInputRequest RecordAnsweredOperatorHumanInput(GoalId goalId, string question, string answer)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(question);
-        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
         lock (_humanInputRequestLock)
         {
-            var goal = GetGoal(goalId);
-            if (IsReopenProtectedGoalStatus(goal.Status))
-                throw new InvalidOperationException("Cannot record operator evidence on a terminal goal.");
-            var now = _clock.UtcNow;
-            var request = new HumanInputRequest(HumanInputRequestId.New(), goalId, taskId: null,
-                question, now, HumanWaitKind.Other, isAutoDefaultable: false, isDismissible: false);
-            request.Complete(answer, now, origin: HumanInputAnswerOrigin.Operator,
-                briefVersion: goal.AuthoritativeBrief.Version);
-            Append(goal, null, ProgressKind.HumanInputReceived, answer);
-            _humanInputRequests.Add(request.Id, request);
-            return request;
+            return AnsweredOperatorHumanInputRecorder.Record(GetGoal(goalId), question, answer, _clock.UtcNow,
+                _humanInputRequests, (g, t, k, message) => Append(g, t, k, message));
         }
     }
 
@@ -1990,20 +1977,8 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     private void ResetAnsweredHumanInputSuppressionStreaks(
-        GoalId goalId,
-        TaskId? taskId,
-        HumanInputRequestId? exceptRequestId)
-    {
-        foreach (var request in _humanInputRequests.Values.Where(candidate =>
-                     candidate.GoalId == goalId &&
-                     candidate.TaskId == taskId &&
-                     candidate.IsCompleted &&
-                     !candidate.WasDismissed &&
-                     candidate.Id != exceptRequestId))
-        {
-            request.ResetSuppressionCount();
-        }
-    }
+        GoalId goalId, TaskId? taskId, HumanInputRequestId? exceptRequestId) =>
+        HumanInputSuppression.ResetAnsweredStreaks(_humanInputRequests.Values, goalId, taskId, exceptRequestId);
 
     internal void ResetAnsweredHumanInputSuppressionStreaks(GoalId goalId, TaskId taskId)
     {
