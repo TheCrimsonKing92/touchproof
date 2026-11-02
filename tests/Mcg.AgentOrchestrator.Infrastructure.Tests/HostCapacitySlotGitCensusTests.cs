@@ -288,5 +288,5 @@ public sealed class HostCapacitySlotGitCensusTests : IDisposable
         Assert.Equal(expected.OrderBy(pair => pair.Key), actual.OrderBy(pair => pair.Key));
     }
 
-    public void Dispose() => Directory.Delete(root, recursive: true);
+    public void Dispose() => SharedTestSupport.RemoveTempDirectory(root);
 }
