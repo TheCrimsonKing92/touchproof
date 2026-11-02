@@ -70,7 +70,9 @@ internal static class GateTestObligationEvaluator
         {
             if (GateTestObligationWaivers.FindWaiver(goal, obligation) is { } waiver)
                 return new Result(obligation, Outcome.Waived, obligation.Selectors, null, waiver.WaiverReason);
-            var original = EvaluateObligation(obligation, sources, orchestratorDirectory);
+            var effective = answeredRequests is null ? obligation :
+                AnsweredSelectorRebinding.ApplySelectorEdits(goal, obligation, answeredRequests);
+            var original = EvaluateObligation(effective, sources, orchestratorDirectory);
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
                 ? FollowRenames(original, sources, orchestratorDirectory, renames.Value) : original;

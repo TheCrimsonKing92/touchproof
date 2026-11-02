@@ -706,10 +706,12 @@ internal static class CliCommandHelp
         ImpactReplayUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
         ["--since", "--limit", "--out", "--floor", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
-    public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
+        "       obligation-rebind <goal-prefix> --selector \"<old selector>\" --to \"<new selector>\" --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
+        "       obligation-rebind <goal-prefix> --selector \"<old selector>\" --drop --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
     private static readonly CommandHelpEntry ObligationRebind = new(
         ObligationRebindUsage, "Queue an operator class rebind for a pending gate test obligation at the current brief on the next tick.",
-        ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+        ["--selector", "--to", "--drop", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry GateCancel = new(
         GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
         ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
