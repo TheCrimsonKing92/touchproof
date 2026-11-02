@@ -588,7 +588,7 @@ internal static class SourceSizeRatchet
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
-            new SourceClassCeiling("CliCommandHandlers", 11030, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11029, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

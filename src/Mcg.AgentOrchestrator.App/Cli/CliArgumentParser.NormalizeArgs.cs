@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -643,7 +644,7 @@ private static bool LooksLikeAttentionClarificationId(string value)
 {
     if (value.Length > 0 && value.Length <= 32 && value.All(Uri.IsHexDigit))
         return true;
-    if (value.StartsWith("spec-clarification:", StringComparison.Ordinal))
+    if (SpecClarificationKey.IsSpecClarification(value))
         return true;
 
     return value.Contains('-', StringComparison.Ordinal) &&
