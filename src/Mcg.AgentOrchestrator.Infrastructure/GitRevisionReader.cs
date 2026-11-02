@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -214,6 +215,8 @@ internal sealed class GitRevisionReader : IDisposable
     internal sealed class ReaderProcess
     {
         private readonly Process process;
+        private readonly string packedRefsPath;
+        private readonly string packedRefsVersion;
         private readonly object terminationGate = new();
         private readonly BlockingCollection<Request> requests = new();
         private int stopped;
@@ -223,10 +226,20 @@ internal sealed class GitRevisionReader : IDisposable
         internal long LastCompleted;
         internal bool HasExited => exited;
 
-        private ReaderProcess(Process process) => this.process = process;
+        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion)
+        {
+            this.process = process;
+            this.packedRefsPath = packedRefsPath;
+            this.packedRefsVersion = packedRefsVersion;
+        }
 
         internal static ReaderProcess Start(string gitDirectory)
         {
+            var commonDirectoryFile = Path.Combine(gitDirectory, "commondir");
+            var commonDirectory = File.Exists(commonDirectoryFile)
+                ? Path.GetFullPath(File.ReadAllText(commonDirectoryFile).Trim(), gitDirectory) : gitDirectory;
+            var packedRefsPath = Path.Combine(commonDirectory, "packed-refs");
+            var packedRefsVersion = ReadPackedRefsVersion(packedRefsPath);
             var info = new ProcessStartInfo("git")
             {
                 WorkingDirectory = AppContext.BaseDirectory,
@@ -239,8 +252,8 @@ internal sealed class GitRevisionReader : IDisposable
                 "-c", "gc.auto=0", "-c", "maintenance.auto=false", "--git-dir=" + gitDirectory,
                 "cat-file", "--batch-check" }) info.ArgumentList.Add(arg);
             info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-            var process = Process.Start(info) ?? throw new IOException("failed to start git process");
-            var reader = new ReaderProcess(process);
+            var process = ProcessTreeGuiSuppression.Start(info);
+            var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion);
             try
             {
                 // Notify on the querying thread, preserving census/test identity and source frames.
@@ -261,9 +274,24 @@ internal sealed class GitRevisionReader : IDisposable
         internal string? Query(string revision, int timeoutMilliseconds)
         {
             if (Volatile.Read(ref stopped) != 0 || process.HasExited) return null;
+            // cat-file retains packed refs across requests. Invalidate before trusting any answer
+            // after their contents change, including same-size/timestamp replacements. Returning
+            // null discards this process and confirms the query through fresh one-shot Git state.
+            if (ReadPackedRefsVersion(packedRefsPath) != packedRefsVersion) return null;
             var request = new Request(revision);
             if (!requests.TryAdd(request)) return null;
             return request.Answer.Task.Wait(timeoutMilliseconds) && !process.HasExited ? request.Answer.Task.Result : null;
+        }
+
+        private static string ReadPackedRefsVersion(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                return Convert.ToHexString(SHA256.HashData(stream));
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return string.Empty; }
         }
 
         private void Run()

@@ -79,6 +79,59 @@ public sealed class GitRevisionReaderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_PackedRefReplacedWithSameMetadata_SeesNewTarget()
+    {
+        var repo = CreateRepository();
+        Git(repo, "branch", "packed");
+        Git(repo, "pack-refs", "--all");
+        var original = Oracle(repo, "packed");
+        AssertResolved(reader, repo, "packed", original);
+        Git(repo, "commit", "--allow-empty", "-m", "new target");
+        var updated = Oracle(repo, "HEAD");
+        Assert.NotEqual(original, updated);
+
+        var packedRefs = Path.Combine(repo, ".git", "packed-refs");
+        var contents = File.ReadAllText(packedRefs);
+        var timestamp = File.GetLastWriteTimeUtc(packedRefs);
+        var length = new FileInfo(packedRefs).Length;
+        Assert.Contains(original + " refs/heads/packed", contents, StringComparison.Ordinal);
+        var replacement = packedRefs + ".replacement";
+        File.WriteAllText(replacement, contents.Replace(original + " refs/heads/packed",
+            updated + " refs/heads/packed", StringComparison.Ordinal), new System.Text.UTF8Encoding(false));
+        File.SetLastWriteTimeUtc(replacement, timestamp);
+        File.Move(replacement, packedRefs, overwrite: true);
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(packedRefs));
+        Assert.Equal(length, new FileInfo(packedRefs).Length);
+        Assert.False(File.Exists(Path.Combine(repo, ".git", "refs", "heads", "packed")));
+        Assert.Equal(updated, Oracle(repo, "packed"));
+
+        AssertResolved(reader, repo, "packed", updated);
+        AssertResolved(reader, repo, "packed", updated); // Replacement reader also sees the target.
+    }
+
+    [Fact]
+    public void Resolve_LinkedWorktree_SeesCommonPackedRefsChange()
+    {
+        var repo = CreateRepository();
+        var original = Oracle(repo, "HEAD");
+        Git(repo, "branch", "packed");
+        Git(repo, "pack-refs", "--all");
+        var linked = Path.Combine(root, "linked");
+        Git(repo, "worktree", "add", "--detach", linked, original);
+        AssertResolved(reader, linked, "packed", original);
+
+        Git(repo, "commit", "--allow-empty", "-m", "new common target");
+        var updated = Oracle(repo, "HEAD");
+        Assert.NotEqual(original, updated);
+        Git(repo, "update-ref", "refs/heads/packed", updated);
+        Git(repo, "pack-refs", "--all");
+        Assert.False(File.Exists(Path.Combine(repo, ".git", "refs", "heads", "packed")));
+
+        AssertResolved(reader, linked, "packed", updated);
+        AssertResolved(reader, linked, "HEAD", original);
+    }
+
+    [Fact]
     public void Resolve_ExternalCommit_IsVisibleOnNextQuery()
     {
         var repo = CreateRepository();
