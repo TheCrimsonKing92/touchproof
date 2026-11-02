@@ -49,6 +49,7 @@ public interface IGoalLifecycleEventWriter
         string reason,
         string capturedAcceptanceCriteriaHash);
     void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) { }
+    void AppendGoalStatusTransition(GoalId goalId, GoalStatus from, GoalStatus to, string site) { }
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch, LandingAdmissionReceipt receipt) =>
         AppendGoalLanded(goalId, integrationBranch, goalBranch);

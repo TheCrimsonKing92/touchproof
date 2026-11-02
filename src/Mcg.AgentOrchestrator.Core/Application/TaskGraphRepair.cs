@@ -55,7 +55,7 @@ public static class TaskGraphRepair
         foreach (var item in parsed)
             kernel.AddTask(goalId, item.Role, item.Description, beforeRole: item.Before);
         if (goal.Status == GoalStatus.Verified)
-            goal.SetStatus(GoalStatus.Active);
+            kernel.RecordGoalStatusTransition(goal.SetStatus(GoalStatus.Active), GoalStatusTransitionRecorder.TaskGraphRepairApply);
     }
 
     private static bool TryRole(string? value, out AgentRole role) =>
