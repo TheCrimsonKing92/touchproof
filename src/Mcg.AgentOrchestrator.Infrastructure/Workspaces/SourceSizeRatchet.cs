@@ -141,7 +141,7 @@ internal static class SourceSizeRatchet
             // Goal 387027bb adds three integration lines for the separately owned acceptance retry hold gate.
             // Goal 5ca3f5c0: six property/construction lines wire the separately owned PR tracker and landing receipt.
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1708),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1693),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -551,7 +551,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
-            new SourceClassCeiling("ConductorDriver", 14381, 70),
+            new SourceClassCeiling("ConductorDriver", 14366, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
