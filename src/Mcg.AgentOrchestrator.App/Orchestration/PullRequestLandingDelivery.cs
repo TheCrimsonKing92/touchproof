@@ -41,9 +41,12 @@ internal static class PullRequestLandingDelivery
         }
 
         if (RefreshStopped(goal)) return Result("landing mutation blocked: pull request refresh stopped");
+        if (PullRequestReviewRound.Stopped(goal)) return Result("landing mutation blocked: pull request review round stopped");
         var refreshing = HasRefreshStarted(goal);
+        var reviewRound = PullRequestReviewRound.InFlight(goal)
+            ? PullRequestReviewRound.Started(goal, goal.DeliveredForReview!.Url) : (int?)null;
         var previousDelivery = goal.DeliveredForReview;
-        if (goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
+        if (reviewRound is null && goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
             return Result($"delivered for review: {delivered.Url}" + ActingSuffix(delivered.ActingLogin));
         if (mutationBlocker?.Invoke() is { Length: > 0 } blocked)
             return Result($"landing mutation blocked: {blocked}");
@@ -77,6 +80,7 @@ internal static class PullRequestLandingDelivery
         }
 
         if (RefreshStopped(goal)) return Result("landing mutation blocked: pull request refresh stopped");
+        if (PullRequestReviewRound.Stopped(goal)) return Result("landing mutation blocked: pull request review round stopped");
         var publication = publisher.Publish(request);
         if (!publication.Succeeded)
         {
@@ -103,6 +107,9 @@ internal static class PullRequestLandingDelivery
         if (refreshing && previousDelivery is not null)
             kernel.RecordGoalPolicyDecision(goal.Id,
                 $"pull request refreshed: {publication.Url} pushed={publication.PushedCommit} previous={previousDelivery.PushedCommit}");
+        if (reviewRound is not null)
+            kernel.RecordGoalPolicyDecision(goal.Id,
+                $"{PullRequestReviewRound.DeliveredPrefix}{publication.Url} round={reviewRound} pushed={publication.PushedCommit}");
         return Result($"delivered for review: {publication.Url}" + ActingSuffix(publication.ActingLogin), stateChanged: true);
     }
 

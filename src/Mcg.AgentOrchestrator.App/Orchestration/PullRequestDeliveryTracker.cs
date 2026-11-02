@@ -91,11 +91,13 @@ internal sealed class PullRequestDeliveryTracker
             case PullRequestStatusKind.Open:
                 _unavailable.Remove(goal.Id);
                 RecordChangesRequested(goal, delivery, status);
+                StartReviewRound(goal, delivery, status);
                 if (!PullRequestLandingDelivery.HasRefreshStarted(goal)) Refresh(goal, delivery);
                 return;
             case PullRequestStatusKind.ClosedUnmerged:
                 ResolveChangesRequested(goal, "pull request closed unmerged");
                 _unavailable.Remove(goal.Id);
+                StopReviewRound(goal, delivery, "closed unmerged");
                 if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
                     _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "closed unmerged " + delivery.Url);
                 var reason = PullRequestLandingDelivery.ClosedUnmergedPrefix + delivery.Url;
@@ -107,9 +109,11 @@ internal sealed class PullRequestDeliveryTracker
                 return;
             case PullRequestStatusKind.Merged:
                 ResolveChangesRequested(goal, "pull request merged");
+                StopReviewRound(goal, delivery, "merged");
                 if (PullRequestLandingDelivery.HasRefreshStarted(goal) && !PullRequestLandingDelivery.RefreshStopped(goal))
                     _kernel.RecordGoalPolicyDecision(goal.Id, PullRequestLandingDelivery.RefreshStoppedPrefix + "merged " + delivery.Url);
                 if (!IsRevision(status.MergeCommit)) { Unavailable(goal, "merged response has no usable merge commit"); return; }
+                if (PullRequestReviewRound.HasStarted(goal) && !PrepareRoundForMerge(goal)) return;
                 Land(goal, delivery, status.MergeCommit!);
                 return;
             default: throw new InvalidOperationException("Unknown pull request tracking outcome.");
@@ -121,15 +125,12 @@ internal sealed class PullRequestDeliveryTracker
         if (status.ReviewDecision != "CHANGES_REQUESTED")
         { ResolveChangesRequested(goal, "pull request review decision is no longer changes requested"); return; }
         // Use timeline order to scope refreshes to this delivery, including on a fixed clock.
-        var boundary = goal.Timeline.Reverse().Where(item => item.Kind == ProgressKind.GoalPolicyDecision)
-            .TakeWhile(item => !PullRequestLandingDelivery.IsDeliveredForReview(item.Message))
-            .Where(item => item.Message.StartsWith(PullRequestLandingDelivery.RefreshStartedPrefix, StringComparison.Ordinal))
-            .Select(item => item.OccurredAt).Append(delivery.DeliveredAt).Max();
+        var boundary = ReviewBoundary(goal, delivery);
         var batch = (status.ChangesRequested ?? []).Where(review => review.SubmittedAt > boundary)
             .OrderBy(review => review.Login, StringComparer.Ordinal).ThenBy(review => review.SubmittedAt).ToArray();
         if (batch.Length == 0) return;
         var latest = batch.Max(review => review.SubmittedAt).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
-        var prefix = "pull request changes requested: " + delivery.Url + " ";
+        var prefix = PullRequestReviewRound.BatchPrefix + delivery.Url + " ";
         if (goal.Timeline.Any(item => item.Kind == ProgressKind.GoalPolicyDecision &&
             item.Message.StartsWith(prefix, StringComparison.Ordinal) &&
             item.Message.EndsWith(" latest=" + latest, StringComparison.Ordinal))) return;
@@ -138,9 +139,68 @@ internal sealed class PullRequestDeliveryTracker
         var excerpts = string.Join("; ", batch.Select(review => $"{review.Login}: \"{review.Body.Replace("\"", "\"\"")}\""));
         _attention.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Pull request changes requested",
             ForgeDiagnosticRedactor.Redact($"{delivery.Url}. Project decider: {decider}. Reviews: {excerpts}. " +
-                "A Developer round from reviews is not yet automatic."), "pr-changes-requested:" + goal.Id.Value)
+                "A Developer review round addresses this batch."), "pr-changes-requested:" + goal.Id.Value)
             .GetAwaiter().GetResult();
         _kernel.RecordGoalPolicyDecision(goal.Id, $"{prefix}reviewers={reviewers} latest={latest}");
+    }
+
+    private static DateTimeOffset ReviewBoundary(Goal goal, GoalDeliveredForReview delivery) =>
+        goal.Timeline.Reverse().Where(item => item.Kind == ProgressKind.GoalPolicyDecision)
+            .TakeWhile(item => !PullRequestLandingDelivery.IsDeliveredForReview(item.Message))
+            .Where(item => item.Message.StartsWith(PullRequestLandingDelivery.RefreshStartedPrefix, StringComparison.Ordinal))
+            .Select(item => item.OccurredAt).Append(delivery.DeliveredAt).Max();
+
+    private void StartReviewRound(Goal goal, GoalDeliveredForReview delivery, PullRequestStatus status)
+    {
+        if (status.ReviewDecision != "CHANGES_REQUESTED" || goal.Status != GoalStatus.Verified ||
+            goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url ||
+            PullRequestLandingDelivery.HasRefreshStarted(goal) || PullRequestReviewRound.HasStarted(goal) ||
+            PullRequestReviewRound.Stopped(goal) || !PullRequestReviewRound.Pending(goal, delivery.Url)) return;
+        var boundary = PullRequestReviewRound.Boundary(goal, delivery.Url, ReviewBoundary(goal, delivery));
+        var batch = (status.ChangesRequested ?? []).Where(review => review.SubmittedAt > boundary)
+            .OrderBy(review => review.Login, StringComparer.Ordinal).ThenBy(review => review.SubmittedAt).ToArray();
+        if (batch.Length == 0) return;
+        var reviewers = string.Join(",", batch.Select(review => review.Login).Distinct(StringComparer.Ordinal));
+        var delivered = PullRequestReviewRound.Delivered(goal, delivery.Url);
+        if (delivered >= 3)
+        {
+            if (PullRequestReviewRound.CapRecorded(goal, delivery.Url)) return;
+            var decider = _workspace.DeliveryDecider ?? status.Repository!.Split('/')[0];
+            _attention.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Pull request review round cap reached",
+                ForgeDiagnosticRedactor.Redact($"{delivery.Url}. Project decider: {decider}. Delivered rounds={delivered}. Pending reviewers={reviewers}. Decide how to proceed."),
+                "pr-review-cap:" + goal.Id.Value).GetAwaiter().GetResult();
+            _kernel.RecordGoalPolicyDecision(goal.Id,
+                $"{PullRequestReviewRound.CapPrefix}{delivery.Url} rounds={delivered} reviewers={reviewers}");
+            return;
+        }
+        var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer)
+            ?? throw new InvalidOperationException("Pull request review round has no Developer task.");
+        var round = PullRequestReviewRound.Started(goal, delivery.Url) + 1;
+        _kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, developer.Id,
+            PullRequestReviewRound.Guidance(delivery.Url, round, batch), RetryCause.ContractClarification,
+            invalidateDownstream: true, correctionSource: CriteriaCorrectionSource.Escalation);
+        _kernel.ClearGoalHold(goal.Id);
+        _kernel.RecordGoalPolicyDecision(goal.Id,
+            $"{PullRequestReviewRound.StartedPrefix}{delivery.Url} round={round} reviewers={reviewers}");
+    }
+
+    private void StopReviewRound(Goal goal, GoalDeliveredForReview delivery, string reason)
+    {
+        if (PullRequestReviewRound.InFlight(goal))
+            _kernel.RecordGoalPolicyDecision(goal.Id, $"{PullRequestReviewRound.StoppedPrefix}{delivery.Url} reason={reason}");
+    }
+
+    private bool PrepareRoundForMerge(Goal goal)
+    {
+        if (goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }))
+        { Unavailable(goal, "merged pull request review round still has a live task process"); return false; }
+        foreach (var task in goal.Tasks.Where(task => task.Status is not
+            (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed)).ToArray())
+            _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled,
+                "Pull request merged during review round.", correctionSource: CriteriaCorrectionSource.Escalation);
+        if (_kernel.DescribeMergeEvidenceCompletionRefusal(goal.Id) is { } refusal)
+        { Unavailable(goal, refusal); return false; }
+        return true;
     }
 
     private void ResolveChangesRequested(Goal goal, string reason) =>
@@ -173,7 +233,10 @@ internal sealed class PullRequestDeliveryTracker
         if (goal.SourceBacklogItemId is not null)
             GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, _workspace.BacklogStorePath,
                 Console.WriteLine, _kernel, root, integrateCommitSha: merge, stateDbPath: _workspace.SqliteStatePath);
-        _kernel.CompleteGoal(goal.Id, message);
+        if (goal.Status is GoalStatus.Verified or GoalStatus.Verifying)
+            _kernel.CompleteGoal(goal.Id, message);
+        else
+            _kernel.CompleteGoalFromMergeEvidence(goal.Id, merge, message);
         _unavailable.Remove(goal.Id);
     }
 
@@ -196,7 +259,9 @@ internal sealed class PullRequestDeliveryTracker
     private void Refresh(Goal goal, GoalDeliveredForReview delivery)
     {
         // Recovery owns failed attempts and operator holds; drift never starts a retry loop.
-        if (PullRequestLandingDelivery.RefreshStopped(goal) || goal.Status != GoalStatus.Verified ||
+        if (PullRequestLandingDelivery.RefreshStopped(goal) || PullRequestReviewRound.HasStarted(goal) ||
+            PullRequestReviewRound.Stopped(goal) || PullRequestReviewRound.CapRecorded(goal, delivery.Url) ||
+            goal.Status != GoalStatus.Verified ||
             goal.CurrentHold?.Blocker != "delivered for review: " + delivery.Url) return;
         if (!Fetch(goal)) return;
         var remote = Git("rev-parse", "--verify", "refs/remotes/origin/" + _workspace.IntegrationBranch);
@@ -239,7 +304,9 @@ internal sealed class PullRequestDeliveryTracker
     internal static bool IsEligible(Goal goal) => goal.DeliveredForReview is { } delivery &&
         ((goal.Status == GoalStatus.Verified && goal.CurrentHold?.Blocker == "delivered for review: " + delivery.Url) ||
          (goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
-          PullRequestLandingDelivery.HasRefreshStarted(goal)));
+          PullRequestLandingDelivery.HasRefreshStarted(goal)) ||
+         (goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded) &&
+          PullRequestReviewRound.HasStarted(goal)));
     private void Unavailable(Goal goal, string reason)
     {
         reason = ForgeDiagnosticRedactor.Redact(reason);
