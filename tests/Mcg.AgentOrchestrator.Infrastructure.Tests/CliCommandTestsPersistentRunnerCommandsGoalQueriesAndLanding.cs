@@ -208,39 +208,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         Xunit.Assert.Contains("already been answered", error.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_provenance_loads_completed_goals_on_demand")]
-    public void PersistentRunnerProvenanceLoadsCompletedGoalsOnDemand()
-    {
-        var root = CreateTempDirectory();
-        var kernel = new AgentOrchestratorKernel();
-        var completed = kernel.CreateGoal("Backed completed goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
-        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active provenance bystander");
-        kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
-        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
-            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
-        var repository = new InMemoryTransactionalStateRepository(kernel);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = active;
-
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["provenance"],
-            repository,
-            CreateRefinedWorkspace(root),
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal));
-
-        Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
-        Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
-        Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
-        Xunit.Assert.Contains("BACKED", output, StringComparison.Ordinal);
-    }
-
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_tick_merge_skip_formats_receipt")]
     public void PersistentRunnerTickMergeSkipFormatsReceipt()

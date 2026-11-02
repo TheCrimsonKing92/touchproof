@@ -229,11 +229,6 @@ internal static partial class CliPersistentStateRunner
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
-        if (IsProvenanceCommand(args))
-        {
-            return ExecuteProvenanceWithoutFullHydration(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
-        }
-
         if (IsSingleGoalReportCommand(args))
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -722,9 +717,6 @@ internal static partial class CliPersistentStateRunner
             _ => false
         };
     }
-
-    internal static bool IsProvenanceCommand(IReadOnlyList<string> args) =>
-        args.Count == 1 && args[0].Equals("provenance", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsSingleGoalReportCommand(IReadOnlyList<string> args) =>
         CliSingleGoalReportCommand.IsCommand(args);
@@ -1943,35 +1935,6 @@ internal static partial class CliPersistentStateRunner
             .Any(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool ExecuteProvenanceWithoutFullHydration(
-        IReadOnlyList<string> args,
-        ITransactionalOrchestratorStateRepository stateRepository,
-        OrchestratorWorkspace workspace,
-        ref IReadOnlyList<AgentDefinition> agents,
-        IModelProviderRegistry providers,
-        ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
-    {
-        var completedGoalIds = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
-            .Where(goal => goal.Status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase))
-            .Select(goal => new GoalId(goal.Id))
-            .ToArray();
-        var kernel = LoadGoalSnapshotsById(stateRepository, completedGoalIds);
-        currentGoal = null;
-
-        return CliCommandDispatcher.ExecuteCommand(
-            args,
-            kernel,
-            workspace,
-            ref agents,
-            providers,
-            ref workerProfiles,
-            ref currentGoal,
-            channel,
-            () => LoadGoalSnapshotsById(stateRepository, completedGoalIds));
-    }
-
     private static bool ExecuteBacklogIntakeOutsideTransaction(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -3164,24 +3127,6 @@ internal static partial class CliPersistentStateRunner
         }
 
         return kernel;
-    }
-
-    private static AgentOrchestratorKernel LoadGoalSnapshotsById(
-        ITransactionalOrchestratorStateRepository stateRepository,
-        IReadOnlyList<GoalId> goalIds,
-        CancellationToken cancellationToken = default)
-    {
-        var snapshots = new List<GoalSnapshot>(goalIds.Count);
-        foreach (var goalId in goalIds)
-        {
-            var snapshot = stateRepository.LoadGoalAsync(goalId, cancellationToken).GetAwaiter().GetResult();
-            if (snapshot is not null)
-            {
-                snapshots.Add(snapshot);
-            }
-        }
-
-        return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(snapshots, []));
     }
 
     private static AgentOrchestratorKernel KernelFromGoalSnapshot(

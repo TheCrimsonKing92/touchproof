@@ -29,7 +29,8 @@ internal sealed class OperatorIntentAdjudication(
         TaskSpec task,
         OperatorIntentRecord intent,
         AdjudicateOperatorIntentPayload payload,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool recordTimeline = true)
     {
         var shape = NormalizeShape(payload.Shape);
         var verifiedRegate = shape == "reopen-regate" && goal.Status == GoalStatus.Verified;
@@ -37,26 +38,10 @@ internal sealed class OperatorIntentAdjudication(
         var heldReceipt = verifiedRegate
             ? passedGateHold?.Invoke(goal) : null;
         manifest = PassedGateHoldEvidence.Include(manifest, heldReceipt);
-        var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause,
-            OperatorRouteNoteAdmission.Admits(task, intent));
+        var reason = PreflightRejection(goal, task, intent, payload, shape, unresolvedEvidence, now,
+            out var retryCause, out var reversibility, out var stewardClose, out var stewardRegate);
         var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
-        var stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
-            AdmitsStewardClose(goal, task, payload);
-        var stewardRegate = intent.AuthenticationAssurance == StewardAssurance && shape == "reopen-regate" &&
-            ConductorStewardCaseG.Admits(goal, task, payload, now);
-        if (intent.AuthenticationAssurance == StewardAssurance &&
-            (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
-             intent.Channel != "conductor-steward" ||
-             !(stewardClose || stewardRegate || shape == "route" &&
-               retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification) &&
-               (!caseE || ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id))))))
-            reason = "steward-capability-boundary";
-        var reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
-        if (reason is null && invalidReversibility)
-            reason = "unknown-reversibility";
         var currentVersion = goalStateVersionResolver(goal.Id);
-        if (reason is null && AdjudicationPrecondition.IsStale(payload, goal, task))
-            reason = "stale-goal-state-version";
 
         // These narrow recoveries complete a task; they cannot attest or land the candidate.
         var actionKind = stewardClose || stewardRegate ? DecisionActionKind.Recover :
@@ -97,13 +82,13 @@ internal sealed class OperatorIntentAdjudication(
 
         if (reason is not null)
         {
-            Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion, reason, now);
+            Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion, reason, now, recordTimeline);
         }
         if (!DecisionAuthorization.Meets(assurance, requiredTier))
         {
             var denied = decisions.TryApplyDecisionEffectAsync(
                 requestId, receipt.Id, actionRef, currentVersion, "adjudication applied", now).GetAwaiter().GetResult();
-            RejectWithRecordedEffect(kernel, goal, task, intent, receipt, denied.Receipt.Result);
+            RejectWithRecordedEffect(kernel, goal, task, intent, receipt, denied.Receipt.Result, recordTimeline);
         }
 
         // Task updates preserve Verifying; the admitted operator intent must release
@@ -119,7 +104,7 @@ internal sealed class OperatorIntentAdjudication(
                 {
                     if (!ConductorStewardCaseEAdmission.Admits(goal, task, payload, ResolveHead(goal.Id)))
                         Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                            "steward-capability-boundary", now);
+                            "steward-capability-boundary", now, recordTimeline);
                 }
                 else if (stewardClose)
                 {
@@ -128,13 +113,13 @@ internal sealed class OperatorIntentAdjudication(
                     if (regateIndex is null || !ConductorStewardCaseDAdmission.Admits(
                             goal, task, payload, head, regateIndex.Read(), regateCap))
                         Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                            "steward-capability-boundary", now);
+                            "steward-capability-boundary", now, recordTimeline);
                     if (!ConductorStewardCaseDAdmission.RecordRegate(regateIndex!, goal, task, payload, head!, now))
                         Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                            "apparatus-regate-unrecorded", now);
+                            "apparatus-regate-unrecorded", now, recordTimeline);
                     if (!string.Equals(ResolveHead(goal.Id), head, StringComparison.OrdinalIgnoreCase))
                         Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                            "steward-capability-boundary", now);
+                            "steward-capability-boundary", now, recordTimeline);
                 }
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
@@ -145,7 +130,7 @@ internal sealed class OperatorIntentAdjudication(
                         requestPassedGateRegate?.Invoke(goal, heldReceipt,
                             $"OPERATOR_ADJUDICATION decision={receipt.Id} gate-request=queued; {heldReceipt.Describe()}") != true)
                         Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                            "acceptance-attempt-live", now);
+                            "acceptance-attempt-live", now, recordTimeline);
                     break;
                 }
                 kernel.RetryTaskWithAuthoritativeFeedback(
@@ -159,12 +144,20 @@ internal sealed class OperatorIntentAdjudication(
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "route":
+                // A decision can survive an uncheckpointed goal. Reuse the retry only
+                // when this snapshot also contains it, and still finish its decision effect.
+                // The kernel appends the event after recording the task's retry timestamp.
+                if (intent.Verb == OperatorIntentVerbs.Answer && task.LatestRetryAt >= receipt.RecordedAt &&
+                    task.PendingRetryCause == retryCause && task.AcceptedRetryFeedback?.Message == payload.Text.Trim() &&
+                    goal.Timeline.Any(entry => entry.TaskId == task.Id && entry.Kind == ProgressKind.TaskRetried &&
+                        entry.OccurredAt >= task.LatestRetryAt && entry.Message == payload.Text.Trim()))
+                    break;
                 if (OperatorRouteNoteAdmission.TryApply(kernel, goal, task, intent, payload, retryCause!.Value, now))
                     break;
                 if (intent.AuthenticationAssurance == StewardAssurance && caseE &&
                     !ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id)))
                     Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
-                        "steward-capability-boundary", now);
+                        "steward-capability-boundary", now, recordTimeline);
                 kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     task.Id,
@@ -183,7 +176,48 @@ internal sealed class OperatorIntentAdjudication(
             $"applied task={task.Status} goal={goal.Status}", now).GetAwaiter().GetResult();
         if (!applied.Applied)
             throw new InvalidOperationException($"Decision effect was unexpectedly rejected: {applied.Receipt.Result}");
-        RecordTimeline(kernel, goal, task, intent, receipt.Id, "applied");
+        if (recordTimeline)
+            RecordTimeline(kernel, goal, task, intent, receipt.Id, "applied");
+    }
+
+    internal string? RouteRejection(Goal goal, TaskSpec task, OperatorIntentRecord intent,
+        AdjudicateOperatorIntentPayload payload, DateTimeOffset now)
+    {
+        BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
+        var reason = PreflightRejection(goal, task, intent, payload, "route", unresolvedEvidence, now,
+            out _, out _, out _, out _);
+        if (reason is not null) return reason;
+        var assurance = ResolveAuthorizationTier(intent.AuthenticationAssurance);
+        var requiredTier = DecisionAuthorization.RequiredTierFor(DecisionActionKind.Retry);
+        return DecisionAuthorization.Meets(assurance, requiredTier) ? null :
+            $"Authentication assurance '{assurance}' does not satisfy required tier '{requiredTier}'.";
+    }
+
+    private string? PreflightRejection(Goal goal, TaskSpec task, OperatorIntentRecord intent,
+        AdjudicateOperatorIntentPayload payload, string shape, bool unresolvedEvidence, DateTimeOffset now,
+        out RetryCause? retryCause, out DecisionReversibility? reversibility,
+        out bool stewardClose, out bool stewardRegate)
+    {
+        var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out retryCause,
+            OperatorRouteNoteAdmission.Admits(task, intent));
+        var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
+        stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
+            AdmitsStewardClose(goal, task, payload);
+        stewardRegate = intent.AuthenticationAssurance == StewardAssurance && shape == "reopen-regate" &&
+            ConductorStewardCaseG.Admits(goal, task, payload, now);
+        if (intent.AuthenticationAssurance == StewardAssurance &&
+            (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
+             intent.Channel != "conductor-steward" ||
+             !(stewardClose || stewardRegate || shape == "route" &&
+               retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification) &&
+               (!caseE || ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id))))))
+            reason = "steward-capability-boundary";
+        reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
+        if (reason is null && invalidReversibility)
+            reason = "unknown-reversibility";
+        if (reason is null && AdjudicationPrecondition.IsStale(payload, goal, task))
+            reason = "stale-goal-state-version";
+        return reason;
     }
 
     private bool AdmitsStewardClose(Goal goal, TaskSpec task, AdjudicateOperatorIntentPayload payload) =>
@@ -207,7 +241,8 @@ internal sealed class OperatorIntentAdjudication(
         DecisionActionRef actionRef,
         long? currentVersion,
         string reason,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool recordTimeline)
     {
         var effect = decisions.TryApplyDecisionEffectAsync(
             receipt.RequestId,
@@ -217,7 +252,7 @@ internal sealed class OperatorIntentAdjudication(
             "adjudication rejected",
             now,
             reason).GetAwaiter().GetResult();
-        RejectWithRecordedEffect(kernel, goal, task, intent, receipt, effect.Receipt.Result);
+        RejectWithRecordedEffect(kernel, goal, task, intent, receipt, effect.Receipt.Result, recordTimeline);
     }
 
     private static void RejectWithRecordedEffect(
@@ -226,9 +261,11 @@ internal sealed class OperatorIntentAdjudication(
         TaskSpec task,
         OperatorIntentRecord intent,
         DecisionReceipt receipt,
-        string reason)
+        string reason,
+        bool recordTimeline)
     {
-        RecordTimeline(kernel, goal, task, intent, receipt.Id, reason);
+        if (recordTimeline)
+            RecordTimeline(kernel, goal, task, intent, receipt.Id, reason);
         throw new OperatorIntentAdjudicationRejectedException(reason);
     }
 
