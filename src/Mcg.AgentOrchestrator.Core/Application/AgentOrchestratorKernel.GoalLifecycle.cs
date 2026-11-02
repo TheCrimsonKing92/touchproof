@@ -1646,7 +1646,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 downstream.Id,
                 ProgressKind.TaskRetried,
-                $"Invalidated {downstream.RequiredRole} task because upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} was retried.");
+                DownstreamInvalidationMessage.UpstreamRetried(downstream.RequiredRole, retriedTask.RequiredRole, retriedTask.Id));
         }
     }
 
@@ -1695,7 +1695,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 downstream.Id,
                 ProgressKind.TaskRetried,
-                $"Invalidated {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} {invalidationReason}.");
+                DownstreamInvalidationMessage.RetriedWithReason(downstream.RequiredRole, retriedTask.RequiredRole, retriedTask.Id, invalidationReason));
         }
 
         ReconcileSupersededFailedDownstreamTasks(goal, reconciledAt);
@@ -1737,7 +1737,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 downstream.Id,
                 ProgressKind.TaskRetried,
-                $"Invalidated superseded {downstream.RequiredRole} verdict for reviewed candidate {reviewedCandidate} because {reason}; historical findings remain in verification history.");
+                DownstreamInvalidationMessage.SupersededVerdict(downstream.RequiredRole, reviewedCandidate, reason));
             reconciled = true;
         }
 

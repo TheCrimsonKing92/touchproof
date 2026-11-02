@@ -54,7 +54,7 @@ public static class FailureClusterReport
             var cli = e.EventType == "TaskFailed" ? WorkerCli(e.Message) : null;
             var marker = Marker(e.Message) ?? cli ?? FailingTest(e.Message);
             ReworkCauseFamily? family = null;
-            if (e.EventType == "TaskRetried" || e.Message.StartsWith("Invalidated ", StringComparison.Ordinal))
+            if (e.EventType == "TaskRetried" || e.Message.StartsWith(DownstreamInvalidationMessage.Prefix, StringComparison.Ordinal))
             {
                 if (!families.TryGetValue(e.Message, out var classified))
                     families[e.Message] = classified = Classify(e.Message);
@@ -65,7 +65,7 @@ public static class FailureClusterReport
             if (e.Timestamp < since) continue;
             var row = Get(clusters, key, e.EventType, family, message, marker, cli);
             row.Add(e.GoalId, e.Timestamp);
-            if (e.Message.StartsWith("Invalidated ", StringComparison.Ordinal)) row.KnockOn++;
+            if (e.Message.StartsWith(DownstreamInvalidationMessage.Prefix, StringComparison.Ordinal)) row.KnockOn++;
             else if (e.EventType == "TaskRetried") row.Paid++;
         }
 
@@ -117,7 +117,7 @@ public static class FailureClusterReport
 
     private static bool IsFailure(FailureClusterGoalEvent e) =>
         e.EventType is "TaskRetried" or "TaskFailed" or "GoalEscalated" ||
-        e.Message.StartsWith("Invalidated ", StringComparison.Ordinal) ||
+        e.Message.StartsWith(DownstreamInvalidationMessage.Prefix, StringComparison.Ordinal) ||
         (e.EventType == "GoalLifecycleDecision" &&
             Regex.IsMatch(e.Message, @"\b(?:held|escalated) at\b", RegexOptions.IgnoreCase));
 

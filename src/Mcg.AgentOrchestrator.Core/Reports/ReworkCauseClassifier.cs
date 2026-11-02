@@ -41,7 +41,7 @@ public static class ReworkCauseClassifier
         ("Dispatch hit provider connectivity failure", ReworkCauseFamily.Environment),
         ("Dispatch hit ProviderInterruption", ReworkCauseFamily.Environment),
         ("Auto-requeued interrupted dispatch after conductor loop stop", ReworkCauseFamily.Environment),
-        ("Invalidated ", ReworkCauseFamily.DownstreamRerun),
+        (DownstreamInvalidationMessage.Prefix, ReworkCauseFamily.DownstreamRerun),
         ("missing-planner-artifact: dependency reroute", ReworkCauseFamily.Routing),
         ("worker-build-check-failed automatic recovery ", ReworkCauseFamily.CandidateRed),
         ("worker-build-capacity automatic retry ", ReworkCauseFamily.Environment),
