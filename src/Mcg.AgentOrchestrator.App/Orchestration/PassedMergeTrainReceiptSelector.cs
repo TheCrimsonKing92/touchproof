@@ -5,6 +5,32 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Owns receipt observation and selection; storage, git and identity validation stay with the driver.
 internal static class PassedMergeTrainReceiptSelector
 {
+    internal enum OmissionReason
+    {
+        SelectionExcluded,
+        RebaseConflict,
+        StaleBinding,
+        MaterializationFailure,
+        RedNewestMember,
+        RedAttributedMember
+    }
+
+    internal static IReadOnlyList<(GoalId GoalId, OmissionReason Reason)> Omissions(
+        ConductorMergeTrainSelection selection, MergeTrainReceipt receipt,
+        IReadOnlyList<MergeTrainEjection> ejections)
+    {
+        var selected = selection.Members.Select(member => member.GoalId).ToHashSet();
+        var reasons = ejections.GroupBy(ejection => ejection.GoalId)
+            .ToDictionary(group => group.Key, group => group.Last().Reason);
+        // Bisection shrinks the gated identity. Attempt ejections retain its original members.
+        return receipt.Identity.Members.Select(member => member.GoalId)
+            .Concat(ejections.Select(ejection => ejection.GoalId)).Distinct()
+            .Where(goalId => !selected.Contains(goalId))
+            .Select(goalId => (goalId, reasons.TryGetValue(goalId, out var reason) &&
+                Enum.TryParse<OmissionReason>(reason.ToString(), out var typed) && Enum.IsDefined(typed)
+                    ? typed : OmissionReason.SelectionExcluded)).ToArray();
+    }
+
     internal static IReadOnlyList<(ConductorMergeTrainSelection Selection, MergeTrainReceipt Receipt)> Find(
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
         IReadOnlySet<string> ineligibleGoalIds,
