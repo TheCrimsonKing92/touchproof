@@ -14,10 +14,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private static string? TryResolveGitHead(string path)
-    {
-        var result = GitCli.Run(path, "rev-parse", "HEAD");
-        return result.Succeeded ? result.Output.Trim() : null;
-    }
+        => GitRevisionReader.Shared.TryResolve(path, "HEAD", out var head) ? head : null;
 
     private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(
         string worktreePath, string integrationBranch)

@@ -718,13 +718,13 @@ private static string FormatConductEventChecks(IEnumerable<string> checks) =>
 private static string? TryResolveGitHead(CliExecutionContext context, string? path)
 {
     if (string.IsNullOrWhiteSpace(path))
-    {
         return null;
-    }
 
     try
     {
-        return context.Worktrees.ResolveHead(path);
+        return context.Worktrees is DefaultCliGoalWorktreeService
+            ? GitRevisionReader.Shared.TryResolve(path, "HEAD", out var head) ? head : string.Empty
+            : context.Worktrees.ResolveHead(path);
     }
     catch
     {
