@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: every test owns its repositories. Census windows use the current test
@@ -41,7 +42,11 @@ public sealed class CurrentBranchInProcessReadTests : IDisposable
         if (relative)
         {
             var target = pointer[8..].TrimEnd('\r', '\n');
-            File.WriteAllText(dotGit, "gitdir: " + Path.GetRelativePath(linked, target).Replace('\\', '/') + "\r\n");
+            // Git hides .git on Windows; open the existing file instead of recreating it.
+            using var stream = File.Open(dotGit, FileMode.Open, FileAccess.Write);
+            var bytes = Encoding.UTF8.GetBytes("gitdir: " + Path.GetRelativePath(linked, target).Replace('\\', '/') + "\r\n");
+            stream.Write(bytes);
+            stream.SetLength(stream.Position);
         }
         AssertRecognized(linked, "linked");
     }
@@ -78,7 +83,16 @@ public sealed class CurrentBranchInProcessReadTests : IDisposable
     {
         var repo = CreateRepository();
         Git(repo, "checkout", "-b", name);
-        AssertRecognized(repo, name);
+        // Git emits UTF-8, while redirected output defaults to the Windows console code page.
+        // Pin only this synchronous test thread's launches and restore the previous observer.
+        var previous = GitCli.StartInfoObserver;
+        GitCli.StartInfoObserver = info =>
+        {
+            previous?.Invoke(info);
+            info.StandardOutputEncoding = Encoding.UTF8;
+        };
+        try { AssertRecognized(repo, name); }
+        finally { GitCli.StartInfoObserver = previous; }
     }
 
     [Theory]
