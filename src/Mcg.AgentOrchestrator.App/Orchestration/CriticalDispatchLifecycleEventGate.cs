@@ -100,6 +100,7 @@ internal sealed class CriticalDispatchLifecycleEventGate(IGoalLifecycleEventWrit
     public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) => inner.AppendAcceptanceResult(goalId, pass, failures);
     public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string hash) => inner.AppendAcceptanceCriterionWaived(goalId, criterion, actor, recordedAt, reason, hash);
     public void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) => inner.AppendCriteriaCorrectionIgnored(goalId, taskId, source);
+    public void AppendGoalStatusTransition(GoalId goalId, GoalStatus from, GoalStatus to, string site) => inner.AppendGoalStatusTransition(goalId, from, to, site);
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) => inner.AppendGoalLanded(goalId, integrationBranch, goalBranch);
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch, LandingAdmissionReceipt receipt) => inner.AppendGoalLanded(goalId, integrationBranch, goalBranch, receipt);
     public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) => inner.AppendGoalLandedFromAncestry(goalId, goalBranch, branchTip, mainSha);

@@ -311,8 +311,9 @@ public sealed class Goal
             orderedTimeline.LastOrDefault()?.OccurredAt);
     }
 
-    internal void SetStatus(GoalStatus status)
+    internal GoalStatusChange SetStatus(GoalStatus status)
     {
+        var from = Status;
         if (IsTerminalMetadataStatus(status)) LandingBlocker = null;
         if (IsExplicitlyParked)
         {
@@ -323,7 +324,7 @@ public sealed class Goal
             if (status is not (GoalStatus.Cancelled or GoalStatus.Superseded))
             {
                 Status = GoalStatus.Parked;
-                return;
+                return new(Id, from, Status);
             }
         }
         else if (ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
@@ -332,10 +333,12 @@ public sealed class Goal
         if (!IsTerminal && IsTerminalMetadataStatus(status))
             GoalEffectivePriorityIndex.RecordSeeds(this, [], terminal: true);
         Status = status;
+        return new(Id, from, Status);
     }
 
-    internal void ApplyExplicitDisposition(GoalExplicitDispositionAction action)
+    internal GoalStatusChange ApplyExplicitDisposition(GoalExplicitDispositionAction action)
     {
+        var from = Status;
         // Reissuing an explicit park on a legacy hold records authority from this action
         // onward. Its ordinary lifecycle is recomputed on release, as for legacy unpark.
         var lifecycle = LifecycleStatus == GoalStatus.Parked ? GoalStatus.Active : LifecycleStatus;
@@ -351,6 +354,7 @@ public sealed class Goal
             ParkedLifecycleStatus = null;
             SetStatus(lifecycle == GoalStatus.Parked ? GoalStatus.Active : lifecycle);
         }
+        return new(Id, from, Status);
     }
 
     internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt, bool validate = true)

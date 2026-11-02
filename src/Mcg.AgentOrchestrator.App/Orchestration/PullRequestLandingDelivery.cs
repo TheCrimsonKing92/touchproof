@@ -24,7 +24,7 @@ internal static class PullRequestLandingDelivery
         (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded ||
          SinceDelivery(goal).Any(item => item.Message.StartsWith(RefreshStoppedPrefix, StringComparison.Ordinal)));
     public static bool Applies(OrchestratorWorkspace? workspace) => workspace is { IsProjectScoped: true, Delivery: ProjectDelivery.PullRequest };
-    public static bool IsDeliveredForReview(string reason) => reason.StartsWith("delivered for review: ", StringComparison.Ordinal);
+    public static bool IsDeliveredForReview(string reason) => DeliveredForReviewHold.IsDeliveredForReviewText(reason);
 
     public static LandingResult Deliver(AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace,
         string candidate, IPullRequestPublisher publisher, IOperatorChannel? channel,
@@ -47,7 +47,7 @@ internal static class PullRequestLandingDelivery
             ? PullRequestReviewRound.Started(goal, goal.DeliveredForReview!.Url) : (int?)null;
         var previousDelivery = goal.DeliveredForReview;
         if (reviewRound is null && goal.DeliveredForReview is { } delivered && string.Equals(delivered.PushedCommit, candidate, StringComparison.OrdinalIgnoreCase))
-            return Result($"delivered for review: {delivered.Url}" + ActingSuffix(delivered.ActingLogin));
+            return Result(DeliveredForReviewHold.Text(delivered.Url, delivered.ActingLogin));
         if (mutationBlocker?.Invoke() is { Length: > 0 } blocked)
             return Result($"landing mutation blocked: {blocked}");
 
@@ -110,8 +110,6 @@ internal static class PullRequestLandingDelivery
         if (reviewRound is not null)
             kernel.RecordGoalPolicyDecision(goal.Id,
                 $"{PullRequestReviewRound.DeliveredPrefix}{publication.Url} round={reviewRound} pushed={publication.PushedCommit}");
-        return Result($"delivered for review: {publication.Url}" + ActingSuffix(publication.ActingLogin), stateChanged: true);
+        return Result(DeliveredForReviewHold.Text(publication.Url!, publication.ActingLogin), stateChanged: true);
     }
-
-    private static string ActingSuffix(string? login) => login is null ? "" : $" as {login}";
 }
