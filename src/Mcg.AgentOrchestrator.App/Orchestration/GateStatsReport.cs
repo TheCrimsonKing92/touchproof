@@ -7,6 +7,54 @@ internal static class GateStatsReport
     internal sealed record CompareRow(string Lane, int BeforeGates, double? BeforeMedian, double? BeforeP90,
         int AfterGates, double? AfterMedian, double? AfterP90, double? MedianDelta, double? P90Delta);
     internal sealed record Report<T>(IReadOnlyList<T> Rows, int Skipped);
+    internal sealed record FlakeRow(string Test, int Attempts, int Pass, int Flake, int Hard, double FlakeRate);
+    internal sealed record FlakeReport(string Form, int Gates, int Skipped, int Nonterminal, IReadOnlyList<FlakeRow> Tests);
+    // Ordered by precedence when the same test appears in multiple lanes of an attempt.
+    private enum TestAttemptOutcome { Nonterminal, CleanPass, Flake, HardFailure }
+
+    internal static FlakeReport Flakes(string directory, int last, int top)
+    {
+        var attempts = GateStatsReader.ReadGateRuns(directory, last, out var skipped);
+        var outcomes = new Dictionary<string, List<TestAttemptOutcome>>(StringComparer.Ordinal);
+        var nonterminal = 0;
+        foreach (var attempt in attempts)
+        {
+            var tests = attempt.Runs.SelectMany(run => run.Results
+                .Where(result => !string.IsNullOrWhiteSpace(result.Test))
+                .Select(result => (Test: result.Test!, run.Lane, run.Run, result.Outcome)))
+                .GroupBy(result => result.Test, StringComparer.Ordinal);
+            foreach (var test in tests)
+            {
+                var outcome = test.GroupBy(result => result.Lane, StringComparer.OrdinalIgnoreCase)
+                    .Select(lane => ClassifyLane(lane.Select(result => (result.Run, result.Outcome)))).Max();
+                if (outcome == TestAttemptOutcome.Nonterminal) { nonterminal++; continue; }
+                if (!outcomes.TryGetValue(test.Key, out var values)) outcomes[test.Key] = values = [];
+                values.Add(outcome);
+            }
+        }
+        var rows = outcomes.Select(pair =>
+        {
+            var flake = pair.Value.Count(outcome => outcome == TestAttemptOutcome.Flake);
+            return new FlakeRow(pair.Key, pair.Value.Count,
+                pair.Value.Count(outcome => outcome == TestAttemptOutcome.CleanPass), flake,
+                pair.Value.Count(outcome => outcome == TestAttemptOutcome.HardFailure), (double)flake / pair.Value.Count);
+        }).OrderByDescending(row => row.Flake).ThenByDescending(row => row.FlakeRate)
+            .ThenBy(row => row.Test, StringComparer.Ordinal).Take(top).ToArray();
+        return new("flakes", attempts.Count, skipped, nonterminal, rows);
+    }
+
+    private static TestAttemptOutcome ClassifyLane(IEnumerable<(int Run, string? Outcome)> results)
+    {
+        var runs = results.Where(result => IsOutcome(result.Outcome, "Passed") || IsOutcome(result.Outcome, "Failed"))
+            .GroupBy(result => result.Run).OrderBy(group => group.Key)
+            .Select(group => group.Any(result => IsOutcome(result.Outcome, "Failed"))).ToArray();
+        if (runs.Length == 0) return TestAttemptOutcome.Nonterminal;
+        if (runs[^1]) return TestAttemptOutcome.HardFailure;
+        return runs.Any(failed => failed) ? TestAttemptOutcome.Flake : TestAttemptOutcome.CleanPass;
+    }
+
+    private static bool IsOutcome(string? outcome, string expected) =>
+        string.Equals(outcome, expected, StringComparison.OrdinalIgnoreCase);
 
     internal static Report<LaneRow> Lanes(string directory, int last)
     {
