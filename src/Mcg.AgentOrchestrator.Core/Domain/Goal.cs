@@ -463,9 +463,10 @@ public sealed class Goal
         var declaration = declarations.FirstOrDefault();
         return version is not null && declarations.Length <= 1 &&
             (declaration is null || CriterionEvidenceLifecycle.IsValidDeclaration(version.Spec, declaration)) &&
-            (obligation.Phase != CriterionEvidencePhase.PostLanding || declaration is { Atomic: true }) &&
-            obligation.Phase == (declaration?.Phase ?? CriterionEvidencePhase.PreLanding) &&
-            obligation.ObservationScope == declaration?.ObservationScope &&
+            (CriterionEvidenceRephase.IsRecordedRephase(obligation, declaration) ||
+             ((obligation.Phase != CriterionEvidencePhase.PostLanding || declaration is { Atomic: true }) &&
+              obligation.Phase == (declaration?.Phase ?? CriterionEvidencePhase.PreLanding) &&
+              obligation.ObservationScope == declaration?.ObservationScope)) &&
             (obligation.Publication is null || (obligation.Publication.GoalId == Id.Value &&
              version.RecordedAt <= obligation.Publication.PromotedAt &&
              string.Equals(obligation.ExpectedCandidateSha, obligation.Publication.CandidateRevision, StringComparison.OrdinalIgnoreCase))) &&
@@ -707,6 +708,18 @@ public sealed class Goal
         var bound = ReviewedCandidateEvidenceBinding.Apply(obligation, normalizedCandidate, recordedAt);
         _criterionEvidenceObligations[index] = bound;
         return bound;
+    }
+
+    internal CriterionEvidenceObligation RephaseCriterionEvidenceObligation(
+        string obligationId, CriterionObservationScope? scope, string actor, string reason, DateTimeOffset recordedAt)
+    {
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
+        if (index < 0)
+            throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
+
+        var result = CriterionEvidenceRephase.Apply(_criterionEvidenceObligations[index], scope, actor, reason, recordedAt);
+        _criterionEvidenceObligations[index] = result;
+        return result;
     }
 
     internal CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(

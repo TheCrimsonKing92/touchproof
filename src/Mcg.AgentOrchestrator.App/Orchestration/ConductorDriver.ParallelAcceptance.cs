@@ -144,49 +144,8 @@ internal sealed partial class ConductorDriver
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
         }
 
-        GoalLifecycleState lifecycleState;
-        try
-        {
-            lifecycleState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-        }
-        catch
-        {
-            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.LifecycleNotReady);
-        }
-
-        bool gateSatisfied;
-        try
-        {
-            gateSatisfied = _isVerificationGateSatisfied(goal);
-        }
-        catch
-        {
-            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.GateNotReady);
-        }
-
-        ChangeRiskTier? changeRiskTier;
-        ConductorTransitionDecision? autoPromotionDisposition;
-        try
-        {
-            changeRiskTier = _classifyChangeRisk(goal);
-            autoPromotionDisposition = changeRiskTier.HasValue
-                ? policy.GetTransitionDecision(GoalLifecycleState.Merged, changeRiskTier.Value)
-                : null;
-        }
-        catch
-        {
-            changeRiskTier = null;
-            autoPromotionDisposition = null;
-        }
-
-        var input = new GateReadyCandidateInput(
-            goal.Id,
-            lifecycleState,
-            gateSatisfied,
-            changeRiskTier,
-            autoPromotionDisposition);
-        return _gateReadyCandidateProjector?.Project(input) ??
-            ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.RevisionUnknown);
+        return GateReadyProjectionCache.ProjectUncached(goal, policy, GetFacts,
+            _isVerificationGateSatisfied, _classifyChangeRisk, _gateReadyCandidateProjector);
     }
 
     private static GateReadyCandidateProjectionResult.Excluded ExcludedGateReadyCandidate(

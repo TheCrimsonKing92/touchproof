@@ -24,6 +24,7 @@ public sealed class CliHandledVerbRegistryTests
     [InlineData("criterion-evidence-map")]
     [InlineData("criterion-evidence-record")]
     [InlineData("criterion-evidence-repair")]
+    [InlineData("criterion-evidence-rephase")]
     [InlineData("operator-intent-status")]
     [InlineData("model-outcomes")]
     [InlineData("experiment-apply-flag")]

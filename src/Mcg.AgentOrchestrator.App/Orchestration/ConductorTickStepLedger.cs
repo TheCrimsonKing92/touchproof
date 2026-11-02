@@ -45,7 +45,7 @@ internal sealed class ConductorTickStepLedger
     private readonly Stack<Frame> _frames = new();
     private bool _active;
     private long _goalsHydrated, _metadataRows, _terminalJournalStats, _backlogRows, _readinessEvaluations;
-    private long _projectionCount, _slowestProjectionTicks;
+    private long _projectionCount, _slowestProjectionTicks, _projectionCacheHits, _projectionCacheMisses;
     private string? _slowestProjectionGoalId;
 
     internal ConductorTickStepLedger(Func<TimeSpan> cpu, Action<string>? probe = null)
@@ -186,6 +186,12 @@ internal sealed class ConductorTickStepLedger
         };
     }
 
+    internal static void CountProjectionCache(bool hit) => AddCounter(ledger =>
+    {
+        if (hit) ledger._projectionCacheHits++;
+        else ledger._projectionCacheMisses++;
+    });
+
     private static void AddCounter(Action<ConductorTickStepLedger> increment)
     {
         var ledger = Current.Value;
@@ -230,7 +236,7 @@ internal sealed class ConductorTickStepLedger
             var prepRemainder = Math.Max(0, _steps.GetValueOrDefault("grouped-admission-prep").InclusiveWallTicks - prepWallTicks) / TimeSpan.TicksPerMillisecond;
             var slowest = _slowestProjectionGoalId is null ? "none:0" :
                 FormattableString.Invariant($"{_slowestProjectionGoalId[..8]}:{_slowestProjectionTicks / TimeSpan.TicksPerMillisecond}");
-            return FormattableString.Invariant($"admission_steps={steps} unattributed_ms={remainder} prep_steps={prepSteps} prep_projection_count={_projectionCount} prep_projection_slowest={slowest} prep_unattributed_ms={prepRemainder}");
+            return FormattableString.Invariant($"admission_steps={steps} unattributed_ms={remainder} prep_steps={prepSteps} prep_projection_count={_projectionCount} prep_projection_slowest={slowest} prep_unattributed_ms={prepRemainder} prep_projection_cache=hits:{_projectionCacheHits},misses:{_projectionCacheMisses}");
         }
     }
 
