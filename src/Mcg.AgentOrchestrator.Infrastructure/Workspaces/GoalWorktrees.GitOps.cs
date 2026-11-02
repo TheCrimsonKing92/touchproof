@@ -183,7 +183,8 @@ public static partial class GoalWorktrees
     private static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
         string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId, string mainHead)
     {
-        if (!TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out var oldHead) ||
+        if (!(GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{branch}", out var oldHead) ||
+              TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out oldHead)) ||
             !CommitShaPattern.IsMatch(mainHead) || !CommitShaPattern.IsMatch(oldHead) ||
             !HasMergeCommitsOutsideBase(executionDirectory, mainHead, oldHead) ||
             !TryReadCleanMergeTree(executionDirectory, mainHead, oldHead, out var tree))
