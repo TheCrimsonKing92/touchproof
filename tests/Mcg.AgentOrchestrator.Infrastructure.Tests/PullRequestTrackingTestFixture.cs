@@ -34,7 +34,8 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
     internal void Merged() => Forge.Json = JsonSerializer.Serialize(new
     {
         state = "MERGED", mergedAt = "2026-10-31T12:00:00Z", mergeCommit = new { oid = Delivery.Candidate },
-        closedAt = "2026-10-31T12:00:00Z", url = PullRequestLandingTestFixture.Url
+        closedAt = "2026-10-31T12:00:00Z", url = PullRequestLandingTestFixture.Url,
+        reviewDecision = (string?)null, latestReviews = Array.Empty<object>()
     });
     internal string Git(params string[] args)
     {
@@ -49,7 +50,7 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
 
     internal sealed class Runner : IForgeProcessRunner
     {
-        internal string Json = """{"state":"OPEN","mergedAt":null,"mergeCommit":null,"closedAt":null,"url":"https://github.com/octo/sample/pull/7"}""";
+        internal string Json = """{"state":"OPEN","mergedAt":null,"mergeCommit":null,"closedAt":null,"url":"https://github.com/octo/sample/pull/7","reviewDecision":null,"latestReviews":[]}""";
         internal int Reads;
         internal bool Unavailable;
         internal bool FetchFails;
@@ -66,7 +67,7 @@ internal sealed class PullRequestTrackingTestFixture : IDisposable
                 return new(true, FetchFails ? 1 : 0, "", FetchFails ? "fetch failed" : "");
             }
             Assert.Equal("gh", fileName);
-            Assert.Equal(["pr", "view", "7", "--repo", "octo/sample", "--json", "state,mergedAt,mergeCommit,closedAt,url"], arguments);
+            Assert.Equal(["pr", "view", "7", "--repo", "octo/sample", "--json", "state,mergedAt,mergeCommit,closedAt,url,reviewDecision,latestReviews"], arguments);
             Reads++;
             OnRead?.Invoke();
             return Unavailable ? new(true, 1, "", "not available") : new(true, 0, Json, "");
