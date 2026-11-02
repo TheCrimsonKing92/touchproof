@@ -280,7 +280,7 @@ internal sealed partial class ConductorBatchLoop
         // Reconcile child ejections before projections or implication-key exclusions can hide them.
         state.OrderedEligible = ConductorTickStepLedger.Measure("prep-train-reconcile", () => MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines));
         var speculativeCandidates = ConductorTickStepLedger.Measure("prep-projection", () => GroupedAdmissionCandidateProjection.ProjectAll(
-            ConductorTickStepLedger.ObserveProjections(state.OrderedEligible), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)));
+            ConductorTickStepLedger.ObserveProjections(driver.ProjectionCache.Retain(eligible, state.OrderedEligible)), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)));
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = ConductorTickStepLedger.Measure("prep-census", () => CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
