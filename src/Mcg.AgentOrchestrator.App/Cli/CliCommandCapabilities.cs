@@ -13,6 +13,7 @@ internal static class CliCommandCapabilities
         "tasks", "task", "verifications", "agents", "finding", "status", "goals", "monitor-goal", "monitor",
         "failure-clusters",
         "storage-health",
+        "gate-stats",
         "build-attribution",
         "impact-replay",
         "intent-coverage",
