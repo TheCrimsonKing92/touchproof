@@ -106,14 +106,15 @@ public sealed class PassedTrainPartialLandingTests
             var storePath = Path.Combine(root, "merge-train.db");
             var store = new MergeTrainAcceptanceStore(storePath);
             var omitted = new MergeTrainEjection(fixture.Goals[2].Id,
-                MergeTrainEjectionReason.RedNewestMember, ["src/conflict.cs"], "Dropped after RED");
+                recheck ? MergeTrainEjectionReason.RedAttributedMember : MergeTrainEjectionReason.RedNewestMember,
+                ["src/conflict.cs"], "Dropped after RED");
             store.RecordEjections("other-attempt", [omitted with { GoalId = GoalId.New() }]);
             store.RecordEjections("attempt-x", [omitted, omitted]);
             var receipt = fixture.Receipt with { ValidForLanding = true };
             if (recheck)
                 receipt = receipt with
                 {
-                    GateAttemptId = null,
+                    GateAttemptId = "recheck-x",
                     Recheck = new("red-train", "red-receipt", "attempt-x", "recheck-x", omitted.GoalId,
                         "reproduction", ["TestClass"], true, [], true, Fixture.Main, Fixture.Revision, ["TestClass"], 0)
                 };
@@ -138,9 +139,13 @@ public sealed class PassedTrainPartialLandingTests
             Assert.Empty(readOnly.ReadAttemptEjections("missing-attempt"));
             // Existing receipts remain usable without inspecting or rewriting their evidence.
             var bytes = File.ReadAllBytes(artifact.Path);
-            fixture.Ejections = readOnly.ReadAttemptEjections("attempt-x");
-            fixture.Land(selectedMembers: 2, useSelector: true);
-            fixture.AssertPartial("RedNewestMember");
+            fixture.Receipt = saved;
+            fixture.Land(selectedMembers: 2, useSelector: true,
+                readAttemptEjections: readOnly.ReadAttemptEjections);
+            fixture.AssertPartial(omitted.Reason.ToString());
+            Assert.Equal("attempt-x", Assert.Single(fixture.AttemptReads));
+            Assert.Equal(fixture.Goals.Take(2).Select(goal => goal.Id),
+                Assert.Single(fixture.Landings).Members.Select(member => member.GoalId));
             Assert.Equal(bytes, File.ReadAllBytes(artifact.Path));
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -153,7 +158,7 @@ public sealed class PassedTrainPartialLandingTests
         internal AgentOrchestratorKernel Kernel { get; } = new();
         internal Goal[] Goals { get; }
         internal GateReadyCandidateProjection[] Projections { get; }
-        internal MergeTrainReceipt Receipt { get; }
+        internal MergeTrainReceipt Receipt { get; set; }
         internal IReadOnlyList<MergeTrainEjection> Ejections { get; set; } = [];
         internal List<string> Progress { get; } = [];
         internal List<string> AttemptReads { get; } = [];
@@ -181,7 +186,8 @@ public sealed class PassedTrainPartialLandingTests
                 MergeTrainGateOutcome.Passed, DateTimeOffset.UnixEpoch, 0, [], 0, []) { GateAttemptId = "attempt-x" };
         }
 
-        internal void Land(int selectedMembers, bool useSelector = false, string outcome = "outcome=passed")
+        internal void Land(int selectedMembers, bool useSelector = false, string outcome = "outcome=passed",
+            Func<string, IReadOnlyList<MergeTrainEjection>>? readAttemptEjections = null)
         {
             var selection = new ConductorMergeTrainSelection(Projections.Take(selectedMembers).ToArray());
             var candidates = Projections.Select(projection => new ConductorSpeculativeAcceptanceCandidate(
@@ -202,7 +208,11 @@ public sealed class PassedTrainPartialLandingTests
                         new ConductorAdvanceResult(member.GoalId.Value, member.GoalId.Value[..8], "Permissive",
                             new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp))), [], outcome);
                 },
-                ReadAttemptEjections: attempt => { AttemptReads.Add(attempt); return Ejections; },
+                ReadAttemptEjections: attempt =>
+                {
+                    AttemptReads.Add(attempt);
+                    return readAttemptEjections?.Invoke(attempt) ?? Ejections;
+                },
                 RecordDecision: (goalId, message) => Kernel.RecordGoalPolicyDecision(goalId, message));
             PassedMergeTrainReceiptAdmission.Apply(operations, ConductorAutonomyPolicy.Permissive,
                 Goals, candidates, Goals, [], 49, [], new(), [], Progress.Add,

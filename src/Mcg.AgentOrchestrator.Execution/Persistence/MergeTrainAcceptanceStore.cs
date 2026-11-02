@@ -564,7 +564,7 @@ public sealed class MergeTrainAcceptanceStore
         {
             receipt.Identity.Value,
             MemberGoalIds = receipt.Identity.Members.Select(member => member.GoalId.Value)
-                .Concat((receipt.GateAttemptId ?? receipt.Recheck?.TrainAttemptId) is { } attemptId
+                .Concat((receipt.Recheck?.TrainAttemptId ?? receipt.GateAttemptId) is { } attemptId
                     ? ReadAttemptEjections(attemptId).Select(ejection => ejection.GoalId.Value) : [])
                 .Distinct(StringComparer.Ordinal).ToArray(),
             receipt.Outcome,

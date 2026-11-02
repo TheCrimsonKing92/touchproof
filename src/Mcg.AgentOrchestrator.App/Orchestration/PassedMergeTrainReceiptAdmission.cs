@@ -196,7 +196,7 @@ internal static class PassedMergeTrainReceiptAdmission
         IReadOnlyList<MergeTrainEjection> ejections = [];
         try
         {
-            if ((receipt.GateAttemptId ?? receipt.Recheck?.TrainAttemptId) is { } attemptId)
+            if ((receipt.Recheck?.TrainAttemptId ?? receipt.GateAttemptId) is { } attemptId)
                 ejections = operations.ReadAttemptEjections?.Invoke(attemptId) ?? [];
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
