@@ -136,6 +136,14 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["capturedAcceptanceCriteriaHash"] = capturedAcceptanceCriteriaHash;
         });
 
+    public void AppendGoalStatusTransition(GoalId goalId, GoalStatus from, GoalStatus to, string site) =>
+        Append(goalId, "goal-status-transition", obj =>
+        {
+            obj["from"] = from.ToString();
+            obj["to"] = to.ToString();
+            obj["site"] = site;
+        });
+
     public void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) =>
         Append(goalId, "CriteriaCorrectionIgnored", obj =>
         {
