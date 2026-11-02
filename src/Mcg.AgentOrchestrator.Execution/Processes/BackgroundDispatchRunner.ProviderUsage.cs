@@ -32,9 +32,9 @@ public sealed partial class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         if (outcome.Verification is not null && outcome.ReceiptlessUsageAttemptAt is { } attemptAt)
         {
-            var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == attemptAt)
-                ?? throw new InvalidOperationException($"Cannot record provider usage for unknown dispatch attempt {attemptAt:O}.");
-            if (dispatch.ContextPackageReceipt is null)
+            var matches = task.DispatchHistory.Where(candidate => candidate.DispatchedAt == attemptAt).Take(2).ToArray();
+            // Telemetry must not prevent reconciliation when its attempt is missing or ambiguous.
+            if (matches.Length == 1 && matches[0].ContextPackageReceipt is null)
                 kernel.RecordDispatchProviderUsage(goalId, taskId, attemptAt,
                     DispatchProviderUsage.From(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason));
         }
