@@ -171,6 +171,9 @@ internal sealed class OperatorIntentAdjudication(
                 throw new InvalidOperationException($"Unsupported adjudication shape '{shape}'.");
         }
 
+        if (shape == "route" && payload.RulingText is not null)
+            RecordRouteRuling(kernel, goal, intent, payload.RulingText);
+
         var applied = decisions.TryApplyDecisionEffectAsync(
             requestId, receipt.Id, actionRef, currentVersion,
             $"applied task={task.Status} goal={goal.Status}", now).GetAwaiter().GetResult();
@@ -178,6 +181,15 @@ internal sealed class OperatorIntentAdjudication(
             throw new InvalidOperationException($"Decision effect was unexpectedly rejected: {applied.Receipt.Result}");
         if (recordTimeline)
             RecordTimeline(kernel, goal, task, intent, receipt.Id, "applied");
+    }
+
+    private static void RecordRouteRuling(AgentOrchestratorKernel kernel, Goal goal,
+        OperatorIntentRecord intent, string rulingText)
+    {
+        var question = $"Operator route ruling intent {intent.Id}";
+        if (kernel.HumanInputRequests.Any(request => request.GoalId == goal.Id && request.Question == question))
+            return;
+        kernel.RecordAnsweredOperatorHumanInput(goal.Id, question, rulingText, HumanWaitKind.SpecClarification);
     }
 
     internal string? RouteRejection(Goal goal, TaskSpec task, OperatorIntentRecord intent,
@@ -328,6 +340,9 @@ internal sealed class OperatorIntentAdjudication(
         if (string.IsNullOrWhiteSpace(payload.Text)) return "missing-explanation";
         if (payload.EvidenceReferences is null || payload.EvidenceReferences.All(string.IsNullOrWhiteSpace)) return "missing-evidence";
         if (shape is not ("close" or "reopen-regate" or "route")) return "unknown-shape";
+        if (payload.RulingText is not null && shape != "route") return "ruling-requires-route";
+        if (payload.RulingText is not null && FrozenFactRuling.TryParse(payload.RulingText) is null)
+            return "frozen-fact-ruling-malformed";
         if (shape == "reopen-regate" && goal.Status == GoalStatus.Verified)
         {
             if (HasLiveAcceptanceAttempt(goal.Id)) return "acceptance-attempt-live";
