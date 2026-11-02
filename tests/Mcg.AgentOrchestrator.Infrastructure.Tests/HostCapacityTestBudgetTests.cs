@@ -57,6 +57,9 @@ public sealed class HostCapacityTestBudgetTests
 
         await fixture.InitializeAsync();
         Assert.Equal(1, budget.AvailableSlots);
+        var launch = Mcg.AgentOrchestrator.Infrastructure.GitCli.Run(Path.GetTempPath(), "--version");
+        Assert.True(launch.Succeeded, launch.Error);
+        Assert.Equal(1, budget.AvailableSlots);
 
         await fixture.DisposeAsync();
         Assert.Equal(2, budget.AvailableSlots);

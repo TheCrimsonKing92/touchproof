@@ -1,5 +1,7 @@
-internal sealed class CliCommandSlotProbe(HostCapacityTestBudget budget) : CliCommandTestBase
+internal sealed class CliCommandSlotProbe(HostCapacityTestBudget budget, bool usesGit = false) : CliCommandTestBase
 {
+    private protected override bool UsesGit => usesGit;
+
     internal TaskCompletionSource AcquisitionRequested { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 

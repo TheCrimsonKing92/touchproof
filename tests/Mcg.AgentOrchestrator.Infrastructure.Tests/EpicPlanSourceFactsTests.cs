@@ -8,6 +8,9 @@ using Microsoft.Data.Sqlite;
 // Parallel-safe: each test owns all stores and uses in-process CLI/formatting seams.
 public sealed class EpicPlanSourceFactsTests : CliCommandTestBase
 {
+    // Never launched git in the measured census; these scenarios operate on stored facts.
+    private protected override bool UsesGit => false;
+
     private readonly string root = CreateTempDirectory();
 
     [Theory]
