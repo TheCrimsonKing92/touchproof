@@ -66,8 +66,13 @@ public sealed class PullRequestReviewRoundTests
         var restored = fixture.Repository.LoadAsync().GetAwaiter().GetResult();
         var goal = restored.GetGoal(fixture.Goal.Id);
         var tracker = new PullRequestDeliveryTracker(restored, fixture.Workspace,
-            new GitHubPullRequestStatusReader(fixture.Forge), fixture.Forge, fixture.Attention);
+            new GitHubPullRequestStatusReader(fixture.Forge), fixture.Forge, fixture.Attention,
+            elapsed: () => fixture.Elapsed, conflictCheck: fixture.ConflictCheck);
 
+        tracker.Service([goal]);
+        // Wait for the check completion event, then consume it on the next service pass.
+        fixture.ConflictCheck.PendingTask(goal.Id)!.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+        fixture.Elapsed += TimeSpan.FromMinutes(2);
         Assert.Contains(goal.Id, tracker.Service([goal]));
 
         Assert.Equal(2, Decisions(goal, PullRequestReviewRound.StartedPrefix).Length);

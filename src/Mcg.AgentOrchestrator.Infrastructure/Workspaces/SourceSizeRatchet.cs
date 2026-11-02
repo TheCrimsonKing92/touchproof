@@ -549,7 +549,9 @@ internal static class SourceSizeRatchet
             // After integrating main 691fc3bf, measured 14460 lines across the same 70 files; no extra headroom.
             // Goal 5ca3f5c0: six PR-tracker wiring lines, no added partial file.
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
-            new SourceClassCeiling("ConductorDriver", 14380, 70),
+            // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
+            // extracting only its initializer would separate ownership from the outcome it classifies.
+            new SourceClassCeiling("ConductorDriver", 14384, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -675,7 +677,9 @@ internal static class SourceSizeRatchet
             // the typed environment hold; EnvironmentContractGate owns its automatic clearing.
             // Goal f608f29b adds the three-line environment admission guard before progressive-review steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines, no added partial file.
-            new SourceClassCeiling("ConductorBatchLoop", 8972, 56),
+            // Goal 38a48117 exempts the review owner at the existing hold-tracking call;
+            // the added comment explains why the tracker still needs the hold record.
+            new SourceClassCeiling("ConductorBatchLoop", 8973, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

@@ -21,6 +21,7 @@ internal sealed class PullRequestDeliveryTracker
     private readonly Func<string?>? _mutationBlocker;
     private readonly Action<ConductorLandingReceipt>? _landingSink;
     private readonly ConductorParallelAcceptanceAttemptCoordinator? _acceptanceAttempts;
+    private readonly PullRequestReviewConflictCheck _conflictCheck;
     private readonly object _sync = new();
     private readonly Dictionary<GoalId, TimeSpan> _attempts = [];
     private readonly Dictionary<GoalId, string> _unavailable = [];
@@ -31,7 +32,7 @@ internal sealed class PullRequestDeliveryTracker
         IGoalLifecycleEventWriter? eventWriter = null, IOperatorChannel? channel = null, IClock? clock = null,
         Func<TimeSpan>? elapsed = null, Action<GoalId>? refreshJournal = null, Func<string?>? mutationBlocker = null,
         Action<ConductorLandingReceipt>? landingSink = null,
-        ConductorParallelAcceptanceAttemptCoordinator? acceptanceAttempts = null)
+        ConductorParallelAcceptanceAttemptCoordinator? acceptanceAttempts = null, PullRequestReviewConflictCheck? conflictCheck = null)
     {
         _kernel = kernel;
         _workspace = workspace;
@@ -47,6 +48,7 @@ internal sealed class PullRequestDeliveryTracker
         _mutationBlocker = mutationBlocker;
         _landingSink = landingSink;
         _acceptanceAttempts = acceptanceAttempts;
+        _conflictCheck = conflictCheck ?? new();
     }
 
     internal IReadOnlySet<GoalId> Service(IEnumerable<Goal> goals)
@@ -90,6 +92,7 @@ internal sealed class PullRequestDeliveryTracker
         {
             case PullRequestStatusKind.Open:
                 _unavailable.Remove(goal.Id);
+                _conflictCheck.ObserveOpen(_kernel, _workspace, _attention, goal, delivery, status);
                 RecordChangesRequested(goal, delivery, status);
                 StartReviewRound(goal, delivery, status);
                 if (!PullRequestLandingDelivery.HasRefreshStarted(goal)) Refresh(goal, delivery);
@@ -173,11 +176,12 @@ internal sealed class PullRequestDeliveryTracker
                 $"{PullRequestReviewRound.CapPrefix}{delivery.Url} rounds={delivered} reviewers={reviewers}");
             return;
         }
+        if (!_conflictCheck.TryProceed(_kernel, _workspace, _attention, goal, delivery, status, batch, out var ruling)) return;
         var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer)
             ?? throw new InvalidOperationException("Pull request review round has no Developer task.");
         var round = PullRequestReviewRound.Started(goal, delivery.Url) + 1;
         _kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, developer.Id,
-            PullRequestReviewRound.Guidance(delivery.Url, round, batch), RetryCause.ContractClarification,
+            PullRequestReviewRound.Guidance(delivery.Url, round, batch, ruling), RetryCause.ContractClarification,
             invalidateDownstream: true, correctionSource: CriteriaCorrectionSource.Escalation);
         _kernel.ClearGoalHold(goal.Id);
         _kernel.RecordGoalPolicyDecision(goal.Id,
@@ -186,6 +190,7 @@ internal sealed class PullRequestDeliveryTracker
 
     private void StopReviewRound(Goal goal, GoalDeliveredForReview delivery, string reason)
     {
+        _conflictCheck.Finish(_kernel, _attention, goal, delivery, reason);
         if (PullRequestReviewRound.InFlight(goal))
             _kernel.RecordGoalPolicyDecision(goal.Id, $"{PullRequestReviewRound.StoppedPrefix}{delivery.Url} reason={reason}");
     }
@@ -261,7 +266,7 @@ internal sealed class PullRequestDeliveryTracker
         // Recovery owns failed attempts and operator holds; drift never starts a retry loop.
         if (PullRequestLandingDelivery.RefreshStopped(goal) || PullRequestReviewRound.HasStarted(goal) ||
             PullRequestReviewRound.Stopped(goal) || PullRequestReviewRound.CapRecorded(goal, delivery.Url) ||
-            !DeliveredForReviewHold.IsCurrent(goal)) return;
+            _conflictCheck.Holds(goal, delivery.Url) || !DeliveredForReviewHold.IsCurrent(goal)) return;
         if (!Fetch(goal)) return;
         var remote = Git("rev-parse", "--verify", "refs/remotes/origin/" + _workspace.IntegrationBranch);
         if (!Ok(remote) || !IsRevision(remote.Output.Trim()))

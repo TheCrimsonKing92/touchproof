@@ -1611,7 +1611,7 @@ public static class DotnetBuildEnvironmentManager
             clean |= ownerMarkerMismatch;
         }
 
-        if (clean)
+        if (clean || artifactCustody is not null)
         {
             AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
                 environment.ArtifactsPath,

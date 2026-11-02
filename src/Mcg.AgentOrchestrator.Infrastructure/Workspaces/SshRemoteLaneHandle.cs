@@ -124,6 +124,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                         if (status.String("state") == "failed") throw new RemoteLaneTransportException(status.String("error"));
+                        if (status.String("state") == "cancelled") throw new RemoteLaneTransportException(string.IsNullOrEmpty(status.String("error")) ? "remote job cancelled" : $"remote job cancelled: {status.String("error")}");
                         if (status.String("state") != "completed") continue;
                         var (code, names) = request.Kind == "build-check" ? status.BuildCheckCompletion() : status.Completion();
                         _stop.Token.ThrowIfCancellationRequested();

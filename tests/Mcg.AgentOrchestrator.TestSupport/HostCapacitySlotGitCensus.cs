@@ -1,3 +1,8 @@
+using System.Collections.Frozen;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>Test-only cumulative counts with independent snapshots for each slot hold.</summary>
@@ -5,10 +10,26 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
 {
     private readonly object sync = new();
     private readonly Dictionary<string, Dictionary<string, int>> counts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, int>> callers = new(StringComparer.Ordinal);
+    [ThreadStatic] private static long stackWalks;
+    private static readonly ConcurrentDictionary<MethodBase, CallerFrame> callerFrames = new();
+
+    private readonly record struct CallerFrame(string? Caller, bool IsLaunchBoundary = false);
+
+    public static long StackWalksOnCurrentThread => stackWalks;
+
+    // Assembly identity matters: test projects and fixture probes share the product prefix.
+    public static IReadOnlySet<string> ProductAssemblyNames { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "Mcg.AgentOrchestrator.Core", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.Execution",
+        "Mcg.AgentOrchestrator.Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
+        "Mcg.AgentOrchestrator.Infrastructure.Providers"
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     public static HostCapacitySlotGitCensus Shared { get; } = new(HostCapacitySlotTimingWriter.CurrentTestName);
 
-    public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands);
+    public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands,
+        IReadOnlyDictionary<string, int>? Callers = null);
 
     public static bool EnsureInstalled(string? destination) =>
         EnsureInstalled(destination, ref GitCli.LaunchObserver);
@@ -30,7 +51,21 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         catch (Exception error) { Diagnose(error); }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void Record(string subcommand)
+    {
+        var caller = "test:<unknown>";
+        try
+        {
+            stackWalks++;
+            caller = ResolveCaller(new StackTrace(fNeedFileInfo: false));
+        }
+        catch (Exception error) { Diagnose(error); }
+        Record(subcommand, caller);
+    }
+
+    // Also permits measuring aggregation alone, holding all work but attribution constant.
+    public void Record(string subcommand, string caller)
     {
         try
         {
@@ -39,7 +74,13 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
             {
                 if (!counts.TryGetValue(name, out var commands))
                     counts[name] = commands = new(StringComparer.Ordinal);
-                commands[subcommand] = checked(commands.GetValueOrDefault(subcommand) + 1);
+                if (!callers.TryGetValue(name, out var sources))
+                    callers[name] = sources = new(StringComparer.Ordinal);
+                var key = caller + "|" + subcommand;
+                var commandCount = checked(commands.GetValueOrDefault(subcommand) + 1);
+                var callerCount = checked(sources.GetValueOrDefault(key) + 1);
+                commands[subcommand] = commandCount;
+                sources[key] = callerCount;
             }
         }
         catch (Exception error) { Diagnose(error); }
@@ -51,7 +92,9 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         {
             lock (sync)
                 return new Window(this, testName, counts.TryGetValue(testName, out var commands)
-                    ? new(commands, StringComparer.Ordinal) : new(StringComparer.Ordinal));
+                    ? new(commands, StringComparer.Ordinal) : new(StringComparer.Ordinal),
+                    callers.TryGetValue(testName, out var sources)
+                    ? new(sources, StringComparer.Ordinal) : new(StringComparer.Ordinal));
         }
         catch (Exception error) { Diagnose(error); return null; }
     }
@@ -61,12 +104,15 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         private readonly HostCapacitySlotGitCensus census;
         private readonly string testName;
         private readonly Dictionary<string, int> initial;
+        private readonly Dictionary<string, int> initialCallers;
 
-        internal Window(HostCapacitySlotGitCensus census, string testName, Dictionary<string, int> initial)
+        internal Window(HostCapacitySlotGitCensus census, string testName, Dictionary<string, int> initial,
+            Dictionary<string, int> initialCallers)
         {
             this.census = census;
             this.testName = testName;
             this.initial = initial;
+            this.initialCallers = initialCallers;
         }
 
         public GitLaunchDelta? Close()
@@ -85,11 +131,88 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
                             delta[command] = difference;
                             total = checked(total + difference);
                         }
-                    return new(total, delta);
+                    var callerDelta = new Dictionary<string, int>(StringComparer.Ordinal);
+                    if (census.callers.TryGetValue(testName, out var sources))
+                        foreach (var (source, count) in sources)
+                        {
+                            var difference = count - initialCallers.GetValueOrDefault(source);
+                            if (difference != 0) callerDelta[source] = difference;
+                        }
+                    return new(total, delta, callerDelta);
                 }
             }
             catch (Exception error) { Diagnose(error); return null; }
         }
+    }
+
+    private static string ResolveCaller(StackTrace trace)
+    {
+        string? caller = null;
+        foreach (var frame in trace.GetFrames())
+        {
+            var method = frame.GetMethod();
+            if (method is null) continue;
+            var resolved = callerFrames.GetOrAdd(method, ResolveFrame);
+            // Forwarding observers execute inside the launch boundary. Discard their
+            // frames even when the wrapper belongs to another test or assembly.
+            if (resolved.IsLaunchBoundary) caller = null;
+            else caller ??= resolved.Caller;
+        }
+        return caller ?? "test:<unknown>";
+    }
+
+    private static CallerFrame ResolveFrame(MethodBase method)
+    {
+        var type = method.DeclaringType;
+        if (type is null) return default;
+        var assembly = type.Assembly.GetName().Name ?? "";
+        if (!assembly.StartsWith("Mcg.AgentOrchestrator", StringComparison.Ordinal)) return default;
+
+        // MoveNext belongs to a state machine; use its source method (which may itself
+        // be a generated lambda/local function) before unwrapping the generated name.
+        var methodName = method!.Name;
+        if (methodName == "MoveNext" && type.IsDefined(typeof(CompilerGeneratedAttribute), false) &&
+            type.DeclaringType is { } enclosing)
+        {
+            var source = enclosing.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
+                BindingFlags.Instance | BindingFlags.Static).FirstOrDefault(candidate =>
+                candidate.GetCustomAttribute<StateMachineAttribute>()?.StateMachineType is { } state &&
+                (state == type || (type.IsGenericType && state == type.GetGenericTypeDefinition())));
+            methodName = source?.Name ?? type.Name;
+            if (source is not null) type = source.DeclaringType!;
+        }
+        methodName = SourceMethodName(methodName);
+        while (type.DeclaringType is { } parent && type.IsDefined(typeof(CompilerGeneratedAttribute), false))
+            type = parent;
+        var outermost = type;
+        while (outermost.DeclaringType is { } outer) outermost = outer;
+        if (outermost == typeof(HostCapacitySlotGitCensus)) return default;
+        if (outermost == typeof(GitCli)) return new(null, IsLaunchBoundary: true);
+        if (type.FullName == "InfrastructureTestSupport" &&
+            methodName.StartsWith("RunGitProbe", StringComparison.Ordinal)) return new(null, IsLaunchBoundary: true);
+
+        var names = new Stack<string>();
+        for (var current = type; current is not null; current = current.DeclaringType)
+            names.Push(current.Name.Split('`')[0]);
+        var sourceType = (type.Namespace is { Length: > 0 } ns ? ns + "." : "") + string.Join(".", names);
+        return new((ProductAssemblyNames.Contains(assembly) ? "src:" : "test:") + sourceType + "." + methodName);
+    }
+
+    private static string SourceMethodName(string name)
+    {
+        while (name.StartsWith('<'))
+        {
+            var depth = 0;
+            var end = -1;
+            for (var index = 0; index < name.Length; index++)
+            {
+                if (name[index] == '<') depth++;
+                else if (name[index] == '>' && --depth == 0) { end = index; break; }
+            }
+            if (end <= 1) break;
+            name = name[1..end];
+        }
+        return name;
     }
 
     private static void Diagnose(Exception error) =>
