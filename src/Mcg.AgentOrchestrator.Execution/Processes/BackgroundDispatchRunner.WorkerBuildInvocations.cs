@@ -13,13 +13,16 @@ public sealed partial class BackgroundDispatchRunner
         {
             // Missing apparatus must deny verification without inventing a native worker exit.
             orchestratorFailureReason ??= "worker-build-consumer-unavailable";
-            return new(true, false, "worker_build_host=unavailable; enrolled dispatch cannot use legacy worker receipts");
+            return OrchestratorBuildEvidenceCheck.RetainUnverifiedBusyClaim(
+                new(true, false, "worker_build_host=unavailable; enrolled dispatch cannot use legacy worker receipts"), workerOutput);
         }
         var receipt = WorkerBuildInvocations.Consume(kernel, goalId, taskId, changedPaths, dirtyPaths);
         var host = new OrchestratorBuildEvidenceResolution(receipt.MissingEvidence, receipt.CompilerFailed, receipt.Diagnostic);
         var task = kernel.GetTask(goalId, taskId);
         var infrastructure = WorkerBuildInfrastructureEvidence.Classify(task);
-        if (!receipt.MissingEvidence || receipt.CompilerFailed || infrastructure == WorkerBuildInfrastructureBlocker.None ||
+        if (infrastructure == WorkerBuildInfrastructureBlocker.None)
+            return OrchestratorBuildEvidenceCheck.RetainUnverifiedBusyClaim(host, workerOutput);
+        if (!receipt.MissingEvidence || receipt.CompilerFailed ||
             _completionBuildEvidence is null ||
             WorkerResultBlockers.TryGetAssignedScopeComplete(workerOutput, out var complete, out _) && !complete)
             return host;
