@@ -123,6 +123,8 @@ internal static class CliGoalReplacementExecution
                         observedClaim.OwnerGoalId,
                         observedClaim.Version);
                 }
+                var unavailableFacts = CreateUnavailableGoalReplacementFacts(predecessorForLease);
+                failureCode = AppendGoalReplacementProtectedBy(failureCode, unavailableFacts);
                 TryRecordGoalReplacementFailure(
                     claimStore,
                     command,
@@ -132,9 +134,10 @@ internal static class CliGoalReplacementExecution
                     observedClaim.OwnerGoalId,
                     observedClaim.Version,
                     failureCode,
-                    CreateUnavailableGoalReplacementFacts(predecessorForLease));
+                    unavailableFacts);
                 throw new InvalidOperationException(
-                    $"GOAL_REPLACE_PROTECTED_OWNER predecessor={command.PredecessorGoalId.Value} reason={failureCode}");
+                    $"GOAL_REPLACE_PROTECTED_OWNER predecessor={command.PredecessorGoalId.Value} reason={failureCode}" +
+                    RenderGoalReplacementProtectedNextLine(unavailableFacts));
             }
             if (replacementLeaseAcquisition.Kind == GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut)
             {
@@ -220,6 +223,7 @@ internal static class CliGoalReplacementExecution
             var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(preparedGoal.Id);
 
             GoalReplacementReceipt receipt;
+            var refusalFacts = authorizedFacts;
             try
             {
                 // The committed replacement lease serializes every supported mutation of the
@@ -254,6 +258,7 @@ internal static class CliGoalReplacementExecution
                                 if (existingAudit.Outcome != GoalReplacementOutcome.Succeeded ||
                                     existingAudit.SuccessorGoalId is null)
                                 {
+                                    refusalFacts = existingAudit.EligibilityFacts;
                                     return Task.FromResult((
                                         ShouldSave: false,
                                         Result: new GoalReplacementReceipt(
@@ -316,6 +321,7 @@ internal static class CliGoalReplacementExecution
                             var eligibility = SourceBacklogClaimEligibility.Evaluate(command.Disposition, validatedFacts);
                             if (eligibility != GoalReplacementOutcome.Succeeded)
                             {
+                                refusalFacts = validatedFacts;
                                 var rejectedAudit = new GoalReplacementAuditSnapshot(
                                     command.RequestId,
                                     fingerprint,
@@ -338,9 +344,9 @@ internal static class CliGoalReplacementExecution
                                     claim.Version,
                                     validatedFacts,
                                     eligibility == GoalReplacementOutcome.ProtectedOwner
-                                        ? validatedFacts.IsGitEvidenceAvailable
-                                            ? "protected-owner"
-                                            : "git-evidence-unavailable"
+                                        ? AppendGoalReplacementProtectedBy(
+                                            validatedFacts.IsGitEvidenceAvailable ? "protected-owner" : "git-evidence-unavailable",
+                                            validatedFacts)
                                         : "ineligible-disposition",
                                     fingerprintInputs.ObjectiveHash,
                                     fingerprintInputs.OrderedRoles,
@@ -530,12 +536,16 @@ internal static class CliGoalReplacementExecution
             var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
             var receiptOwner = receipt.OwnerGoalId ?? "unknown";
             var receiptVersion = receipt.ClaimVersion?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-            Console.WriteLine(
-                $"GOAL_REPLACE_{outcomeCode} requestId={receipt.RequestId:D} predecessor={receipt.PredecessorGoalId} successor={receipt.SuccessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion}");
+            var receiptText = $"GOAL_REPLACE_{outcomeCode} requestId={receipt.RequestId:D} predecessor={receipt.PredecessorGoalId} successor={receipt.SuccessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion}";
+            Console.WriteLine(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
+                ? AppendGoalReplacementProtectedBy(receiptText, refusalFacts)
+                : receiptText);
             if (receipt.Outcome is not (GoalReplacementOutcome.Succeeded or GoalReplacementOutcome.Replayed))
             {
-                throw new InvalidOperationException(
-                    $"GOAL_REPLACE_{outcomeCode} predecessor={receipt.PredecessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion} reason={receipt.ReasonCode}");
+                var refusalText = $"GOAL_REPLACE_{outcomeCode} predecessor={receipt.PredecessorGoalId} backlogItem={receipt.BacklogItemId} owner={receiptOwner} claimVersion={receiptVersion} reason={receipt.ReasonCode}";
+                throw new InvalidOperationException(receipt.Outcome == GoalReplacementOutcome.ProtectedOwner
+                    ? AppendGoalReplacementProtectedBy(refusalText, refusalFacts) + RenderGoalReplacementProtectedNextLine(refusalFacts)
+                    : refusalText);
             }
         }
 
@@ -932,10 +942,33 @@ internal static class CliGoalReplacementExecution
         var failureOutcomeCode = RenderGoalReplacementOutcomeCode(audit.Outcome);
         var failureOwner = audit.ObservedOwnerGoalId ?? "unknown";
         var failureVersion = audit.ObservedClaimVersion?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-        Console.WriteLine(
-            $"GOAL_REPLACE_{failureOutcomeCode} requestId={audit.RequestId:D} predecessor={audit.PredecessorGoalId} successor={audit.SuccessorGoalId} backlogItem={audit.BacklogItemId} owner={failureOwner} claimVersion={failureVersion}");
-        throw new InvalidOperationException(
-            $"GOAL_REPLACE_{failureOutcomeCode} predecessor={audit.PredecessorGoalId} backlogItem={audit.BacklogItemId} owner={failureOwner} claimVersion={failureVersion} reason={audit.FailureCode ?? "replayed-failure"}");
+        var receiptText = $"GOAL_REPLACE_{failureOutcomeCode} requestId={audit.RequestId:D} predecessor={audit.PredecessorGoalId} successor={audit.SuccessorGoalId} backlogItem={audit.BacklogItemId} owner={failureOwner} claimVersion={failureVersion}";
+        var refusalText = $"GOAL_REPLACE_{failureOutcomeCode} predecessor={audit.PredecessorGoalId} backlogItem={audit.BacklogItemId} owner={failureOwner} claimVersion={failureVersion} reason={audit.FailureCode ?? "replayed-failure"}";
+        if (audit.Outcome == GoalReplacementOutcome.ProtectedOwner)
+        {
+            receiptText = AppendGoalReplacementProtectedBy(receiptText, audit.EligibilityFacts);
+            refusalText = AppendGoalReplacementProtectedBy(refusalText, audit.EligibilityFacts) +
+                RenderGoalReplacementProtectedNextLine(audit.EligibilityFacts);
+        }
+        Console.WriteLine(receiptText);
+        throw new InvalidOperationException(refusalText);
+    }
+
+    private static string AppendGoalReplacementProtectedBy(string text, GoalReplacementEligibilityFacts facts)
+    {
+        if (text.Contains("protected_by=", StringComparison.Ordinal))
+            return text;
+        var protections = facts.ListProtections();
+        return $"{text} protected_by={(protections.Count == 0 ? "none" : string.Join(',', protections))}";
+    }
+
+    private static string RenderGoalReplacementProtectedNextLine(GoalReplacementEligibilityFacts facts)
+    {
+        if (facts.IsLanded || facts.IsMerged)
+            return Environment.NewLine + "next: the predecessor's work is on main; file a new goal instead";
+        if (facts.ListProtections() is ["running"])
+            return Environment.NewLine + "next: stop the live dispatch and retry after the next conductor tick";
+        return string.Empty;
     }
 
     private static string ComputeUnpreparedGoalReplacementFingerprint(
