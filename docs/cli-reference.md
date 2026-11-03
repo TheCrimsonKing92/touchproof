@@ -8,6 +8,8 @@ The query lists live unresolved human waits (including owner input, landing appr
 
 One proven canonical state-store path produces one read and one project outcome. Sharing a repository root alone does not merge projects. Home wins an alias group; otherwise the first registration under OrdinalIgnoreCase then Ordinal ordering wins. Remaining distinct names appear in `aliases`, sorted by the same order. Unresolved registrations remain separate. Follow-up commands bind the canonical project (displayed home uses `--project=default`) and tenant, retain full known identities and reuse existing answer/dismiss/retry templates. An unavailable or unsafe-to-qualify action is null.
 
+A registration named `home` (case insensitive) conflicts with the fleet's home identity. It produces a `registry-unavailable` inventory diagnostic, `complete=false` and exit 1; home and other registered projects still return their rows. Rename the conflicting registration to include its workspace in the inventory.
+
 Items sort by original UTC raised/requested time, oldest first, then project, goal, source and item ID ordinally; unknown times sort last and null goal sorts before a non-null goal. A source's unset minimum timestamp is unknown. Deduplication uses the complete `(project, source, goalId, itemId)` tuple. The limit applies after sorting; `total` counts observed unique actionable items before limiting and `omitted = total - items.length`.
 
 JSON uses an `AgentReadEnvelope`: `schema` is `mcg.fleet-attention`, `schemaVersion` is integer 1, `generatedAt` is a UTC ISO-8601 round-trip string, and `payload` is an object with these always-present fields:

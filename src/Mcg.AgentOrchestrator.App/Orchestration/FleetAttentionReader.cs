@@ -118,11 +118,21 @@ internal static class FleetAttentionReader
         if (command.IndexOfAny(['|', ';', '&', '\r', '\n']) >= 0 ||
             command.Contains("--project", StringComparison.OrdinalIgnoreCase) ||
             command.Contains("--tenant", StringComparison.OrdinalIgnoreCase)) return null;
-        foreach (var identity in new[] { goalId, itemId }.OfType<string>().Where(id => id.Length >= 8))
-            command = Regex.Replace(command, $@"(?<!\S){Regex.Escape(identity[..8])}(?!\S)", Quote(identity));
+        // Expand only identity arguments: a goal and a wait may share the same short prefix.
+        command = ExpandArgument(command, @"^\s*answer\s+", itemId);
+        command = ExpandArgument(command, @"^\s*attention\s+answer\s+", goalId);
+        command = ExpandArgument(command, @"^\s*attention\s+answer\s+(?:""(?:\\.|[^""\\])*""|\S+)\s+", itemId);
+        command = ExpandArgument(command, @"(?<!\S)--goal(?:=|\s+)", goalId);
+        command = ExpandArgument(command, @"(?<!\S)--item(?:=|\s+)", itemId);
         var binding = project == "home" ? OrchestratorWorkspace.DefaultProjectName : project;
         return $"--project={binding} --tenant={workspace.TenantName} {command}";
     }
+
+    private static string ExpandArgument(string command, string prefixPattern, string? identity) =>
+        identity is { Length: >= 8 }
+            ? Regex.Replace(command, $@"({prefixPattern}){Regex.Escape(identity[..8])}(?!\S)",
+                match => match.Groups[1].Value + Quote(identity))
+            : command;
 
     private static string Quote(string value) => value.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' or ':' or '.')
         ? value : "\"" + value.Replace("\"", "\\\"") + "\"";

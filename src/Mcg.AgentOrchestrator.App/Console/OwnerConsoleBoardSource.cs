@@ -70,19 +70,25 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
             catch (Exception ex) when (ex is not OperationCanceledException) { return new(name, null, ex); }
         }
         entries.Add(Describe("home", () => OrchestratorWorkspace.ForDirectory(repositoryRoot, null, tenant, registry)));
+        Exception? inventoryError = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             foreach (var project in registry.ListProjects())
             {
-                if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase)) continue;
+                if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase))
+                {
+                    inventoryError = new InvalidOperationException(
+                        $"Registered project '{project.Name}' conflicts with the fleet home identity; rename the registration to include it in the inventory.");
+                    continue;
+                }
                 entries.Add(Describe(project.Name, () => OrchestratorWorkspace.ForProject(project.Name,
                     project.RootDirectory, tenantName: tenant, integrationBranch: project.IntegrationBranch,
                     dataRootDirectory: registry.DataRootDirectory), project.DeliveryAnswer is not null,
                     project.UseLearnedIntegrationBranch));
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return new(entries);
+            return new(entries, inventoryError);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { return new(entries, ex); }
     }

@@ -91,6 +91,44 @@ public sealed class CliFleetAttentionTests
     }
 
     [Theory]
+    [InlineData("home", false)]
+    [InlineData("home", true)]
+    [InlineData("HOME", false)]
+    [InlineData("HOME", true)]
+    public async Task Cli_HomeRegistration_ReportsIncompleteAndKeepsHealthyRows(
+        string registration, bool seedConflictingStore)
+    {
+        using var fixture = new Fixture();
+        var conflicting = fixture.Register(registration);
+        var beta = fixture.Register("beta");
+        Assert.NotEqual(fixture.Home.SqliteStatePath, conflicting.SqliteStatePath);
+        foreach (var workspace in new[] { fixture.Home, beta })
+        {
+            await fixture.SeedAsync(workspace);
+            await fixture.ItemAsync(workspace, ItemIdValue, GoalIdValue, Now);
+        }
+        if (seedConflictingStore)
+        {
+            await fixture.SeedAsync(conflicting);
+            await fixture.ItemAsync(conflicting, "conflicting-item", GoalIdValue, Now);
+        }
+        var before = fixture.Snapshot();
+        var child = fixture.Run("attention", "fleet", "--json");
+        Assert.Equal(1, child.ExitCode);
+        using var document = JsonDocument.Parse(child.StandardOutput);
+        AssertEnvelope(document.RootElement);
+        var payload = document.RootElement.GetProperty("payload");
+        Assert.False(payload.GetProperty("complete").GetBoolean());
+        Assert.Equal(2, payload.GetProperty("total").GetInt32());
+        Assert.Equal(new[] { "beta", "home" }, payload.GetProperty("items").EnumerateArray()
+            .Select(item => item.GetProperty("project").GetString()));
+        var error = Assert.Single(payload.GetProperty("errors").EnumerateArray());
+        Assert.Equal("registry-unavailable", error.GetProperty("code").GetString());
+        Assert.Contains($"Registered project '{registration}' conflicts", error.GetProperty("message").GetString());
+        Assert.Equal(before, fixture.Snapshot());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Aliases_ReversedCatalog_StillReadsCanonicalWorkspaceOnce(bool reverse)
@@ -168,6 +206,50 @@ public sealed class CliFleetAttentionTests
             read: (_, _, _) => Task.FromResult(Context(item, item, item with { GoalId = null }) with { Waits = [wait] }));
         Assert.Equal(3, result.Total);
         Assert.Equal(new[] { "collaboration-item", "collaboration-item", "human-wait" }, result.Items.Select(item => item.Source));
+    }
+
+    [Theory]
+    [InlineData("11111111bbbbbbbbbbbbbbbbbbbbbbbb", "11111111bbbbbbbbbbbbbbbbbbbbbbbb")]
+    [InlineData("wait-id-123$&tail", "\"wait-id-123$&tail\"")]
+    public async Task HumanWait_DefaultAction_PreservesLiteralFullItemId(string id, string target)
+    {
+        using var fixture = new Fixture();
+        var wait = new HumanInputRequest(new HumanInputRequestId(id), new GoalId(GoalIdValue),
+            null, "Question", Now);
+        Assert.Equal($"answer {id[..8]} <answer>", wait.ResumeCommand);
+        var result = await FleetAttentionReader.ReadAsync(new([new("home", fixture.Home)]), 50, Now,
+            read: (_, _, _) => Task.FromResult(Context() with { Waits = [wait] }));
+        var row = Assert.Single(result.Items);
+        Assert.Equal(id, row.ItemId);
+        Assert.Equal($"--project=default --tenant=default answer {target} <answer>", row.NextAction);
+    }
+
+    [Theory]
+    [InlineData("11111111bbbbbbbbbbbbbbbbbbbbbbbb", "11111111bbbbbbbbbbbbbbbbbbbbbbbb")]
+    [InlineData("wait-id-123$&tail", "\"wait-id-123$&tail\"")]
+    public async Task HumanWait_ClarificationAction_ExpandsGoalAndItemByPosition(
+        string id, string target)
+    {
+        using var fixture = new Fixture();
+        var wait = new HumanInputRequest(new HumanInputRequestId(id), new GoalId(GoalIdValue),
+            null, "Question", Now, resumeCommand: $"attention answer {GoalIdValue[..8]} {id[..8]} --text-file <path>");
+        var result = await FleetAttentionReader.ReadAsync(new([new("home", fixture.Home)]), 50, Now,
+            read: (_, _, _) => Task.FromResult(Context() with { Waits = [wait] }));
+        Assert.Equal($"--project=default --tenant=default attention answer {GoalIdValue} {target} --text-file <path>",
+            Assert.Single(result.Items).NextAction);
+    }
+
+    [Fact]
+    public async Task HumanWait_AnswerTextMatchesPrefix_DoesNotRewriteAnswer()
+    {
+        using var fixture = new Fixture();
+        const string id = "11111111bbbbbbbbbbbbbbbbbbbbbbbb";
+        var wait = new HumanInputRequest(new HumanInputRequestId(id), new GoalId(GoalIdValue),
+            null, "Question", Now, resumeCommand: "answer 11111111 11111111");
+        var result = await FleetAttentionReader.ReadAsync(new([new("home", fixture.Home)]), 50, Now,
+            read: (_, _, _) => Task.FromResult(Context() with { Waits = [wait] }));
+        Assert.Equal($"--project=default --tenant=default answer {id} 11111111",
+            Assert.Single(result.Items).NextAction);
     }
 
     [Fact]
