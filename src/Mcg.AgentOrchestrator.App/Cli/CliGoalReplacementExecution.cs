@@ -63,7 +63,7 @@ internal static class CliGoalReplacementExecution
             var preparedSnapshot = kernel.ExportGoalSnapshot(preparedGoal.Id);
             var fingerprintInputs = BuildGoalReplacementFingerprint(command, preparedSnapshot);
             var fingerprint = fingerprintInputs.Fingerprint;
-            GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(preparedGoal.Id);
+            GoalCreationSideEffectDelivery.BeforeStateCommit(preparedGoal.Id);
             GoalReplacementTransferLeaseAcquisition replacementLeaseAcquisition;
             try
             {

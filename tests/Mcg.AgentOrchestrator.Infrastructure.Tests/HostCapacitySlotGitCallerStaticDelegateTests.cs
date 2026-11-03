@@ -29,7 +29,7 @@ public sealed class HostCapacitySlotGitCallerStaticDelegateTests : IDisposable
     }
 
     [Fact]
-    public async Task Release_InstanceInitializerLambda_KeepsEnclosingConstructor()
+    public async Task Release_InstanceInitializerLambda_UsesInvokingMethod()
     {
         var fixture = new InstanceRunnerFixture();
         var path = Path.Combine(root, "instance.jsonl");
@@ -40,7 +40,8 @@ public sealed class HostCapacitySlotGitCallerStaticDelegateTests : IDisposable
         using var row = ReadRow(path);
         var callers = Callers(row);
         Assert.Equal(1, row.RootElement.GetProperty("git_launches").GetInt32());
-        Assert.Equal(1, callers[Key("InstanceRunnerFixture..ctor")]);
+        Assert.DoesNotContain(callers.Keys, key => key.Contains(".ctor", StringComparison.Ordinal));
+        Assert.Equal(1, callers[Key("InstanceRunnerFixture.Launch")]);
         Assert.Equal(0, callers["other"]);
         Assert.Equal(2, callers.Count);
     }
@@ -67,8 +68,9 @@ public sealed class HostCapacitySlotGitCallerStaticDelegateTests : IDisposable
     private static string Key(string method) => $"test:HostCapacitySlotGitCallerStaticDelegateTests.{method}|--version";
     private static void Succeeded(GitCli.GitResult result) => Assert.True(result.Succeeded, result.Error);
     private static JsonDocument ReadRow(string path) => JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
-    private static Dictionary<string, int> Callers(JsonDocument row) => row.RootElement.GetProperty("git_callers")
-        .EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetInt32());
+    private static IReadOnlyDictionary<string, int> Callers(JsonDocument row) => HostCapacitySlotGitCensus.GroupByCaller(
+        row.RootElement.GetProperty("git_callers").EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.GetInt32()));
 
     private static class StaticRunnerFixture
     {

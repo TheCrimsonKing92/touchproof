@@ -129,7 +129,8 @@ public sealed class LandingExecutorGitRunnerScopeTests
             var callers = row.RootElement.GetProperty("git_callers").EnumerateObject()
                 .ToDictionary(property => property.Name, property => property.Value.GetInt32());
             Assert.DoesNotContain(callers.Keys, key => key.Contains(".cctor", StringComparison.Ordinal));
-            var caller = Assert.Single(callers.Where(pair => pair.Value != 0));
+            var caller = Assert.Single(HostCapacitySlotGitCensus.GroupByCaller(callers)
+                .Where(pair => pair.Value != 0));
             Assert.Contains(caller.Key, new[]
             {
                 "src:Mcg.AgentOrchestrator.App.Orchestration.LandingExecutor.UpdateRef|update-ref",

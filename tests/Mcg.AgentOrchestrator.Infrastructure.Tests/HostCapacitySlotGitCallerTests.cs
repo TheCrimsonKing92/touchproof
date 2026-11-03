@@ -19,6 +19,9 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         var environment = GitEnvironment();
         Succeeded(GitCli.RunWithEnvironment(repo, environment, "init"));
         Succeeded(GitCli.RunWithEnvironment(repo, environment, "commit", "--allow-empty", "-m", "seed"));
+        // Git accepts this HEAD spelling; the conservative in-process check defers to the probe.
+        var headPath = Path.Combine(repo, ".git", "HEAD");
+        File.WriteAllText(headPath, File.ReadAllText(headPath).Replace("ref: ", "ref:", StringComparison.Ordinal));
         var path = Path.Combine(root, "fixture.jsonl");
         var budget = new HostCapacityTestBudget(1, _ => path);
         await using (var held = await budget.EnterAsync())
@@ -297,8 +300,9 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
     private static string Key(string method, string command) => $"test:HostCapacitySlotGitCallerTests.{method}|{command}";
     private static void Succeeded(GitCli.GitResult result) => Assert.True(result.Succeeded, result.Error);
     private static JsonDocument ReadRow(string path) => JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
-    private static Dictionary<string, int> Callers(JsonDocument row) => row.RootElement.GetProperty("git_callers")
-        .EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetInt32());
+    private static IReadOnlyDictionary<string, int> Callers(JsonDocument row) => HostCapacitySlotGitCensus.GroupByCaller(
+        row.RootElement.GetProperty("git_callers").EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.GetInt32()));
 
     private sealed class GenericCaller<T>
     {

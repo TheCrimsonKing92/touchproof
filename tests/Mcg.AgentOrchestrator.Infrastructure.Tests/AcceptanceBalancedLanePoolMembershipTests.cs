@@ -64,7 +64,7 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
             .Where(AcceptanceBalancedLaneExpander.IsConstrained).ToArray();
         Assert.Equal(constrained, expanded.Lanes.Take(constrained.Length));
         var remainder = Assert.Single(constrained, lane => lane.Name == "Remainder");
-        Assert.Equal(["machine:GitHeavyLanes"], remainder.ExclusiveResourceKeys);
+        Assert.Empty(remainder.ExclusiveResourceKeys);
         // The restored constrained catch-all still owns new classes under ruling d7eb800a.
         Assert.Equal(remainder.Name,
             Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, newClass)).Name);

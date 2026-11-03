@@ -8,7 +8,7 @@ using Xunit;
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGitHeavyLaneKeys : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Fact]
-    public Task ShippedKeys_SerializeGitHeavyLanesWhileKeylessLaneOverlaps() =>
+    public Task FixtureKeys_SerializeGitHeavyLanesWhileKeylessLaneOverlaps() =>
         RunScenarioAsync(removeKeys: false);
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGitHeavyLaneKeys :
                 name,
                 filter = "FullyQualifiedName~" + FixtureTokens[index],
                 estimatedSerialSeconds = 100 - index * 10,
-                exclusiveResourceKeys = removeKeys && index < 2 ? [] : shippedLane.ExclusiveResourceKeys.ToArray()
+                exclusiveResourceKeys = !removeKeys && index < 2 ? new[] { "machine:GitHeavyLanes" } : []
             };
         }).ToArray();
         const string project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";

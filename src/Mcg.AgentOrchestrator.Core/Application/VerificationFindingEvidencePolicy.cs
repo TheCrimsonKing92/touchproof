@@ -1,6 +1,7 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-// Finding deferral requires authoritative ownership; worker prose cannot grant it.
+// Operator deferral requires authoritative ownership. Typed acceptance requests
+// also qualify for conductor-created, candidate-bound carry state.
 // Candidate context comes from the dispatch that owns the verification record.
 internal static class VerificationFindingEvidencePolicy
 {
@@ -74,6 +75,7 @@ internal static class VerificationFindingEvidencePolicy
             verification.MergedReviewFindings ?? [],
             goal.EffectiveAcceptanceCriteriaCorrections);
         return openFindings.Count > 0 && openFindings.All(finding =>
-            FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is not null);
+            FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is not null ||
+            AcceptanceOwnedFindingCarry.IsCarriable(goal, finding, verification.ReviewedCommit));
     }
 }

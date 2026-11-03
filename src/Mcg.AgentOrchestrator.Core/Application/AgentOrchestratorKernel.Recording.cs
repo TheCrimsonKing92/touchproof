@@ -699,10 +699,7 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     private static bool HasTypedEvidenceRequest(ReviewFinding finding) =>
-        finding.EvidenceRequest is { Selections.Count: > 0 } request &&
-        request.Selections.All(selection =>
-            !string.IsNullOrWhiteSpace(selection.TestProject) &&
-            !string.IsNullOrWhiteSpace(selection.TestClass));
+        AcceptanceOwnedFindingCarry.HasTypedEvidenceRequest(finding);
 
     private static bool TryReadRejectedDispatchHead(string stderr, out string head)
     {
@@ -1086,20 +1083,8 @@ public sealed partial class AgentOrchestratorKernel
         var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
-        var workerBlockingFindings = openBlockingFindings
-            .Where(finding => VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is null)
-            .ToArray();
-        foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
-        {
-            var obligation = VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, deferredFinding, verification.ReviewedCommit)!;
-            Append(
-                goal,
-                task.Id,
-                ProgressKind.TaskNote,
-                $"Deferred {(obligation.Owner == CriterionEvidenceOwner.Acceptance ? "acceptance-owned" : "operator-owned")} finding remains pending: stable_id={deferredFinding.StableId}; " +
-                $"obligation={obligation.DisplayLabel}; owner={obligation.Owner}; state={obligation.State}; " +
-                $"next_action={obligation.RequiredScope}; candidate_sha={verification.ReviewedCommit}.");
-        }
+        var (workerBlockingFindings, carriedFindings) = AcceptanceOwnedFindingCarry.GetWorkerBlockingFindings(
+            goal, task, verification, openBlockingFindings, message => Append(goal, task.Id, ProgressKind.TaskNote, message));
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
             workerBlockingFindings.Length > 0)
@@ -1197,7 +1182,7 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        if (enforceFailureEvidenceRule &&
+        if (enforceFailureEvidenceRule && !(onlyAuthoritativelyDeferredBlockingFindings && carriedFindings.Length > 0) &&
             task.RequiredRole != AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out blocker))
@@ -1211,6 +1196,20 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return false;
+    }
+
+    // Only the conductor's deterministic full gate calls the success path.
+    // Failure records acceptance ownership without reopening a paid worker task.
+    internal void RecordCarriedAcceptanceFindingGateOutcome(
+        GoalId goalId, string? candidateSha, bool passed, string source)
+    {
+        var goal = GetGoal(goalId);
+        foreach (var stableId in AcceptanceOwnedFindingCarry.GetOpenCarried(goal, candidateSha))
+        {
+            Append(goal, null, ProgressKind.TaskNote, passed
+                ? AcceptanceOwnedFindingCarry.ClosureNote(stableId, candidateSha!, source)
+                : $"Acceptance gate failed for carried finding: stable_id={Uri.EscapeDataString(stableId)}; candidate_sha={candidateSha}; owner=Acceptance; finding remains open.");
+        }
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)

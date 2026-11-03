@@ -1,9 +1,34 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text;
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class BacklogTextView
 {
+internal static string RenderBacklogRelations(BacklogItem item, Func<string, BacklogItem?> loadOther)
+{
+    if (item.Links.Count == 0)
+        return "";
+
+    var text = new StringBuilder().AppendLine().AppendLine("Relations:");
+    foreach (var link in item.Links.OrderBy(link => link.OtherId(item.Id), StringComparer.Ordinal))
+    {
+        var otherId = link.OtherId(item.Id);
+        BacklogItem? other;
+        try { other = loadOther(otherId); }
+        catch (Exception error) when (error is not OperationCanceledException) { other = null; }
+        text.AppendLine(other is null
+            ? $"- {link.Kind} {otherId} [item unavailable]"
+            : $"- {link.Kind} {otherId} [{other.Status}] {other.Title}");
+    }
+    return text.ToString();
+}
+
+internal static string RenderBacklogLinkResult(BacklogLinkKind kind, string firstId, string secondId, BacklogLink link) =>
+    kind == BacklogLinkKind.RelatedCause
+        ? $"Linked related-cause: [{CliIdentifierText.ShortId(firstId)}] <-> [{CliIdentifierText.ShortId(secondId)}]"
+        : $"{(kind == BacklogLinkKind.Duplicate ? "Linked duplicate" : "Linked related")}: [{link.Item1Id[..Math.Min(8, link.Item1Id.Length)]}] <-> [{link.Item2Id[..Math.Min(8, link.Item2Id.Length)]}]";
+
 internal static string RenderBacklogListTag(BacklogItem item)
 {
     if (item.SupersededBy is not null)

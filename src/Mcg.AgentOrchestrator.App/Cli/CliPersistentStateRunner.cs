@@ -2015,7 +2015,7 @@ internal static partial class CliPersistentStateRunner
         {
             GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
-            GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(goal.Id);
+            GoalCreationSideEffectDelivery.BeforeStateCommit(goal.Id);
             var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
                 goal.Id,
                 deferredCollaborationWriter.SnapshotEffects(),
