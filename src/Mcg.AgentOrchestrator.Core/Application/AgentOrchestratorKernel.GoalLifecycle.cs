@@ -746,14 +746,13 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.RecordAcceptanceFailure(
+        RecordAcceptanceFailure(
+            goalId,
             failedChecks,
-            _clock.UtcNow,
             branchHeadSha,
             mainHeadSha,
             checkAttributions,
             baselineAttestation);
-        RecordCarriedAcceptanceFindingGateOutcome(goalId, branchHeadSha, passed: false, source: "deterministic acceptance failure");
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.AcceptanceFailed), GoalStatusTransitionRecorder.GoalLifecycleReconcileGoalAcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
@@ -884,6 +883,7 @@ public sealed partial class AgentOrchestratorKernel
             mainHeadSha,
             checkAttributions,
             baselineAttestation);
+        RecordCarriedAcceptanceFindingGateOutcome(goalId, branchHeadSha, passed: false, source: "deterministic acceptance failure");
     }
 
     public void ClearAcceptanceFailure(GoalId goalId)
