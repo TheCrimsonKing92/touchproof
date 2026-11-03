@@ -116,6 +116,7 @@ internal static class CliCommandHelp
     public const string DirectivesUsage = "Usage: directives [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
+    public const string ClaudeUsageBackfillUsage = "Usage: claude-usage-backfill [--since <ISO-8601-with-offset>] [--goal <goal-prefix>] [--apply] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status [--json] | conductor stop | conductor setup | conductor apply-intents <goal-prefix>";
@@ -770,6 +771,11 @@ internal static class CliCommandHelp
         "Report per-role and per-model worker dispatch context usage.",
         ["--since", "--role", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry ClaudeUsageBackfill = new(
+        ClaudeUsageBackfillUsage,
+        "Report historical Claude transcript usage fills; --apply queues a workspace intent for the conductor tick.",
+        ["--since", "--goal", "--apply", "--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry AuthorDraft = new(
         AuthorDraftUsage,
         "Draft and check a goal brief from a backlog item without filing a goal.",
@@ -1406,6 +1412,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("context-usage", StringComparison.OrdinalIgnoreCase))
         {
             entry = ContextUsage;
+            return true;
+        }
+
+        if (args[0].Equals("claude-usage-backfill", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ClaudeUsageBackfill;
             return true;
         }
 
