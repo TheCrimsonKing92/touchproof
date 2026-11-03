@@ -111,7 +111,11 @@ public sealed class ForegroundRuntimeCacheTests
         var refused = fixture.Helper("goals");
         Assert.NotEqual(0, refused.ExitCode);
         Assert.Contains("invalid and will not be modified or launched", refused.Stderr);
-        Assert.Contains(Path.GetDirectoryName(original)!, refused.Stderr);
+        // Windows PowerShell wraps error text, including paths containing spaces.
+        // Compare the complete path without display whitespace; argv stays exact above.
+        var expectedPath = string.Concat(Path.GetDirectoryName(original)!.Where(c => !char.IsWhiteSpace(c)));
+        var reportedError = string.Concat(refused.Stderr.Where(c => !char.IsWhiteSpace(c)));
+        Assert.Contains(expectedPath, reportedError);
         Assert.False(File.Exists(fixture.ArgumentsLog));
         Assert.Equal("conflict", File.ReadAllText(dependency));
     }
