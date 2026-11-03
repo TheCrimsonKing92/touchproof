@@ -15,7 +15,7 @@ public sealed class ForegroundRuntimeCacheTests
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
         var first = fixture.Helper("goals", "--name", "two words");
-        Assert.Equal(0, first.ExitCode);
+        AssertExitCode(0, first);
         var argv = fixture.NativeArguments();
         var run = Path.GetDirectoryName(argv[0])!;
         Assert.Equal(Path.Combine(fixture.CacheRoot, "v2"), Path.GetDirectoryName(run));
@@ -28,7 +28,7 @@ public sealed class ForegroundRuntimeCacheTests
         Assert.False(File.Exists(fixture.BuildLog));
 
         var warm = fixture.Helper("goals", "--name", "two words");
-        Assert.Equal(0, warm.ExitCode);
+        AssertExitCode(0, warm);
         Assert.Equal(argv, fixture.NativeArguments());
         Assert.Equal(seal, File.ReadAllText(Path.Combine(run, ".mcg-run-closure.json")));
         Assert.Equal(new[] { fixture.TempRoot, fixture.TempRoot }, File.ReadAllLines(fixture.NativeEnvironment));
@@ -41,7 +41,7 @@ public sealed class ForegroundRuntimeCacheTests
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
         string[] tail = ["goals", "--name", "two words", "--runtime-cache-root", "native value", "--limit", "5"];
-        Assert.Equal(0, fixture.Helper(tail).ExitCode);
+        AssertExitCode(0, fixture.Helper(tail));
         Assert.Equal(tail, fixture.NativeArguments().Skip(1));
         Assert.False(File.Exists(fixture.BuildLog));
     }
@@ -52,7 +52,7 @@ public sealed class ForegroundRuntimeCacheTests
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
         var result = fixture.HelperWithExitCode(7, "goals");
-        Assert.Equal(7, result.ExitCode);
+        AssertExitCode(7, result);
         Assert.Equal(new[] { "goals" }, fixture.NativeArguments().Skip(1));
         Assert.StartsWith(fixture.CacheRoot + Path.DirectorySeparatorChar, fixture.NativeArguments()[0]);
         Assert.Equal(ReadEnvironment(fixture.BeforeEnvironment), ReadEnvironment(fixture.AfterEnvironment));
@@ -63,13 +63,13 @@ public sealed class ForegroundRuntimeCacheTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         var original = fixture.NativeArguments()[0];
         File.WriteAllText(fixture.SourceFile, "// changed source");
         File.SetLastWriteTimeUtc(fixture.SourceFile, new DateTime(2045, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 
         var rebuilt = fixture.Helper("goals");
-        Assert.Equal(0, rebuilt.ExitCode);
+        AssertExitCode(0, rebuilt);
         Assert.Equal(new[] { "build" }, File.ReadAllLines(fixture.BuildLog));
         Assert.Equal(CacheFixture.Head, File.ReadAllText(fixture.AppDll + ".git-head").Trim());
         Assert.NotEqual(original, fixture.NativeArguments()[0]);
@@ -82,11 +82,11 @@ public sealed class ForegroundRuntimeCacheTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         var original = fixture.NativeArguments()[0];
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.AppDll)!, "dependency.dll"), "dependency-v2");
 
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         var selected = fixture.NativeArguments()[0];
         Assert.NotEqual(original, selected);
         Assert.Equal("dependency-v2", File.ReadAllText(Path.Combine(Path.GetDirectoryName(selected)!, "dependency.dll")));
@@ -98,11 +98,11 @@ public sealed class ForegroundRuntimeCacheTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         var original = fixture.NativeArguments()[0];
         var dependency = Path.Combine(Path.GetDirectoryName(original)!, "dependency.dll");
         File.Delete(dependency);
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         Assert.Equal(original, fixture.NativeArguments()[0]);
         Assert.Equal("dependency-v1", File.ReadAllText(dependency));
 
@@ -125,7 +125,7 @@ public sealed class ForegroundRuntimeCacheTests
         string[] tail = ["goals", "--name", "two words", "", "left&right", "bang!literal",
             "--runtime-cache-root", "native option value", "brackets (x)"];
         var result = fixture.Launcher(["--runtime-cache-root", externalCache, .. tail], exitCode: 7);
-        Assert.Equal(7, result.ExitCode);
+        AssertExitCode(7, result);
         var argv = fixture.NativeArguments();
         Assert.Equal(tail, argv.Skip(1));
         Assert.Equal(Path.Combine(externalCache, "v2"), Path.GetDirectoryName(Path.GetDirectoryName(argv[0])));
@@ -138,7 +138,7 @@ public sealed class ForegroundRuntimeCacheTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new CacheFixture();
-        Assert.Equal(0, fixture.Launcher(["goals", "--name", "two words"]).ExitCode);
+        AssertExitCode(0, fixture.Launcher(["goals", "--name", "two words"]));
         var argv = fixture.NativeArguments();
         Assert.Equal(new[] { argv[0], "goals", "--name", "two words" }, argv);
         Assert.Equal(Path.Combine(fixture.TempRoot, "mcg-run", "v2"),
@@ -158,9 +158,9 @@ public sealed class ForegroundRuntimeCacheTests
         Directory.CreateDirectory(Path.GetDirectoryName(pointer)!);
         File.WriteAllLines(pointer, [CacheFixture.Head, adoptedDll]);
         // Positive control proves the pointer is eligible before testing explicit selection.
-        Assert.Equal(0, fixture.Launcher(["goals"], intree: false).ExitCode);
+        AssertExitCode(0, fixture.Launcher(["goals"], intree: false));
         Assert.Equal(adoptedDll, fixture.NativeArguments()[0]);
-        Assert.Equal(0, fixture.Helper("goals").ExitCode);
+        AssertExitCode(0, fixture.Helper("goals"));
         Assert.StartsWith(fixture.CacheRoot + Path.DirectorySeparatorChar, fixture.NativeArguments()[0]);
         Assert.Equal("app-v1", File.ReadAllText(fixture.ObservedApp));
     }
@@ -233,7 +233,7 @@ public sealed class ForegroundRuntimeCacheTests
         fixture.CreateJunction(link, target);
         try
         {
-            Assert.Equal(0, fixture.Helper("goals").ExitCode);
+            AssertExitCode(0, fixture.Helper("goals"));
             Assert.True(Directory.Exists(Path.Combine(target, "operator-run-cache", "v2")));
             Assert.StartsWith(fixture.CacheRoot + Path.DirectorySeparatorChar, fixture.NativeArguments()[0]);
         }
@@ -278,6 +278,7 @@ public sealed class ForegroundRuntimeCacheTests
             Assert.Throws<UnauthorizedAccessException>(() => Directory.CreateDirectory(Path.Combine(fixture.CacheRoot, "probe")));
             var result = fixture.Helper("goals");
             Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains("Cannot prepare runtime cache root", result.Stderr);
             Assert.Contains("operator-run-cache", result.Stderr);
             Assert.False(File.Exists(fixture.ArgumentsLog));
             Assert.False(File.Exists(fixture.BuildLog));
@@ -300,7 +301,7 @@ public sealed class ForegroundRuntimeCacheTests
 
         var explicitDll = fixture.BoundHelper("-AppDll", fixture.AppDll, "-RepositoryRoot", fixture.Root,
             "-ExpectedStateDirectory", state, "-DisposableFixture", "goals");
-        Assert.Equal(0, explicitDll.ExitCode);
+        AssertExitCode(0, explicitDll);
         Assert.Equal(new[] { fixture.AppDll, "goals", "--repository-root", fixture.Root,
             "--expected-state-directory", state, "--disposable-fixture" }, fixture.NativeArguments());
         Assert.False(Directory.Exists(fixture.CacheRoot));
@@ -311,10 +312,15 @@ public sealed class ForegroundRuntimeCacheTests
         JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))!
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).ToArray();
 
+    private static void AssertExitCode(int expected, TestChildProcessCapture.Result result) =>
+        Assert.True(result.ExitCode == expected,
+            $"Expected exit {expected}, actual {result.ExitCode}.\nstdout: {result.Stdout}\nstderr: {result.Stderr}");
+
     private sealed class CacheFixture : IDisposable
     {
         internal const string Head = "controlled-fixture-head";
-        internal string Root { get; } = Path.Combine(Path.GetTempPath(), $"foreground cache {Guid.NewGuid():N}");
+        // Leave room for the digest and native-asset suffix in Windows PowerShell 5.1.
+        internal string Root { get; } = Path.Combine(Path.GetTempPath(), $"fc {Guid.NewGuid().ToString("N")[..12]}");
         internal string Repository => Path.Combine(Root, "repo with spaces");
         internal string CacheRoot => Path.Combine(Repository, ".orchestrator", "operator-run-cache");
         internal string TempRoot => Path.Combine(Root, "caller temp");
@@ -375,7 +381,7 @@ public sealed class ForegroundRuntimeCacheTests
                     public static int Main(string[] args) {
                         // Git must be an executable: invoking git.cmd without CALL in
                         // the production launcher transfers control out of that batch.
-                        if (string.Equals(Path.GetFileName(Environment.GetCommandLineArgs()[0]),
+                        if (string.Equals(Path.GetFileName(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName),
                             "git.exe", StringComparison.OrdinalIgnoreCase)) {
                             if (args.Length < 3 || args[0] != "-C") return 91;
                             if (args[2] == "rev-parse") {
@@ -404,9 +410,15 @@ public sealed class ForegroundRuntimeCacheTests
                 '@
                 """);
             var compile = RunPowerShell(compileScript, []);
-            Assert.Equal(0, compile.ExitCode);
+            AssertExitCode(0, compile);
             Assert.True(File.Exists(NativeHost), compile.Stderr);
             File.Copy(NativeHost, Path.Combine(ShimDirectory, "git.exe"));
+            var git = StartInfo(Path.Combine(ShimDirectory, "git.exe"));
+            foreach (var argument in new[] { "-C", Repository, "rev-parse", "HEAD" })
+                git.ArgumentList.Add(argument);
+            var gitHead = TestChildProcessCapture.Run(git);
+            AssertExitCode(0, gitHead);
+            Assert.Equal(Head, gitHead.Stdout.Trim());
             File.WriteAllText(Path.Combine(Root, "invoke-helper.ps1"), $"""
                 param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
                 $ErrorActionPreference = 'Stop'
@@ -459,7 +471,7 @@ public sealed class ForegroundRuntimeCacheTests
             start.ArgumentList.Add("-Command");
             start.ArgumentList.Add($"New-Item -ItemType Junction -Path '{Ps(link)}' -Target '{Ps(target)}' -ErrorAction Stop | Out-Null");
             var result = TestChildProcessCapture.Run(start);
-            Assert.Equal(0, result.ExitCode);
+            AssertExitCode(0, result);
             Assert.True((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0, "Junction fixture was not created.");
         }
 

@@ -366,7 +366,12 @@ if (-not $PSBoundParameters.ContainsKey('CacheRoot')) {
     $CacheRoot = Join-Path $env:TEMP 'mcg-run'
 }
 $base = Join-Path $CacheRoot "v$script:RunCacheSchemaVersion"
-[void](New-Item -ItemType Directory -Force -Path $base)
+try {
+    [void](New-Item -ItemType Directory -Force -Path $base -ErrorAction Stop)
+}
+catch {
+    throw "Cannot prepare runtime cache root '$CacheRoot' (schema directory '$base'). Check directory permissions and retry. $($_.Exception.Message)"
+}
 
 $resolvedRun = $null
 $lastSnapshotFailure = $null
