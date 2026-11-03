@@ -158,8 +158,8 @@ public sealed class OwnerConsoleSelectedPreviewWholeGoalTests
         var again = await query.LoadAsync(goal, Token);
         Assert.Equal("Changes 1 file in src: Round1.cs", Line2(goal, first));
         Assert.Equal(Line2(goal, first), Line2(goal, again));
-        // Matching endpoints still require distinct detail and preview entries.
-        Assert.Equal(new[] { (repo.Initial, repo.Round1), (repo.Initial, repo.Round1) }, reads);
+        // Detail and preview share the immutable read when their endpoints match.
+        Assert.Equal(new[] { (repo.Initial, repo.Round1) }, reads);
 
         repo.Git("checkout", repo.IntegrationBranch);
         repo.Git("merge", "--ff-only", repo.Round1);
@@ -168,8 +168,8 @@ public sealed class OwnerConsoleSelectedPreviewWholeGoalTests
         Assert.Equal(first.Changed.State, moved.Changed.State);
         Assert.Equal(first.Changed.Items, moved.Changed.Items);
         Assert.Equal(first.Changed.Source, moved.Changed.Source);
-        Assert.Equal((repo.Round1, repo.Round1), reads[2]);
-        Assert.Equal(3, reads.Count);
+        Assert.Equal((repo.Round1, repo.Round1), reads[1]);
+        Assert.Equal(2, reads.Count);
         Assert.Equal(3, bases);
     }
 
@@ -197,7 +197,7 @@ public sealed class OwnerConsoleSelectedPreviewWholeGoalTests
         release.TrySetResult();
         var summaries = await TestHangGuard.WaitAsync(Task.WhenAll(first, second), "both selected summary loads completed");
 
-        Assert.Equal(2, reads);
+        Assert.Equal(1, reads);
         Assert.All(summaries, summary => Assert.Equal("Changes 1 file in src: Round1.cs", Line2(goal, summary)));
     }
 
