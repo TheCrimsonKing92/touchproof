@@ -1100,6 +1100,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 .Select((path, index) => new
                 {
                     Path = path,
+                    Role = path == LinkedBacklogRecordEvidence.FileName ? AgentRole.Planner : AgentRole.Developer,
                     Marker = $"registry-source-{index:D2}-{path}-✓",
                     Bytes = Encoding.UTF8.GetBytes($"registry-source-{index:D2}-{path}-✓\r\nfinal newline\n")
                 })
@@ -1121,7 +1122,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                         path = artifact.Path,
                         exists = true,
                         sha256 = WorkerContextArtifact.Hash(artifact.Bytes),
-                        roleVisibility = new[] { "Developer" },
+                        roleVisibility = new[] { artifact.Role.ToString() },
                         hashVerified = true
                     }).ToArray()
                 }));
@@ -1263,6 +1264,30 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 brief,
                 observedSources: observations);
 
+            var plannerTask = new TaskSpec(TaskId.New(), "Plan semantic sources", AgentRole.Planner);
+            var plannerGoal = new AgentOrchestratorKernel().CreateGoal("Planner semantic sources", [plannerTask]);
+            var plannerObservations = new List<WorkerProfileDispatcher.SemanticSourceObservation>();
+            const string backlogPointer = "linked-backlog-pointer-source-✓";
+            var plannerPackage = WorkerProfileDispatcher.BuildContextPackage(
+                plannerGoal,
+                plannerTask,
+                root,
+                contextDirectory,
+                BriefFor(plannerGoal, plannerTask, "planner-instruction-source"),
+                observedSources: plannerObservations,
+                linkedBacklogPointer: backlogPointer);
+            var rolePackages = new Dictionary<AgentRole, WorkerContextPackage>
+            {
+                [AgentRole.Developer] = package,
+                [AgentRole.Planner] = plannerPackage
+            };
+            Assert.DoesNotContain(package.Artifacts, artifact =>
+                artifact.Identity.Value is "context/linked-backlog-record.md" or "goal/linked-backlog-pointer.md");
+            var plannerRecord = Assert.Single(plannerPackage.Artifacts, artifact =>
+                artifact.Identity.Value == "context/linked-backlog-record.md");
+            Assert.Equal(ContextDeliveryMode.OnDemandFile, plannerRecord.DeliveryMode);
+            Assert.Equal([AgentRole.Planner], plannerRecord.RoleVisibility);
+
             var findingHistory = Assert.Single(package.Artifacts,
                 artifact => artifact.Identity.Value == "goal/review-finding-history.json");
             using var findingHistoryDocument = System.Text.Json.JsonDocument.Parse(Recover(root, findingHistory));
@@ -1326,11 +1351,14 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             expectedSources.AddRange(registryArtifacts.Select(artifact => new ExpectedSemanticSource(
                 $"registered artifact {artifact.Path}",
                 $"context/{artifact.Path}",
-                artifact.Marker)));
+                artifact.Marker,
+                artifact.Role)));
+            expectedSources.Add(new ExpectedSemanticSource("linked backlog pointer",
+                LinkedBacklogRecordEvidence.PointerIdentity, backlogPointer, AgentRole.Planner));
 
             Assert.All(expectedSources, expected =>
             {
-                var artifact = Assert.Single(package.Artifacts.Where(candidate =>
+                var artifact = Assert.Single(rolePackages[expected.Role].Artifacts.Where(candidate =>
                     candidate.Identity.Value == expected.LogicalIdentity));
                 var recovered = Recover(root, artifact);
                 Assert.Equal(artifact.ContentHash, WorkerContextArtifact.Hash(recovered));
@@ -1437,6 +1465,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var scenarios = new[]
             {
                 new ObservedPackage(root, package, observations),
+                new ObservedPackage(root, plannerPackage, plannerObservations),
                 new ObservedPackage(dispatchRoot, dispatchPackage, dispatchObservations),
                 new ObservedPackage(executionRoot, executionPackage, executionObservations),
                 new ObservedPackage(reviewerRoot, reviewerPackage, reviewerObservations)
@@ -2342,7 +2371,8 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         {instruction}
         """);
 
-    private sealed record ExpectedSemanticSource(string Name, string LogicalIdentity, string Marker);
+    private sealed record ExpectedSemanticSource(
+        string Name, string LogicalIdentity, string Marker, AgentRole Role = AgentRole.Developer);
     private sealed record ObservedPackage(
         string WorkingDirectory,
         WorkerContextPackage Package,
