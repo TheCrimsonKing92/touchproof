@@ -21,6 +21,32 @@ internal static class AcceptanceOwnedFindingCarry
         VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(
             goal, finding, candidateSha) is null;
 
+    internal static (ReviewFinding[] WorkerBlockingFindings, ReviewFinding[] CarriedFindings) GetWorkerBlockingFindings(
+        Goal goal, TaskSpec task, TaskVerificationRecord verification,
+        IReadOnlyList<ReviewFinding> openBlockingFindings, Action<string> recordTaskNote)
+    {
+        var workerBlockingFindings = openBlockingFindings
+            .Where(finding => VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is null)
+            .ToArray();
+        foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
+        {
+            var obligation = VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, deferredFinding, verification.ReviewedCommit)!;
+            recordTaskNote(
+                $"Deferred {(obligation.Owner == CriterionEvidenceOwner.Acceptance ? "acceptance-owned" : "operator-owned")} finding remains pending: stable_id={deferredFinding.StableId}; " +
+                $"obligation={obligation.DisplayLabel}; owner={obligation.Owner}; state={obligation.State}; " +
+                $"next_action={obligation.RequiredScope}; candidate_sha={verification.ReviewedCommit}.");
+        }
+        var carriedFindings = verification.WorkerResultPresent && task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
+            ? workerBlockingFindings.Where(finding => IsCarriable(goal, finding, verification.ReviewedCommit)).ToArray()
+            : [];
+        foreach (var finding in carriedFindings)
+        {
+            if (!IsCarried(goal, finding.StableId, verification.ReviewedCommit!))
+                recordTaskNote(CarryNote(finding.StableId, verification.ReviewedCommit!));
+        }
+        return (workerBlockingFindings.Except(carriedFindings).ToArray(), carriedFindings);
+    }
+
     private static string Identity(string stableId, string candidateSha) =>
         $"stable_id={Uri.EscapeDataString(stableId)}; candidate_sha={Uri.EscapeDataString(candidateSha.Trim().ToLowerInvariant())}";
 

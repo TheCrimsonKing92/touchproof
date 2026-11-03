@@ -1083,31 +1083,8 @@ public sealed partial class AgentOrchestratorKernel
         var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
-        var workerBlockingFindings = openBlockingFindings
-            .Where(finding => VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is null)
-            .ToArray();
-        foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
-        {
-            var obligation = VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, deferredFinding, verification.ReviewedCommit)!;
-            Append(
-                goal,
-                task.Id,
-                ProgressKind.TaskNote,
-                $"Deferred {(obligation.Owner == CriterionEvidenceOwner.Acceptance ? "acceptance-owned" : "operator-owned")} finding remains pending: stable_id={deferredFinding.StableId}; " +
-                $"obligation={obligation.DisplayLabel}; owner={obligation.Owner}; state={obligation.State}; " +
-                $"next_action={obligation.RequiredScope}; candidate_sha={verification.ReviewedCommit}.");
-        }
-        var carriedFindings = verification.WorkerResultPresent && task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
-            ? workerBlockingFindings.Where(finding =>
-                AcceptanceOwnedFindingCarry.IsCarriable(goal, finding, verification.ReviewedCommit)).ToArray()
-            : [];
-        foreach (var finding in carriedFindings)
-        {
-            if (!AcceptanceOwnedFindingCarry.IsCarried(goal, finding.StableId, verification.ReviewedCommit!))
-                Append(goal, task.Id, ProgressKind.TaskNote,
-                    AcceptanceOwnedFindingCarry.CarryNote(finding.StableId, verification.ReviewedCommit!));
-        }
-        workerBlockingFindings = workerBlockingFindings.Except(carriedFindings).ToArray();
+        var (workerBlockingFindings, carriedFindings) = AcceptanceOwnedFindingCarry.GetWorkerBlockingFindings(
+            goal, task, verification, openBlockingFindings, message => Append(goal, task.Id, ProgressKind.TaskNote, message));
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
             workerBlockingFindings.Length > 0)
