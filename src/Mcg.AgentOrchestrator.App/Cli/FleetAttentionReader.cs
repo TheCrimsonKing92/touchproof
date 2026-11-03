@@ -36,22 +36,11 @@ internal static class FleetAttentionReader
         var errors = new List<FleetAttentionError>();
         if (catalog.RegistryError is { } registryError)
             errors.Add(new("registry-unavailable", Concise(registryError.Message)));
-        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        // Unresolved entries cannot establish equivalence. Group only resolved canonical state paths.
-        var groups = catalog.Projects.Where(entry => entry.Workspace is not null)
-            .GroupBy(entry => WorkspaceInvocationBinding.CanonicalPath(entry.Workspace!.SqliteStatePath), pathComparer)
-            .Select(group => group.OrderBy(entry => entry.Name.Equals("home", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-                .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(entry => entry.Name, StringComparer.Ordinal).ToArray())
-            .Concat(catalog.Projects.Where(entry => entry.Workspace is null).Select(entry => new[] { entry }))
-            .OrderBy(group => group[0].Name, StringComparer.Ordinal);
-        foreach (var group in groups)
+        foreach (var group in catalog.CanonicalGroups())
         {
             cancellationToken.ThrowIfCancellationRequested();
             var canonical = group[0];
-            var aliases = group.Skip(1).Select(entry => entry.Name).Distinct(StringComparer.Ordinal)
-                .Where(name => name != canonical.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(name => name, StringComparer.Ordinal).ToArray();
+            var aliases = AttentionWorkspaceCatalog.Aliases(group);
             try
             {
                 if (canonical.Error is { } resolutionError) throw resolutionError;
