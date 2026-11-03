@@ -355,6 +355,11 @@ internal static class CliCommandHelp
         "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry FleetCapacity = new(
+        CliFleetCapacityQueryCommand.Usage,
+        "Report recorded task-worker occupancy and configured local limits across the fleet.",
+        ["--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry AbandonGoal = new(
         AbandonGoalUsage,
         "Abandon a goal after preview or confirmation.",
@@ -972,6 +977,11 @@ internal static class CliCommandHelp
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
+        if (CliFleetCapacityQueryCommand.IsCommand(args))
+        {
+            if (!IsCommandSpecificHelp(args)) _ = CliFleetCapacityQueryCommand.Parse(args);
+            return;
+        }
         if (CliFleetAttentionQueryCommand.IsCommand(args))
         {
             if (!IsCommandSpecificHelp(args)) _ = CliFleetAttentionQueryCommand.Parse(args);
@@ -1267,6 +1277,11 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("fleet-capacity", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FleetCapacity;
+            return true;
+        }
         if (args[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
         {
             entry = Attention;

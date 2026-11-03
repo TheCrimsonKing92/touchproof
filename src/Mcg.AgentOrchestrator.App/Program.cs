@@ -136,11 +136,13 @@ var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
-if (CliFleetAttentionQueryCommand.IsCommand(startupArgs))
+if (CliFleetAttentionQueryCommand.IsCommand(startupArgs) || CliFleetCapacityQueryCommand.IsCommand(startupArgs))
 {
     try
     {
-        _ = CliFleetAttentionQueryCommand.Parse(startupArgs);
+        var capacity = CliFleetCapacityQueryCommand.IsCommand(startupArgs);
+        if (capacity) _ = CliFleetCapacityQueryCommand.Parse(startupArgs);
+        else _ = CliFleetAttentionQueryCommand.Parse(startupArgs);
         OrchestratorWorkspace? launchWorkspace = null;
         // Explicit expectations still bind the launch workspace. Fleet never consults
         // current-project.txt, including when no project override was given.
@@ -158,10 +160,17 @@ if (CliFleetAttentionQueryCommand.IsCommand(startupArgs))
         Console.CancelKeyPress += cancel;
         try
         {
+            if (capacity)
+                return await CliFleetCapacityQueryCommand.ExecuteAsync(startupArgs, repoRoot,
+                    tenantSelection.TenantName, projectRegistry, Console.Out, launchWorkspace, cancellation.Token);
             return await CliFleetAttentionQueryCommand.ExecuteAsync(startupArgs, repoRoot,
                 tenantSelection.TenantName, projectRegistry, Console.Out, launchWorkspace, cancellation.Token);
         }
         finally { Console.CancelKeyPress -= cancel; }
+    }
+    catch (OperationCanceledException) when (CliFleetCapacityQueryCommand.IsCommand(startupArgs))
+    {
+        throw;
     }
     catch (Exception ex)
     {
