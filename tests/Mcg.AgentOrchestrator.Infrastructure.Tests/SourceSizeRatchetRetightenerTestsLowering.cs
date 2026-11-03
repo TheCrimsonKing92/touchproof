@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: rewrite inputs are local, and the repository authority is only read.
 public sealed class SourceSizeRatchetRetightenerTestsLowering : GoalWorktreeTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void FileLoweringPreservesEveryOtherByte()
     {
