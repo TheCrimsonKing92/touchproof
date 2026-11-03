@@ -36,13 +36,17 @@ internal sealed class GitRevisionReader : IDisposable
 
     // This is a fresh metadata read, independent of the cached revision-reader processes.
     internal static bool TryReadCurrentBranch(string worktree, out string? branch)
+        => TryReadCurrentBranch(worktree, out branch, Environment.GetEnvironmentVariable);
+
+    internal static bool TryReadCurrentBranch(string worktree, out string? branch, Func<string, string?> environment)
     {
         branch = null;
+        ArgumentNullException.ThrowIfNull(environment);
         try
         {
             foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" })
-                if (Environment.GetEnvironmentVariable(name) is not null) return false;
+                if (environment(name) is not null) return false;
 
             var root = Path.GetFullPath(worktree);
             var gitDirectory = ResolveBranchGitDirectory(root);
@@ -91,13 +95,17 @@ internal sealed class GitRevisionReader : IDisposable
 
     // Positive evidence only: unsupported layouts/configuration retain the diagnostic git probe.
     internal static bool TryConfirmWorkTree(string directory)
+        => TryConfirmWorkTree(directory, Environment.GetEnvironmentVariable);
+
+    internal static bool TryConfirmWorkTree(string directory, Func<string, string?> environment)
     {
+        ArgumentNullException.ThrowIfNull(environment);
         try
         {
             foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
                 "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT" })
-                if (Environment.GetEnvironmentVariable(name) is not null) return false;
+                if (environment(name) is not null) return false;
 
             // Do not normalize away an alias or a metadata segment before inspecting it.
             if (directory.Split(['/', '\\']).Any(part => part == ".." ||
