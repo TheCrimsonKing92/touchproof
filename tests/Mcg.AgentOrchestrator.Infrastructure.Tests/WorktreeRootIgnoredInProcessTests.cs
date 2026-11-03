@@ -65,7 +65,8 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
         var repo = CreateRepository();
         var nested = Directory.CreateDirectory(Path.Combine(repo, "nested", "child")).FullName;
         Assert.True(GitRevisionReader.TryConfirmWorkTree(nested));
-        Assert.Equal(Path.Combine(repo, ".git"), ReferenceDirectory(nested));
+        // Git may spell an absolute path with forward slashes on Windows.
+        Assert.Equal(Path.Combine(repo, ".git"), Path.GetFullPath(ReferenceDirectory(nested)));
         AssertDeclines(nested);
     }
 
@@ -184,7 +185,7 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
         var repo = CreateRepository();
         var gitDirectory = ReferenceDirectory(repo);
         var directory = nested ? Directory.CreateDirectory(Path.Combine(repo, "nested")).FullName : repo;
-        Assert.Equal(gitDirectory, ReferenceDirectory(directory));
+        Assert.Equal(gitDirectory, Path.GetFullPath(ReferenceDirectory(directory)));
         Assert.Equal(!nested, GitRevisionReader.TryResolveRootGitDirectory(directory, out _));
         var exclude = Path.Combine(gitDirectory, "info", "exclude");
         const string original = "# fixture without trailing newline";
