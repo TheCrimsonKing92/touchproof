@@ -41,14 +41,34 @@ internal static partial class GoalRefinementWorkCoordinator
         get => LaunchOverrideLocal.Value;
         set => LaunchOverrideLocal.Value = value;
     }
-    internal static Func<DateTimeOffset>? UtcNowOverride { get; set; }
+    private static readonly AsyncLocal<Func<DateTimeOffset>?> ClockOverride = new();
+
+    // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
+    internal static IDisposable UseClock(Func<DateTimeOffset> clock)
+    {
+        ArgumentNullException.ThrowIfNull(clock);
+        var scope = new ClockScope(ClockOverride.Value);
+        ClockOverride.Value = clock;
+        return scope;
+    }
+
+    private sealed class ClockScope(Func<DateTimeOffset>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                ClockOverride.Value = previous;
+        }
+    }
 
     internal static void ResetRecoveryLaunchesForTests()
     {
         // Launch attempts are workspace-scoped durable records now; temp workspaces isolate tests.
     }
 
-    private static DateTimeOffset UtcNow() => UtcNowOverride?.Invoke() ?? DateTimeOffset.UtcNow;
+    private static DateTimeOffset UtcNow() => ClockOverride.Value?.Invoke() ?? DateTimeOffset.UtcNow;
 
     public static OrchestratorStateOutboxMessage CreateMessage(GoalId goalId) =>
         new(

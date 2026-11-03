@@ -28,11 +28,9 @@ public sealed class StaticDelegateSeamGuardTests
         new("src/Mcg.AgentOrchestrator.App/Cli/DeferredGoalCreationSideEffects.cs", "Mcg.AgentOrchestrator.App.Cli.GoalCreationSideEffectDelivery", "BeforeStateCommit"),
         new("src/Mcg.AgentOrchestrator.App/Cli/DeferredGoalCreationSideEffects.cs", "Mcg.AgentOrchestrator.App.Cli.GoalCreationSideEffectDelivery", "BeforeEffectDelivery"),
         new("src/Mcg.AgentOrchestrator.App/Cli/ProjectInstallManifestCommand.cs", "Mcg.AgentOrchestrator.App.Cli.ProjectInstallManifestCommand", "ReplaceFaultForTests"),
-        new("src/Mcg.AgentOrchestrator.App/Cli/ProjectInstallManifestCommand.cs", "Mcg.AgentOrchestrator.App.Cli.ProjectInstallManifestCommand", "UtcNowForTests"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalOperationJournal", "BeforeLandingIntentAppend"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalOperationJournal", "BeforeAcceptanceRetryAppend"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalRefinementWorkCoordinator", "LaunchOverride"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalRefinementWorkCoordinator", "UtcNowOverride"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalReplacementEvidence.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalReplacementEvidence", "AfterFinalTransferValidation"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolution"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolutionSave"),
@@ -54,7 +52,7 @@ public sealed class StaticDelegateSeamGuardTests
             .Select(path => (Path.GetRelativePath(root, path).Replace('\\', '/'), snapshot.GetSyntaxTree(path)))
             .ToArray();
 
-        Assert.Equal(32, AllowList.Length);
+        Assert.Equal(30, AllowList.Length);
         Assert.Equal(AllowList.Length, AllowList.Distinct().Count());
         Assert.Empty(AllowListViolations(Scan(trees), AllowList));
     }
