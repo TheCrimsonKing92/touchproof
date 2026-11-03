@@ -136,6 +136,39 @@ var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
+if (CliFleetAttentionQueryCommand.IsCommand(startupArgs))
+{
+    try
+    {
+        _ = CliFleetAttentionQueryCommand.Parse(startupArgs);
+        OrchestratorWorkspace? launchWorkspace = null;
+        // Explicit expectations still bind the launch workspace. Fleet never consults
+        // current-project.txt, including when no project override was given.
+        if (invocationBinding.RepositoryRoot is not null || invocationBinding.ExpectedStateDirectory is not null ||
+            projectSelection.ProjectName is not null)
+        {
+            var project = projectRegistry.ResolveActiveProject(repoRoot,
+                projectSelection.ProjectName ?? OrchestratorWorkspace.DefaultProjectName);
+            launchWorkspace = SelectedProjectWorkspaceResolver.Resolve(project, executionDirectory,
+                tenantSelection.TenantName, projectRegistry);
+            invocationBinding.Verify(launchWorkspace);
+        }
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancel = (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+        Console.CancelKeyPress += cancel;
+        try
+        {
+            return await CliFleetAttentionQueryCommand.ExecuteAsync(startupArgs, repoRoot,
+                tenantSelection.TenantName, projectRegistry, Console.Out, launchWorkspace, cancellation.Token);
+        }
+        finally { Console.CancelKeyPress -= cancel; }
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return 1;
+    }
+}
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
 {
     try
