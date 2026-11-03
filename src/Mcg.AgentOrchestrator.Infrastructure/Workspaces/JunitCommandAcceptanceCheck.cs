@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
@@ -15,6 +16,32 @@ internal sealed class JunitCommandAcceptanceCheck(
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runCommand,
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runParser)
 {
+    internal static Task<AcceptanceCheckResult> RunWithEnvironmentContractAsync(
+        AcceptanceManifestCheck check, string worktreePath,
+        IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,
+        TimeProvider timeProvider, CrosswalkExecutableResolver executableResolver, bool requiresTestTelemetryReceipt,
+        Func<string[], GateHeartbeatContext> createHeartbeat,
+        Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runCommand,
+        Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runParser,
+        CancellationToken cancellationToken)
+    {
+        EnvironmentContract? contract;
+        try
+        {
+            contract = EnvironmentContract.Load(worktreePath,
+                (owner as AcceptanceRunExecutionOwner)?.ProjectHomeDirectory);
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            return Task.FromResult(new AcceptanceCheckResult(check.Name, false, null,
+                $"JUnit environment contract could not be loaded: {exception.Message}", Advisory: check.Advisory));
+        }
+
+        return RunOwnedAsync(check, worktreePath, owner, invocation, contract, timeProvider, executableResolver,
+            requiresTestTelemetryReceipt, createHeartbeat, runCommand, runParser, cancellationToken);
+    }
+
     internal static Task<AcceptanceCheckResult> RunOwnedAsync(
         AcceptanceManifestCheck check, string worktreePath,
         IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,

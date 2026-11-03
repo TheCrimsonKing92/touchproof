@@ -2275,26 +2275,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("junit-command", StringComparison.OrdinalIgnoreCase))
-        {
-            EnvironmentContract? environmentContract;
-            try
-            {
-                environmentContract = EnvironmentContract.Load(worktreePath,
-                    (_executionContext as AcceptanceRunExecutionOwner)?.ProjectHomeDirectory);
-            }
-            catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or
-                ArgumentException or InvalidOperationException or NotSupportedException)
-            {
-                return (new AcceptanceCheckResult(check.Name, false, null,
-                    $"JUnit environment contract could not be loaded: {exception.Message}", Advisory: check.Advisory), false);
-            }
-            return (await JunitCommandAcceptanceCheck.RunOwnedAsync(check, worktreePath,
-                _executionContext, _invocationContext, environmentContract, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
+            return (await JunitCommandAcceptanceCheck.RunWithEnvironmentContractAsync(check, worktreePath,
+                _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
                 (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
                     arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true),
                 RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
-        }
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
