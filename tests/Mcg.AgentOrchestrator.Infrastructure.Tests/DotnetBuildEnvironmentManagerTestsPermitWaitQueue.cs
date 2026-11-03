@@ -140,9 +140,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
     [Fact]
     public void UnavailableQueueMatchesBaselinePermitWaitAndAcquisition()
     {
-        var prior = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         {
             var directory = Path.Combine(StorageRoot.RootPath, "build-slots", "wait-tickets");
             Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
@@ -179,15 +177,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
                 DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment, TimeSpan.Zero, claimant: Claim("fallback"))).Lease;
             Assert.Equal(expectedPermit, acquired.Environment.BuildPermitIndex);
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = prior; }
     }
 
     [Fact]
     public void FailedTicketRemovalKeepsAcquiredLeaseAndDoesNotBlockNextClaimant()
     {
-        var prior = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         {
             var clock = new RecordingTimeProvider();
             var queue = new BuildPermitWaitQueue(StorageRoot, clock, _ => true);
@@ -220,7 +215,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
             Assert.False(File.Exists(queue.TicketPath(claimant.Key)));
             Assert.False(File.Exists(queue.TicketPath(claimant.Key) + ".satisfied"));
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = prior; }
     }
 
     [Fact]
@@ -301,9 +295,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
     [Fact]
     public void QueueLockContendedRemovalPublishesSatisfactionAndNeverRevivesConsumedTicket()
     {
-        var prior = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         {
             var clock = new RecordingTimeProvider();
             var claimant = Claim("a-gate");
@@ -343,7 +335,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
             Assert.False(File.Exists(queue.TicketPath(claimant.Key)));
             Assert.False(File.Exists(queue.TicketPath(claimant.Key) + ".satisfied"));
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = prior; }
     }
 
     [Theory]
@@ -352,9 +343,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
     [InlineData(BuildPermitClaimantKind.WorkerBuild, false)]
     public void TimeoutAndCancellationFollowClaimantTicketLifetime(BuildPermitClaimantKind kind, bool retained)
     {
-        var prior = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         {
             using var first = Hold(0);
             using var second = Hold(1);
@@ -373,15 +362,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
                     sleep: _ => cancellation.Cancel()));
             Assert.Equal(retained, File.Exists(queue.TicketPath(claimant.Key)));
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = prior; }
     }
 
     [Fact]
     public void StableSlotAcquisitionHonorsOlderTicketAndLeavesFreePermitUnheld()
     {
-        var prior = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         {
             using var held = Hold(1);
             var clock = new RecordingTimeProvider();
@@ -404,7 +390,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsPermitWaitQueue : DotnetBu
             Assert.Equal(0, lease.Environment.BuildPermitIndex);
             Assert.False(File.Exists(queue.TicketPath(worker.Key)));
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = prior; }
     }
 
     private DotnetBuildEnvironmentLease Hold(int slot) => Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(

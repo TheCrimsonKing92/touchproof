@@ -191,7 +191,7 @@ public sealed class LocalProcessVerifierStaticHookTests : DotnetBuildEnvironment
             new(0, "Test run succeeded.", "")
         ]);
         var shutdownCount = 0;
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
 
         var verifier = new LocalProcessVerifier((fileName, args, _, _) =>
         {
@@ -220,8 +220,6 @@ public sealed class LocalProcessVerifierStaticHookTests : DotnetBuildEnvironment
         }
         finally
         {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
             RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }

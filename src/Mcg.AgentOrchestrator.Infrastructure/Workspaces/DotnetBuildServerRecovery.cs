@@ -16,7 +16,34 @@ internal static class DotnetBuildServerRecovery
     private static readonly object s_buildServerRecoverySync = new();
     private static DotnetBuildServerShutdownOutcome? s_lastBuildServerShutdownOutcome;
 
-    internal static Action? ShutdownBuildServersForTests { get; set; }
+    internal const string SuppressShutdownSwitchName = "Mcg.AgentOrchestrator.SuppressBuildServerShutdown";
+    private static readonly AsyncLocal<Action?> ShutdownBuildServersOverride = new();
+    private static readonly Action SuppressedShutdown = static () => { };
+
+    internal static Action? ShutdownBuildServersForTests => ShutdownBuildServersOverride.Value ??
+        (AppContext.TryGetSwitch(SuppressShutdownSwitchName, out var suppressed) && suppressed
+            ? SuppressedShutdown
+            : null);
+
+    // Scopes inherit ExecutionContext and must be disposed in reverse order in their owning flow.
+    internal static IDisposable UseShutdownBuildServers(Action callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        var scope = new ShutdownScope(ShutdownBuildServersOverride.Value);
+        ShutdownBuildServersOverride.Value = callback;
+        return scope;
+    }
+
+    private sealed class ShutdownScope(Action? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                ShutdownBuildServersOverride.Value = previous;
+        }
+    }
     internal static DotnetBuildServerShutdownOutcome? LastBuildServerShutdownOutcome =>
         Volatile.Read(ref s_lastBuildServerShutdownOutcome);
 

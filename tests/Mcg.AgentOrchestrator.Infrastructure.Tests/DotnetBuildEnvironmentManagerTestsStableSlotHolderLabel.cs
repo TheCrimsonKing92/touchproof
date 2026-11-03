@@ -10,9 +10,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : Do
     [Fact]
     public void CohortAndGoalAttemptWriteLabelsAndBusyLineNamesBoth()
     {
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
-            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(StorageRoot.RootPath, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, buildStorageRoot: StorageRoot);
@@ -57,7 +56,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : Do
             foreach (var slot in busy.BusySlots)
                 Assert.Contains($"slot-{slot.SlotIndex}:pid-{Environment.ProcessId}:holder-{slot.HolderLabel}", busyOutput);
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null; }
     }
 
     [Theory]
@@ -65,9 +63,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : Do
     [InlineData(true)]
     public void LegacyMetadataWithoutLabelPrintsUnknown(bool legacyPid)
     {
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
-            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
         {
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.Zero, slotCount: 1, storageRoot: StorageRoot, holderLabel: "original-holder");
@@ -89,7 +86,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : Do
             Assert.Contains($"slot-0:pid-{Environment.ProcessId}:holder-unknown", output);
             Assert.Contains("wantedBy=first-available-stable-slot", output);
         }
-        finally { DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null; }
     }
 
     [Fact]

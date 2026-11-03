@@ -272,14 +272,14 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
+        });
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(2468, "VBCSCompiler", "VBCSCompiler.exe -pipename:slot-0", true)],
@@ -313,9 +313,8 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
+
+
             LockAttribution.AttributeForTests = null;
         }
     }
