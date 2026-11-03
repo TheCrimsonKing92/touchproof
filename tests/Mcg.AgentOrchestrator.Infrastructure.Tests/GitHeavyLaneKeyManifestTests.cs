@@ -9,6 +9,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     [
         "Remainder",
         "Remainder balance A",
+        "Remainder balance D",
         "Remainder merge train and ratchet"
     ];
 
@@ -16,7 +17,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     public void ShippedManifest_OnlyConstrainedGitHeavyLanesDeclareTheSharedKey()
     {
         var lanes = LoadLanes();
-        Assert.Equal(27, lanes.Count);
+        Assert.Equal(28, lanes.Count);
         var keyedLanes = lanes.Where(lane => lane.ExclusiveResourceKeys.Contains(SharedKey)).ToArray();
         Assert.Equal(GitHeavyLaneNames, keyedLanes.Select(lane => lane.Name)
             .OrderBy(name => name, StringComparer.Ordinal).ToArray());
