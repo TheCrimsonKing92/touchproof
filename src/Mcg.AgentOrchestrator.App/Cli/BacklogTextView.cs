@@ -5,6 +5,66 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class BacklogTextView
 {
+internal static string RenderBacklogCloseFollowUp(string closedId, Func<string, BacklogItem?> loadItem)
+{
+    const string heading = "\nRelatedCause advisory: recheck still-open linked items (no causal certainty).\n";
+    const int maxBytes = 1_000;
+    BacklogItem? root;
+    try { root = loadItem(closedId); }
+    catch (Exception error) when (error is not OperationCanceledException) { root = null; }
+    if (root is null)
+        return heading + "Follow-up information unavailable.\n";
+
+    var entries = new List<string>();
+    var unavailable = 0;
+    foreach (var id in root.Links.Where(link => link.Kind == BacklogLinkKind.RelatedCause)
+                 .Select(link => link.OtherId(root.Id)).Distinct(StringComparer.Ordinal)
+                 .OrderBy(id => id, StringComparer.Ordinal))
+    {
+        BacklogItem? other;
+        try { other = loadItem(id); }
+        catch (Exception error) when (error is not OperationCanceledException) { other = null; }
+        if (other is null)
+        {
+            unavailable++;
+            entries.Add($"- {id} [item unavailable]\n");
+        }
+        else if (other.Status == BacklogItemStatus.Open)
+            entries.Add($"- {id} [{other.Status}] {CloseFollowUpTitle(other.Title)}\n");
+    }
+    if (entries.Count == 0)
+        return "";
+
+    string Footer(int omitted) =>
+        (omitted == 0 ? "" : $"Omitted {omitted} items.\n") +
+        (unavailable == 0 ? "" : $"Follow-up information unavailable for {unavailable} linked items.\n");
+    var text = heading;
+    var included = 0;
+    while (included < entries.Count &&
+           Encoding.UTF8.GetByteCount(text + entries[included] + Footer(entries.Count - included - 1)) <= maxBytes)
+        text += entries[included++];
+    return text + Footer(entries.Count - included);
+}
+
+private static string CloseFollowUpTitle(string title)
+{
+    const int maxBytes = 180;
+    const string marker = "... [title truncated]";
+    title = title.ReplaceLineEndings(" ");
+    if (Encoding.UTF8.GetByteCount(title) <= maxBytes)
+        return title;
+    var text = new StringBuilder();
+    var budget = maxBytes - Encoding.UTF8.GetByteCount(marker);
+    foreach (var rune in title.EnumerateRunes())
+    {
+        if (rune.Utf8SequenceLength > budget)
+            break;
+        text.Append(rune.ToString());
+        budget -= rune.Utf8SequenceLength;
+    }
+    return text + marker;
+}
+
 internal static string RenderBacklogRelations(BacklogItem item, Func<string, BacklogItem?> loadOther)
 {
     if (item.Links.Count == 0)

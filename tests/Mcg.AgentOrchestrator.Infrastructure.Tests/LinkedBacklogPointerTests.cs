@@ -31,12 +31,14 @@ public sealed class LinkedBacklogPointerTests : WorkerDispatchTestSupport
         Assert.Contains(fixture.Item.Id, pointer, StringComparison.Ordinal);
         Assert.Contains(fixture.Item.Title, pointer, StringComparison.Ordinal);
         Assert.Contains(fixture.Item.Status.ToString(), pointer, StringComparison.Ordinal);
-        Assert.Contains($"{linked.Id} | Related | {linked.Title}", pointer, StringComparison.Ordinal);
+        var relationship = $"{linked.Id} | Related | {linked.Title} | Status: Open";
+        Assert.Contains(relationship, pointer, StringComparison.Ordinal);
         Assert.Contains("Read linked-backlog-record.md", pointer, StringComparison.Ordinal);
         Assert.Contains("before planning", pointer, StringComparison.Ordinal);
         Assert.DoesNotContain(BodySentinel, prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("first note sentinel", prompt, StringComparison.Ordinal);
         var record = ReadRecord(fixture);
+        Assert.Contains(relationship, record, StringComparison.Ordinal);
         Assert.Contains(BodySentinel, record, StringComparison.Ordinal);
         Assert.Contains(fixture.Item.Id, record, StringComparison.Ordinal);
         Assert.Contains(fixture.Item.Status.ToString(), record, StringComparison.Ordinal);
@@ -61,6 +63,7 @@ public sealed class LinkedBacklogPointerTests : WorkerDispatchTestSupport
             Assert.Equal(ContextDeliveryMode.OnDemandFile, section.DeliveryMode);
             Assert.Equal([AgentRole.Planner], section.RoleVisibility);
             Assert.Equal(Encoding.UTF8.GetByteCount(record), section.ByteCount);
+            Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(record)), section.ContentHash);
             Assert.True(receipt.OnDemandArtifactBytes >= section.ByteCount);
             Assert.Equal(receipt.Sections.Where(section => section.DeliveryMode is
                 ContextDeliveryMode.InlineFull or ContextDeliveryMode.MandatoryFile).Sum(section => section.ByteCount),
@@ -249,6 +252,115 @@ public sealed class LinkedBacklogPointerTests : WorkerDispatchTestSupport
         Directory.CreateDirectory(fixture.RecordPath);
         AssertAbsent(fixture, Prepare(fixture, typed));
     }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task BothArtifactsShowAllDirectKindsAndCapturedStatuses(bool typed)
+    {
+        var fixture = await CreateFixture();
+        var related = await fixture.Store.AddAsync("Related neighbor", "RELATED BODY MUST NOT TRAVEL");
+        var duplicate = await fixture.Store.AddAsync("Duplicate neighbor");
+        var cause = await fixture.Store.AddAsync("Cause neighbor");
+        var secondHop = await fixture.Store.AddAsync("SECOND HOP MUST NOT TRAVEL");
+        await fixture.Store.LinkAsync(related.Id, fixture.Item.Id, BacklogLinkKind.Related);
+        await fixture.Store.LinkAsync(fixture.Item.Id, duplicate.Id, BacklogLinkKind.Duplicate);
+        await fixture.Store.LinkAsync(cause.Id, fixture.Item.Id, BacklogLinkKind.RelatedCause);
+        await fixture.Store.LinkAsync(cause.Id, related.Id, BacklogLinkKind.RelatedCause);
+        await fixture.Store.LinkAsync(cause.Id, secondHop.Id, BacklogLinkKind.RelatedCause);
+        await fixture.Store.CloseAsync(related.Id);
+        await fixture.Store.SupersedeAsync(duplicate.Id, cause.Id);
+
+        var dispatch = Prepare(fixture, typed);
+        var pointer = ReadPointer(File.ReadAllText(dispatch.PromptPath), typed);
+        var record = ReadRecord(fixture);
+        foreach (var text in new[] { pointer, record })
+        {
+            Assert.Contains($"{related.Id} | Related | {related.Title} | Status: Done", text);
+            Assert.Contains($"{duplicate.Id} | Duplicate | {duplicate.Title} | Status: Superseded", text);
+            Assert.Contains($"{cause.Id} | RelatedCause | {cause.Title} | Status: Open", text);
+            Assert.DoesNotContain(secondHop.Id, text);
+            Assert.DoesNotContain("RELATED BODY MUST NOT TRAVEL", text);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("success")]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("throw")]
+    public void CaptureReusesEachNeighborIncludingUnavailable(string condition)
+    {
+        var root = EvidenceItem("root", "Root");
+        var other = EvidenceItem("neighbor", "First captured title");
+        var healthy = EvidenceItem("healthy", "Healthy neighbor");
+        var links = new List<BacklogLink>
+        {
+            new(root.Id, other.Id, BacklogLinkKind.Related, null, root.CreatedAt),
+            new(other.Id, root.Id, BacklogLinkKind.RelatedCause, null, root.CreatedAt),
+            new(root.Id, healthy.Id, BacklogLinkKind.Duplicate, root.Id, root.CreatedAt)
+        };
+        root = root with { Links = links };
+        other = other with { Links = [new(other.Id, "second-hop", BacklogLinkKind.Related, null, root.CreatedAt)] };
+        var calls = new Dictionary<string, int>();
+        BacklogItem? Load(string id)
+        {
+            calls[id] = calls.GetValueOrDefault(id) + 1;
+            if (id == healthy.Id) return healthy;
+            Assert.Equal(other.Id, id);
+            // Capture must freeze the root's edge set before any target read.
+            links.Clear();
+            if (condition == "throw") throw new IOException("Neighbor read failed");
+            if (condition == "missing") return null;
+            return calls[id] == 1 ? other : other with { Title = "Later title", Status = BacklogItemStatus.Done };
+        }
+
+        var snapshot = LinkedBacklogRecordEvidence.Capture(root, Load);
+
+        Assert.Equal(2, calls.Count);
+        Assert.All(calls.Values, count => Assert.Equal(1, count));
+        foreach (var text in new[] { snapshot.Pointer, snapshot.Record })
+        {
+            var evidence = condition == "success" ? "First captured title | Status: Open" : "[item unavailable]";
+            Assert.Contains($"neighbor | Related | {evidence}", text);
+            Assert.Contains($"neighbor | RelatedCause | {evidence}", text);
+            Assert.Contains("healthy | Duplicate | Healthy neighbor | Status: Open", text);
+            Assert.DoesNotContain("Later title", text);
+            Assert.DoesNotContain("second-hop", text);
+            if (condition != "success") Assert.DoesNotContain(other.Title, text);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RelationshipPressureKeepsCompleteArtifactsBoundedAndCountsOmissions()
+    {
+        var root = EvidenceItem("root", "Root") with { Body = string.Concat(Enumerable.Repeat("😀漢\r\n", 10_000)) };
+        var neighbors = Enumerable.Range(0, 90).Select(index => EvidenceItem($"neighbor-{index:D3}",
+            string.Concat(Enumerable.Repeat("漢😀", 30)))).ToDictionary(item => item.Id);
+        root = root with { Links = neighbors.Values.Select(other =>
+            new BacklogLink(root.Id, other.Id, BacklogLinkKind.RelatedCause, null, root.CreatedAt)).ToArray() };
+
+        var snapshot = LinkedBacklogRecordEvidence.Capture(root, id => neighbors[id]);
+        Assert.Equal(snapshot, LinkedBacklogRecordEvidence.Capture(root, id => neighbors[id]));
+        foreach (var (text, limit) in new[] { (snapshot.Pointer, 1_000), (snapshot.Record, 20_000) })
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            Assert.InRange(bytes.Length, 1, limit);
+            Assert.Equal(text, new UTF8Encoding(false, true).GetString(bytes));
+            Assert.DoesNotContain("\uFFFD", text);
+            var included = Regex.Matches(text, @"(?m)^- neighbor-\d+ \| RelatedCause \| .* \| Status: Open$");
+            var omissions = Regex.Match(text, @"Omitted (\d+) links\.");
+            Assert.True(omissions.Success);
+            Assert.True(included.Count > 0);
+            Assert.Equal(neighbors.Count - included.Count, int.Parse(omissions.Groups[1].Value, CultureInfo.InvariantCulture));
+            foreach (var other in neighbors.Values.Take(included.Count)) Assert.Contains(other.Id, text);
+            foreach (var other in neighbors.Values.Skip(included.Count)) Assert.DoesNotContain(other.Id, text);
+        }
+        Assert.Matches(@"Omitted 0 notes and [1-9]\d* body characters\.", snapshot.Record);
+    }
+
+    private static BacklogItem EvidenceItem(string id, string title) =>
+        new(id, title, "NEIGHBOR BODY MUST NOT TRAVEL", BacklogItemStatus.Open,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, null);
 
     private static WorkerProfileDispatchResult Prepare(Fixture fixture, bool typed,
         string? storePath = null, TaskSpec? task = null)

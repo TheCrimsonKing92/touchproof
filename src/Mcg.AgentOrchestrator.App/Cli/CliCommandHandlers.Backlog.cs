@@ -311,6 +311,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var reason = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: null, "--reason-file", "--text-file");
             var closed = store.CloseAsync(item.Id, reason).GetAwaiter().GetResult();
             Console.WriteLine($"Closed: [{closed.Id}] {closed.Title}");
+            Console.Write(BacklogTextView.RenderBacklogCloseFollowUp(closed.Id,
+                id => store.GetByExactIdAsync(id).GetAwaiter().GetResult()));
             return false;
         }
 
