@@ -21,8 +21,10 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     internal const int MaxArtifactBytes = 1_056_000;
     private readonly object _cacheGate = new();
     private readonly SemaphoreSlim _diffRead = new(1, 1);
-    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _committed;
-    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _whole;
+    private readonly Dictionary<CommittedRange, RangeRead> _ranges = new();
+    private CommittedRange? _observedRange;
+    private CommittedRange? _wholeRange;
+    private long _loadVersion;
 
     internal static OwnerGoalChangeSummaryQuery ForWorkspace(OrchestratorWorkspace workspace) => new(
         async (id, token) =>
@@ -56,6 +58,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        using var request = BeginRangeRequest();
         GoalPromotionFact? landed = null;
         string? promotionFailure = promotion is null ? "promotion query unavailable" : null;
         try { if (promotion is not null) landed = await promotion(goal.Id.Value, token); }
@@ -77,37 +80,29 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             !string.Equals(item.BaseCommit, candidate, StringComparison.OrdinalIgnoreCase));
         var promotionRange = landed is not null && landed.CandidateRevision == candidate;
         var basis = promotionRange ? landed!.PriorMainRevision : contributing?.BaseCommit ?? dispatch?.BaseCommit;
+        var observedRange = changes is not null && FullRevision(basis) && FullRevision(candidate)
+            ? new CommittedRange(basis!, candidate!) : null;
+        ResolveRange(request, whole: false, observedRange);
         var planned = await PlannedAsync(goal, token);
         var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
-        if (candidate is not null && FullRevision(basis) && changes is not null)
+        if (observedRange is not null)
         {
             try
             {
-                Task<CommittedGoalChanges> read;
-                lock (_cacheGate)
-                {
-                    if (_committed is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
-                        cached.Read.IsCanceled || cached.Read.IsFaulted)
-                        _committed = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
-                    read = _committed.Value.Read;
-                }
-                var facts = await read.WaitAsync(token);
+                var facts = await SharedChangesAsync(request, observedRange, token).WaitAsync(token);
                 observed = facts.Available
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
                         $"Git {basis}..{candidate}; " + (promotionRange ? "promotion range" : "latest contributing dispatch range, not whole-goal coverage"),
                         Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray())
                     : new("unavailable — " + facts.Reason, [], $"Git {basis}..{candidate}");
-                // Retry an unavailable observation on the next refresh; never cache it as an empty diff.
-                if (!facts.Available) lock (_cacheGate) { if (_committed?.Read == read) _committed = null; }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 observed = new("unavailable — " + ex.GetType().Name, [], $"Git {basis}..{candidate}");
-                lock (_cacheGate) _committed = null;
             }
         }
-        var previewChanges = await WholeGoalChangesAsync(candidate, landed, promotionRange, promotionFailure, token);
+        var previewChanges = await WholeGoalChangesAsync(request, candidate, landed, promotionRange, promotionFailure, token);
         var reported = await ReportedAsync(goal, candidate, token);
         var landing = landed is null
             ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
@@ -120,44 +115,120 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         };
     }
 
-    private async Task<OwnerGoalPreviewChanges> WholeGoalChangesAsync(string? candidate, GoalPromotionFact? landed,
+    private async Task<OwnerGoalPreviewChanges> WholeGoalChangesAsync(RangeRequest request, string? candidate, GoalPromotionFact? landed,
         bool promotionRange, string? promotionFailure, CancellationToken token)
     {
-        if (candidate is null || changes is null) return new(OwnerGoalPreviewChangeKind.None, [], 0);
+        if (candidate is null || changes is null)
+        {
+            ResolveRange(request, whole: true, null);
+            return new(OwnerGoalPreviewChangeKind.None, [], 0);
+        }
         var unavailable = new OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind.Unavailable, [], 0);
         try
         {
             // Promotion failures cannot safely be treated as unlanded goals: main may already contain the candidate.
             if ((landed is not null && !promotionRange) || (promotion is not null && promotionFailure is not null))
+            {
+                ResolveRange(request, whole: true, null);
                 return unavailable;
+            }
             var basis = landed is not null ? landed.PriorMainRevision :
                 mergeBase is not null ? await mergeBase(candidate, token).WaitAsync(token) : null;
-            if (!FullRevision(basis)) return unavailable;
-
-            Task<CommittedGoalChanges> read;
-            lock (_cacheGate)
+            if (!FullRevision(basis) || !FullRevision(candidate))
             {
-                // Separate from detail even when the endpoints match. Resolve the base on every refresh
-                // so a moved integration ref cannot reuse a diff for a different whole-goal range.
-                if (_whole is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
-                    cached.Read.IsCanceled || cached.Read.IsFaulted)
-                    _whole = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
-                read = _whole.Value.Read;
-            }
-            var facts = await read.WaitAsync(token);
-            if (!facts.Available)
-            {
-                lock (_cacheGate) { if (_whole?.Read == read) _whole = null; }
+                ResolveRange(request, whole: true, null);
                 return unavailable;
             }
+            // Applicability is resolved anew before sharing immutable committed range facts.
+            var range = new CommittedRange(basis!, candidate);
+            ResolveRange(request, whole: true, range);
+            var facts = await SharedChangesAsync(request, range, token).WaitAsync(token);
+            if (!facts.Available) return unavailable;
             return new(facts.TotalFiles == 0 ? OwnerGoalPreviewChangeKind.None : OwnerGoalPreviewChangeKind.Listed,
                 facts.Files, facts.TotalFiles);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            lock (_cacheGate) _whole = null;
+            ResolveRange(request, whole: true, null);
             return unavailable;
         }
+    }
+
+    private sealed record CommittedRange(string Base, string Candidate);
+
+    private sealed class RangeRead(Task<CommittedGoalChanges> task)
+    {
+        internal Task<CommittedGoalChanges> Task { get; } = task;
+        internal int Users { get; set; }
+    }
+
+    private sealed class RangeRequest(OwnerGoalChangeSummaryQuery owner, long version) : IDisposable
+    {
+        internal long Version { get; } = version;
+        internal bool ObservedResolved { get; set; }
+        internal bool WholeResolved { get; set; }
+        internal HashSet<RangeRead> Reads { get; } = [];
+
+        public void Dispose()
+        {
+            lock (owner._cacheGate)
+            {
+                foreach (var read in Reads) read.Users--;
+                if (Version == owner._loadVersion)
+                {
+                    if (!ObservedResolved) owner._observedRange = null;
+                    if (!WholeResolved) owner._wholeRange = null;
+                }
+                owner.PruneRanges();
+            }
+        }
+    }
+
+    private RangeRequest BeginRangeRequest()
+    {
+        lock (_cacheGate) return new(this, ++_loadVersion);
+    }
+
+    private void ResolveRange(RangeRequest request, bool whole, CommittedRange? range)
+    {
+        lock (_cacheGate)
+        {
+            if (whole) request.WholeResolved = true;
+            else request.ObservedResolved = true;
+            // Late continuations may finish their own load, but cannot restore obsolete relevance.
+            if (request.Version != _loadVersion) return;
+            if (whole) _wholeRange = range;
+            else _observedRange = range;
+            PruneRanges();
+        }
+    }
+
+    private Task<CommittedGoalChanges> SharedChangesAsync(RangeRequest request, CommittedRange range,
+        CancellationToken token)
+    {
+        lock (_cacheGate)
+        {
+            PruneRanges();
+            if (!_ranges.TryGetValue(range, out var read))
+            {
+                // The initiating caller owns cancellation; other callers cancel only their own wait.
+                read = new(ReadChangesAsync(range.Base, range.Candidate, token));
+                _ranges.Add(range, read);
+            }
+            if (request.Reads.Add(read)) read.Users++;
+            return read.Task;
+        }
+    }
+
+    // At rest at most two distinct ranges survive. Superseded loads hold leases only until they exit;
+    // their completion never publishes a range back into this dictionary.
+    private void PruneRanges()
+    {
+        foreach (var (range, read) in _ranges.ToArray())
+            if ((read.Users == 0 && range != _observedRange && range != _wholeRange) ||
+                read.Task.IsCanceled || read.Task.IsFaulted ||
+                (read.Task.IsCompletedSuccessfully && !read.Task.Result.Available))
+                _ranges.Remove(range);
     }
 
     private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)

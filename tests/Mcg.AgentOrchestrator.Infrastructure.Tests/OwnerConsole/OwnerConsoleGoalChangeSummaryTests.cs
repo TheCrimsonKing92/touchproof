@@ -117,7 +117,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(string.Join('\n', "Readable goal", changed
             ? "Changes 2 files in 2 areas: Feature.cs and 1 more" : "No committed changes yet", "Developer"), view.PreviewText);
         Assert.Equal(phase == "pending" ? 0 : changed ? 2 : 1, artifactReads);
-        Assert.Equal(changed ? 2 : 0, diffReads);
+        Assert.Equal(changed ? 1 : 0, diffReads);
         Assert.Equal(1, promotionReads);
         Assert.Equal(new[] { goal.Id.Value }, queries.ReadIds);
         Assert.Equal(0, queries.MetadataReads);
@@ -130,7 +130,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Contains("Planned: " + planned, text);
         Assert.Contains("Changed:", text); Assert.Contains("Reported:", text); Assert.Contains("Verified: " + verified, text);
         Assert.Contains("brief v1", text);
-        Assert.Equal(changed ? 2 : 0, diffReads); // Separate immutable-range caches survive preview/detail refresh.
+        Assert.Equal(changed ? 1 : 0, diffReads); // Separate immutable-range caches survive preview/detail refresh.
         if (changed)
         {
             Assert.Contains("M src/Feature.cs", text);
@@ -339,7 +339,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                 new CommittedGoalChanges(true, ["M src/Feature.cs"], 1));
         }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
-        Assert.Equal(new[] { (advanced ? Next : Basis, candidate), (Basis, candidate) }, reads);
+        Assert.Equal(advanced ? new[] { (Next, candidate), (Basis, candidate) } : new[] { (Basis, candidate) }, reads);
         Assert.Contains("Candidate: " + candidate, detail);
         Assert.Contains("Git " + (advanced ? Next : Basis) + ".." + candidate, detail);
         var expected = advanced ? "Changed: observed empty committed range" : "Changed: observed 1 files";
@@ -522,11 +522,11 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(Next, updated.Candidate);
         Assert.StartsWith("pending", updated.Verified.State);
         Assert.StartsWith("unavailable", updated.Reported.State);
-        Assert.Equal(new[] { Candidate, Candidate, Next, Next }, comparisons);
+        Assert.Equal(new[] { Candidate, Next }, comparisons);
         snapshot = queries.Goal.ToSnapshot();
         queries.Goal = new TestGoal(snapshot with { CriterionEvidenceObligations = [Obligation(Next, true)] });
         Assert.StartsWith("passed", (await query.LoadSummaryAsync(goal.Id.Value, Token))!.Verified.State);
-        Assert.Equal(4, comparisons.Count); // A receipt-only update doesn't re-run either diff.
+        Assert.Equal(2, comparisons.Count); // A receipt-only update doesn't re-run either diff.
     }
 
     [Theory]

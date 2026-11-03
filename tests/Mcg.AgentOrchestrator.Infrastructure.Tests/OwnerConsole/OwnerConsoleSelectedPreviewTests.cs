@@ -62,7 +62,7 @@ public sealed class OwnerConsoleSelectedPreviewTests
         }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
 
         var summary = await query.LoadAsync(goal, Token);
-        Assert.Equal(scenario == "no-commit" ? 0 : 2, diffReads);
+        Assert.Equal(scenario == "no-commit" ? 0 : (scenario is "unreadable" or "read-throws" ? 2 : 1), diffReads);
         Assert.Equal(scenario == "no-commit" ? 0 : 1, acceptanceReads);
         var lines = OwnerConsoleSelectedPreview.Lines(new(Id, summary), Stage, TimeZoneInfo.Utc, 160);
         Assert.Equal(new[] { Title, changes, progress }, lines);
