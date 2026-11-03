@@ -14,9 +14,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
         }
         Assert.Contains(Environment.ProcessId.ToString(),
             File.ReadAllText(releasedEnvironment.ExecutionLockPath), StringComparison.Ordinal);
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
-            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
-        try
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
         {
             DotnetBuildSlotsBusyException? fault = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -31,10 +30,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
             Assert.DoesNotContain(fault.SlotsBusy.BusySlots, slot => slot.SlotIndex == 1);
             Assert.Contains($"slot-0:pid-{Environment.ProcessId}", output, StringComparison.Ordinal);
             Assert.DoesNotContain("slot-1:", output, StringComparison.Ordinal);
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
         }
     }
 
@@ -63,8 +58,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
         using var priority = new FileStream(environment.ExecutionLockPath + ".acceptance-priority.lock",
             FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
         priority.Lock(0, 1);
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
-            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
         try
         {
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -78,7 +73,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             priority.Unlock(0, 1);
         }
     }

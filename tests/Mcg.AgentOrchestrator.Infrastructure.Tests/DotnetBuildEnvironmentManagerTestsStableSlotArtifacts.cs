@@ -198,11 +198,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
     {
         var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var sleeper = StartSleepProcess();
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
             {
                 [sleeper.Id] = $"testhost.exe --artifacts-path \"{slot0.ArtifactsPath}\""
-            });
+            }));
 
         try
         {
@@ -218,7 +218,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(sleeper);
         }
     }
@@ -382,7 +381,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
     {
         const int unavailableProcessId = 424242;
         var snapshotCalls = 0;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
         {
             snapshotCalls++;
             return new ProcessCommandLineSnapshot(
@@ -397,9 +396,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                         null,
                         ProcessInspectionStatus.AccessDenied)
                 });
-        };
+        });
 
-        try
         {
             var result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                 TimeSpan.Zero,
@@ -409,10 +407,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
 
             using var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result).Lease;
             Assert.Equal(1, snapshotCalls);
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
         }
     }
 
@@ -459,7 +453,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                     new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
 
             var snapshotCalls = 0;
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+            using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
             {
                 snapshotCalls++;
                 return new ProcessCommandLineSnapshot(
@@ -474,7 +468,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                             null,
                             ProcessInspectionStatus.AccessDenied)
                     });
-            };
+            });
 
             var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
                 RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
@@ -499,7 +493,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             heldSlotLock.Unlock(0, 1);
             StopProcess(holder);
         }
@@ -529,7 +522,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                     AcquiredAt = DateTimeOffset.UtcNow
                 },
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
             new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>
                 {
@@ -541,7 +534,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                         null,
                         null,
                         ProcessInspectionStatus.AccessDenied)
-                });
+                }));
 
         try
         {
@@ -562,7 +555,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(holder);
         }
     }
@@ -574,12 +566,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
             ProcessInspectionStatus.NativeFailure,
             24,
             "CreateToolhelp32Snapshot");
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
             new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>(),
-                failure);
+                failure));
 
-        try
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -603,10 +594,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                 output,
                 StringComparison.Ordinal);
         }
-        finally
-        {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
-        }
     }
 
     [Xunit.Fact]
@@ -614,20 +601,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
     {
         var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var snapshotCalls = 0;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
         {
             snapshotCalls++;
             return ProcessCommandLineSnapshot.Empty;
-        };
+        });
 
-        try
         {
             Assert.Null(DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(slot));
             Assert.Equal(1, snapshotCalls);
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
         }
     }
 
@@ -638,7 +620,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         var lockedPath = Path.Combine(slot0.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "debug_net10.0", "testhost.exe");
         using var sleeper = StartSleepProcess();
         var snapshotCalls = 0;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
         {
             var call = Interlocked.Increment(ref snapshotCalls);
             return new ProcessCommandLineSnapshot(call == 1
@@ -647,14 +629,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                 {
                     [sleeper.Id] = $"vstest.console.exe --artifacts-path \"{slot0.ArtifactsPath}\""
                 });
-        };
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        });
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == slot0.ExecutionLockPath)
             {
                 throw new IOException($"The process cannot access the file '{lockedPath}' because it is being used by another process.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(sleeper.Id, "vstest.console", $"vstest.console.exe --artifacts-path \"{slot0.ArtifactsPath}\"", true)],
@@ -676,8 +658,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
             StopProcess(sleeper);
         }
@@ -689,11 +669,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         var gateGoalId = new GoalId("92000000920000009200000092000000");
         var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, gateGoalId, "first");
         using var sleeper = StartSleepProcess();
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
             {
                 [sleeper.Id] = $"vstest.console.exe --artifacts-path \"{first.ArtifactsPath}\""
-            });
+            }));
 
         try
         {
@@ -705,7 +685,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(sleeper);
             RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, gateGoalId);
         }
