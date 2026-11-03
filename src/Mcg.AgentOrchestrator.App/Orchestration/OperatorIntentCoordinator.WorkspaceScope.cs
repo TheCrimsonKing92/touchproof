@@ -24,6 +24,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal OperatorDirectiveIntentHandler? Directives { get; init; }
     internal ExecutorSettingIntentHandler? ExecutorSettings { get; init; }
     internal ProviderResetRetainedSourceRecorder? ProviderResets { get; init; }
+    internal ClaudeUsageBackfillIntentHandler? ClaudeUsageBackfills { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -34,7 +35,7 @@ internal sealed partial class OperatorIntentCoordinator
                 .GetAwaiter().GetResult();
             if (intent is null) break;
             bool replayed;
-            string? executorSettingSummary = null;
+            string? outcomeSummary = null;
             try
             {
                 if (Lessons is null && intent.Verb is OperatorIntentVerbs.LessonRecord or OperatorIntentVerbs.LessonRetire or OperatorIntentVerbs.EscapeRecord)
@@ -42,7 +43,10 @@ internal sealed partial class OperatorIntentCoordinator
                 replayed = intent.Verb switch
                 {
                     OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.ExecutorSetEnabled or OperatorIntentVerbs.FocusedEvidenceSet =>
-                        ApplyExecutorSetting(intent, out executorSettingSummary),
+                        ApplyExecutorSetting(intent, out outcomeSummary),
+                    OperatorIntentVerbs.ClaudeUsageBackfill =>
+                        (ClaudeUsageBackfills ?? throw new InvalidOperationException("Claude usage backfill intent services are unavailable."))
+                            .Apply(kernel, intent, out outcomeSummary),
                     OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons!),
                     OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons!),
                     OperatorIntentVerbs.EscapeRecord => ApplyEscapeRecord(kernel, intent, Lessons!,
@@ -73,8 +77,8 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
             _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                executorSettingSummary is not null
-                    ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}; {executorSettingSummary}."
+                outcomeSummary is not null
+                    ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}; {outcomeSummary}."
                     : intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag or OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord or OperatorIntentVerbs.ProviderReset
                     ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}."
                     : replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
