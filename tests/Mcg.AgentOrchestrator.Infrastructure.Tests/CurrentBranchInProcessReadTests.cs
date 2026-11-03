@@ -201,6 +201,50 @@ public sealed class CurrentBranchInProcessReadTests : IDisposable
         AssertFallback(repo);
     }
 
+    [Theory]
+    [InlineData("GIT_DIR", "override")]
+    [InlineData("GIT_WORK_TREE", "override")]
+    [InlineData("GIT_COMMON_DIR", "override")]
+    [InlineData("GIT_INDEX_FILE", "override")]
+    [InlineData("GIT_OBJECT_DIRECTORY", "override")]
+    [InlineData("GIT_ALTERNATE_OBJECT_DIRECTORIES", "override")]
+    [InlineData("GIT_DIR", "")]
+    public void EnvironmentOverride_DeclinesRead(string name, string value)
+    {
+        var repo = CreateRepository();
+        Assert.True(GitRevisionReader.TryReadCurrentBranch(repo, out var baseline, _ => null));
+        Assert.Equal("fixture-main", baseline);
+        Assert.False(GitRevisionReader.TryReadCurrentBranch(repo, out var actual, key => key == name ? value : null));
+        Assert.Null(actual);
+    }
+
+    [Theory]
+    [InlineData("main", true, "fixture-main")]
+    [InlineData("detached", true, null)]
+    [InlineData("malformed", false, null)]
+    public void AbsentEnvironment_MatchesRealLookup(string fixture, bool expected, string? expectedBranch)
+    {
+        foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" })
+            Assert.True(Environment.GetEnvironmentVariable(name) is null, $"{name} must be absent for lookup equivalence.");
+
+        var repo = CreateRepository();
+        if (fixture == "detached") Git(repo, "checkout", "--detach");
+        if (fixture == "malformed") File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "unknown\n");
+
+        var actual = GitRevisionReader.TryReadCurrentBranch(repo, out var branch, _ => null);
+        Assert.Equal(expected, actual);
+        Assert.Equal(expectedBranch, branch);
+        Assert.Equal(GitRevisionReader.TryReadCurrentBranch(repo, out var realBranch), actual);
+        Assert.Equal(realBranch, branch);
+    }
+
+    [Fact]
+    public void NullEnvironment_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => GitRevisionReader.TryReadCurrentBranch(root, out _, null!));
+    }
+
     private static void AssertRecognized(string repo, string? expected)
     {
         Assert.Equal(expected, Oracle(repo));

@@ -39,11 +39,55 @@ internal static class RemoteGitMirror
         WriteIndented = true
     };
 
-    internal static Func<DateTimeOffset> UtcNow { get; set; } = () => DateTimeOffset.UtcNow;
-    internal static Func<int, TimeSpan> BackoffForAttempt { get; set; } = DefaultBackoffForAttempt;
-    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
-        (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
-    internal static Action<string> StatusWriter { get; set; } = Console.WriteLine;
+    private static readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> DefaultGitRunner = RunGitDefault;
+    private static readonly Func<int, TimeSpan> DefaultBackoff = DefaultBackoffForAttempt;
+    private static readonly AsyncLocal<Func<string, IReadOnlyList<string>, GitCli.GitResult>?> GitRunnerOverride = new();
+    private static readonly AsyncLocal<Func<int, TimeSpan>?> BackoffOverride = new();
+
+    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner => GitRunnerOverride.Value ?? DefaultGitRunner;
+    internal static Func<int, TimeSpan> BackoffForAttempt => BackoffOverride.Value ?? DefaultBackoff;
+
+    // Scopes inherit through ExecutionContext and restore in reverse order in the owning flow.
+    internal static IDisposable UseGitRunner(Func<string, IReadOnlyList<string>, GitCli.GitResult> runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        var scope = new GitRunnerScope(GitRunnerOverride.Value);
+        GitRunnerOverride.Value = runner;
+        return scope;
+    }
+
+    internal static IDisposable UseBackoffForAttempt(Func<int, TimeSpan> backoff)
+    {
+        ArgumentNullException.ThrowIfNull(backoff);
+        var scope = new BackoffScope(BackoffOverride.Value);
+        BackoffOverride.Value = backoff;
+        return scope;
+    }
+
+    private static GitCli.GitResult RunGitDefault(string workingDirectory, IReadOnlyList<string> args) =>
+        GitCli.Run(workingDirectory, args.ToArray());
+
+    private sealed class GitRunnerScope(Func<string, IReadOnlyList<string>, GitCli.GitResult>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                GitRunnerOverride.Value = previous;
+        }
+    }
+
+    private sealed class BackoffScope(Func<int, TimeSpan>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                BackoffOverride.Value = previous;
+        }
+    }
 
     static RemoteGitMirror()
     {
@@ -86,7 +130,7 @@ internal static class RemoteGitMirror
                     existing.PushGoalBranch = config.Push.GoalBranch;
                     existing.PushTags = config.Push.Tags;
                     existing.NextAttemptUtc = null;
-                    existing.UpdatedUtc = UtcNow();
+                    existing.UpdatedUtc = DateTimeOffset.UtcNow;
                     changed = true;
                 }
             }
@@ -135,12 +179,12 @@ internal static class RemoteGitMirror
                     var result = ProcessDue(goalsSnapshot, normalizedDirectory, onlyGoalId, integrationBranch);
                     foreach (var outcome in result.Outcomes)
                     {
-                        StatusWriter(FormatStatusLine(outcome));
+                        Console.WriteLine(FormatStatusLine(outcome));
                     }
                 }
                 catch (Exception ex)
                 {
-                    StatusWriter($"[mirror] result=failed exception={ex.GetType().Name} message={TrimDetail(ex.Message, string.Empty)}");
+                    Console.WriteLine($"[mirror] result=failed exception={ex.GetType().Name} message={TrimDetail(ex.Message, string.Empty)}");
                 }
                 finally
                 {
@@ -187,7 +231,7 @@ internal static class RemoteGitMirror
                 return new RemoteMirrorProcessResult([]);
             }
 
-            var dueNow = UtcNow();
+            var dueNow = DateTimeOffset.UtcNow;
             dueEntries = state.Entries
                 .Where(entry => entry.Status != RemoteMirrorEntryStatus.Succeeded)
                 .Where(entry => onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase))
@@ -196,7 +240,7 @@ internal static class RemoteGitMirror
                 .ToArray();
         }
 
-        var now = UtcNow();
+        var now = DateTimeOffset.UtcNow;
         var outcomes = new List<RemoteMirrorOutcome>();
         var processedEntries = new List<RemoteMirrorProcessedEntry>();
         var goals = goalsSnapshot.ToDictionary(goal => goal.Id.Value, StringComparer.OrdinalIgnoreCase);
@@ -250,7 +294,7 @@ internal static class RemoteGitMirror
 
         lock (StateGate)
         {
-            var now = UtcNow();
+            var now = DateTimeOffset.UtcNow;
             return LoadState(executionDirectory).Entries.Any(entry =>
                 entry.Status != RemoteMirrorEntryStatus.Succeeded &&
                 (onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase)) &&
@@ -766,7 +810,7 @@ internal sealed class RemoteMirrorStateEntry
             PushMain = push.Main,
             PushGoalBranch = push.GoalBranch,
             PushTags = push.Tags,
-            UpdatedUtc = RemoteGitMirror.UtcNow()
+            UpdatedUtc = DateTimeOffset.UtcNow
         };
     }
 }

@@ -6,6 +6,7 @@ public static class OperatorIntentVerbs
     public const string GoalPriority = "goal-priority";
     public const string GoalNote = "goal-note";
     public const string ProviderReset = "provider-reset";
+    public const string ClaudeUsageBackfill = "claude-usage-backfill";
     public const string GateCancel = "gate-cancel";
     public const string ObligationRebind = "obligation-rebind";
     public const string GoalIsolation = "goal-isolation";
@@ -48,6 +49,9 @@ public sealed record ExecutorSetSlotsOperatorIntentPayload(string ExecutorId, in
 public sealed record ExecutorSetEnabledOperatorIntentPayload(string ExecutorId, bool? Enabled);
 public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
 public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
+public sealed record ClaudeUsageBackfillOperatorIntentPayload(IReadOnlyList<ClaudeUsageBackfillFill> Fills);
+public sealed record ClaudeUsageBackfillFill(
+    string GoalId, DateTimeOffset DispatchedAt, long InputTokens, long CachedInputTokens, long OutputTokens);
 public sealed record GateCancelOperatorIntentPayload(string Reason, string? AttemptId);
 public sealed record ObligationRebindOperatorIntentPayload(string OldClass, string NewClass, string Reason);
 

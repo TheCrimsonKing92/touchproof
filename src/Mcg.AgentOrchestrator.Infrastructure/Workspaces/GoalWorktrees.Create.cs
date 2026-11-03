@@ -55,12 +55,27 @@ public static partial class GoalWorktrees
     {
         try
         {
+            var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
+            try
+            {
+                if (GitRevisionReader.Shared.TryResolve(worktreePath, "HEAD", out var headCommit) &&
+                    GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{baseBranch}", out var baseCommit) &&
+                    !string.IsNullOrEmpty(headCommit) && !string.IsNullOrEmpty(baseCommit) &&
+                    string.Equals(headCommit, baseCommit, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // An optional equality lookup failure must still take the existing freshness path.
+            }
+
             if (GitCli.IsWorktreeDirty(worktreePath))
             {
                 return;
             }
 
-            var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
             // --ff-only fast-forwards when the branch is strictly behind base, is a no-op when already
             // up to date, and fails harmlessly (branch left as-is) when the branch has diverged with
             // its own commits — exactly the "only advance undriven branches" semantics we want.

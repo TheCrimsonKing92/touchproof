@@ -2,23 +2,10 @@ using System.Reflection;
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Serialized because these tests own and restore process-wide Git discovery overrides.
 // Repositories and census windows belong to the current test; the observer is never replaced.
-[Collection(nameof(WorkTreeInProcessConfirmationCollection))]
 public sealed class WorkTreeInProcessConfirmationTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("worktree-confirmation-").FullName;
-    private readonly Dictionary<string, string?> savedEnvironment = new[]
-    {
-        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
-        "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"
-    }.ToDictionary(name => name, Environment.GetEnvironmentVariable);
-
-    public WorkTreeInProcessConfirmationTests()
-    {
-        foreach (var name in savedEnvironment.Keys) Environment.SetEnvironmentVariable(name, null);
-    }
 
     [Fact]
     public void MainCheckoutAndNestedDirectory_MatchGitWithZeroLaunches()
@@ -125,31 +112,51 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     }
 
     [Theory]
-    [InlineData("GIT_DIR")]
-    [InlineData("GIT_WORK_TREE")]
-    [InlineData("GIT_COMMON_DIR")]
-    [InlineData("GIT_CEILING_DIRECTORIES")]
-    [InlineData("GIT_DISCOVERY_ACROSS_FILESYSTEM")]
-    public void EnvironmentOverride_DeclinesConfirmationAndRestoresVariable(string name)
+    [InlineData("GIT_DIR", "override")]
+    [InlineData("GIT_WORK_TREE", "override")]
+    [InlineData("GIT_COMMON_DIR", "override")]
+    [InlineData("GIT_CEILING_DIRECTORIES", "override")]
+    [InlineData("GIT_DISCOVERY_ACROSS_FILESYSTEM", "override")]
+    [InlineData("GIT_INDEX_FILE", "override")]
+    [InlineData("GIT_OBJECT_DIRECTORY", "override")]
+    [InlineData("GIT_ALTERNATE_OBJECT_DIRECTORIES", "override")]
+    [InlineData("GIT_CONFIG_PARAMETERS", "override")]
+    [InlineData("GIT_CONFIG_COUNT", "override")]
+    [InlineData("GIT_DIR", "")]
+    public void EnvironmentOverride_DeclinesConfirmation(string name, string value)
     {
         var repo = CreateRepository();
-        var previous = Environment.GetEnvironmentVariable(name);
-        try
-        {
-            var value = name == "GIT_DISCOVERY_ACROSS_FILESYSTEM" ? "1" :
-                name is "GIT_DIR" or "GIT_COMMON_DIR" ? Path.Combine(repo, ".git") : repo;
-            Environment.SetEnvironmentVariable(name, value);
-            Assert.False(GitRevisionReader.TryConfirmWorkTree(repo));
-            var oracle = Oracle(repo);
-            Assert.True(oracle.Succeeded, oracle.Error);
-            Assert.Equal("true", oracle.Output.Trim());
-            var launches = new LaunchRecording();
-            Require(repo);
-            launches.AssertCommands("rev-parse");
-        }
-        finally { Environment.SetEnvironmentVariable(name, previous); }
-        Assert.Equal(previous, Environment.GetEnvironmentVariable(name));
+        Assert.True(GitRevisionReader.TryConfirmWorkTree(repo, _ => null));
+        Assert.False(GitRevisionReader.TryConfirmWorkTree(repo, key => key == name ? value : null));
         AssertConfirmed(repo);
+    }
+
+    [Theory]
+    [InlineData("repository", true)]
+    [InlineData("plain", false)]
+    [InlineData("unsupported-head", false)]
+    public void AbsentEnvironment_MatchesRealLookup(string fixture, bool expected)
+    {
+        foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT" })
+            Assert.True(Environment.GetEnvironmentVariable(name) is null, $"{name} must be absent for lookup equivalence.");
+
+        var directory = fixture == "plain"
+            ? Directory.CreateDirectory(Path.Combine(root, "plain")).FullName
+            : CreateRepository();
+        if (fixture == "unsupported-head")
+            File.WriteAllText(Path.Combine(directory, ".git", "HEAD"), "unknown\n");
+
+        var actual = GitRevisionReader.TryConfirmWorkTree(directory, _ => null);
+        Assert.Equal(expected, actual);
+        Assert.Equal(GitRevisionReader.TryConfirmWorkTree(directory), actual);
+    }
+
+    [Fact]
+    public void NullEnvironment_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => GitRevisionReader.TryConfirmWorkTree(root, null!));
     }
 
     [Fact]
@@ -301,11 +308,7 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
         Assert.True(result.Succeeded, result.Error);
     }
 
-    public void Dispose()
-    {
-        foreach (var (name, value) in savedEnvironment) Environment.SetEnvironmentVariable(name, value);
-        SharedTestSupport.RemoveTempDirectory(root);
-    }
+    public void Dispose() => SharedTestSupport.RemoveTempDirectory(root);
 
     private sealed class LaunchRecording
     {
