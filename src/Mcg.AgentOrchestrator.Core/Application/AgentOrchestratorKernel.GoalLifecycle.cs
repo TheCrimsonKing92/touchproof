@@ -1795,12 +1795,13 @@ public sealed partial class AgentOrchestratorKernel
             resumeCommand).Request;
     }
 
-    public HumanInputRequest RecordAnsweredOperatorHumanInput(GoalId goalId, string question, string answer)
+    public HumanInputRequest RecordAnsweredOperatorHumanInput(GoalId goalId, string question, string answer,
+        HumanWaitKind kind = HumanWaitKind.Other)
     {
         lock (_humanInputRequestLock)
         {
             return AnsweredOperatorHumanInputRecorder.Record(GetGoal(goalId), question, answer, _clock.UtcNow,
-                _humanInputRequests, (g, t, k, message) => Append(g, t, k, message));
+                _humanInputRequests, (g, t, k, message) => Append(g, t, k, message), kind);
         }
     }
 

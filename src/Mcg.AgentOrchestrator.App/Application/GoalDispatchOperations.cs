@@ -123,7 +123,7 @@ internal sealed partial class GoalDispatchOperations
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }
@@ -461,7 +461,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
         return batch;
@@ -507,7 +507,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }

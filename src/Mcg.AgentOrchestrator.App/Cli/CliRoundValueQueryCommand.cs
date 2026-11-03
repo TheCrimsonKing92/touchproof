@@ -22,11 +22,21 @@ internal static class CliRoundValueQueryCommand
         var json = false;
         var bySkill = false;
         var byCheck = false;
+        var byGoal = args.Skip(1).Contains("--by-goal", StringComparer.Ordinal);
+        string? goalPrefix = null;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] == "--json") { json = true; continue; }
             if (args[i] == "--by-skill") { bySkill = true; continue; }
             if (args[i] == "--by-check") { byCheck = true; continue; }
+            if (args[i] == "--by-goal") continue;
+            if (args[i] == "--goal" && byGoal)
+            {
+                if (i + 1 == args.Count || string.IsNullOrWhiteSpace(args[i + 1]) ||
+                    args[i + 1].StartsWith("--", StringComparison.Ordinal)) { FailByGoal(); return; }
+                goalPrefix = args[++i];
+                continue;
+            }
             if (args[i] is not ("--since" or "--until" or "--baseline-since" or "--baseline-until") ||
                 i + 1 == args.Count) { Invalid(); return; }
             var flag = args[i++];
@@ -43,7 +53,26 @@ internal static class CliRoundValueQueryCommand
         if (since >= until) { Invalid(); return; }
         if (baselineSince.HasValue != baselineUntil.HasValue || baselineSince >= baselineUntil)
         { Invalid(); return; }
+        if (byGoal && (bySkill || byCheck)) { FailByGoal(); return; }
         var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        if (byGoal)
+        {
+            var ids = metadata.Select(g => g.Id).ToArray();
+            if (goalPrefix is not null)
+            {
+                ids = ids.Where(id => id.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (ids.Length != 1) { FailByGoal(); return; }
+            }
+            var selected = ids.Length == 0 ? [] : queries.LoadGoalsAsync(
+                ids.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult().Goals;
+            if (goalPrefix is not null && selected.Count != 1) { FailByGoal(); return; }
+            var usageIntents = CliOwnerDigestRetryIntents.Read(workspace,
+                goalPrefix is null ? until : DateTimeOffset.MaxValue);
+            WriteGoalUsage(goalPrefix is null
+                ? RoundValueGoalUsageSlice.Build(selected, since.Value, until, usageIntents)
+                : RoundValueGoalUsageSlice.BuildForGoal(selected.Single(), usageIntents), json);
+            return;
+        }
         var goals = metadata.Count == 0 ? [] : queries.LoadGoalsAsync(
             metadata.Select(g => new GoalId(g.Id)).ToArray()).GetAwaiter().GetResult().Goals;
         if (bySkill || byCheck)
@@ -129,6 +158,40 @@ internal static class CliRoundValueQueryCommand
             var baselineRatio = baseline.BaselineRoundsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a";
             Console.WriteLine($"Rounds per landing | current={currentRatio} | baseline={baselineRatio}");
         }
+    }
+
+    private static void WriteGoalUsage(RoundValueGoalUsageSlice slice, bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(slice, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            return;
+        }
+        Console.WriteLine(slice.Goal is null
+            ? FormattableString.Invariant($"Round value by goal [{slice.Since:O}, {slice.Until:O}) | cohort = landed or lost goals whose last round is in the window")
+            : $"Round value by goal {slice.Goal} | any state, all dates");
+        Console.WriteLine("Goal | Outcome | Dispatches | Retry rounds | Review rounds | Unknown usage | Input | Cached input | Output");
+        foreach (var row in slice.Rows)
+            Console.WriteLine(FormattableString.Invariant($"{row.GoalId} | {row.Outcome} | {row.Dispatches} | {row.RetryRounds} | {row.ReviewRounds} | {row.UnknownDispatches} | {Tokens(row.InputTokens)} | {Tokens(row.CachedInputTokens)} | {Tokens(row.OutputTokens)}"));
+        if (slice.Goal is not null)
+        {
+            Console.WriteLine("Role | Model | Dispatches | Unknown usage | Input | Cached input | Output");
+            foreach (var pair in slice.Rows.Single().RoleModels)
+                Console.WriteLine(FormattableString.Invariant($"{pair.Role} | {pair.Model ?? "none"} | {pair.Dispatches} | {pair.UnknownDispatches} | {Tokens(pair.InputTokens)} | {Tokens(pair.CachedInputTokens)} | {Tokens(pair.OutputTokens)}"));
+        }
+        var sums = slice.Landed.Sums;
+        Console.WriteLine(FormattableString.Invariant($"Landed sums | goals={slice.Landed.LandedGoals} | eligible={slice.Landed.EligibleGoals} | Input={Tokens(sums.InputTokens)} | Cached input={Tokens(sums.CachedInputTokens)} | Output={Tokens(sums.OutputTokens)} | Dispatches={sums.Dispatches} | Retry rounds={sums.RetryRounds} | Review rounds={sums.ReviewRounds} | Unknown usage={sums.UnknownDispatches}"));
+        var means = slice.Landed.Means;
+        Console.WriteLine(FormattableString.Invariant($"Usage per landed goal | eligible={slice.Landed.EligibleGoals} | Input={Average(means.InputTokens)} | Cached input={Average(means.CachedInputTokens)} | Output={Average(means.OutputTokens)} | Dispatches={Average(means.Dispatches)} | Retry rounds={Average(means.RetryRounds)} | Review rounds={Average(means.ReviewRounds)} | Unknown usage={Average(means.UnknownDispatches)}"));
+
+        static string Tokens(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+        static string Average(double? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unknown";
+    }
+
+    private static void FailByGoal()
+    {
+        Console.Error.WriteLine(CliCommandHelp.RoundValueUsage);
+        throw new CliExitException(1);
     }
 
     private static void WriteSkills(RoundValueSkillSlice slice, bool json)

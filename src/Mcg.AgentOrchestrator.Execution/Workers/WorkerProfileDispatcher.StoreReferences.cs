@@ -4,9 +4,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class WorkerProfileDispatcher
 {
-    private static string WriteDispatchContextArtifacts(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
+    private static (string Directory, string? Pointer) WriteDispatchContextArtifacts(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
         string workingDirectory, IReadOnlyList<string>? preflightFindings, string? providerName, string? modelName,
-        CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt, string? orchestratorSkillDirectory, WorkerTargetHome? targetHome = null)
+        CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt, string? orchestratorSkillDirectory, WorkerTargetHome? targetHome = null,
+        string? backlogStorePath = null)
     {
         var prerequisiteAnswers = kernel.HumanInputRequests
             .Where(request => request.GoalId == goal.Id && request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence
@@ -25,11 +26,23 @@ public static partial class WorkerProfileDispatcher
             .OrderBy(request => request.AuthoritativeAnswer!.AnsweredAt)
             .ThenBy(request => request.Id.Value, StringComparer.Ordinal)
             .Select(request => request.AuthoritativeAnswer!.Text);
-        return WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings,
+        var linkedBacklog = LinkedBacklogRecordEvidence.Read(backlogStorePath, goal, task.RequiredRole);
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings,
             resolver?.Resolve(goal, task), providerName, modelName,
             orchestratorStoreRoot: resolver?.OrchestratorDirectory,
             answeredEvidenceTexts: prerequisiteAnswers.Concat(clarificationAnswers).ToArray(), clock: new DispatchContextClock(dispatchedAt),
-            orchestratorSkillDirectory: orchestratorSkillDirectory, targetHome: targetHome);
+            orchestratorSkillDirectory: orchestratorSkillDirectory, targetHome: targetHome,
+            linkedBacklogRecord: linkedBacklog?.Record);
+        try
+        {
+            var path = Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName);
+            return (contextDirectory, linkedBacklog is not null && File.Exists(path) &&
+                File.ReadAllText(path) == linkedBacklog.Record ? linkedBacklog.Pointer : null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (contextDirectory, null);
+        }
     }
 
     private sealed class DispatchContextClock(DateTimeOffset utcNow) : IClock

@@ -141,7 +141,7 @@ internal static class SourceSizeRatchet
             // Goal 387027bb adds three integration lines for the separately owned acceptance retry hold gate.
             // Goal 5ca3f5c0: six property/construction lines wire the separately owned PR tracker and landing receipt.
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1708),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1693),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -340,7 +340,7 @@ internal static class SourceSizeRatchet
             // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
             // Goal 60609951: stable provider-capability code and ready-blocked reason routing (+9 lines).
             // Goal 387027bb enforces hold and note preparation at the shared prompt boundary (+1 integration line).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2573),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2567),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -551,7 +551,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
-            new SourceClassCeiling("ConductorDriver", 14381, 70),
+            new SourceClassCeiling("ConductorDriver", 14366, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -588,7 +588,9 @@ internal static class SourceSizeRatchet
             // probing and hold rendering stay in EnvironmentContractGate and EnvironmentHoldAttentionView.
             // Goal fafad26f: declared tool-home environment binding at the manual worker launch call site.
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
-            new SourceClassCeiling("CliCommandHandlers", 11029, 30),
+            // Goal 509d0c91 adds route-only ruling-file validation and captures its text in the existing
+            // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
+            new SourceClassCeiling("CliCommandHandlers", 11037, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -644,7 +646,9 @@ internal static class SourceSizeRatchet
             // Goal 25775eef requires a thin re-phase entry point beside repair to supply the kernel clock
             // and goal lookup; validation and provenance remain owned by CriterionEvidenceRephase.
             // Goal 843fc2d0: one-line kernel recording seam for TaskGraphRepair status transitions.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9280, 28),
+            // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
+            // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9281, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
