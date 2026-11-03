@@ -8,6 +8,8 @@ using Xunit;
 // Parallel-safe: per-test workspaces/databases, AsyncLocal console capture and no shared environment writes.
 public sealed class CliCommandTestsEpicPlanVerbs : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string root = CreateTempDirectory();
 
     [Fact]
