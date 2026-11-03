@@ -1772,7 +1772,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
     public async Task AcceptanceRetryOldResolutionCallbackDoesNotResolveNewerFailure()
     {
         var repo = CreateSeededRepository();
-        var previousHook = OperatorInbox.BeforeLandingEscalationResolution;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -1809,11 +1808,11 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
 
             using var resolutionEntered = new ManualResetEventSlim();
             using var newerEscalationRecorded = new ManualResetEventSlim();
-            OperatorInbox.BeforeLandingEscalationResolution = () =>
+            using var resolutionHook = OperatorInbox.UseBeforeLandingEscalationResolution(() =>
             {
                 resolutionEntered.Set();
                 Assert.True(newerEscalationRecorded.Wait(TimeSpan.FromSeconds(10)));
-            };
+            });
 
             var resolutionTask = Task.Run(() => OperatorInbox.ResolveLandingEscalation(
                 workspace,
@@ -1837,7 +1836,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         }
         finally
         {
-            OperatorInbox.BeforeLandingEscalationResolution = previousHook;
             DeleteDirectory(repo);
         }
     }
@@ -1846,7 +1844,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
     public void AcceptanceRetryOutboxRollsBackWithCommitAndReplaysPendingAudit()
     {
         var repo = CreateSeededRepository();
-        var previousResolutionHook = OperatorInbox.BeforeLandingEscalationResolution;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -1909,27 +1906,27 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             }
 
             failOutboxCommit = false;
-            OperatorInbox.BeforeLandingEscalationResolution = () =>
-                throw new IOException("Injected post-commit audit failure.");
-            var changedDespiteAuditError = CliPersistentStateRunner.ExecuteCommand(
-                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
-                repository,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-            Assert.True(changedDespiteAuditError);
-            var committedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
-            Assert.Equal(GoalStatus.Verified, committedGoal.Status);
-            Assert.Null(committedGoal.LatestAcceptanceFailure);
-            Assert.Equal(1, committedGoal.OperatorAcceptanceRegateCount);
-            Assert.Single(repository
-                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
-                .GetAwaiter()
-                .GetResult());
-
-            OperatorInbox.BeforeLandingEscalationResolution = null;
+            using (OperatorInbox.UseBeforeLandingEscalationResolution(() =>
+                throw new IOException("Injected post-commit audit failure.")))
+            {
+                var changedDespiteAuditError = CliPersistentStateRunner.ExecuteCommand(
+                    ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Assert.True(changedDespiteAuditError);
+                var committedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+                Assert.Equal(GoalStatus.Verified, committedGoal.Status);
+                Assert.Null(committedGoal.LatestAcceptanceFailure);
+                Assert.Equal(1, committedGoal.OperatorAcceptanceRegateCount);
+                Assert.Single(repository
+                    .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                    .GetAwaiter()
+                    .GetResult());
+            }
             var newerKernel = repository.LoadAsync().GetAwaiter().GetResult();
             Assert.True(newerKernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance again."));
             Assert.True(newerKernel.ReconcileGoalAcceptanceFailed(
@@ -1975,7 +1972,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         }
         finally
         {
-            OperatorInbox.BeforeLandingEscalationResolution = previousResolutionHook;
             DeleteDirectory(repo);
         }
     }
@@ -2054,7 +2050,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
     public async Task AcceptanceRetryOutboxSimultaneousDrainersApplyAuditOnce()
     {
         var repo = CreateSeededRepository();
-        var previousJournalHook = GoalOperationJournal.BeforeAcceptanceRetryAppend;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -2075,8 +2070,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
                 "conductor:acceptance");
             repository.SaveAsync(kernel).GetAwaiter().GetResult();
 
-            GoalOperationJournal.BeforeAcceptanceRetryAppend = () =>
-                throw new IOException("Leave the committed audit pending.");
+            using var pendingAuditHook = GoalOperationJournal.UseBeforeAcceptanceRetryAppend(() =>
+                throw new IOException("Leave the committed audit pending."));
             RunPersistentCommand(
                 repository,
                 workspace,
@@ -2089,12 +2084,12 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             using var firstDrainerEnteredJournal = new ManualResetEventSlim();
             using var releaseFirstDrainer = new ManualResetEventSlim();
             var journalHookCalls = 0;
-            GoalOperationJournal.BeforeAcceptanceRetryAppend = () =>
+            using var drainerHook = GoalOperationJournal.UseBeforeAcceptanceRetryAppend(() =>
             {
                 Assert.Equal(1, Interlocked.Increment(ref journalHookCalls));
                 firstDrainerEnteredJournal.Set();
                 Assert.True(releaseFirstDrainer.Wait(TimeSpan.FromSeconds(10)));
-            };
+            });
 
             var firstDrainer = Task.Factory.StartNew(
                 () => RunPersistentCommand(repository, workspace, ["goals"], skipReadOnlyRoute: true),
@@ -2131,7 +2126,6 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         }
         finally
         {
-            GoalOperationJournal.BeforeAcceptanceRetryAppend = previousJournalHook;
             DeleteDirectory(repo);
         }
     }
