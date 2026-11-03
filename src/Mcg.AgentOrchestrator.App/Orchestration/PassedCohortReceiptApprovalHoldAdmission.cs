@@ -13,11 +13,12 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
         IReadOnlyList<Goal> scopedGoals, IReadOnlySet<GoalId> intentChangedGoalIds,
         Func<Goal, bool> otherwiseEligible, IReadOnlySet<string> activeGoalIds,
         Dictionary<string, ParallelLandingOutcome> results, int tick, Action<string> recordProgress,
-        Func<bool> suppressNewAdmission, Func<Goal, bool> requiresCircuitHold, ISet<GoalId> changedGoalIds)
+        Func<bool> suppressNewAdmission, Func<Goal, bool> requiresCircuitHold, ISet<GoalId> changedGoalIds,
+        DateTimeOffset observedAt = default)
     {
         if (!suppressNewAdmission())
             (eligible, candidates) = Apply(driver, policy, kernel, eligible, candidates,
-                scopedGoals, intentChangedGoalIds, otherwiseEligible, activeGoalIds, results, tick, recordProgress);
+                scopedGoals, intentChangedGoalIds, otherwiseEligible, activeGoalIds, results, tick, recordProgress, observedAt);
         if (!suppressNewAdmission() && driver.AcceptanceCohortsEnabled &&
             eligible.Length >= ConductorAcceptanceCohortSelector.CohortSize && !eligible.Any(requiresCircuitHold))
         {
@@ -37,7 +38,8 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
         Goal[] eligible, ConductorSpeculativeAcceptanceCandidate[] candidates,
         IReadOnlyList<Goal> scopedGoals, IReadOnlySet<GoalId> intentChangedGoalIds,
         Func<Goal, bool> otherwiseEligible, IReadOnlySet<string> activeGoalIds,
-        Dictionary<string, ParallelLandingOutcome> results, int tick, Action<string> recordProgress)
+        Dictionary<string, ParallelLandingOutcome> results, int tick, Action<string> recordProgress,
+        DateTimeOffset observedAt = default)
     {
         if (!driver.AcceptanceCohortsEnabled) return (eligible, candidates);
         var candidateIds = candidates.Select(candidate => candidate.GoalId).ToHashSet();
@@ -87,6 +89,7 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
                 restored.UnionWith(selection.Members.Select(member => member.GoalId));
                 continue;
             }
+            recordProgress(PassedCohortApprovalOverlapObservation.Format(hold, candidates, observedAt));
             foreach (var goalId in PassedCohortReceiptPartnerRelease.HeldMembers(hold, tick, recordProgress))
             {
                 results[goalId.Value] = new ParallelLandingOutcome(
