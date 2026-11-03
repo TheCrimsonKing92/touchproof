@@ -13,7 +13,7 @@ public sealed class ConductorStartHandleIsolationTests
     public async Task Start_Conductor_DoesNotInheritCallerConsole()
     {
         using var fixture = new LaunchFixture();
-        var output = fixture.Caller.StandardOutput.ReadToEndAsync();
+        var output = fixture.CallerOutput;
         Assert.True(fixture.Caller.WaitForExit(60000), "CLI caller did not exit.");
         Assert.Equal(0, fixture.Caller.ExitCode);
         await output.WaitAsync(TimeSpan.FromSeconds(10));
@@ -38,7 +38,7 @@ public sealed class ConductorStartHandleIsolationTests
     public async Task Start_MergedCallerPipe_EndsWhileConductorIsAlive()
     {
         using var fixture = new LaunchFixture();
-        var output = fixture.Caller.StandardOutput.ReadToEndAsync();
+        var output = fixture.CallerOutput;
         // WaitForExit with a bound observes process exit independently of pipe EOF.
         Assert.True(fixture.Caller.WaitForExit(60000), "CLI caller did not exit.");
         Assert.Equal(0, fixture.Caller.ExitCode);
@@ -59,7 +59,7 @@ public sealed class ConductorStartHandleIsolationTests
     public async Task Start_Receipt_IdentifiesConductorAndSeparateOutputLogs()
     {
         using var fixture = new LaunchFixture();
-        var output = fixture.Caller.StandardOutput.ReadToEndAsync();
+        var output = fixture.CallerOutput;
         Assert.True(fixture.Caller.WaitForExit(60000), "CLI caller did not exit.");
         Assert.Equal(0, fixture.Caller.ExitCode);
         var text = await output.WaitAsync(TimeSpan.FromSeconds(10));
@@ -90,19 +90,36 @@ public sealed class ConductorStartHandleIsolationTests
         return reader.ReadToEnd();
     }
 
-    private sealed class LaunchFixture : IDisposable
+    internal sealed class LaunchFixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-start-pipe-" + Guid.NewGuid().ToString("N"));
-        internal EventWaitHandle Ready { get; }
-        internal Process Caller { get; }
+        internal EventWaitHandle Ready { get; } = null!;
+        internal EventWaitHandle Release { get; } = null!;
+        internal EventWaitHandle ReleaseWatchdogExpired { get; } = null!;
+        internal Process Caller { get; } = null!;
+        internal Task<string> CallerOutput => callerOutput!;
+        internal Task<string> CallerError => callerError!;
+        private Task<string>? callerOutput;
+        private Task<string>? callerError;
+        private readonly Action<LaunchFixture>? beforeRootRemoval;
+        private readonly Action<LaunchFixture, Process>? beforeConductorRelease;
+        private bool disposed;
 
-        internal LaunchFixture()
+        // Diagnostic seams observe the real acquisition/removal boundaries. They
+        // use the same cleanup path for rollback and normal disposal.
+        internal LaunchFixture(Action<LaunchFixture>? afterCallerStarted = null,
+            Action<LaunchFixture>? beforeRootRemoval = null,
+            Action<LaunchFixture, Process>? beforeConductorRelease = null)
         {
-            Directory.CreateDirectory(Root);
-            var token = @"Local\mcg-start-pipe-" + Guid.NewGuid().ToString("N");
-            Ready = new EventWaitHandle(false, EventResetMode.ManualReset, token);
+            this.beforeRootRemoval = beforeRootRemoval;
+            this.beforeConductorRelease = beforeConductorRelease;
             try
             {
+                Directory.CreateDirectory(Root);
+                var token = @"Local\mcg-start-pipe-" + Guid.NewGuid().ToString("N");
+                Ready = new EventWaitHandle(false, EventResetMode.ManualReset, token);
+                Release = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release");
+                ReleaseWatchdogExpired = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release-watchdog");
                 var location = DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(GetType());
                 Assert.NotNull(location.Directory);
                 var probe = Path.Combine(location.Directory!, "Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll");
@@ -125,12 +142,19 @@ public sealed class ConductorStartHandleIsolationTests
                              "LOCALAPPDATA", "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_X86" })
                     if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
                 Caller = Process.Start(start) ?? throw new InvalidOperationException("Caller probe did not start.");
+                _ = Caller.SafeHandle;
+                callerOutput = Caller.StandardOutput.ReadToEndAsync();
+                callerError = Caller.StandardError.ReadToEndAsync();
                 Caller.StandardInput.Close();
+                afterCallerStarted?.Invoke(this);
             }
-            catch
+            catch (Exception startupFailure)
             {
-                Ready.Dispose();
-                Directory.Delete(Root, recursive: true);
+                try { Dispose(); }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException("Fixture startup and cleanup failed.", startupFailure, cleanupFailure);
+                }
                 throw;
             }
         }
@@ -152,21 +176,55 @@ public sealed class ConductorStartHandleIsolationTests
 
         public void Dispose()
         {
-            try
+            if (disposed) return;
+            disposed = true;
+            var failures = new List<Exception>();
+            Attempt(() =>
             {
-                if (!Caller.HasExited) { Caller.Kill(entireProcessTree: true); Caller.WaitForExit(60000); }
-                if (File.Exists(Path.Combine(Root, "launch-identity.json")))
+                // Let the caller finish publishing child ownership before reading
+                // its record. Both output pipes drain from the moment of acquisition.
+                if (Caller is not null)
+                    Assert.True(Caller.WaitForExit(60000), "CLI caller did not exit during cleanup.");
+            });
+            Attempt(() =>
+            {
+                // Once a caller started, absence of its ownership record cannot
+                // establish that no child was launched. Fail closed in that case.
+                if (Caller is not null)
                 {
                     using var conductor = OpenConductor();
-                    if (!conductor.HasExited) conductor.Kill();
+                    // Validate and retain the owned identity before releasing the
+                    // probe's lifecycle gate; Ready alone does not mean completion.
+                    beforeConductorRelease?.Invoke(this, conductor);
+                    Release.Set();
                     Assert.True(conductor.WaitForExit(60000), "Test-owned fake conductor did not exit during cleanup.");
+                    if (conductor.ExitCode != 0)
+                        throw new InvalidOperationException(
+                            $"Test-owned fake conductor did not complete cooperatively; exit code: {conductor.ExitCode}.");
                 }
-            }
-            finally
+            });
+            Attempt(() =>
             {
-                Caller.Dispose();
-                Ready.Dispose();
-                Directory.Delete(Root, recursive: true);
+                var drains = new[] { callerOutput, callerError }.OfType<Task<string>>();
+                Task.WhenAll(drains).WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            });
+            Attempt(() => Caller?.Dispose());
+            Attempt(() => Ready?.Dispose());
+            // Failed completion keeps Root and its identity records available;
+            // deletion must never replace the failure that prevented safe cleanup.
+            if (failures.Count == 0)
+                Attempt(() => beforeRootRemoval?.Invoke(this));
+            Attempt(() => Release?.Dispose());
+            Attempt(() => ReleaseWatchdogExpired?.Dispose());
+            if (failures.Count == 0 && Directory.Exists(Root))
+                Attempt(() => Directory.Delete(Root, recursive: true));
+            if (failures.Count != 0)
+                throw new AggregateException("Fixture cleanup failed; root: " + Root, failures);
+
+            void Attempt(Action action)
+            {
+                try { action(); }
+                catch (Exception failure) { failures.Add(failure); }
             }
         }
     }
