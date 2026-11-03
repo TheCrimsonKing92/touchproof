@@ -2,9 +2,34 @@
 # application closure. A launcher never observes a directory while it is being copied: each
 # caller copies into its own sibling staging directory, verifies the complete payload, writes a
 # seal, and atomically renames the directory into the published namespace.
-param([Parameter(Mandatory = $true)][string]$Dll)
+param(
+    [Parameter(Mandatory = $true)][string]$Dll,
+    [AllowEmptyString()][string]$CacheRoot,
+    [switch]$ValidateCacheRootOnly
+)
 
 $ErrorActionPreference = 'Stop'
+# Validate before any output inspection or directory creation, including the launcher's
+# pre-build validation request. Omission alone retains the historical TEMP-based root.
+if ($PSBoundParameters.ContainsKey('CacheRoot')) {
+    try {
+        if ([string]::IsNullOrWhiteSpace($CacheRoot) -or
+            $CacheRoot -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))' -or
+            $CacheRoot -match '[<>"|?*\x00-\x1f]' -or
+            $CacheRoot.Substring(2).Contains(':')) {
+            throw 'Expected a fully qualified drive or UNC directory path.'
+        }
+        $CacheRoot = [System.IO.Path]::GetFullPath($CacheRoot)
+    }
+    catch {
+        throw "Invalid runtime cache root '$CacheRoot'. Supply an absolute directory path (for example C:\cache or \\server\share\cache). $($_.Exception.Message)"
+    }
+}
+elseif ($ValidateCacheRootOnly) {
+    throw 'CacheRoot is required for cache-root validation.'
+}
+if ($ValidateCacheRootOnly) { return }
+
 $script:RunCacheSchemaVersion = 2
 $script:RunCacheMarkerName = '.mcg-run-closure.json'
 $script:SourceSnapshotAttempts = 3
@@ -337,7 +362,10 @@ if (-not (Test-Path -LiteralPath $resolvedDll -PathType Leaf)) {
 
 $out = Split-Path $resolvedDll
 $leaf = Split-Path $resolvedDll -Leaf
-$base = Join-Path (Join-Path $env:TEMP 'mcg-run') "v$script:RunCacheSchemaVersion"
+if (-not $PSBoundParameters.ContainsKey('CacheRoot')) {
+    $CacheRoot = Join-Path $env:TEMP 'mcg-run'
+}
+$base = Join-Path $CacheRoot "v$script:RunCacheSchemaVersion"
 [void](New-Item -ItemType Directory -Force -Path $base)
 
 $resolvedRun = $null
