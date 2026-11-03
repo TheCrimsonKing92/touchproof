@@ -99,8 +99,7 @@ internal static class OperatorInbox
         Missing
     }
 
-    internal static Action? BeforeLandingEscalationResolution { get; set; }
-    internal static Action? BeforeLandingEscalationResolutionSave { get; set; }
+    private static readonly AsyncLocal<Action?> BeforeLandingEscalationResolutionOverride = new();
 
     private const string StoreFileName = "operator-inbox-acks.json";
     private const string LandingEscalationFileName = "landing-escalations.json";
@@ -116,13 +115,50 @@ internal static class OperatorInbox
     internal const int MaxHoldWriteRetries = 5;
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
-    internal static Action<TimeSpan> HoldWriteBackoff { get; set; } = Thread.Sleep;
-    internal static Action<string, string> HoldStoreWriteAllText { get; set; } = File.WriteAllText;
+    private static readonly Action<TimeSpan> DefaultHoldWriteBackoff = Thread.Sleep;
+    private static readonly Action<string, string> DefaultHoldStoreWriteAllText = File.WriteAllText;
+    private static readonly AsyncLocal<Action<TimeSpan>?> HoldWriteBackoffOverride = new();
+    private static readonly AsyncLocal<Action<string, string>?> HoldStoreWriteAllTextOverride = new();
+
+    internal static Action<TimeSpan> HoldWriteBackoff => HoldWriteBackoffOverride.Value ?? DefaultHoldWriteBackoff;
+    internal static Action<string, string> HoldStoreWriteAllText => HoldStoreWriteAllTextOverride.Value ?? DefaultHoldStoreWriteAllText;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true
     };
+
+    // Scopes inherit through ExecutionContext and restore in reverse order in the owning flow.
+    internal static IDisposable UseBeforeLandingEscalationResolution(Action hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = BeforeLandingEscalationResolutionOverride.Value;
+        BeforeLandingEscalationResolutionOverride.Value = hook;
+        return new RestoreOverride(() => BeforeLandingEscalationResolutionOverride.Value = previous);
+    }
+
+    internal static IDisposable UseHoldWriteBackoff(Action<TimeSpan> backoff)
+    {
+        ArgumentNullException.ThrowIfNull(backoff);
+        var previous = HoldWriteBackoffOverride.Value;
+        HoldWriteBackoffOverride.Value = backoff;
+        return new RestoreOverride(() => HoldWriteBackoffOverride.Value = previous);
+    }
+
+    internal static IDisposable UseHoldStoreWriteAllText(Action<string, string> writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        var previous = HoldStoreWriteAllTextOverride.Value;
+        HoldStoreWriteAllTextOverride.Value = writer;
+        return new RestoreOverride(() => HoldStoreWriteAllTextOverride.Value = previous);
+    }
+
+    private sealed class RestoreOverride(Action restore) : IDisposable
+    {
+        private Action? _restore = restore;
+
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+    }
 
     public static OperatorInboxReport Build(
         AgentOrchestratorKernel kernel,
@@ -770,7 +806,7 @@ internal static class OperatorInbox
         TimeSpan? collaborationTimeout = null,
         CancellationToken cancellationToken = default)
     {
-        BeforeLandingEscalationResolution?.Invoke();
+        BeforeLandingEscalationResolutionOverride.Value?.Invoke();
         using (AcquireLandingEscalationLock(workspace))
         {
             var changed = false;
@@ -829,7 +865,6 @@ internal static class OperatorInbox
                 .ToArray();
             if (changed)
             {
-                BeforeLandingEscalationResolutionSave?.Invoke();
                 SaveLandingEscalationsUnsafe(workspace, items);
                 return LandingEscalationResolution.Resolved;
             }
