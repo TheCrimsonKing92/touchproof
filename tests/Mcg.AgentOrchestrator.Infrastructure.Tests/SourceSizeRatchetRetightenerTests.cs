@@ -2,6 +2,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SourceSizeRatchetRetightenerTests : GoalWorktreeTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void RewriteChangesOnlyEligibleNumbersAndPreservesCommentsAndBom()
     {
