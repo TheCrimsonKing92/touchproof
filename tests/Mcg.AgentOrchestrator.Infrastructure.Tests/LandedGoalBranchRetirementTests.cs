@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each call owns its journal, SQLite stores, kernel and fake git runner.
 public sealed class LandedGoalBranchRetirementTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void MatchingTrainReceipt_ReturnsTipWithOneAncestryLaunch() => Check(expectTip: true);
 

@@ -7,6 +7,8 @@ using Microsoft.Data.Sqlite;
 // uses the existing AsyncLocal console router. No process or environment hooks are changed.
 public sealed class ReviseAfterRefinementFailureTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private const string OriginalBrief = "Original failure-only sentence.\n\n## Acceptance criteria\n\n1. Original criterion.";
     private const string RevisedBrief = "Revised recovery-only sentence.\n\n## Acceptance criteria\n\n1. Revised criterion.";
     private const string ProviderName = "revision-regression-refiner";
