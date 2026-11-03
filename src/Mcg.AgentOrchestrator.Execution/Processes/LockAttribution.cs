@@ -174,7 +174,30 @@ internal static partial class LockAttribution
     internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
     internal static bool DisableRestartManagerForTests { get; set; }
-    internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
+    private static readonly AsyncLocal<Func<ProcessCommandLineSnapshot>?> ProcessCommandLineSnapshotOverride = new();
+
+    private static Func<ProcessCommandLineSnapshot> ProcessCommandLineSnapshotProvider =>
+        ProcessCommandLineSnapshotOverride.Value ?? ProcessCommandLines.Snapshot;
+
+    // Scopes inherit through ExecutionContext and restore in reverse order in the owning flow.
+    internal static IDisposable UseProcessCommandLineSnapshotForTests(Func<ProcessCommandLineSnapshot> snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var scope = new ProcessCommandLineSnapshotScope(ProcessCommandLineSnapshotOverride.Value);
+        ProcessCommandLineSnapshotOverride.Value = snapshot;
+        return scope;
+    }
+
+    private sealed class ProcessCommandLineSnapshotScope(Func<ProcessCommandLineSnapshot>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                ProcessCommandLineSnapshotOverride.Value = previous;
+        }
+    }
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null) =>
         AttributeCore(path, ownershipHint, phase, operation, diagnostics: null);
@@ -538,7 +561,7 @@ internal static partial class LockAttribution
 
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
-        var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
+        var snapshot = ProcessCommandLineSnapshotProvider() ?? ProcessCommandLines.Snapshot();
         if (snapshot.Failure is { } failure)
         {
             return new BuildLockAttribution(
