@@ -84,6 +84,7 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
         ];
         Assert.All(orchestration, type => Assert.Equal(OrchestrationNamespace, type.Namespace));
         Assert.Equal(CliNamespace, typeof(GoalRefinementWorkOutcomeReporter).Namespace);
+        Assert.Equal(CliNamespace, typeof(FleetAttentionReader).Namespace);
     }
 
     [Fact]

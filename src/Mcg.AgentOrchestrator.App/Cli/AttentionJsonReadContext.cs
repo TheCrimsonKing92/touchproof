@@ -18,13 +18,46 @@ internal sealed record AttentionJsonReadContext(
     internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
         OrchestratorWorkspace workspace, DateTimeOffset now, AttentionProjectionReadOptions options,
         CancellationToken cancellationToken)
+        => await ReadCoreAsync(queries, workspace, now, options, null, cancellationToken);
+
+    // Fleet requires positive proof that both authoritative stores exist and are supported.
+    // Keep the single-workspace query's legacy missing-store behavior unchanged.
+    internal static async Task<AttentionJsonReadContext> ReadExistingAsync(OrchestratorWorkspace workspace,
+        DateTimeOffset now, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var itemsPath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+        RequireExisting(workspace.SqliteStatePath);
+        RequireExisting(itemsPath);
+        try { SqliteOrchestratorStateRepository.ValidateReadOnlySchema(workspace.SqliteStatePath); }
+        catch (InvalidOperationException ex) { throw new FleetAttentionStoreException("unsupported-store", ex.Message, ex); }
+        cancellationToken.ThrowIfCancellationRequested();
+        CollaborationItemStore store;
+        try { store = CollaborationItemStore.OpenReadOnly(itemsPath); }
+        catch (InvalidOperationException ex)
+        { throw new FleetAttentionStoreException("unsupported-store", StoreSchemaDiagnostics.Message(ex), ex); }
+        var items = await store.GetAttentionQueueAsync(cancellationToken: cancellationToken);
+        return await ReadCoreAsync(SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath),
+            workspace, now, new AttentionProjectionReadOptions(false), items, cancellationToken);
+    }
+
+    private static void RequireExisting(string path)
+    {
+        try { _ = File.GetAttributes(path); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        { throw new FleetAttentionStoreException("missing-store", $"Required store was not found: {path}", ex); }
+    }
+
+    private static async Task<AttentionJsonReadContext> ReadCoreAsync(IOrchestratorStateQueries queries,
+        OrchestratorWorkspace workspace, DateTimeOffset now, AttentionProjectionReadOptions options,
+        IReadOnlyList<CollaborationItem>? existingItems, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var projection = await queries.ReadAttentionProjectionAsync(options, cancellationToken);
         var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
-        IReadOnlyList<CollaborationItem> items = File.Exists(itemsDb)
+        IReadOnlyList<CollaborationItem> items = existingItems ?? (File.Exists(itemsDb)
             ? await CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory)
-                .GetAttentionQueueAsync(cancellationToken: cancellationToken) : [];
+                .GetAttentionQueueAsync(cancellationToken: cancellationToken) : []);
 
         if (projection is null)
         {
@@ -34,7 +67,12 @@ internal sealed record AttentionJsonReadContext(
             var fallbackIds = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
             var baseline = fallbackIds.Length == 0 ? new AgentOrchestratorKernel()
                 : await queries.LoadGoalsAsync(fallbackIds, cancellationToken);
-            return FromKernel(baseline, items, now, options);
+            var fallback = FromKernel(baseline, items, now, options);
+            return existingItems is null ? fallback : fallback with
+            {
+                OwnerQuestions = fallback.OwnerQuestions.Where(hold =>
+                    AttentionHumanWaitQuery.IsLiveAttentionGoal(baseline, hold.GoalId)).ToArray()
+            };
         }
 
         var facts = projection.Goals.ToDictionary(goal => goal.GoalId, StringComparer.OrdinalIgnoreCase);
@@ -59,7 +97,10 @@ internal sealed record AttentionJsonReadContext(
             CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false),
             ProviderUsageHoldView.ReadEvidence(projection.ProviderEvidence, now, kernel.Goals),
             options.IncludeGateEvidence ? projection.GateEvidence : [],
-            projection.OwnerQuestions.Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals);
+            projection.OwnerQuestions.Where(hold => existingItems is null ||
+                facts.TryGetValue(hold.GoalId, out var owner) && owner.Status is not
+                    (GoalStatus.Parked or GoalStatus.Failed or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }

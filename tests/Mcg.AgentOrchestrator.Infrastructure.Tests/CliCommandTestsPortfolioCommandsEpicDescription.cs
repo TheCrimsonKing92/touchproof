@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: workspaces are per test; CaptureConsole uses the AsyncLocal console router.
 public sealed class CliCommandTestsPortfolioCommandsEpicDescription : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string root = CreateTempDirectory();
 
     [Theory]
