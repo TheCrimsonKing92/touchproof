@@ -8,6 +8,8 @@ using Xunit;
 // Parallel-safe: real stores are isolated per test; goal state is saved through the conductor's repository seam.
 public sealed class EpicPlanStatusTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string root = CreateTempDirectory();
 
     [Fact]
