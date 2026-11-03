@@ -90,7 +90,7 @@ internal sealed partial class ConductorBatchLoop
             "TRAIN_RECEIPT_REVALIDATE" => "train-receipt-revalidate",
             "TRAIN_RECEIPT_HELD" => "train-receipt-held",
             "TRAIN_RECEIPT_RELEASED" => "train-receipt-released",
-            "ACCEPTANCE_COHORT" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT" or "COHORT_APPROVAL_OVERLAP" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_ENTRY" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_EXIT" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_INFLIGHT" => "acceptance-cohort",

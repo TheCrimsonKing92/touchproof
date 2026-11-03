@@ -324,7 +324,7 @@ internal sealed partial class ConductorBatchLoop
             goal => IsParallelAcceptanceInputEligible(goal, driver, kernel, completedGoals, escalatedGoals),
             state.LiveAttemptGoalIds.Concat(activeCohortMemberGoalIds).ToHashSet(StringComparer.Ordinal),
             state.Results, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), suppressNewAcceptanceAdmission,
-            goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds));
+            goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds, _utcNow()));
         (state.CohortEligible, state.ProductionCandidates) = ConductorTickStepLedger.Measure("prep-train-receipts", () => LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel));
         ConductorTickStepLedger.Measure("prep-follower-receipts", () => CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel));
