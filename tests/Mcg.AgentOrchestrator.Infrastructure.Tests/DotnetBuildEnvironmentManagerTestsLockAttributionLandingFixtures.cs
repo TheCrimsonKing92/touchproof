@@ -20,7 +20,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var snapshotStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
         LockAttribution.DisableRestartManagerForTests = true;
         LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
-        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        using var snapshotScope = LockAttribution.UseProcessCommandLineSnapshotForTests(() =>
         {
             snapshotCalls++;
             return new ProcessCommandLineSnapshot(
@@ -51,7 +51,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                         "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
                         ProcessInspectionStatus.Available)
                 });
-        };
+        });
 
         try
         {
@@ -68,7 +68,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            LockAttribution.ProcessCommandLineSnapshotForTests = null;
             LockAttribution.HandleExecutableForTests = null;
             LockAttribution.DisableRestartManagerForTests = false;
         }
@@ -79,7 +78,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     {
         LockAttribution.DisableRestartManagerForTests = true;
         LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
-        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        using var snapshotScope = LockAttribution.UseProcessCommandLineSnapshotForTests(() =>
             new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>
                 {
@@ -99,7 +98,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                         DateTimeOffset.Parse("2026-09-01T12:00:00Z"),
                         "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
                         ProcessInspectionStatus.AccessDenied)
-                });
+                }));
 
         try
         {
@@ -112,7 +111,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            LockAttribution.ProcessCommandLineSnapshotForTests = null;
             LockAttribution.HandleExecutableForTests = null;
             LockAttribution.DisableRestartManagerForTests = false;
         }
@@ -125,7 +123,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         const string lockedPath = "C:\\isolated\\artifacts\\bin\\Core.dll";
         LockAttribution.DisableRestartManagerForTests = true;
         LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
-        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        using var snapshotScope = LockAttribution.UseProcessCommandLineSnapshotForTests(() =>
             new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>
                 {
@@ -145,7 +143,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                         null,
                         "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
                         ProcessInspectionStatus.Available)
-                });
+                }));
 
         try
         {
@@ -156,7 +154,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            LockAttribution.ProcessCommandLineSnapshotForTests = null;
             LockAttribution.HandleExecutableForTests = null;
             LockAttribution.DisableRestartManagerForTests = false;
         }
@@ -167,13 +164,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     {
         LockAttribution.DisableRestartManagerForTests = true;
         LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
-        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        using var snapshotScope = LockAttribution.UseProcessCommandLineSnapshotForTests(() =>
             new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>(),
                 new ProcessInspectionFailure(
                     ProcessInspectionStatus.NativeFailure,
                     24,
-                    "CreateToolhelp32Snapshot"));
+                    "CreateToolhelp32Snapshot")));
 
         try
         {
@@ -189,7 +186,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            LockAttribution.ProcessCommandLineSnapshotForTests = null;
             LockAttribution.HandleExecutableForTests = null;
             LockAttribution.DisableRestartManagerForTests = false;
         }
