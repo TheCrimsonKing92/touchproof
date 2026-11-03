@@ -24,7 +24,6 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     private bool _dirty;
     private bool _started;
     private bool _disposed;
-    private int _revision;
 
     internal Content Current { get; private set; }
     internal string Title => "Goal";
@@ -92,13 +91,13 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed) return;
-            _dirty = true; _revision++;
+            if (_disposed || _session.IsCancellationRequested) return;
+            _dirty = true;
             _invoke(() =>
             {
                 lock (_gate)
                 {
-                    if (_disposed || !_dirty && _loading is null) return;
+                    if (_disposed || _session.IsCancellationRequested || !_dirty && _loading is null) return;
                     if (_contentLoaded) TitleStatus = "refreshing";
                     Changed?.Invoke();
                 }
@@ -121,13 +120,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     {
         while (true)
         {
-            int revision;
             CancellationToken token;
             lock (_gate)
             {
-                if (_disposed || !_dirty)
+                if (_disposed || _session.IsCancellationRequested || !_dirty)
                 { _loading!.TrySetResult(); _loading = null; return; }
-                _dirty = false; revision = _revision; token = _session.Token;
+                _dirty = false; token = _session.Token;
             }
             try
             {
@@ -138,12 +136,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                     { TitleStatus = "refresh failed: " + OwnerConsoleGoalDetailLoading.UnavailableText; Changed?.Invoke(); return; }
                     if (content is not null)
                     { _contentLoaded = true; _remember?.Invoke(content); }
-                    TitleStatus = null;
+                    TitleStatus = _contentLoaded && _dirty ? "refreshing" : null;
                     content ??= OwnerConsoleGoalDetailLoading.Unavailable(null);
                     Current = content;
                     Page.Replace(content.Text, content.ChoiceLines);
                     Changed?.Invoke();
-                }, revision, token).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
@@ -158,12 +156,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                         Page.Replace(Current.Text, Current.ChoiceLines);
                     }
                     Changed?.Invoke();
-                }, revision, token).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
             }
         }
     }
 
-    private async Task ApplyAsync(Action apply, int revision, CancellationToken token)
+    private async Task ApplyAsync(Action apply, CancellationToken token)
     {
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _invoke(() =>
@@ -171,7 +169,9 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
             try
             {
                 lock (_gate)
-                    if (!_disposed && !token.IsCancellationRequested && revision == _revision) apply();
+                    // Each dialog is bound to one goal. Refresh demand cannot revoke its
+                    // latest available result; awaiting this callback also orders publications.
+                    if (!_disposed && !token.IsCancellationRequested) apply();
                 applied.TrySetResult();
             }
             catch (Exception ex) { applied.TrySetException(ex); }
@@ -204,7 +204,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            _disposed = true; _revision++;
+            _disposed = true;
             _controller.ModelApplied -= ModelApplied;
             _session.Cancel(); _session.Dispose();
         }
