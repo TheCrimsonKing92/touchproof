@@ -753,6 +753,7 @@ public sealed partial class AgentOrchestratorKernel
             mainHeadSha,
             checkAttributions,
             baselineAttestation);
+        RecordCarriedAcceptanceFindingGateOutcome(goalId, branchHeadSha, passed: false, source: "deterministic acceptance failure");
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.AcceptanceFailed), GoalStatusTransitionRecorder.GoalLifecycleReconcileGoalAcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
