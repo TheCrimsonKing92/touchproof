@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized because these tests own and restore process-wide Git discovery overrides.
 // Repositories and census windows belong to the current test; the observer is never replaced.
-[Collection(TestCollections.EnvMutation)]
+[Collection(nameof(WorkTreeInProcessConfirmationCollection))]
 public sealed class WorkTreeInProcessConfirmationTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("worktree-confirmation-").FullName;
