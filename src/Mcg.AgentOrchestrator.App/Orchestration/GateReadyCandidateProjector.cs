@@ -21,11 +21,19 @@ internal sealed class GateReadyCandidateProjector
     }
 
     internal static GateReadyCandidateProjector CreateForRepository(string executionDirectory, string integrationBranch,
-        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null)
+        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null,
+        Func<string, string[], GitCli.GitResult>? changedFilesGitRunner = null,
+        Func<string, string, string?>? changedFilesCommitResolver = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         var gitContext = new WorkerGitContext(reviewerMergeTreeGitRunner,
             (directory, revision) => GitRevisionReader.Shared.TryResolve(directory, revision, out var id) ? id : null);
+        var changedFilesMemo = new GateReadyChangedFilesMemo(
+            changedFilesCommitResolver ?? ((directory, revision) =>
+                GitRevisionReader.Shared.TryResolve(directory, revision, out var id) ? id : null),
+            goalId => changedFilesGitRunner is null
+                ? GoalWorktrees.ResolveChangedFilesAgainstHead(executionDirectory, goalId)
+                : GoalWorktrees.ResolveChangedFilesAgainstHead(executionDirectory, goalId, changedFilesGitRunner));
 
         string ResolveWorktree(GoalId goalId) =>
             GoalWorktrees.TryResolve(executionDirectory, goalId) ??
@@ -36,7 +44,7 @@ internal sealed class GateReadyCandidateProjector
             goalId => ConductorGitRevisionReader.ReadRequiredPair(ResolveWorktree(goalId), integrationBranch),
             goalId =>
             {
-                var result = GoalWorktrees.ResolveChangedFilesAgainstHead(executionDirectory, goalId);
+                var result = changedFilesMemo.Resolve(executionDirectory, goalId);
                 return new GateReadyLandingScopeObservation(
                     result.Succeeded,
                     result.Files,
