@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -69,7 +68,9 @@ internal sealed class ClaudeUsageBackfillIntentHandler(Func<ITransactionalOrches
         if (matches.Length > 1) return "dispatch-ambiguous";
         var (taskId, dispatch) = matches[0];
         if (dispatch.WorkerProviderKind != ProviderKind.AnthropicClaudeCli) return "not-claude-dispatch";
-        var current = ContextUsageFigures.RecordedUsage(dispatch);
+        DispatchProviderUsage? current = dispatch.ContextPackageReceipt is { } usageReceipt
+            ? new(usageReceipt.InputTokens, usageReceipt.CachedInputTokens, usageReceipt.OutputTokens)
+            : dispatch.ProviderUsage;
         if (IsFullyReported(current)) return "already-known";
         try
         {
