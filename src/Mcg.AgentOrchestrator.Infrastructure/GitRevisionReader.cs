@@ -173,6 +173,30 @@ internal sealed class GitRevisionReader : IDisposable
         return false;
     }
 
+    internal static bool TryResolveRootGitDirectory(string directory, out string gitDirectory)
+        => TryResolveRootGitDirectory(directory, out gitDirectory, Environment.GetEnvironmentVariable);
+
+    internal static bool TryResolveRootGitDirectory(
+        string directory, out string gitDirectory, Func<string, string?> environment)
+    {
+        gitDirectory = string.Empty;
+        try
+        {
+            if (!TryConfirmWorkTree(directory, environment)) return false;
+            var entry = Path.Combine(directory, ".git");
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.Directory) == 0 ||
+                (attributes & FileAttributes.ReparsePoint) != 0) return false;
+
+            gitDirectory = Path.GetFullPath(entry);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     // Positive evidence of absence, never a cached negative lookup. Uncertainty retains git.
     internal static bool TryConfirmBranchAbsent(string directory, string branch)
         => TryConfirmBranchAbsent(directory, branch, Environment.GetEnvironmentVariable);
