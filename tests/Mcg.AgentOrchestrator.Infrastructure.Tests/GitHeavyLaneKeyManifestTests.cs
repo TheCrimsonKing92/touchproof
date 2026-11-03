@@ -14,26 +14,25 @@ public sealed class GitHeavyLaneKeyManifestTests
     ];
 
     [Fact]
-    public void ShippedManifest_OnlyConstrainedGitHeavyLanesDeclareTheSharedKey()
+    public void ShippedManifest_NoLaneDeclaresTheSharedKey()
     {
         var lanes = LoadLanes();
         Assert.Equal(28, lanes.Count);
-        var keyedLanes = lanes.Where(lane => lane.ExclusiveResourceKeys.Contains(SharedKey)).ToArray();
-        Assert.Equal(GitHeavyLaneNames, keyedLanes.Select(lane => lane.Name)
-            .OrderBy(name => name, StringComparer.Ordinal).ToArray());
-        Assert.All(keyedLanes, lane =>
+        Assert.All(lanes, lane => Assert.DoesNotContain(SharedKey, lane.ExclusiveResourceKeys));
+        foreach (var name in GitHeavyLaneNames)
         {
-            Assert.Equal(new[] { SharedKey }, lane.ExclusiveResourceKeys);
+            var lane = Assert.Single(lanes, lane => lane.Name == name);
+            Assert.Empty(lane.ExclusiveResourceKeys);
             Assert.Empty(lane.OwnedCollections);
             Assert.False(lane.RequiresBuildSystemChange);
-        });
-        Assert.All(lanes.Where(lane => !GitHeavyLaneNames.Contains(lane.Name)),
-            lane => Assert.DoesNotContain(SharedKey, lane.ExclusiveResourceKeys));
+            Assert.Equal(name is "Remainder" or "Remainder merge train and ratchet",
+                AcceptanceBalancedLaneExpander.IsConstrained(lane));
+        }
         Assert.NotNull(AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).BalancedLanePool);
     }
 
     [Fact]
-    public void RemoteEligibility_SharedKeyMustBeDeclaredMachineLocal()
+    public void RemoteEligibility_FormerGitHeavyLanesNeedNoMachineLocalKey()
     {
         var lanes = LoadLanes();
         string[] shippedMachineLocalKeys =
@@ -47,7 +46,7 @@ public sealed class GitHeavyLaneKeyManifestTests
         foreach (var name in GitHeavyLaneNames)
         {
             var lane = Assert.Single(lanes, lane => lane.Name == name);
-            Assert.Equal("exclusive-key:" + SharedKey, RemoteLaneResourceEligibility.ExclusionReason(
+            Assert.Null(RemoteLaneResourceEligibility.ExclusionReason(
                 lane.ExclusiveResourceKeys, lane.RequiresBuildSystemChange, shippedMachineLocalKeys));
             Assert.Null(RemoteLaneResourceEligibility.ExclusionReason(
                 lane.ExclusiveResourceKeys, lane.RequiresBuildSystemChange, extendedMachineLocalKeys));
@@ -56,6 +55,29 @@ public sealed class GitHeavyLaneKeyManifestTests
         var keylessLane = Assert.Single(lanes, lane => lane.Name == "Remainder balance B");
         Assert.Null(RemoteLaneResourceEligibility.ExclusionReason(
             keylessLane.ExclusiveResourceKeys, keylessLane.RequiresBuildSystemChange, shippedMachineLocalKeys));
+    }
+
+    [Fact]
+    public void ShippedManifest_FormerBalanceAAndDClassesHaveExactlyOneBalancedLane()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        var classes = AcceptanceTestClassSourceScanner.Scan(root);
+        Assert.NotNull(settings.BalancedLanePool);
+        var expanded = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, classes,
+            new Dictionary<string, double>(), settings.BalancedLanePool);
+        foreach (var name in new[] { "Remainder balance A", "Remainder balance D" })
+        {
+            var originalLane = Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == name);
+            var members = classes.Where(item =>
+                AcceptanceLaneMembership.LanesIncluding([originalLane], item.FullName).Count > 0).ToArray();
+            Assert.NotEmpty(members);
+            foreach (var item in members)
+            {
+                var lane = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName));
+                Assert.StartsWith(settings.BalancedLanePool.LaneNamePrefix, lane.Name);
+            }
+        }
     }
 
     private static IReadOnlyList<AcceptanceTestLane> LoadLanes() =>

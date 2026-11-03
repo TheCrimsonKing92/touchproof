@@ -99,13 +99,13 @@ public sealed class RemainderBalanceDLaneMoveTests
         var names = lanes.Select(lane => lane.Name).ToArray();
         Assert.Equal(Array.IndexOf(names, BalanceC) + 1, Array.IndexOf(names, BalanceD));
         Assert.Equal(555.8, balanceD.EstimatedSerialSeconds);
-        Assert.Equal(new[] { SharedKey }, balanceD.ExclusiveResourceKeys);
+        Assert.Empty(balanceD.ExclusiveResourceKeys);
         Assert.Equal(balanceA.ExclusiveResourceKeys, balanceD.ExclusiveResourceKeys);
         Assert.Empty(balanceD.OwnedCollections);
         Assert.Equal(balanceA.OwnedCollections, balanceD.OwnedCollections);
         Assert.False(balanceD.RequiresBuildSystemChange);
         Assert.Equal(balanceA.RequiresBuildSystemChange, balanceD.RequiresBuildSystemChange);
-        Assert.True(AcceptanceBalancedLaneExpander.IsConstrained(balanceD));
+        Assert.False(AcceptanceBalancedLaneExpander.IsConstrained(balanceD));
         Assert.Equal(415.6, Assert.Single(lanes, lane => lane.Name == Remainder).EstimatedSerialSeconds);
         Assert.Equal(string.Join("|", MovedClassNames.Select(name => $"FullyQualifiedName~{name}")),
             balanceD.Filter);
@@ -165,7 +165,7 @@ public sealed class RemainderBalanceDLaneMoveTests
         foreach (var name in MovedClassNames)
         {
             var moved = Assert.Single(classes, item => item.FullName == name);
-            Assert.Equal(BalanceD,
+            Assert.StartsWith(settings.BalancedLanePool.LaneNamePrefix,
                 Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, moved.FullName)).Name);
         }
     }
