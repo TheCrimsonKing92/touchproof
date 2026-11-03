@@ -1,7 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Runtime.Loader;
-
 [Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class WorkerProcessJobsTestsBuildOutputLocator
 {
@@ -115,8 +111,8 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
             Path.Combine(fixture.Root, "bin"));
 
-        fixture.WithCopiedAnchor(anchor =>
-            Assert.Equal(output, FixtureProbeLocator.FindDirectory(anchor, Project, Project + ".dll")));
+        fixture.WithClosure((closure, configuration) =>
+            Assert.Equal(output, FixtureProbeLocator.FindDirectory(closure, configuration, Project, Project + ".dll")));
     }
 
     [Fact]
@@ -131,8 +127,8 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
             Path.Combine(fixture.Root, "bin"));
 
-        fixture.WithCopiedAnchor(anchor =>
-            Assert.Equal(output, FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles)));
+        fixture.WithClosure((closure, configuration) =>
+            Assert.Equal(output, FixtureProbeLocator.FindDirectory(closure, configuration, Project, requiredFiles)));
     }
 
     [Fact]
@@ -142,11 +138,11 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         var output = fixture.CreateOutput("bin");
         File.WriteAllText(Path.Combine(output, Project + ".dll"), "probe");
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            Assert.Null(FixtureProbeLocator.FindDirectory(anchor, Project, Project + ".dll"));
+            Assert.Null(FixtureProbeLocator.FindDirectory(closure, configuration, Project, Project + ".dll"));
             Assert.Equal([Path.Combine(fixture.Root, "summary", Project, Configuration)],
-                FixtureProbeLocator.TriedPaths(anchor, Project, Project + ".dll"));
+                FixtureProbeLocator.TriedPaths(closure, configuration, Project, Project + ".dll"));
         });
     }
 
@@ -164,11 +160,11 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         Assert.True(File.Exists(Path.Combine(output, requiredFiles[0])));
         Assert.False(File.Exists(Path.Combine(output, requiredFiles[3])));
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            Assert.Null(FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles));
+            Assert.Null(FixtureProbeLocator.FindDirectory(closure, configuration, Project, requiredFiles));
             Assert.Equal([Path.Combine(fixture.Root, "summary", Project, Configuration), output],
-                FixtureProbeLocator.TriedPaths(anchor, Project, requiredFiles));
+                FixtureProbeLocator.TriedPaths(closure, configuration, Project, requiredFiles));
         });
     }
 
@@ -185,10 +181,10 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
             Path.Combine(fixture.Root, "bin"));
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            Assert.Equal(sibling, FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles));
-            Assert.Equal([sibling], FixtureProbeLocator.TriedPaths(anchor, Project, requiredFiles));
+            Assert.Equal(sibling, FixtureProbeLocator.FindDirectory(closure, configuration, Project, requiredFiles));
+            Assert.Equal([sibling], FixtureProbeLocator.TriedPaths(closure, configuration, Project, requiredFiles));
         });
     }
 
@@ -203,13 +199,12 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
             File.WriteAllText(Path.Combine(otherOutput, SupervisorProbe + suffix), "other build");
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, Path.Combine(fixture.Root, "bin"));
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
             foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
                 File.WriteAllText(Path.Combine(closure, SupervisorProbe + suffix), "current build");
 
-            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(closure, configuration);
             Assert.Equal(closure, found.Directory);
             Assert.Equal([closure], found.TriedPaths);
         });
@@ -227,12 +222,11 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
             File.WriteAllText(Path.Combine(output, SupervisorProbe + suffix), "bound build");
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, buildRoot);
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
             File.WriteAllText(Path.Combine(closure, SupervisorProbe + presentSuffix), "partial current build");
 
-            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(closure, configuration);
             Assert.Equal(output, found.Directory);
             Assert.Equal([closure, Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration), output], found.TriedPaths);
         });
@@ -248,12 +242,11 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
             File.WriteAllText(Path.Combine(sibling, SupervisorProbe + suffix), "bound build");
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
             File.WriteAllText(Path.Combine(closure, SupervisorProbe + presentSuffix), "partial copy");
 
-            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(closure, configuration);
             Assert.Equal(sibling, found.Directory);
             Assert.Equal([closure, sibling], found.TriedPaths);
         });
@@ -268,12 +261,11 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         var sibling = Directory.CreateDirectory(Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration)).FullName;
         File.WriteAllText(Path.Combine(sibling, SupervisorProbe + siblingSuffix), "partial sibling");
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
             File.WriteAllText(Path.Combine(closure, SupervisorProbe + localSuffix), "partial copy");
 
-            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(closure, configuration);
             Assert.Null(found.Directory);
             Assert.Equal([closure, sibling], found.TriedPaths);
         });
@@ -292,10 +284,9 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
             File.WriteAllText(Path.Combine(fallback, SupervisorProbe + ".runtimeconfig.json"), "bound build");
         Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, buildRoot);
 
-        fixture.WithCopiedAnchor(anchor =>
+        fixture.WithClosure((closure, configuration) =>
         {
-            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
-            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(closure, configuration);
             Assert.Equal(complete ? fallback : null, found.Directory);
             Assert.Equal([closure, Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration), fallback], found.TriedPaths);
         });
@@ -303,7 +294,6 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
 
     private sealed class LocatorFixture : IDisposable
     {
-        private WeakReference? _copiedContext;
         private readonly string? _original = Environment.GetEnvironmentVariable(
             TestBuildOutputLocator.BuildOutputRootVariable);
         internal string Root { get; } = Directory.CreateTempSubdirectory("mcg-output-locator-").FullName;
@@ -323,39 +313,17 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         internal string CreateOutput(string binRoot)
             => Directory.CreateDirectory(Path.Combine(Root, binRoot, Project, Configuration)).FullName;
 
-        // Keep collectible types off the caller's stack before Dispose collects the context.
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal void WithCopiedAnchor(Action<Type> assertion)
+        internal void WithClosure(Action<string, string> assertion)
         {
             var closure = Directory.CreateDirectory(Path.Combine(Root, "summary", ".c", "closure-token")).FullName;
-            var original = typeof(WorkerProcessJobsTestsBuildOutputLocator);
-            var copy = Path.Combine(closure, Path.GetFileName(original.Assembly.Location));
-            File.Copy(original.Assembly.Location, copy);
-            var context = new AssemblyLoadContext("fixture-probe-anchor", isCollectible: true);
-            _copiedContext = new WeakReference(context, trackResurrection: true);
-            try
-            {
-                var anchor = context.LoadFromAssemblyPath(copy).GetType(original.FullName!, throwOnError: true)!;
-                Assert.Equal(copy, anchor.Assembly.Location);
-                Assert.Equal(Configuration, anchor.Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()!.Configuration);
-                assertion(anchor);
-            }
-            finally
-            {
-                context.Unload();
-            }
+            File.WriteAllText(Path.Combine(closure,
+                Path.GetFileName(typeof(TestBuildOutputLocator).Assembly.Location)), "test assembly");
+            assertion(closure, Configuration);
         }
 
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, _original);
-            for (var attempt = 0; _copiedContext?.IsAlive == true && attempt < 10; attempt++)
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-            }
-            Assert.False(_copiedContext?.IsAlive == true,
-                "The copied anchor context must unload before deleting its closure.");
             Directory.Delete(Root, recursive: true);
         }
     }

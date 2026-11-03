@@ -20,9 +20,12 @@ internal sealed class GateReadyCandidateProjector
         _readMergeTree = readMergeTree ?? throw new ArgumentNullException(nameof(readMergeTree));
     }
 
-    internal static GateReadyCandidateProjector CreateForRepository(string executionDirectory, string integrationBranch)
+    internal static GateReadyCandidateProjector CreateForRepository(string executionDirectory, string integrationBranch,
+        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
+        var gitContext = new WorkerGitContext(reviewerMergeTreeGitRunner,
+            (directory, revision) => GitRevisionReader.Shared.TryResolve(directory, revision, out var id) ? id : null);
 
         string ResolveWorktree(GoalId goalId) =>
             GoalWorktrees.TryResolve(executionDirectory, goalId) ??
@@ -41,7 +44,7 @@ internal sealed class GateReadyCandidateProjector
             },
             (goalId, branchRevision, mainRevision) =>
             {
-                var status = new WorkerGitContext().ReadReviewerMergeTreeStatus(
+                var status = gitContext.ReadReviewerMergeTreeStatus(
                     ResolveWorktree(goalId),
                     mainRevision,
                     branchRevision);
