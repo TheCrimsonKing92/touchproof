@@ -270,6 +270,11 @@ if (CliContextUsageCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliContextUsageCommand.Run(startupArgs, workspace));
 }
 
+if (CliClaudeUsageBackfillCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliClaudeUsageBackfillCommand.Run(startupArgs, workspace));
+}
+
 if (CliAuthorDraftCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliAuthorDraftCommand.Run(startupArgs, workspace));

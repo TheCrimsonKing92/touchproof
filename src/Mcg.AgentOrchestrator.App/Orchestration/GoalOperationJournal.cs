@@ -158,7 +158,16 @@ internal static partial class GoalOperationJournal
 
         public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
     }
-    internal static Action? BeforeAcceptanceRetryAppend { get; set; }
+    private static readonly AsyncLocal<Action?> BeforeAcceptanceRetryAppendOverride = new();
+
+    internal static IDisposable UseBeforeAcceptanceRetryAppend(Action hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = BeforeAcceptanceRetryAppendOverride.Value;
+        BeforeAcceptanceRetryAppendOverride.Value = hook;
+        return new RestoreFaultHook(() => BeforeAcceptanceRetryAppendOverride.Value = previous);
+    }
+
     private static readonly ConcurrentDictionary<string, Lazy<SqliteRunEventStore>> RunEventStores =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -485,7 +494,7 @@ internal static partial class GoalOperationJournal
             return;
         }
 
-        BeforeAcceptanceRetryAppend?.Invoke();
+        BeforeAcceptanceRetryAppendOverride.Value?.Invoke();
         Append(
             executionDirectory,
             goal.Id,

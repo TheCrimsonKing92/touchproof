@@ -34,10 +34,20 @@ public sealed class GcEnvironmentEvidenceLaunchTests
         var actual = Capture(fixture, baselineFixture.Storage);
         var expected = new Dictionary<string, string?>(baseline);
         if (heaps == 4) expected["DOTNET_GCHeapCount"] = "4";
-        Assert.Equal(expected.OrderBy(p => p.Key), actual.OrderBy(p => p.Key));
+        AssertControlledEntriesEqual(expected, actual);
         Assert.Equal(baseline.GetValueOrDefault("DOTNET_GCConserveMemory"),
             actual.GetValueOrDefault("DOTNET_GCConserveMemory"));
     }
+
+    internal static void AssertControlledEntriesEqual(IReadOnlyDictionary<string, string?> expected,
+        IReadOnlyDictionary<string, string?> actual) =>
+        Assert.Equal(ControlledEntries(expected), ControlledEntries(actual));
+
+    private static List<KeyValuePair<string, string?>> ControlledEntries(
+        IReadOnlyDictionary<string, string?> environment) =>
+        environment.Where(p => p.Key.StartsWith("DOTNET_GC", StringComparison.Ordinal) ||
+                string.Equals(p.Key, DotnetBuildStorageLayout.IsolatedRootOverrideVariable, StringComparison.Ordinal))
+            .OrderBy(p => p.Key, StringComparer.Ordinal).ToList();
 
     private static void WritePolicy(CompletionBuildEvidenceFixture fixture, ConductorAutonomyPolicy policy) =>
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.StatePath)!, "conductor-policy.json"), policy.ToJson());

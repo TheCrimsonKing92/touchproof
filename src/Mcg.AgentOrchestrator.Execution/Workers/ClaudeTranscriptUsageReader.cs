@@ -17,6 +17,11 @@ public sealed class ClaudeTranscriptUsageReader(
                 : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"),
             "projects")]);
 
+    internal ClaudeTranscriptUsageResult ReadDispatch(TaskDispatchRecord dispatch) =>
+        Read(dispatch.ProviderSessionId, dispatch.SandboxLowIntegrity
+            ? [Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox")]
+            : null);
+
     public ClaudeTranscriptUsageResult Read(string? sessionId, IReadOnlyList<string>? additionalRoots = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) ||

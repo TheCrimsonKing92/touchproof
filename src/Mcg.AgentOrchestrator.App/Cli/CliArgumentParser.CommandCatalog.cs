@@ -81,6 +81,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "directive",
     "directives",
     "context-usage",
+    "claude-usage-backfill",
     "author-draft",
     "host-exclusions",
     "conductor",
