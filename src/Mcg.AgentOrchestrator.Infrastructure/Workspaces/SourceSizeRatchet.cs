@@ -475,8 +475,8 @@ internal static class SourceSizeRatchet
             // and disposes the owned root; the real-process transport assertions remain in this fixture.
             // Goal 2c245bc3 waits for the primer holder's capacity release before asserting next-slot admission.
             // Goal f608f29b adds an explicit empty environmentContract to two inline fixture manifests (2 lines).
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5284),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1357),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5283),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1356),
         });
 
     // Reseeded at main 584b86d13 using complete File.ReadLines counts for files declaring each partial class.

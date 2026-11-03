@@ -362,6 +362,7 @@ public static partial class GoalWorktrees
 
     private static bool BranchExists(string executionDirectory, string branch, int gitTimeoutMilliseconds)
     {
+        if (GitRevisionReader.TryConfirmBranchAbsent(executionDirectory, branch)) return false;
         if (GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{branch}", gitTimeoutMilliseconds, out _))
             return true;
         return GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;

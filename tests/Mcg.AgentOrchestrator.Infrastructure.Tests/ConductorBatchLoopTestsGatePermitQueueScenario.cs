@@ -130,7 +130,7 @@ public sealed class ConductorBatchLoopTestsGatePermitQueueScenario : ConductorBa
     private sealed class Scenario : IDisposable
     {
         private readonly string _root = CreateTempDirectory("mcg-gate-queue");
-        private readonly Func<ProcessCommandLineSnapshot>? _priorSnapshot;
+        private readonly IDisposable _snapshotScope;
         private readonly ConductorParallelAcceptanceAttemptCoordinator _coordinator;
         private readonly ConductorParallelAcceptanceCandidate _candidate;
         private readonly DateTimeOffset _start;
@@ -152,8 +152,8 @@ public sealed class ConductorBatchLoopTestsGatePermitQueueScenario : ConductorBa
                 Path.Combine(_root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true, timeProvider: Clock, buildPermitBusyTimeout: TimeSpan.FromSeconds(20),
                 buildPermitSleep: Clock.Advance, buildStorageRoot: Storage);
-            _priorSnapshot = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
+
+            _snapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         }
 
         public void AtMinute(int minute) => Clock.Advance(_start.AddMinutes(minute) - Clock.GetUtcNow());
@@ -194,7 +194,7 @@ public sealed class ConductorBatchLoopTestsGatePermitQueueScenario : ConductorBa
 
         public void Dispose()
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = _priorSnapshot;
+            _snapshotScope.Dispose();
             SharedTestSupport.RemoveTempDirectory(_root);
         }
     }
