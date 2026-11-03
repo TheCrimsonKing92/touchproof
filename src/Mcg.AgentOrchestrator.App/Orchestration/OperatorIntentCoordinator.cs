@@ -157,6 +157,7 @@ internal sealed partial class OperatorIntentCoordinator
             EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
             Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath),
             ProviderResets = new ProviderResetRetainedSourceRecorder(() => new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)),
+            ClaudeUsageBackfills = new ClaudeUsageBackfillIntentHandler(() => new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)),
             ExecutorSettings = new ExecutorSettingIntentHandler(
                 RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath,
                 new RemoteExecutorSlotsFileSync(GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,

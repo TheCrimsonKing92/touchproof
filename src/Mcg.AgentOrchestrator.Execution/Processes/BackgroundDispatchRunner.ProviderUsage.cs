@@ -14,10 +14,7 @@ public sealed partial class BackgroundDispatchRunner
 
         if (dispatch?.WorkerProviderKind == ProviderKind.AnthropicClaudeCli)
         {
-            IReadOnlyList<string>? additionalRoots = dispatch.SandboxLowIntegrity
-                ? [Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox")]
-                : null;
-            return ClaudeTranscriptUsage.Read(dispatch.ProviderSessionId, additionalRoots);
+            return ClaudeTranscriptUsage.ReadDispatch(dispatch);
         }
 
         return new(null, "unsupported");
