@@ -416,6 +416,20 @@ public sealed class AcceptanceGateEngineSettingsTests
                 .Select(entry => entry.Lane)
                 .DistinctBy(lane => lane.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            if (collection.Key == TestCollections.JobAccounting)
+            {
+                // Owner-approved key removal applies only to these three process-isolated lanes.
+                string[] splitLaneNames = ["Goal acceptance build slots A", "Goal acceptance build slots B",
+                    "Goal acceptance build slots C"];
+                var splitLanes = lanes.Where(lane => splitLaneNames.Contains(lane.Name, StringComparer.Ordinal))
+                    .ToArray();
+                Xunit.Assert.Equal(splitLaneNames.Order(StringComparer.Ordinal),
+                    splitLanes.Select(lane => lane.Name).Order(StringComparer.Ordinal));
+                Xunit.Assert.All(splitLanes, lane => Xunit.Assert.Empty(lane.ExclusiveResourceKeys));
+                lanes = lanes.Except(splitLanes).ToArray();
+                var verifier = Xunit.Assert.Single(lanes, lane => lane.Name == "Goal acceptance verifier");
+                Xunit.Assert.Contains("xunit:JobAccounting", verifier.ExclusiveResourceKeys);
+            }
             if (lanes.Length < 2 || processLocalCollections.Contains(collection.Key))
             {
                 continue;
