@@ -183,6 +183,8 @@ internal sealed class GitRevisionReader : IDisposable
         try
         {
             if (!TryConfirmWorkTree(directory, environment) || !IsBranchRefName(branch)) return false;
+            // rev-parse can resolve a describe-style name from its object suffix without any ref.
+            if (HasDescribeObjectSuffix(branch)) return false;
             if (OperatingSystem.IsWindows() && branch.Split('/').Any(IsAmbiguousWindowsRefComponent)) return false;
 
             // Worktree confirmation permits nested directories; this proof requires the root entry.
@@ -254,6 +256,14 @@ internal sealed class GitRevisionReader : IDisposable
         {
             return false;
         }
+    }
+
+    private static bool HasDescribeObjectSuffix(string branch)
+    {
+        var suffixStart = branch.Length;
+        while (suffixStart > 0 && Uri.IsHexDigit(branch[suffixStart - 1])) suffixStart--;
+        return suffixStart < branch.Length && suffixStart >= 2 &&
+            branch[suffixStart - 2] == '-' && branch[suffixStart - 1] == 'g';
     }
 
     private static bool IsAmbiguousWindowsRefComponent(string component)

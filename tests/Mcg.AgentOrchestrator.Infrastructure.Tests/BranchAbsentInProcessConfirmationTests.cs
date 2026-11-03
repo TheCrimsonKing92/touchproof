@@ -217,6 +217,31 @@ public sealed class BranchAbsentInProcessConfirmationTests : IDisposable
     }
 
     [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public void DescribeName_DeclinesEvenWithoutRef(string format)
+    {
+        var repo = CreateRepository(format);
+        AssertProof(repo, "probe", true, false);
+        var abbreviation = Git(repo, "rev-parse", "--short", "HEAD").Output.Trim();
+        var branch = "probe-1-g" + abbreviation;
+        Assert.False(File.Exists(Metadata(repo, "refs/heads/" + branch)));
+        AssertProof(repo, branch, false, true);
+    }
+
+    [Theory]
+    [InlineData("probe-g1", false)]
+    [InlineData("probe-1-ga", false)]
+    [InlineData("probe-1-gA", false)]
+    [InlineData("probe-1-g", true)]
+    [InlineData("probe-1-g12z", true)]
+    public void DescribeSuffix_RequiresTrailingHex(string branch, bool expectedProof)
+    {
+        var repo = CreateRepository();
+        AssertProof(repo, branch, expectedProof, false);
+    }
+
+    [Theory]
     [InlineData("a..b")]
     [InlineData("a.lock")]
     [InlineData("a//b")]
