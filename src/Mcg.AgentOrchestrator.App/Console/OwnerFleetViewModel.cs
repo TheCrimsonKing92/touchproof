@@ -9,19 +9,62 @@ internal enum OwnerFleetReachability { Unknown, Reachable, Unreachable }
 
 internal sealed record OwnerFleetHostNode(bool ConductorRunning, int ExecutorCount,
     int UnreadableOutcomeLines, int UnreadableProbeLines,
-    int NoExecutorFreeCount = 0, DateTimeOffset? NoExecutorFreeLastAt = null);
+    int NoExecutorFreeCount = 0, DateTimeOffset? NoExecutorFreeLastAt = null)
+{
+    internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create("host",
+        new("conductor", "Conductor running", ConductorRunning.ToString()), new("executors", "Executor count", ExecutorCount.ToString()),
+        new("unreadable-outcomes", "Unreadable outcomes", UnreadableOutcomeLines.ToString()),
+        new("unreadable-probes", "Unreadable probes", UnreadableProbeLines.ToString()),
+        new("no-free", "No free slot count", NoExecutorFreeCount.ToString()), new("last-no-free", "Last no free slot", NoExecutorFreeLastAt?.ToString("O")));
+}
 
 internal sealed record OwnerFleetExecutorNode(string Id, OwnerFleetReachability Reachability,
     IReadOnlyList<string> ProbeReasons, DateTimeOffset? ProbeAt, int? ConfiguredSlots,
     int PeakConcurrentAttempts, string? LastOutcome, DateTimeOffset? LastOutcomeAt,
     double? AcceptedShare, IReadOnlyList<RemoteExecutorLaneSeconds> Lanes, RemoteExecutorSlotsSyncRow? SlotsFile = null,
-    bool? AdmissionEnabled = null, string? Owner = null);
+    bool? AdmissionEnabled = null, string? Owner = null)
+{
+    internal OwnerConsoleFieldSnapshot Fields()
+    {
+        var fields = new List<OwnerConsoleField>
+        {
+            new("executor", "Executor ID", Id), new("reachability", "Reachability", Reachability.ToString()),
+            new("reasons", "Probe reasons", string.Join("\n", ProbeReasons)), new("probe", "Probe at", ProbeAt?.ToString("O")),
+            new("slots", "Configured slots", ConfiguredSlots?.ToString()), new("peak", "Peak concurrency", PeakConcurrentAttempts.ToString()),
+            new("outcome", "Last outcome", LastOutcome), new("outcome-at", "Last outcome at", LastOutcomeAt?.ToString("O")),
+            new("share", "Accepted share", AcceptedShare?.ToString("R", System.Globalization.CultureInfo.InvariantCulture)),
+            new("admission", "Admission enabled", AdmissionEnabled?.ToString()), new("owner", "Owner", Owner),
+            new("sync", "Slots file outcome", SlotsFile?.Outcome), new("sync-reason", "Slots file reason", SlotsFile?.Reason),
+            new("sync-slots", "Slots file slots", SlotsFile?.Slots.ToString()),
+            new("sync-at", "Slots file observed at", SlotsFile?.ObservedAt.ToString("O"))
+        };
+        foreach (var lane in Lanes)
+        {
+            var key = "lane/" + lane.Lane + "/";
+            fields.AddRange(new OwnerConsoleField[] { new(key + "name", "Lane", lane.Lane),
+                new(key + "median", lane.Lane + " median seconds", lane.MedianSeconds.ToString()),
+                new(key + "samples", lane.Lane + " samples", lane.Samples.ToString()),
+                new(key + "solo", lane.Lane + " solo median seconds", lane.SoloMedianSeconds?.ToString("R", System.Globalization.CultureInfo.InvariantCulture)),
+                new(key + "concurrent", lane.Lane + " concurrent median seconds", lane.ConcurrentMedianSeconds?.ToString("R", System.Globalization.CultureInfo.InvariantCulture)) });
+        }
+        return new(Id, [.. fields]);
+    }
+}
 
 internal sealed record OwnerFleetViewModel(OwnerFleetHostNode Host,
     IReadOnlyList<OwnerFleetExecutorNode> Executors, IReadOnlyList<OwnerFleetProviderHoldNode>? ProviderHolds = null);
 
 internal sealed record OwnerFleetProviderHoldNode(string BindingKey, string Name, string Source,
-    DateTimeOffset PlacedAt, DateTimeOffset? NextProbeAt, int? Attempt, string? ResetSource, string? LastProbe);
+    DateTimeOffset PlacedAt, DateTimeOffset? NextProbeAt, int? Attempt, string? ResetSource, string? LastProbe)
+{
+    internal string? SourceGoalId { get; init; }
+    internal string? SourceTaskId { get; init; }
+    internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(BindingKey,
+        new("binding", "Binding", BindingKey), new("name", "Name", Name), new("source-goal", "Source goal ID", SourceGoalId),
+        new("source-task", "Source task ID", SourceTaskId), new("placed", "Placed at", PlacedAt.ToString("O")),
+        new("next", "Next probe", NextProbeAt?.ToString("O")), new("attempt", "Attempt", Attempt?.ToString()),
+        new("reset", "Reset source", ResetSource), new("last", "Last probe", LastProbe));
+}
 
 internal static class OwnerFleetViewModelBuilder
 {
@@ -48,7 +91,8 @@ internal static class OwnerFleetViewModelBuilder
                 TimeZoneInfo.ConvertTime(row.Hold.PlacedAt, zone),
                 row.Schedule is { } schedule ? TimeZoneInfo.ConvertTime(schedule.NextProbeAt, zone) : null,
                 row.Schedule?.Attempt, row.Schedule?.ResetSource,
-                row.Schedule?.LastProbeOutcome is { } outcome && outcome != "none" ? outcome : null)).ToArray());
+                row.Schedule?.LastProbeOutcome is { } outcome && outcome != "none" ? outcome : null)
+                { SourceGoalId = row.Hold.SourceGoalId.Value, SourceTaskId = row.Hold.SourceTaskId.Value }).ToArray());
 
     internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness, TimeProvider? clock = null,
         OwnerConsoleHostRowOwner? owners = null) =>

@@ -6,9 +6,11 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleGateDialog : FrameView
 {
-    private readonly ListView _body = new() { Width = Dim.Fill(), Height = Dim.Fill(1) };
+    private readonly ListView _body = new() { Width = Dim.Fill(), Height = Dim.Fill(2) };
     private readonly Label _footer = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
         Text = OwnerConsoleDialogBindings.GateHelp.HintLabel! };
+    private readonly Label _fieldsHint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1, Text = "F2 fields (snapshot)" };
+    internal void FieldsUnavailable() => _fieldsHint.Text = "No selected structured item. F2 fields";
     private OwnerConsoleGateProgress? _gate;
     internal OwnerConsoleListRenderer SourceRenderer { get; } = new();
     private string? _goalId;
@@ -19,6 +21,8 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     internal string FooterText => _footer.Text;
     internal int SelectedLine => _body.SelectedItem ?? 0;
     internal ListView BodyPane => _body;
+    private OwnerConsoleStructuredText? _fields;
+    internal OwnerConsoleFieldSnapshot? SelectedFields => _fields?.At(SelectedLine);
 
     internal OwnerConsoleGateDialog()
     {
@@ -27,7 +31,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         Height = Dim.Fill();
         CanFocus = true;
         Visible = false;
-        Add(_body, _footer);
+        Add(_body, _footer, _fieldsHint);
         _body.ViewportChanged += (_, _) => { if (IsOpen) RenderTitle(); };
     }
 
@@ -51,7 +55,9 @@ internal sealed class OwnerConsoleGateDialog : FrameView
             else _goalId = null;
         }
         var selected = _body.SelectedItem ?? 0;
-        Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded);
+        var fields = new Dictionary<int, OwnerConsoleFieldSnapshot>();
+        Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded, fields);
+        _fields = new(gate?.FieldSnapshot(), fields);
         if (SourceRenderer.Apply(_body, Lines))
             _body.SelectedItem = Math.Clamp(selected, 0, Math.Max(0, Lines.Count - 1));
         RenderTitle();

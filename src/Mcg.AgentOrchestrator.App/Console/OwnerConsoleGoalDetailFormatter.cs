@@ -25,6 +25,7 @@ internal static class OwnerConsoleGoalDetailFormatter
 
     internal static void Render(OwnerGoalDetailSnapshot detail, IOwnerConsoleOutput output, TimeZoneInfo zone)
     {
+        if (output is OwnerConsoleCapturedOutput captured) captured.Structured = new(detail.Fields());
         var goal = detail.Goal;
         output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
         var status = OwnerConsoleStatusLabel.For(goal.Status);

@@ -16,6 +16,9 @@ internal sealed class OwnerConsoleActivityPane
     internal IReadOnlyList<OwnerConsoleActivityKey> Keys { get; private set; } = [];
     internal bool Following => _follow.Following;
     internal string? Filter { get; private set; }
+    private IReadOnlyList<OwnerConsoleActivityItem> _items = [];
+    internal OwnerConsoleFieldSnapshot? SelectedFields => List.SelectedItem is { } row && row >= 0 && row < Rows.Count &&
+        Rows[row].ItemIndex is { } index && index < _items.Count ? _items[index].Fields() : null;
 
     internal void Render(OwnerConsoleViewModel? model, int width, bool refilter = false, bool follow = false)
     {
@@ -31,6 +34,7 @@ internal sealed class OwnerConsoleActivityPane
         var showContent = state is null || retained;
         TitleStatus = retained ? state is { Loading: true } ? "refreshing" : "refresh failed: " + state!.Error : null;
         Rows = showContent ? OwnerConsoleActivityRows.Build(items, Filter) : [];
+        _items = items;
         Keys = showContent ? Rows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
         IEnumerable<string> pane = !retained && state is { Loading: true } ? ["loading..."] : !retained && state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : Rows.Select(row => row.Text);

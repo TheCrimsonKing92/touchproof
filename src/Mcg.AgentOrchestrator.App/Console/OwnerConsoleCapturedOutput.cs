@@ -8,4 +8,5 @@ internal sealed class OwnerConsoleCapturedOutput : IOwnerConsoleOutput
     public void Write(string text) => _text.Append(text);
     public void WriteLine(string text) => _text.AppendLine(text);
     internal string Text => _text.ToString();
+    internal OwnerConsoleStructuredText? Structured { get; set; }
 }

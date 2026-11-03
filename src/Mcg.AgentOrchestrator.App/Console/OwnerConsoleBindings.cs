@@ -2,6 +2,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleBindings
 {
+    internal static Terminal.Gui.Input.Key OpenFields => Terminal.Gui.Input.Key.F2;
+    internal static Terminal.Gui.Input.Key CopyField => Terminal.Gui.Input.Key.C.WithCtrl;
+    internal const string FieldsHint = "F2 fields  Left/Right cell  Ctrl+C copy cell";
     internal static IReadOnlyList<OwnerConsoleBinding> All { get; } = Array.AsReadOnly<OwnerConsoleBinding>(
     [
         Row("conductor start", "Start the conductor.", effect: OwnerConsoleEffect.External),

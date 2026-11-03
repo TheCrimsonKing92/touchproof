@@ -6,6 +6,7 @@ internal sealed class OwnerConsoleControlCommands(
     IOwnerConsoleOutput output,
     TimeProvider clock)
 {
+    internal OwnerConsoleStructuredText? Fields { get; private set; }
     private const string ConductorUsage = "usage: conductor start [--clear-stop] | conductor stop [--yes] | conductor status";
     private const string DetachWarning = "This is a detach, not a drain: live workers are detached without waiting for them to finish.";
 
@@ -37,9 +38,10 @@ internal sealed class OwnerConsoleControlCommands(
         var args = verb == "start" && parts.Length == 3
             ? new[] { "conductor", "start", "--clear-stop" }
             : new[] { "conductor", verb };
-        using var standard = new StringWriter();
+        using var standard = new OwnerConsoleStructuredWriter();
         using var error = new StringWriter();
-        conductor.Run(args, standard, error);
+        conductor.RunStructured(args, standard, error, fields => Fields = fields);
+        Fields = standard.Build(Fields);
         var firstLine = true;
         Echo(standard.ToString(), ref firstLine);
         Echo(error.ToString(), ref firstLine);
@@ -57,8 +59,9 @@ internal sealed class OwnerConsoleControlCommands(
             Announce("metrics unavailable in this session");
             return;
         }
-        using var writer = new StringWriter();
-        digestReport.Run(writer);
+        using var writer = new OwnerConsoleStructuredWriter();
+        digestReport.RunStructured(writer, fields => Fields = fields);
+        Fields = writer.Build(Fields);
         var firstLine = true;
         Echo(writer.ToString(), ref firstLine);
     }

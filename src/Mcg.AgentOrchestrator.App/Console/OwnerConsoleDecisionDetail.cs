@@ -23,7 +23,8 @@ internal sealed class OwnerConsoleDecisionDetail : IDisposable
     internal event Action? Changed;
     internal string Id => _decision.Id;
     internal Task LastRefresh { get { lock (_gate) return _refresh; } }
-    internal sealed record Presentation(string Text, string Banner, string Notice, bool CanAnswer, bool CanAcceptDefault);
+    internal sealed record Presentation(string Text, string Banner, string Notice, bool CanAnswer, bool CanAcceptDefault,
+        OwnerConsoleFieldSnapshot? Fields = null);
 
     internal Presentation State
     {
@@ -45,8 +46,13 @@ internal sealed class OwnerConsoleDecisionDetail : IDisposable
                     else banner = _failure is not null ? "No longer open (resolution unavailable: " + _failure + ")" :
                         _reading ? "No longer open; reading how it was resolved…" : "No longer open";
                 }
+                var fields = _decision.Fields();
+                if (_resolution is { } resolution)
+                    fields = fields with { Fields = [.. fields.Fields, .. OwnerQuestionResolutionText.Fields(resolution).Fields
+                        .Select(value => value with { Key = "resolution/" + value.Key })] };
                 return new(text, banner, _notice, _open && _decision.CanAnswer,
-                    _open && !string.IsNullOrWhiteSpace(_decision.ProposedDefault));
+                    _open && !string.IsNullOrWhiteSpace(_decision.ProposedDefault),
+                    fields);
             }
         }
     }

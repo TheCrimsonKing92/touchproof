@@ -9,10 +9,19 @@ internal sealed record OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow Window, 
     IReadOnlyList<EpicProgressRollup> Epics, OwnerConsoleEpicViewModel.Detail? SelectedDetail = null,
     DateTimeOffset? LoadedAt = null)
 {
-    internal sealed record GoalLine(string Id, string Title, string Stage, string? Reason = null);
+    internal sealed record GoalLine(string Id, string Title, string Stage, string? Reason = null)
+    {
+        internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(Id,
+            new("goal", "Goal ID", Id), new("title", "Title", Title), new("stage", "Stage", Stage), new("reason", "Reason", Reason));
+    }
     internal sealed record Detail(PortfolioEpic Epic, IReadOnlyList<GoalLine> InFlight,
         IReadOnlyList<GoalLine> Landed, IReadOnlyList<GoalLine> Failed, IReadOnlyList<GoalLine> Parked,
-        EpicPlanView? Plan = null, IReadOnlyList<GoalLine>? UnknownLandingDates = null);
+        EpicPlanView? Plan = null, IReadOnlyList<GoalLine>? UnknownLandingDates = null)
+    {
+        internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(Epic.Id,
+            [new("epic", "Epic ID", Epic.Id), new("title", "Title", Epic.Title), new("description", "Description", Epic.Description),
+            .. OwnerConsoleEpicPlanFormatter.Fields(Plan)]);
+    }
 
     internal static DateTimeOffset? Cutoff(OwnerConsoleEpicWindow window, DateTimeOffset now)
     {

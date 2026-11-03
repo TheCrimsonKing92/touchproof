@@ -32,6 +32,15 @@ public sealed class OwnerQuestionResolutionFieldLayoutTests
         Assert.DoesNotContain("Question:", lines);
         Assert.DoesNotContain(lines, line => line.Contains("Availability:", StringComparison.Ordinal) && line.Contains("Reason:", StringComparison.Ordinal));
         if (availability != "post-implementation") Assert.DoesNotContain(lines, line => line.StartsWith("Evidence owner:", StringComparison.Ordinal));
+        var snapshot = OwnerQuestionResolutionText.Fields(resolution);
+        foreach (var field in OwnerEvidenceRequestFields.Read(resolution.Question)!)
+        {
+            var writes = new List<string>();
+            using var modal = new OwnerConsoleFieldsDialog(snapshot, new(value => { writes.Add(value); return true; }), "request/" + field.Label);
+            Assert.Equal(field.Label, modal.SelectedField?.Label);
+            modal.Copy();
+            Assert.Equal(field.Value, Assert.Single(writes));
+        }
         var summary = OwnerQuestionResolutionText.Summary(resolution, TimeZoneInfo.Utc);
         Assert.Equal(resolution.Stage + ": Planner evidence request for criterion 1 — the operator, 00:00:00 (Answered)", summary);
         foreach (var label in new[] { "Availability:", "Owner:", "Reason:", "\n", "\r" }) Assert.DoesNotContain(label, summary);

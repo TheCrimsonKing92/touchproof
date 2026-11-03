@@ -35,8 +35,17 @@ internal static class OwnerConsoleEpicFormatter
 
     internal static string Summary(EpicProgressRollup row) =>
         $"landed {row.WindowLandedCount ?? row.LandedCount} · in flight {row.VerifyingCount + row.ActiveCount} ({row.VerifyingCount} verifying, {row.ActiveCount} active) · failed {row.WindowFailedCount ?? row.FailedCount} · backlog {row.BacklogOpenCount} open / {row.BacklogDoneCount} done";
+    internal static OwnerConsoleFieldSnapshot Fields(EpicProgressRollup row) => OwnerConsoleFieldSnapshot.Create(row.Epic.Id,
+        [new("epic", "Epic ID", row.Epic.Id), new("title", "Title", row.Epic.Title), new("description", "Description", row.Epic.Description),
+        new("landed", "Landed", (row.WindowLandedCount ?? row.LandedCount).ToString()),
+        new("verifying", "Verifying", row.VerifyingCount.ToString()), new("active", "Active", row.ActiveCount.ToString()),
+        new("failed", "Failed", (row.WindowFailedCount ?? row.FailedCount).ToString()),
+        new("backlog-open", "Backlog open", row.BacklogOpenCount.ToString()), new("backlog-done", "Backlog done", row.BacklogDoneCount.ToString()),
+        new("unknown-dates", "Unknown landing dates", row.UnknownLandingDateCount.ToString()),
+        new("updated", "Newest update", row.NewestUpdatedAt?.ToString("O")), .. OwnerConsoleEpicPlanFormatter.Fields(row.Plan)]);
 
-    internal static IReadOnlyList<string> ListLines(OwnerConsoleEpicViewModel model, int width, string? selectedId)
+    internal static IReadOnlyList<string> ListLines(OwnerConsoleEpicViewModel model, int width, string? selectedId,
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null)
     {
         width = Width(width);
         if (model.Epics.Count == 0) return Wrap(NoEpicsText, width).ToArray();
@@ -44,6 +53,7 @@ internal static class OwnerConsoleEpicFormatter
         if (HasNoActivity(model)) lines.AddRange(Wrap(NoActivityLine(model.Window), width));
         foreach (var row in model.Epics)
         {
+            var start = lines.Count;
             var marker = row.Epic.Id == selectedId ? "> " : "  ";
             lines.Add(Fit(marker + Title(row.Epic.Title), width));
             lines.AddRange(Wrap(Summary(row), width));
@@ -51,14 +61,17 @@ internal static class OwnerConsoleEpicFormatter
                 lines.AddRange(Wrap($"Unknown landing dates: {row.UnknownLandingDateCount} (excluded from dated windows)", width));
             if (row.Plan is not null) lines.AddRange(Wrap(row.Outcome.Render(), width));
             lines.Add(string.Empty);
+            if (fields is not null) for (var i = start; i < lines.Count; i++) fields[i] = Fields(row);
         }
         return lines;
     }
 
-    internal static IReadOnlyList<string> DetailLines(OwnerConsoleEpicViewModel.Detail detail, int width)
+    internal static IReadOnlyList<string> DetailLines(OwnerConsoleEpicViewModel.Detail detail, int width,
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null)
     {
         width = Width(width);
         var lines = new List<string> { Fit(Title(detail.Epic.Title), width), "Plan of record:" };
+        var owners = new Dictionary<int, OwnerConsoleFieldSnapshot>();
         lines.AddRange(Wrap(string.IsNullOrWhiteSpace(detail.Epic.Description) ? "(no plan of record)" : detail.Epic.Description, width));
         lines.Add(string.Empty);
         lines.Add("Epic plan:");
@@ -69,7 +82,14 @@ internal static class OwnerConsoleEpicFormatter
             Section("Unknown landing dates", detail.UnknownLandingDates);
         Section("Failed", detail.Failed);
         Section("Parked", detail.Parked);
-        return lines.SelectMany(line => Wrap(line, width)).ToArray();
+        var result = new List<string>();
+        for (var i = 0; i < lines.Count; i++)
+            foreach (var line in Wrap(lines[i], width))
+            {
+                if (fields is not null && owners.TryGetValue(i, out var owner)) fields[result.Count] = owner;
+                result.Add(line);
+            }
+        return result;
 
         void Section(string title, IReadOnlyList<OwnerConsoleEpicViewModel.GoalLine> goals)
         {
@@ -78,6 +98,7 @@ internal static class OwnerConsoleEpicFormatter
             if (goals.Count == 0) lines.Add("(none)");
             foreach (var goal in goals)
             {
+                var start = lines.Count;
                 var prefix = goal.Id[..Math.Min(8, goal.Id.Length)];
                 var fixedWidth = prefix.Length + goal.Stage.Length + 4;
                 var titleWidth = width - fixedWidth;
@@ -90,6 +111,7 @@ internal static class OwnerConsoleEpicFormatter
                     lines.Add(Fit(Title(goal.Title), width));
                 }
                 if (goal.Reason is { } reason) lines.AddRange(Wrap(reason, width));
+                for (var i = start; i < lines.Count; i++) owners[i] = goal.Fields();
             }
         }
     }

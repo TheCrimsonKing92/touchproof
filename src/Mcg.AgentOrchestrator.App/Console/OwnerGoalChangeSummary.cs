@@ -2,7 +2,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Display facts, never a gate evaluator. Each section retains its own authority and identity.
 internal sealed record OwnerGoalSummarySection(string State, IReadOnlyList<string> Items,
-    string Source, int Omitted = 0, IReadOnlyList<string>? ExpandedItems = null);
+    string Source, int Omitted = 0, IReadOnlyList<string>? ExpandedItems = null,
+    IReadOnlyList<string>? SourceItems = null);
 
 // Raw facts already loaded for goal detail; preview wording never derives from diagnostic states.
 internal enum OwnerGoalPreviewChangeKind { None, Unavailable, Listed }
@@ -17,6 +18,33 @@ internal sealed record OwnerGoalChangeSummary(string GoalId, int BriefVersion, s
     OwnerGoalSummarySection Reported, OwnerGoalSummarySection Verified, string Landing)
 {
     internal OwnerGoalPreviewFacts? Preview { get; init; }
+    internal IEnumerable<OwnerConsoleField> Fields()
+    {
+        yield return new("candidate", "Candidate revision", Candidate);
+        yield return new("brief", "Brief version", BriefVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        yield return new("criteria", "Criteria identity", CriteriaIdentity);
+        yield return new("landing", "Landing", Landing);
+        foreach (var (key, section) in new[] { ("Planned", Planned), ("Changed", Changed), ("Reported", Reported), ("Verified", Verified) })
+        {
+            yield return new(key + "/state", key + " state", section.State);
+            yield return new(key + "/source", key + " source", section.Source);
+            var index = 0;
+            foreach (var item in section.SourceItems ?? section.Items)
+                yield return new(key + "/" + index, key + " item " + ++index, item);
+        }
+        if (Preview is { } preview)
+        {
+            yield return new("preview/title", "Preview title", preview.Title);
+            yield return new("preview/changes/kind", "Preview changes", preview.Changes.Kind.ToString());
+            yield return new("preview/changes/total", "Preview total files", preview.Changes.Total.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            for (var i = 0; i < preview.Changes.Files.Count; i++)
+                yield return new("preview/changes/" + i, "Preview file " + (i + 1), preview.Changes.Files[i]);
+            yield return new("preview/evidence/kind", "Preview evidence kind", preview.Evidence?.Kind.ToString());
+            yield return new("preview/evidence/passed", "Preview evidence passed", preview.Evidence?.Passed.ToString());
+            yield return new("preview/evidence/at", "Preview evidence at", preview.Evidence?.At.ToString("O"));
+            yield return new("preview/evidence/failed", "Preview first failed check", preview.Evidence?.FirstFailedCheck);
+        }
+    }
 
     internal OwnerGoalChangeSummary AsStale() => this with
     {
