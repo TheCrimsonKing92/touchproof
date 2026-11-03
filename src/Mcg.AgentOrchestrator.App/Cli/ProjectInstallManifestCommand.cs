@@ -11,7 +11,29 @@ internal static class ProjectInstallManifestCommand
 {
     internal const string Usage = "Usage: project install-manifest [name] --from <path>";
     internal static Action? ReplaceFaultForTests { get; set; }
-    internal static Func<DateTimeOffset>? UtcNowForTests { get; set; }
+    private static readonly AsyncLocal<Func<DateTimeOffset>?> ClockOverride = new();
+
+    // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
+    internal static IDisposable UseClock(Func<DateTimeOffset> clock)
+    {
+        ArgumentNullException.ThrowIfNull(clock);
+        var scope = new ClockScope(ClockOverride.Value);
+        ClockOverride.Value = clock;
+        return scope;
+    }
+
+    internal static DateTimeOffset UtcNow() => ClockOverride.Value?.Invoke() ?? DateTimeOffset.UtcNow;
+
+    private sealed class ClockScope(Func<DateTimeOffset>? previous) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                ClockOverride.Value = previous;
+        }
+    }
 
     internal static int Execute(IReadOnlyList<string> parts, OrchestratorProjectRegistry registry,
         string defaultRootDirectory, string? activeProjectOverride, TextWriter output)
@@ -104,7 +126,7 @@ internal static class ProjectInstallManifestCommand
         {
             if (File.Exists(live))
             {
-                var stamp = (UtcNowForTests?.Invoke() ?? DateTimeOffset.UtcNow).UtcDateTime
+                var stamp = UtcNow().UtcDateTime
                     .ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
                 backup = live + ".bak-" + stamp;
                 if (File.Exists(backup) || Directory.Exists(backup))

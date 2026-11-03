@@ -49,6 +49,17 @@ public sealed record GoalReplacementEligibilityFacts(
 {
     public bool HasWork => HasWorkspace || HasBranch || HasDispatch || HasRepositoryDelta;
     public bool IsProtected => !IsGitEvidenceAvailable || IsRunning || IsLanded || IsMerged || IsRecorded;
+
+    public IReadOnlyList<string> ListProtections()
+    {
+        var protections = new List<string>();
+        if (IsRunning) protections.Add("running");
+        if (IsLanded) protections.Add("landed");
+        if (IsMerged) protections.Add("merged");
+        if (IsRecorded) protections.Add("recorded");
+        if (!IsGitEvidenceAvailable) protections.Add("git-evidence-unavailable");
+        return protections;
+    }
 }
 
 public sealed record GoalReplacementTransferAuthoritySnapshot(
