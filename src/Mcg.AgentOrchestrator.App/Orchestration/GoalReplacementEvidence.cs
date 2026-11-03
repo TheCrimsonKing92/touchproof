@@ -8,7 +8,25 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GoalReplacementEvidence
 {
-    internal static Action<GoalId>? AfterFinalTransferValidation { get; set; }
+    private static readonly AsyncLocal<Action<GoalId>?> AfterFinalTransferValidationOverride = new();
+
+    internal static void AfterFinalTransferValidation(GoalId goalId) => AfterFinalTransferValidationOverride.Value?.Invoke(goalId);
+
+    internal static IDisposable UseAfterFinalTransferValidation(Action<GoalId> hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = AfterFinalTransferValidationOverride.Value;
+        AfterFinalTransferValidationOverride.Value = hook;
+        return new RestoreFaultHook(() => AfterFinalTransferValidationOverride.Value = previous);
+    }
+
+    // Scopes inherit with ExecutionContext and restore in reverse creation order in the owning flow.
+    private sealed class RestoreFaultHook(Action restore) : IDisposable
+    {
+        private Action? _restore = restore;
+
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+    }
 
     public static GoalReplacementEligibilityFacts Capture(
         OrchestratorWorkspace workspace,
@@ -148,7 +166,7 @@ internal static class GoalReplacementEvidence
                 throw new GoalReplacementTransferAuthorityException("eligibility-evidence-changed", observedFacts);
             }
 
-            AfterFinalTransferValidation?.Invoke(predecessor.Id);
+            AfterFinalTransferValidation(predecessor.Id);
             GoalReplacementEligibilityFacts transferFacts;
             try
             {

@@ -24,7 +24,7 @@ internal static partial class AcceptanceCriterionEvidence
                 item.RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)
             .ToArray();
         // Validate the entire set before recording any evidence.
-        if (matching.Length == 0 || matching.Any(item =>
+        if ((matching.Length == 0 && AcceptanceOwnedFindingCarry.GetOpenCarried(goal, candidateSha).Count == 0) || matching.Any(item =>
                 item.Owner != CriterionEvidenceOwner.Acceptance || item.State != CriterionEvidenceState.Pending ||
                 item.RequiredScope != CriterionEvidenceScopes.FullAcceptanceGate ||
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)))
@@ -33,6 +33,7 @@ internal static partial class AcceptanceCriterionEvidence
             kernel.RecordCriterionEvidence(goal.Id, obligation.Id, CriterionEvidenceOwner.Acceptance,
                 candidateSha, $"full-acceptance:{candidateSha}", CriterionEvidenceScopes.FullAcceptanceGate,
                 passed: true, detail: $"Deterministic full acceptance passed for the mapped candidate; source=attempt:{attempt.AttemptId}.");
+        kernel.RecordCarriedAcceptanceFindingGateOutcome(goal.Id, candidateSha, passed: true, source: $"attempt:{attempt.AttemptId}");
         return true;
     }
 
@@ -194,6 +195,8 @@ internal static partial class AcceptanceCriterionEvidence
         string? evidenceSource,
         string integrationBranch, string? executionDirectory, string? currentHeadSha = null)
     {
+        kernel?.RecordCarriedAcceptanceFindingGateOutcome(goal.Id, candidateSha, passed: true,
+            source: evidenceSource ?? "normal deterministic full acceptance");
         var outstanding = goal.GetLandingPrerequisiteObligations(candidateSha);
         if (outstanding.Count == 0) return null;
         if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))

@@ -97,11 +97,11 @@ public sealed class SourceBacklogSiblingCreationTests : CliCommandTestBase
 
         using var commitsReady = new CountdownEvent(initialCount: 2);
         using var releaseCommits = new ManualResetEventSlim(initialState: false);
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             commitsReady.Signal();
             Xunit.Assert.True(releaseCommits.Wait(TimeSpan.FromSeconds(15)));
-        };
+        });
         Exception?[] outcomes;
         try
         {
@@ -114,7 +114,7 @@ public sealed class SourceBacklogSiblingCreationTests : CliCommandTestBase
         finally
         {
             releaseCommits.Set();
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            beforeStateCommitScope.Dispose();
         }
         Xunit.Assert.Single(outcomes, outcome => outcome is null);
         var rejected = Xunit.Assert.Single(outcomes, outcome => outcome is not null);

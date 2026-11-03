@@ -139,7 +139,25 @@ internal static partial class GoalOperationJournal
     public const string AcceptanceApparatusRegateOperation = "conductor:acceptance-apparatus-regate";
     public const string AcceptanceApparatusGenuineOperation = "conductor:acceptance-apparatus-genuine";
     public const string ApparatusRegateAcceptanceOutcome = "apparatus-regate";
-    internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
+    private static readonly AsyncLocal<Action<GoalLandingIntent>?> BeforeLandingIntentAppendOverride = new();
+
+    internal static void BeforeLandingIntentAppend(GoalLandingIntent intent) => BeforeLandingIntentAppendOverride.Value?.Invoke(intent);
+
+    internal static IDisposable UseBeforeLandingIntentAppend(Action<GoalLandingIntent> hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = BeforeLandingIntentAppendOverride.Value;
+        BeforeLandingIntentAppendOverride.Value = hook;
+        return new RestoreFaultHook(() => BeforeLandingIntentAppendOverride.Value = previous);
+    }
+
+    // Scopes inherit with ExecutionContext and restore in reverse creation order in the owning flow.
+    private sealed class RestoreFaultHook(Action restore) : IDisposable
+    {
+        private Action? _restore = restore;
+
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+    }
     internal static Action? BeforeAcceptanceRetryAppend { get; set; }
     private static readonly ConcurrentDictionary<string, Lazy<SqliteRunEventStore>> RunEventStores =
         new(StringComparer.OrdinalIgnoreCase);
@@ -334,7 +352,7 @@ internal static partial class GoalOperationJournal
             NormalizeSha(boundMainRevision),
             NormalizeSha(previousIntegrationRevision),
             TaskGraphIdentity.Compute(goal));
-        BeforeLandingIntentAppend?.Invoke(intent);
+        BeforeLandingIntentAppend(intent);
         Append(
             executionDirectory,
             goal.Id,

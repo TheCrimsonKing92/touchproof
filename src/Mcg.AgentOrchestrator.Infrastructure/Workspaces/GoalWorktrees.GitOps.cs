@@ -518,6 +518,7 @@ public static partial class GoalWorktrees
 
     private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
     {
+        if (GitRevisionReader.TryConfirmWorkTree(executionDirectory)) return;
         // Carry the probe evidence into the diagnostic. A bare "not a work tree" message cannot
         // distinguish a genuinely non-git directory from a probe that exited 0 with empty output,
         // timed out, or never started - and those have different causes and different fixes.

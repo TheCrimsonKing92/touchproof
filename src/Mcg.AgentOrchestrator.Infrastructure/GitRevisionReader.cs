@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -43,15 +45,8 @@ internal sealed class GitRevisionReader : IDisposable
                 if (Environment.GetEnvironmentVariable(name) is not null) return false;
 
             var root = Path.GetFullPath(worktree);
-            var gitDirectory = Path.Combine(root, ".git");
-            if (!Directory.Exists(gitDirectory))
-            {
-                var pointer = ReadBranchMetadataLine(gitDirectory);
-                if (pointer is null || !pointer.StartsWith("gitdir: ", StringComparison.Ordinal) || pointer.Length == 8)
-                    return false;
-                gitDirectory = Path.GetFullPath(pointer[8..], root);
-                if (!Directory.Exists(gitDirectory)) return false;
-            }
+            var gitDirectory = ResolveBranchGitDirectory(root);
+            if (gitDirectory is null) return false;
 
             var headPath = Path.Combine(gitDirectory, "HEAD");
             // A legacy symlink HEAD points at the branch ref, not a detached object ID.
@@ -92,6 +87,184 @@ internal sealed class GitRevisionReader : IDisposable
         {
             return false;
         }
+    }
+
+    // Positive evidence only: unsupported layouts/configuration retain the diagnostic git probe.
+    internal static bool TryConfirmWorkTree(string directory)
+    {
+        try
+        {
+            foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+                "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT" })
+                if (Environment.GetEnvironmentVariable(name) is not null) return false;
+
+            // Do not normalize away an alias or a metadata segment before inspecting it.
+            if (directory.Split(['/', '\\']).Any(part => part == ".." ||
+                part.TrimEnd(' ', '.').Equals(".git", StringComparison.OrdinalIgnoreCase))) return false;
+            var start = Path.GetFullPath(directory);
+            if (!Directory.Exists(start) || !HasOrdinaryDirectoryPath(start)) return false;
+            if (start.Split(['/', '\\']).Any(part =>
+                part.TrimEnd(' ', '.').Equals(".git", StringComparison.OrdinalIgnoreCase))) return false;
+
+            for (var current = new DirectoryInfo(start); current is not null; current = current.Parent)
+            {
+                var entry = Path.Combine(current.FullName, ".git");
+                if (WorkTreeMetadataEntryExists(entry))
+                {
+                    if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
+                    var gitDirectory = ResolveBranchGitDirectory(current.FullName);
+                    if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return false;
+                    var headPath = Path.Combine(gitDirectory, "HEAD");
+                    if ((File.GetAttributes(headPath) & FileAttributes.ReparsePoint) != 0) return false;
+                    var head = ReadBranchMetadataLine(headPath);
+                    const string prefix = "ref: refs/heads/";
+                    if (head is null || !(IsBranchObjectId(head) ||
+                        head.StartsWith(prefix, StringComparison.Ordinal) && IsBranchRefName(head[prefix.Length..])))
+                        return false;
+
+                    var commonDirectory = gitDirectory;
+                    var commonPath = Path.Combine(gitDirectory, "commondir");
+                    if (WorkTreeMetadataEntryExists(commonPath))
+                    {
+                        if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return false;
+                        var common = ReadBranchMetadataLine(commonPath);
+                        if (common is null) return false;
+                        commonDirectory = Path.GetFullPath(common, gitDirectory);
+                    }
+                    if (!HasOrdinaryDirectoryPath(commonDirectory) ||
+                        !Directory.Exists(Path.Combine(commonDirectory, "objects")) ||
+                        !Directory.Exists(Path.Combine(commonDirectory, "refs")) ||
+                        !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+                    var worktreeConfig = Path.Combine(gitDirectory, "config.worktree");
+                    if (WorkTreeMetadataEntryExists(worktreeConfig) && !HasConclusiveWorkTreeConfig(worktreeConfig)) return false;
+
+                    if (OperatingSystem.IsWindows())
+                    {
+                        using var identity = WindowsIdentity.GetCurrent();
+                        foreach (var path in new[] { current.FullName, entry, gitDirectory })
+                        {
+                            var owner = Directory.Exists(path)
+                                ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier))
+                                : new FileInfo(path).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier));
+                            if (!Equals(owner, identity.User) && !(owner is SecurityIdentifier sid &&
+                                sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) &&
+                                new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))) return false;
+                        }
+                    }
+                    return true;
+                }
+                // Git stops at a bare repository before looking for an enclosing checkout.
+                if (WorkTreeMetadataEntryExists(Path.Combine(current.FullName, "HEAD"))) return false;
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        return false;
+    }
+
+    private static string? ResolveBranchGitDirectory(string root)
+    {
+        var gitDirectory = Path.Combine(root, ".git");
+        if (!Directory.Exists(gitDirectory))
+        {
+            var pointer = ReadBranchMetadataLine(gitDirectory);
+            if (pointer is null || !pointer.StartsWith("gitdir: ", StringComparison.Ordinal) || pointer.Length == 8)
+                return null;
+            gitDirectory = Path.GetFullPath(pointer[8..], root);
+            if (!Directory.Exists(gitDirectory)) return null;
+        }
+        return gitDirectory;
+    }
+
+    private static bool HasOrdinaryDirectoryPath(string directory)
+    {
+        for (var current = new DirectoryInfo(directory); current is not null; current = current.Parent)
+            if (!current.Exists || (current.Attributes & FileAttributes.ReparsePoint) != 0 ||
+                current.Name != current.Name.TrimEnd(' ', '.') ||
+                OperatingSystem.IsWindows() && current.Name.Contains('~')) return false;
+        return true;
+    }
+
+    private static bool WorkTreeMetadataEntryExists(string path)
+    {
+        // Unlike Exists, preserve access/I/O failures so the caller declines confirmation.
+        try { _ = File.GetAttributes(path); return true; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+    }
+
+    private static bool HasConclusiveWorkTreeConfig(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
+        using var stream = File.OpenRead(path);
+        var bytes = new byte[65537];
+        var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+        if (count > 65536) return false;
+        var text = new UTF8Encoding(false, true).GetString(bytes, 0, count);
+        if (text.Contains('\0') || text.StartsWith('\uFEFF')) return false;
+        var section = "";
+        var repositoryFormatVersion = "0";
+        var hasObjectFormat = false;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
+            // Git's config whitespace is ASCII; do not normalize malformed input into valid syntax.
+            if (line.Any(c => c is not (' ' or '\t') && (char.IsControl(c) || char.IsWhiteSpace(c)))) return false;
+            line = line.Trim(' ', '\t');
+            if (line.Length == 0 || line[0] is '#' or ';') continue;
+            // Includes, quoted subsections/values and continuations require Git's parser.
+            if (line.Contains('"') || line.Contains('\\')) return false;
+            line = line.Split(['#', ';'], 2)[0].TrimEnd(' ', '\t');
+            if (line.StartsWith('['))
+            {
+                if (!line.EndsWith(']')) return false;
+                section = line[1..^1];
+                if (section.Length == 0 || !section.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
+                section = section.ToLowerInvariant();
+                if (section is "include" or "includeif") return false;
+                continue;
+            }
+            var separator = line.IndexOf('=');
+            if (section.Length == 0 || separator < 1) return false;
+            var key = line[..separator].TrimEnd(' ', '\t');
+            var value = line[(separator + 1)..].Trim(' ', '\t');
+            if (key.Length == 0 || !char.IsAsciiLetter(key[0]) ||
+                !key.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
+            key = key.ToLowerInvariant();
+            if (section == "core")
+            {
+                var isBoolean = value.Length == 0 || value is "0" or "1" ||
+                    value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("off", StringComparison.OrdinalIgnoreCase);
+                // Git interprets config before answering rev-parse. Only confirm settings whose
+                // values we validate; unknown keys (even in other sections) retain its probe.
+                var supported = key switch
+                {
+                    "repositoryformatversion" => value is "0" or "1",
+                    "bare" => value.Equals("false", StringComparison.OrdinalIgnoreCase),
+                    "filemode" or "symlinks" or "ignorecase" => isBoolean,
+                    "logallrefupdates" => isBoolean || value.Equals("always", StringComparison.OrdinalIgnoreCase),
+                    _ => false
+                };
+                if (!supported) return false;
+                if (key == "repositoryformatversion") repositoryFormatVersion = value;
+            }
+            else if (section == "extensions")
+            {
+                if (key == "objectformat" && value is "sha1" or "sha256") hasObjectFormat = true;
+                else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
+            }
+            else return false;
+        }
+        return !hasObjectFormat || repositoryFormatVersion == "1";
     }
 
     private static string? ReadBranchMetadataLine(string path)

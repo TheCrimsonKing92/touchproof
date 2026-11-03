@@ -31,6 +31,35 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands,
         IReadOnlyDictionary<string, int>? Callers = null);
 
+    public static string CallerOf(string key)
+    {
+        var separator = key.IndexOf('|');
+        var member = separator < 0 ? key : key[..separator];
+        var parent = member.IndexOf("<-", StringComparison.Ordinal);
+        return parent < 0 ? member : member[..parent];
+    }
+
+    public static string? ParentOf(string key)
+    {
+        var separator = key.IndexOf('|');
+        var member = separator < 0 ? key : key[..separator];
+        var parent = member.IndexOf("<-", StringComparison.Ordinal);
+        return parent < 0 ? null : member[(parent + 2)..];
+    }
+
+    public static IReadOnlyDictionary<string, int> GroupByCaller(
+        IReadOnlyDictionary<string, int> sources, bool includeParent = false)
+    {
+        var grouped = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (key, count) in sources)
+        {
+            var separator = key.IndexOf('|');
+            var group = includeParent || separator < 0 ? key : CallerOf(key) + key[separator..];
+            grouped[group] = checked(grouped.GetValueOrDefault(group) + count);
+        }
+        return grouped;
+    }
+
     public static bool EnsureInstalled(string? destination) =>
         EnsureInstalled(destination, ref GitCli.LaunchObserver);
 
@@ -148,6 +177,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     private static string ResolveCaller(StackTrace trace)
     {
         string? caller = null;
+        string? parent = null;
         foreach (var frame in trace.GetFrames())
         {
             var method = frame.GetMethod();
@@ -155,10 +185,16 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
             var resolved = callerFrames.GetOrAdd(method, ResolveFrame);
             // Forwarding observers execute inside the launch boundary. Discard their
             // frames even when the wrapper belongs to another test or assembly.
-            if (resolved.IsLaunchBoundary) caller = null;
-            else caller ??= resolved.Caller;
+            if (resolved.IsLaunchBoundary) { caller = null; parent = null; }
+            else if (resolved.Caller is { } member)
+            {
+                if (caller is null) caller = member;
+                // Generated frames and overloads can resolve to the same source member.
+                else if (parent is null && member != caller) parent = member;
+            }
         }
-        return caller ?? "test:<unknown>";
+        return caller is null ? "test:<unknown>" : parent is null ? caller :
+            caller + "<-" + parent[(parent.IndexOf(':') + 1)..];
     }
 
     private static CallerFrame ResolveFrame(MethodBase method)
@@ -181,7 +217,8 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
             methodName = source?.Name ?? type.Name;
             if (source is not null) type = source.DeclaringType!;
         }
-        var staticInitializerLambda = methodName.StartsWith("<.cctor>b__", StringComparison.Ordinal);
+        var initializerLambda = methodName.StartsWith("<.cctor>b__", StringComparison.Ordinal) ||
+            methodName.StartsWith("<.ctor>b__", StringComparison.Ordinal);
         methodName = SourceMethodName(methodName);
         while (type.DeclaringType is { } parent && type.IsDefined(typeof(CompilerGeneratedAttribute), false))
             type = parent;
@@ -192,8 +229,8 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         if (type.FullName == "InfrastructureTestSupport" &&
             methodName.StartsWith("RunGitProbe", StringComparison.Ordinal)) return new(null, IsLaunchBoundary: true);
 
-        // Attribute static-initializer delegates to the method invoking them.
-        if (staticInitializerLambda) return default;
+        // Attribute constructor-initialized delegates to the method invoking them.
+        if (initializerLambda) return default;
 
         var names = new Stack<string>();
         for (var current = type; current is not null; current = current.DeclaringType)

@@ -95,8 +95,36 @@ internal static class GoalReplacementTransferLeaseClock
 internal static class GoalCreationSideEffectDelivery
 {
     internal const string OutboxKind = "goal-create-delivery";
-    internal static Action<GoalId>? BeforeStateCommit { get; set; }
-    internal static Action<string>? BeforeEffectDelivery { get; set; }
+    private static readonly AsyncLocal<Action<GoalId>?> BeforeStateCommitOverride = new();
+    private static readonly AsyncLocal<Action<string>?> BeforeEffectDeliveryOverride = new();
+
+    internal static void BeforeStateCommit(GoalId goalId) => BeforeStateCommitOverride.Value?.Invoke(goalId);
+
+    internal static IDisposable UseBeforeStateCommit(Action<GoalId> hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = BeforeStateCommitOverride.Value;
+        BeforeStateCommitOverride.Value = hook;
+        return new RestoreFaultHook(() => BeforeStateCommitOverride.Value = previous);
+    }
+
+    internal static void BeforeEffectDelivery(string deliveryId) => BeforeEffectDeliveryOverride.Value?.Invoke(deliveryId);
+
+    internal static IDisposable UseBeforeEffectDelivery(Action<string> hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        var previous = BeforeEffectDeliveryOverride.Value;
+        BeforeEffectDeliveryOverride.Value = hook;
+        return new RestoreFaultHook(() => BeforeEffectDeliveryOverride.Value = previous);
+    }
+
+    // Scopes inherit with ExecutionContext and restore in reverse creation order in the owning flow.
+    private sealed class RestoreFaultHook(Action restore) : IDisposable
+    {
+        private Action? _restore = restore;
+
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+    }
 
     internal static InvalidOperationException Incomplete(GoalId goalId, Exception exception) =>
         new(
@@ -160,7 +188,7 @@ internal static class GoalCreationSideEffectDelivery
         var collaborationStore = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         foreach (var effect in receipt.CollaborationEffects)
         {
-            BeforeEffectDelivery?.Invoke(effect.DeliveryId);
+            BeforeEffectDelivery(effect.DeliveryId);
             _ = await collaborationStore.RaiseAsync(
                 effect.Type,
                 effect.GoalId,
@@ -176,7 +204,7 @@ internal static class GoalCreationSideEffectDelivery
         foreach (var effect in receipt.LifecycleEffects)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            BeforeEffectDelivery?.Invoke(effect.DeliveryId);
+            BeforeEffectDelivery(effect.DeliveryId);
             effect.DeliverIdempotently(lifecycleWriter);
         }
     }

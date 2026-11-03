@@ -231,7 +231,8 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
             new BacklogDependencyTarget(derived.Id.Value, BacklogDependencyTargetKind.Goal),
             goalExists: id => id == derived.Id.Value);
         var commitHookInvoked = false;
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        InvalidOperationException error;
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             commitHookInvoked = true;
             if (change is "remove" or "retarget")
@@ -240,17 +241,11 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
                 backlog.AddDependencyAsync(source.Id,
                     new BacklogDependencyTarget(other.Id.Value, BacklogDependencyTargetKind.Goal),
                     goalExists: id => id == other.Id.Value).GetAwaiter().GetResult();
-        };
-        InvalidOperationException error;
-        try
+        }))
         {
             error = Assert.Throws<InvalidOperationException>(() => ExecuteCommand(repository, workspace,
                 ["goal", "--brief-file", WriteBrief(), "--backlog-item", source.Id, "--backlog-coverage", "full",
                     "--depends-on", explicitGoal.Id.Value[..8]]));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Assert.True(commitHookInvoked);

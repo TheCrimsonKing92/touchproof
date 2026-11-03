@@ -52,7 +52,7 @@ public sealed record BacklogDependencyTarget(
     string Id,
     BacklogDependencyTargetKind Kind);
 
-public enum BacklogLinkKind { Duplicate, Related }
+public enum BacklogLinkKind { Duplicate, Related, RelatedCause }
 
 public enum BacklogDependencyTargetKind { Backlog, Goal }
 
@@ -838,6 +838,14 @@ public sealed class BacklogStore
         if (string.Equals(id1, id2, StringComparison.Ordinal))
             throw new InvalidOperationException("A backlog item cannot be linked to itself.");
 
+        var action = kind switch
+        {
+            BacklogLinkKind.Duplicate => "link-duplicate",
+            BacklogLinkKind.Related => "link-related",
+            BacklogLinkKind.RelatedCause => "link-related-cause",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown backlog link kind.")
+        };
+
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
@@ -850,11 +858,25 @@ public sealed class BacklogStore
                 var second = await LoadItemByIdAsync(conn, id2, cancellationToken, includeNotes: false)
                     ?? throw new InvalidOperationException($"No backlog item found with id '{id2}'.");
                 var (item1, item2) = NormalizeLinkIds(first.Id, second.Id);
+                await using (var existing = conn.CreateCommand())
+                {
+                    existing.CommandText = "SELECT kind FROM backlog_links WHERE item1_id = $a AND item2_id = $b";
+                    existing.Parameters.AddWithValue("$a", item1);
+                    existing.Parameters.AddWithValue("$b", item2);
+                    if (await existing.ExecuteScalarAsync(cancellationToken) is string existingKind)
+                    {
+                        if (!string.Equals(existingKind, kind.ToString(), StringComparison.Ordinal))
+                            throw new InvalidOperationException($"Backlog items '{item1}' and '{item2}' are already linked as {existingKind}.");
+                        var unchanged = (await LoadLinkAsync(conn, item1, item2, cancellationToken))!;
+                        await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                        return unchanged;
+                    }
+                }
                 var now = DateTimeOffset.UtcNow.ToString("O");
                 await using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = """
-                        INSERT OR IGNORE INTO backlog_links (item1_id, item2_id, kind, canonical_id, created_at)
+                        INSERT INTO backlog_links (item1_id, item2_id, kind, canonical_id, created_at)
                         VALUES ($item1_id, $item2_id, $kind, $canonical_id, $created_at)
                         """;
                     cmd.Parameters.AddWithValue("$item1_id", item1);
@@ -865,8 +887,8 @@ public sealed class BacklogStore
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
 
-                await InsertHistoryAsync(conn, first.Id, kind == BacklogLinkKind.Duplicate ? "link-duplicate" : "link-related", now, new { linkedId = second.Id }, cancellationToken);
-                await InsertHistoryAsync(conn, second.Id, kind == BacklogLinkKind.Duplicate ? "link-duplicate" : "link-related", now, new { linkedId = first.Id }, cancellationToken);
+                await InsertHistoryAsync(conn, first.Id, action, now, new { linkedId = second.Id }, cancellationToken);
+                await InsertHistoryAsync(conn, second.Id, action, now, new { linkedId = first.Id }, cancellationToken);
                 var link = (await LoadLinkAsync(conn, item1, item2, cancellationToken))!;
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return link;
@@ -1186,7 +1208,9 @@ public sealed class BacklogStore
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var link = ReadLink(reader);
+                var link = TryReadLink(reader);
+                if (link is null)
+                    continue;
                 if (linksByItem.TryGetValue(link.Item1Id, out var first))
                     first.Add(link);
                 if (linksByItem.TryGetValue(link.Item2Id, out var second))
@@ -1239,7 +1263,8 @@ public sealed class BacklogStore
         cmd.Parameters.AddWithValue("$item_id", itemId);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-            links.Add(ReadLink(reader));
+            if (TryReadLink(reader) is { } link)
+                links.Add(link);
         return links;
     }
 
@@ -1258,16 +1283,21 @@ public sealed class BacklogStore
         cmd.Parameters.AddWithValue("$item1_id", item1Id);
         cmd.Parameters.AddWithValue("$item2_id", item2Id);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadLink(reader) : null;
+        return await reader.ReadAsync(cancellationToken) ? TryReadLink(reader) : null;
     }
 
-    private static BacklogLink ReadLink(SqliteDataReader reader) =>
-        new(
+    private static BacklogLink? TryReadLink(SqliteDataReader reader)
+    {
+        var kindText = reader.GetString(2);
+        if (!Enum.GetNames<BacklogLinkKind>().Contains(kindText, StringComparer.Ordinal))
+            return null;
+        return new(
             reader.GetString(0),
             reader.GetString(1),
-            Enum.Parse<BacklogLinkKind>(reader.GetString(2)),
+            Enum.Parse<BacklogLinkKind>(kindText),
             reader.IsDBNull(3) ? null : reader.GetString(3),
             DateTimeOffset.Parse(reader.GetString(4)));
+    }
 
     private static async Task<IReadOnlyList<BacklogDependency>> LoadDependenciesAsync(
         SqliteConnection conn,
