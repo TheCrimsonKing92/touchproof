@@ -8,6 +8,7 @@ internal static class FakeConductorProbe
     internal static int Run(string token, string lifetimeSeconds, string root)
     {
         using var ready = EventWaitHandle.OpenExisting(token);
+        using var release = EventWaitHandle.OpenExisting(token + "-release");
         var consoleProcesses = new uint[64];
         var consoleCount = GetConsoleProcessList(consoleProcesses, (uint)consoleProcesses.Length);
         if (consoleCount == 0)
@@ -24,7 +25,10 @@ internal static class FakeConductorProbe
         Console.Out.Flush();
         Console.Error.Flush();
         ready.Set();
-        Thread.Sleep(TimeSpan.FromSeconds(int.Parse(lifetimeSeconds, CultureInfo.InvariantCulture)));
+        // Hold the owned process at an explicit lifecycle boundary. The timeout
+        // only detects an absent fixture signal; it never selects test success.
+        if (!release.WaitOne(TimeSpan.FromSeconds(int.Parse(lifetimeSeconds, CultureInfo.InvariantCulture))))
+            throw new TimeoutException("Fake conductor release signal absent.");
         return 0;
     }
 

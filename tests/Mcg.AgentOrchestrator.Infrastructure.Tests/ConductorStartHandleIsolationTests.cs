@@ -90,17 +90,24 @@ public sealed class ConductorStartHandleIsolationTests
         return reader.ReadToEnd();
     }
 
-    private sealed class LaunchFixture : IDisposable
+    internal sealed class LaunchFixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-start-pipe-" + Guid.NewGuid().ToString("N"));
         internal EventWaitHandle Ready { get; }
+        internal EventWaitHandle Release { get; }
         internal Process Caller { get; }
+        private readonly Action<LaunchFixture>? beforeRootRemoval;
 
-        internal LaunchFixture()
+        // Diagnostic seams observe the real acquisition/removal boundaries. They
+        // do not change cleanup ordering when omitted by the isolation cases.
+        internal LaunchFixture(Action<LaunchFixture>? afterCallerStarted = null,
+            Action<LaunchFixture>? beforeRootRemoval = null)
         {
+            this.beforeRootRemoval = beforeRootRemoval;
             Directory.CreateDirectory(Root);
             var token = @"Local\mcg-start-pipe-" + Guid.NewGuid().ToString("N");
             Ready = new EventWaitHandle(false, EventResetMode.ManualReset, token);
+            Release = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release");
             try
             {
                 var location = DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(GetType());
@@ -126,10 +133,13 @@ public sealed class ConductorStartHandleIsolationTests
                     if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
                 Caller = Process.Start(start) ?? throw new InvalidOperationException("Caller probe did not start.");
                 Caller.StandardInput.Close();
+                afterCallerStarted?.Invoke(this);
             }
             catch
             {
                 Ready.Dispose();
+                beforeRootRemoval?.Invoke(this);
+                Release.Dispose();
                 Directory.Delete(Root, recursive: true);
                 throw;
             }
@@ -166,6 +176,8 @@ public sealed class ConductorStartHandleIsolationTests
             {
                 Caller.Dispose();
                 Ready.Dispose();
+                beforeRootRemoval?.Invoke(this);
+                Release.Dispose();
                 Directory.Delete(Root, recursive: true);
             }
         }
