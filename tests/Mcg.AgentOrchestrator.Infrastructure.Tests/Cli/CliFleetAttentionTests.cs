@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -17,6 +18,10 @@ public sealed class CliFleetAttentionTests
     private const string ItemIdValue = "same-opaque-item-id";
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-01T12:00:00Z", CultureInfo.InvariantCulture);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions SnapshotOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     [Fact]
     public async Task RegistryFleet_CollidingIds_PreservesThreeProjectBindings()
@@ -193,6 +198,11 @@ public sealed class CliFleetAttentionTests
         await fixture.ItemAsync(fixture.Home, "resolved-item", live.Id.Value, Now, CollaborationItemStatus.Resolved);
         await fixture.WaitAsync(new("parked-wait", parked.Id.Value, null, "Parked", Now));
         await fixture.WaitAsync(new("terminal-wait", terminal.Id.Value, null, "Terminal", Now));
+        var persistedWaits = await SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Home.SqliteStatePath)
+            .ListOpenHumanInputRequestsAsync();
+        Assert.Equal(new[] { "approval-wait", "future-acceptance", "future-review", "owner-wait", "parked-wait", "risk-wait", "terminal-wait" },
+            persistedWaits.Select(wait => wait.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(HumanWaitKind.OperatorApproval, persistedWaits.Single(wait => wait.Id == "approval-wait").Kind);
         var result = await FleetAttentionReader.ReadAsync(fixture.Catalog(), 50, Now);
         Assert.True(result.Complete);
         Assert.Equal(new[] { "live-item", "approval-wait", "owner-wait", "risk-wait" }, result.Items.Select(item => item.ItemId));
@@ -446,27 +456,36 @@ public sealed class CliFleetAttentionTests
         using var fixture = new Fixture();
         await fixture.SeedAsync(fixture.Home);
         await fixture.ItemAsync(fixture.Home, ItemIdValue, GoalIdValue, Now);
-        using var writer = new SqliteConnection(new SqliteConnectionStringBuilder
-        { DataSource = fixture.Home.SqliteStatePath, Pooling = false }.ToString());
-        writer.Open();
-        using var begin = writer.CreateCommand();
-        begin.CommandText = "BEGIN IMMEDIATE; UPDATE meta SET value = value WHERE key = 'schema_version'";
-        begin.ExecuteNonQuery();
-        using var rival = new SqliteConnection(new SqliteConnectionStringBuilder
-        { DataSource = fixture.Home.SqliteStatePath, Pooling = false, DefaultTimeout = 1 }.ToString());
-        rival.Open();
-        using var probe = rival.CreateCommand();
-        probe.CommandText = "BEGIN IMMEDIATE";
-        Assert.Equal(5, Assert.Throws<SqliteException>(() => probe.ExecuteNonQuery()).SqliteErrorCode);
         var before = fixture.Snapshot();
-        var child = fixture.Run("attention", "fleet", "--json");
-        Assert.Equal(0, child.ExitCode);
-        using var document = JsonDocument.Parse(child.StandardOutput);
-        Assert.Equal(ItemIdValue, Assert.Single(document.RootElement.GetProperty("payload").GetProperty("items").EnumerateArray()).GetProperty("itemId").GetString());
+        using (var writer = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = fixture.Home.SqliteStatePath, Pooling = false }.ToString()))
+        {
+            writer.Open();
+            using var begin = writer.CreateCommand();
+            begin.CommandText = "BEGIN IMMEDIATE; UPDATE meta SET value = value WHERE key = 'schema_version'";
+            begin.ExecuteNonQuery();
+            try
+            {
+                using var rival = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = fixture.Home.SqliteStatePath, Pooling = false, DefaultTimeout = 1 }.ToString());
+                rival.Open();
+                using var probe = rival.CreateCommand();
+                probe.CommandText = "BEGIN IMMEDIATE";
+                Assert.Equal(5, Assert.Throws<SqliteException>(() => probe.ExecuteNonQuery()).SqliteErrorCode);
+                var child = fixture.Run("attention", "fleet", "--json");
+                Assert.Equal(0, child.ExitCode);
+                using var document = JsonDocument.Parse(child.StandardOutput);
+                Assert.Equal(ItemIdValue, Assert.Single(document.RootElement.GetProperty("payload").GetProperty("items").EnumerateArray()).GetProperty("itemId").GetString());
+            }
+            finally
+            {
+                using var rollback = writer.CreateCommand();
+                rollback.CommandText = "ROLLBACK";
+                rollback.ExecuteNonQuery();
+            }
+        }
+        // Hash only after SQLite releases its handles; the CLI still ran under the proven writer lock.
         Assert.Equal(before, fixture.Snapshot());
-        using var rollback = writer.CreateCommand();
-        rollback.CommandText = "ROLLBACK";
-        rollback.ExecuteNonQuery();
     }
 
     [Fact]
@@ -534,7 +553,7 @@ public sealed class CliFleetAttentionTests
         internal Task WaitAsync(HumanInputRequestSnapshot wait)
         {
             Sql(Home.SqliteStatePath, "INSERT INTO human_input_requests (id, goal_id, snapshot_json) VALUES ($id, $goal, $json)",
-                ("$id", wait.Id), ("$goal", wait.GoalId), ("$json", JsonSerializer.Serialize(wait, JsonOptions)));
+                ("$id", wait.Id), ("$goal", wait.GoalId), ("$json", JsonSerializer.Serialize(wait, SnapshotOptions)));
             return Task.CompletedTask;
         }
         internal Task ItemAsync(OrchestratorWorkspace workspace, string id, string? goalId, DateTimeOffset at,
