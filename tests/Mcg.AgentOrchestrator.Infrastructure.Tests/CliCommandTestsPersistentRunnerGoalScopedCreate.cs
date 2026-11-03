@@ -63,12 +63,12 @@ public sealed class CliCommandTestsPersistentRunnerGoalScopedCreate : CliCommand
         var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Concurrent full coverage source");
         using var commitsReady = new CountdownEvent(2);
         using var releaseCommits = new ManualResetEventSlim(false);
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             commitsReady.Signal();
             if (!releaseCommits.Wait(TimeSpan.FromMinutes(2)))
                 throw new TimeoutException("Goal creation commit release event did not arrive.");
-        };
+        });
         Exception? RunCreate(SqliteOrchestratorStateRepository repository, string objective)
         {
             try
@@ -94,7 +94,7 @@ public sealed class CliCommandTestsPersistentRunnerGoalScopedCreate : CliCommand
         finally
         {
             releaseCommits.Set();
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            beforeStateCommitScope.Dispose();
             if (firstCreate is not null && secondCreate is not null)
                 await Task.WhenAll(firstCreate, secondCreate).WaitAsync(TimeSpan.FromMinutes(2));
         }
@@ -133,19 +133,17 @@ public sealed class CliCommandTestsPersistentRunnerGoalScopedCreate : CliCommand
         legacy.SetGoalSourceBacklogItemLink(first.Id, item.Id, SourceBacklogCoverage.Full);
         legacy.SetGoalSourceBacklogItemLink(second.Id, item.Id, SourceBacklogCoverage.Full);
         var hookRan = false;
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        InvalidOperationException error;
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             repository.SaveAsync(legacy).GetAwaiter().GetResult();
             hookRan = true;
-        };
-        InvalidOperationException error;
-        try
+        }))
         {
             error = Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => ExecuteGoal(
                 repository, workspace,
                 ["goal", "Reject ambiguous legacy owners", "--backlog-item", item.Id, "--backlog-coverage", "full"])));
         }
-        finally { GoalCreationSideEffectDelivery.BeforeStateCommit = null; }
 
         Assert.True(hookRan);
         Assert.Contains("reason=legacy-owner-ambiguous", error.Message);

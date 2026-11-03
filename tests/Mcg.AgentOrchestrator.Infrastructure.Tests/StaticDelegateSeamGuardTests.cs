@@ -25,13 +25,9 @@ public sealed class StaticDelegateSeamGuardTests
         new("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchetRetightener.cs", "Mcg.AgentOrchestrator.Infrastructure.SourceSizeRatchetRetightener", "ProgressSink"),
         new("src/Mcg.AgentOrchestrator.App/Cli/CliGoalReplacementExecution.cs", "Mcg.AgentOrchestrator.App.Cli.CliGoalReplacementExecution", "AfterGoalReplacementLeaseAcquisitionFailed"),
         new("src/Mcg.AgentOrchestrator.App/Cli/CliGoalReplacementExecution.cs", "Mcg.AgentOrchestrator.App.Cli.CliGoalReplacementExecution", "BeforeGoalReplacementFailureClaimObservation"),
-        new("src/Mcg.AgentOrchestrator.App/Cli/DeferredGoalCreationSideEffects.cs", "Mcg.AgentOrchestrator.App.Cli.GoalCreationSideEffectDelivery", "BeforeStateCommit"),
-        new("src/Mcg.AgentOrchestrator.App/Cli/DeferredGoalCreationSideEffects.cs", "Mcg.AgentOrchestrator.App.Cli.GoalCreationSideEffectDelivery", "BeforeEffectDelivery"),
         new("src/Mcg.AgentOrchestrator.App/Cli/ProjectInstallManifestCommand.cs", "Mcg.AgentOrchestrator.App.Cli.ProjectInstallManifestCommand", "ReplaceFaultForTests"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalOperationJournal", "BeforeLandingIntentAppend"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalOperationJournal.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalOperationJournal", "BeforeAcceptanceRetryAppend"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalRefinementWorkCoordinator", "LaunchOverride"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalReplacementEvidence.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalReplacementEvidence", "AfterFinalTransferValidation"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolution"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolutionSave"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "HoldWriteBackoff"),
@@ -52,7 +48,7 @@ public sealed class StaticDelegateSeamGuardTests
             .Select(path => (Path.GetRelativePath(root, path).Replace('\\', '/'), snapshot.GetSyntaxTree(path)))
             .ToArray();
 
-        Assert.Equal(30, AllowList.Length);
+        Assert.Equal(26, AllowList.Length);
         Assert.Equal(AllowList.Length, AllowList.Distinct().Count());
         Assert.Empty(AllowListViolations(Scan(trees), AllowList));
     }

@@ -46,9 +46,8 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
         var replacement = await backlog.AddAsync("Unrelated replacement");
         var hookCalls = 0;
         InvalidOperationException error;
-        try
         {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
             {
                 hookCalls++;
                 Assert.Equal(BacklogItemStatus.Done,
@@ -57,13 +56,9 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
                     ? backlog.ReopenAsync(prerequisite.Id).GetAwaiter().GetResult()
                     : backlog.SupersedeAsync(prerequisite.Id, replacement.Id).GetAwaiter().GetResult();
                 Assert.Equal(status, changed.Status);
-            };
+            });
             error = Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 ExecuteGoal(repository, workspace, dependent.Id)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Assert.Equal(1, hookCalls);
@@ -85,9 +80,8 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
         var unknownId = Guid.NewGuid().ToString("n");
         var hookCalls = 0;
         InvalidOperationException error;
-        try
         {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
             {
                 hookCalls++;
                 using var connection = new SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
@@ -97,13 +91,9 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
                 command.Parameters.AddWithValue("$missing", unknownId);
                 command.Parameters.AddWithValue("$source", dependent.Id);
                 Assert.Equal(1, command.ExecuteNonQuery());
-            };
+            });
             error = Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 ExecuteGoal(repository, workspace, dependent.Id)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Assert.Equal(1, hookCalls);

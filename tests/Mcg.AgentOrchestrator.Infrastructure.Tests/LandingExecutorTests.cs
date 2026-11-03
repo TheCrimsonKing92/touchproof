@@ -929,7 +929,6 @@ public sealed class LandingExecutorTests
     public void LandingExecutorIntentWriteFailurePreventsMainMerge()
     {
         var repo = CreateGitRepository();
-        var previousHook = GoalOperationJournal.BeforeLandingIntentAppend;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -937,11 +936,11 @@ public sealed class LandingExecutorTests
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/intent-write-fails.txt", "goal work");
             var anchor = $"refs/orchestrator/landing/{goal.Id.Value}";
-            GoalOperationJournal.BeforeLandingIntentAppend = intent =>
+            using var beforeLandingIntentAppendScope = GoalOperationJournal.UseBeforeLandingIntentAppend(intent =>
             {
                 Assert.Equal(intent.MergeCommitSha, ReadGit(repo, "rev-parse", "--verify", anchor));
                 throw new InvalidOperationException("simulated intent write failure");
-            };
+            });
 
             var ex = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
 
@@ -952,7 +951,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            GoalOperationJournal.BeforeLandingIntentAppend = previousHook;
             TryDeleteDirectory(repo);
         }
     }

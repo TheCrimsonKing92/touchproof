@@ -577,15 +577,14 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        InvalidOperationException error;
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
             var competing = competingKernel.CreateGoal("Competing intake winner");
             competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
             repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
-        };
-        InvalidOperationException error;
-        try
+        }))
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -596,10 +595,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     providers,
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains(
@@ -978,10 +973,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
-            RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id));
         InvalidOperationException exception;
-        try
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
+            RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id))))
         {
             exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -997,10 +991,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     new InMemoryModelProviderRegistry([]),
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_INELIGIBLE_DISPOSITION", exception.Message, StringComparison.Ordinal);
@@ -1042,12 +1032,12 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var beforeOutbox = await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind);
         using var finalValidationReached = new ManualResetEventSlim(initialState: false);
         using var releaseFinalValidation = new ManualResetEventSlim(initialState: false);
-        GoalReplacementEvidence.AfterFinalTransferValidation = _ =>
+        using var afterFinalTransferValidationScope = GoalReplacementEvidence.UseAfterFinalTransferValidation(_ =>
         {
             finalValidationReached.Set();
             if (!releaseFinalValidation.Wait(TimeSpan.FromSeconds(15)))
                 throw new TimeoutException("Final transfer validation was not released by the test.");
-        };
+        });
 
         Exception? ExecuteReplacement()
         {
@@ -1092,7 +1082,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         finally
         {
             releaseFinalValidation.Set();
-            GoalReplacementEvidence.AfterFinalTransferValidation = null;
+            afterFinalTransferValidationScope.Dispose();
         }
 
         var restored = await repository.LoadAsync();
@@ -1424,11 +1414,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
-            backlog.RemoveDependencyAsync(item.Id, dependency.Id.Value).GetAwaiter().GetResult();
-
         Exception exception;
-        try
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
+            backlog.RemoveDependencyAsync(item.Id, dependency.Id.Value).GetAwaiter().GetResult()))
         {
             exception = Xunit.Assert.ThrowsAny<Exception>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -1444,10 +1432,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
@@ -1510,9 +1494,12 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Goal? currentGoal = null;
         IDisposable? evidenceLease = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        var competingReplacementStarted = false;
+        using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            if (competingReplacementStarted)
+                return;
+            competingReplacementStarted = true;
             IReadOnlyList<AgentDefinition> competingAgents = AgentCatalog.Default().Agents;
             var competingProfiles = WorkerProfileCatalog.Default();
             Goal? competingGoal = null;
@@ -1535,7 +1522,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     $"goal-evidence:test:{Guid.NewGuid():N}",
                     TimeSpan.FromMinutes(30));
             Xunit.Assert.NotNull(evidenceLease);
-        };
+        });
 
         SourceBacklogClaimConflictException conflict;
         try
@@ -1557,7 +1544,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         }
         finally
         {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            beforeStateCommitScope.Dispose();
             evidenceLease?.Dispose();
         }
 
@@ -1695,13 +1682,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "A replacement winner did not commit before the loser lease deadline advanced.");
                 timeProvider.AdvanceForTests(TimeSpan.FromSeconds(16));
             });
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        using var beforeStateCommitScope = GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             bothPrepared.Signal();
             Xunit.Assert.True(
                 releaseCommit.Wait(TimeSpan.FromMinutes(1)),
                 "Concurrent replacement commit gate was not released.");
-        };
+        });
 
         Exception? Replace(ITransactionalOrchestratorStateRepository repository, string brief, Guid requestId)
         {
@@ -1782,7 +1769,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         finally
         {
             releaseCommit.Set();
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            beforeStateCommitScope.Dispose();
         }
         Xunit.Assert.Single(outcomes, outcome => outcome is null);
         Xunit.Assert.Contains(
@@ -1991,10 +1978,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
-            backlogStore.CloseAsync(item.Id).GetAwaiter().GetResult();
         InvalidOperationException exception;
-        try
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
+            backlogStore.CloseAsync(item.Id).GetAwaiter().GetResult()))
         {
             exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2010,10 +1996,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     new InMemoryModelProviderRegistry([]),
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
@@ -2053,16 +2035,15 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        InvalidOperationException exception;
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
             var competing = competingKernel.CreateGoal("Competing historical association");
             competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
             competingKernel.CancelGoal(competing.Id, "Legacy duplicate association.");
             repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
-        };
-        InvalidOperationException exception;
-        try
+        }))
         {
             exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2078,10 +2059,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     new InMemoryModelProviderRegistry([]),
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_LEGACY_OWNER_AMBIGUOUS", exception.Message, StringComparison.Ordinal);
@@ -2199,17 +2176,15 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                 OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage])));
 
         var lifecycleAttempts = 0;
-        GoalCreationSideEffectDelivery.BeforeEffectDelivery = deliveryId =>
+        InvalidOperationException error;
+        using (GoalCreationSideEffectDelivery.UseBeforeEffectDelivery(deliveryId =>
         {
             if (deliveryId.Contains(":lifecycle:", StringComparison.Ordinal) &&
                 Interlocked.Increment(ref lifecycleAttempts) == 2)
             {
                 throw new IOException("Injected lifecycle delivery failure.");
             }
-        };
-
-        InvalidOperationException error;
-        try
+        }))
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2221,10 +2196,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     ref profiles,
                     ref currentGoal)));
         }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
-        }
+
 
         var committedKernel = await repository.LoadAsync();
         Xunit.Assert.Single(committedKernel.Goals);
@@ -2346,9 +2318,8 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
 
         if (retry)
         {
-            GoalCreationSideEffectDelivery.BeforeEffectDelivery = _ =>
-                throw new IOException("Injected initial delivery failure.");
-            try
+            using (GoalCreationSideEffectDelivery.UseBeforeEffectDelivery(_ =>
+                throw new IOException("Injected initial delivery failure.")))
             {
                 var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                     CliPersistentStateRunner.ExecuteCommand(
@@ -2361,10 +2332,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         ref currentGoal)));
                 Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_INCOMPLETE", error.Message, StringComparison.Ordinal);
             }
-            finally
-            {
-                GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
-            }
+
 
             Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
         }
@@ -2372,7 +2340,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         using var deliveryEntered = new ManualResetEventSlim();
         using var releaseDelivery = new ManualResetEventSlim();
         var deliveryCalls = 0;
-        GoalCreationSideEffectDelivery.BeforeEffectDelivery = _ =>
+        using var beforeEffectDeliveryScope = GoalCreationSideEffectDelivery.UseBeforeEffectDelivery(_ =>
         {
             if (Interlocked.Increment(ref deliveryCalls) != 1)
                 return;
@@ -2381,7 +2349,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             Xunit.Assert.True(
                 releaseDelivery.Wait(TimeSpan.FromSeconds(15)),
                 "Timed out waiting to release the external goal-creation delivery.");
-        };
+        });
 
         var deliveryTask = Task.Run(() => CaptureConsole(() =>
         {
@@ -2410,7 +2378,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         finally
         {
             releaseDelivery.Set();
-            GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
+            beforeEffectDeliveryScope.Dispose();
         }
 
         await deliveryTask.WaitAsync(TimeSpan.FromSeconds(15));
@@ -2450,10 +2418,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
-            throw new InvalidOperationException("Injected pre-commit analysis failure.");
         InvalidOperationException error;
-        try
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
+            throw new InvalidOperationException("Injected pre-commit analysis failure.")))
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2464,10 +2431,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("Injected pre-commit analysis failure", error.Message, StringComparison.Ordinal);
@@ -2506,10 +2469,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
-            backlog.RemoveDependencyAsync(source.Id, dependencyGoal.Id.Value).GetAwaiter().GetResult();
         InvalidOperationException error;
-        try
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
+            backlog.RemoveDependencyAsync(source.Id, dependencyGoal.Id.Value).GetAwaiter().GetResult()))
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2520,10 +2482,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     providers,
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-dependencies-changed", error.Message, StringComparison.Ordinal);
@@ -2559,7 +2517,8 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        InvalidOperationException error;
+        using (GoalCreationSideEffectDelivery.UseBeforeStateCommit(_ =>
         {
             using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
             connection.Open();
@@ -2568,9 +2527,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             command.Parameters.AddWithValue("$missing", GoalId.New().Value);
             command.Parameters.AddWithValue("$source", source.Id);
             Xunit.Assert.Equal(1, command.ExecuteNonQuery());
-        };
-        InvalidOperationException error;
-        try
+        }))
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
@@ -2581,10 +2538,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     providers,
                     ref profiles,
                     ref currentGoal)));
-        }
-        finally
-        {
-            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=dependency-target-missing", error.Message, StringComparison.Ordinal);
