@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public void SupersedeCommand_ReportsAuthoritativeAnswer_AndMapperReturnsAuditHistory()
     {

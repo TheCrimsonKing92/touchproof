@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: CLI work uses a unique workspace and in-memory kernel; no process or environment mutation.
 public sealed class FiveRolePipelineRetirementTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData("five-role")]
     [Xunit.InlineData("Five-Role")]

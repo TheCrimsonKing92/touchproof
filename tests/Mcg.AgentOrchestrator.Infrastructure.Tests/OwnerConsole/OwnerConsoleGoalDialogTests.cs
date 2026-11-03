@@ -65,6 +65,16 @@ public sealed class OwnerConsoleGoalDialogTests
         Assert.Contains("SampleTests.FailsOnPurpose", failure.Text);
         Assert.Contains("first message\nsecond message\nthird message".Replace("\n", Environment.NewLine), failure.Text);
         Assert.DoesNotContain("fourth message", failure.Text);
+        var structured = Assert.Single(dialogs.Structured);
+        Assert.Equal("Last failure", structured.Title);
+        using var page = new OwnerConsoleTextDialog(structured.Title, structured.Text) { Structured = structured.Fields };
+        OwnerConsoleFieldSnapshot? opened = null; page.FieldsRequested += fields => opened = fields;
+        Assert.True(page.HandleKey(OwnerConsoleBindings.OpenFields));
+        Assert.NotNull(opened);
+        var writes = new List<string>();
+        using var fieldsDialog = new OwnerConsoleFieldsDialog(opened, new(value => { writes.Add(value); return true; }), "check/0/evidence");
+        fieldsDialog.Copy();
+        Assert.Equal("first message\nsecond message\nthird message\nfourth message", Assert.Single(writes));
         Assert.Empty(harness.Answers.Calls);
         Assert.Empty(harness.Conductor.Calls);
     }
@@ -275,10 +285,13 @@ public sealed class OwnerConsoleGoalDialogTests
     {
         internal readonly List<OwnerConsoleGoalDialog> Goals = [];
         internal readonly List<(string Title, string Text)> Texts = [];
+        internal readonly List<(string Title, string Text, OwnerConsoleStructuredText Fields)> Structured = [];
         internal Func<OwnerConsoleGoalDialog, Task>? OnGoal;
         public Task<bool> ConfirmAsync(string title, string text) => throw new InvalidOperationException("Read-only goal action asked for confirmation");
         public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException("Read-only goal action asked for input");
         public Task ShowTextAsync(string title, string text) { Texts.Add((title, text)); return Task.CompletedTask; }
+        public async Task<int?> ShowStructuredAsync(string title, string text, OwnerConsoleStructuredText fields, IReadOnlyList<int>? choiceLines = null)
+        { Structured.Add((title, text, fields)); await ShowTextAsync(title, text); return null; }
         public async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
         { Goals.Add(dialog); dialog.Start(action => action()); await dialog.LastLoad; if (OnGoal is not null) await OnGoal(dialog); }
     }

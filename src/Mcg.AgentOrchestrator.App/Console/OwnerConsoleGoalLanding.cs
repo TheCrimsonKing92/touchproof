@@ -42,6 +42,24 @@ internal static class OwnerConsoleGoalLanding
             string.Join(Environment.NewLine, (failure.CheckAttributions?.FirstOrDefault(item => item.CheckName == check)?.Evidence ?? "")
                 .Replace("\r", "").Split('\n').Take(3))));
 
+    internal static OwnerConsoleFieldSnapshot FailureFields(AcceptanceFailureSummary failure)
+    {
+        var fields = new List<OwnerConsoleField> {
+            new("at", "Failed at", failure.OccurredAt.ToString("O")),
+            new("candidate", "Candidate revision", failure.BranchHeadSha), new("integration-revision", "Main revision", failure.MainHeadSha) };
+        for (var i = 0; i < failure.FailedChecks.Count; i++)
+        {
+            var check = failure.FailedChecks[i];
+            var attribution = failure.CheckAttributions?.FirstOrDefault(item => item.CheckName == check);
+            var key = "check/" + i + "/";
+            fields.AddRange(new OwnerConsoleField[] { new(key + "name", "Failed check " + (i + 1), check),
+                new(key + "evidence", "Failure evidence " + (i + 1), attribution?.Evidence),
+                new(key + "origin", "Failure origin " + (i + 1), attribution?.Origin.ToString()),
+                new(key + "cause", "Failure cause " + (i + 1), attribution?.Cause.ToString()) });
+        }
+        return new("failure/" + failure.OccurredAt.ToString("O"), [.. fields]);
+    }
+
     private static string Time(DateTimeOffset time, TimeZoneInfo zone) =>
         TimeZoneInfo.ConvertTime(time, zone).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 }

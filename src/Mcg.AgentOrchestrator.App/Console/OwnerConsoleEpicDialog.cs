@@ -12,6 +12,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     private readonly Label _header = new() { Width = Dim.Fill(), Height = 1 };
     private readonly ListView _body = new() { Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
     private readonly Label _hint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 2 };
+    private readonly Label _fieldsHint = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1, Text = "F2 fields (snapshot)" };
     private OwnerConsoleEpicViewModel? _model;
     private readonly OwnerConsoleListRenderer _source = new();
     private readonly OwnerConsoleLastGood<(OwnerConsoleEpicWindow, string?), OwnerConsoleEpicViewModel> _lastGood = new();
@@ -34,6 +35,8 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     internal OwnerConsoleEpicLoadState LoadState { get; private set; } = OwnerConsoleEpicLoadState.Loading;
     internal string HeaderLine => _header.Text.ToString();
     internal string HintText => _hint.Text.ToString();
+    internal string FieldsHintText => _fieldsHint.Text;
+    internal void FieldsUnavailable() => _fieldsHint.Text = "No selected structured item. F2 fields";
     private string HeaderWithStatus => HeaderText + " · " + (LoadState switch
     {
         OwnerConsoleEpicLoadState.Loading when _model is not null => "refreshing…",
@@ -51,6 +54,19 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         OwnerConsoleEpicFormatter.ListHint(LoadState == OwnerConsoleEpicLoadState.Failed);
     internal ListView BodyPane => _body;
     internal Task LastLoad => _loads.LastLoad;
+    private IReadOnlyDictionary<int, OwnerConsoleFieldSnapshot> _fieldRows = new Dictionary<int, OwnerConsoleFieldSnapshot>();
+    internal OwnerConsoleFieldSnapshot? SelectedFields
+    {
+        get
+        {
+            var snapshot = _model?.SelectedDetail is { } detail
+                ? _fieldRows.GetValueOrDefault(_body.SelectedItem ?? _scroll) ?? detail.Fields()
+                : _fieldRows.GetValueOrDefault(_body.SelectedItem ?? -1);
+            return snapshot is null ? null : snapshot with { Fields = [.. snapshot.Fields,
+                new("view/window", "Time window", _model is null ? null : OwnerConsoleEpicFormatter.WindowLabel(_model.Window)),
+                new("view/loaded", "Loaded at", _model?.LoadedAt?.ToString("O"))] };
+        }
+    }
 
     internal OwnerConsoleEpicDialog(OwnerConsoleScreenController controller, Action<Action> invoke, CancellationToken token)
     {
@@ -61,9 +77,19 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         Height = Dim.Fill();
         CanFocus = true;
         Visible = false;
-        Add(_header, _body, _hint);
+        Add(_header, _body, _hint, _fieldsHint);
         ViewportChanged += (_, _) => Format();
         _body.ViewportChanged += (_, _) => Format();
+        _body.ValueChanged += (_, _) =>
+        {
+            if (_formatting || _body.SelectedItem is not { } row) return;
+            if (ShowingDetail) { _scroll = row; return; }
+            if (_fieldRows.TryGetValue(row, out var fields) && _model is { } model)
+            {
+                var index = model.Epics.ToList().FindIndex(item => item.Epic.Id == fields.Identity);
+                if (index >= 0) { _selectedIndex = index; SelectedEpicId = fields.Identity; Format(); }
+            }
+        };
     }
 
     internal async Task OpenAsync(OwnerConsolePane returnPane, string? epicId = null)
@@ -208,12 +234,13 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             _body.Y = Pos.Bottom(_header);
             var hintLines = OwnerConsoleEpicFormatter.Wrap(HintWithRetry, width).ToArray();
             _hint.Text = string.Join("\n", hintLines);
-            _hint.Y = Pos.AnchorEnd(hintLines.Length);
+            _hint.Y = Pos.AnchorEnd(hintLines.Length + 1);
             _hint.Height = hintLines.Length;
-            _body.Height = Dim.Fill(hintLines.Length);
+            _body.Height = Dim.Fill(hintLines.Length + 1);
+            var fieldRows = new Dictionary<int, OwnerConsoleFieldSnapshot>();
             Lines = _model is not null ? (_model.SelectedDetail is { } retainedDetail
-                ? OwnerConsoleEpicFormatter.DetailLines(retainedDetail, width)
-                : OwnerConsoleEpicFormatter.ListLines(_model, width, SelectedEpicId))
+                ? OwnerConsoleEpicFormatter.DetailLines(retainedDetail, width, fieldRows)
+                : OwnerConsoleEpicFormatter.ListLines(_model, width, SelectedEpicId, fieldRows))
                 : LoadState switch
             {
                 OwnerConsoleEpicLoadState.Loading => OwnerConsoleEpicFormatter.Wrap(
@@ -225,6 +252,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                     ? OwnerConsoleEpicFormatter.DetailLines(detail, width)
                     : OwnerConsoleEpicFormatter.ListLines(_model!, width, SelectedEpicId)
             };
+            _fieldRows = fieldRows;
             _scroll = Math.Clamp(_scroll, 0, Math.Max(0, Lines.Count - 1));
             var changed = _source.Apply(_body, Lines);
             var row = ShowingDetail ? _scroll : _model?.Epics.Take(_selectedIndex)

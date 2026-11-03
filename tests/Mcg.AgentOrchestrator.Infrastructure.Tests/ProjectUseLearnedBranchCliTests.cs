@@ -11,6 +11,8 @@ using static InfrastructureTestSupport;
 // Parallel-safe: unique registry/data roots, child-only environments and AsyncLocal console capture.
 public sealed class ProjectUseLearnedBranchCliTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string directory = CreateTempDirectory();
     private string ProjectRoot => Path.Combine(directory, "repository");
     private OrchestratorProjectRegistry Registry => new(Path.Combine(directory, "registry"), Path.Combine(directory, "data"));

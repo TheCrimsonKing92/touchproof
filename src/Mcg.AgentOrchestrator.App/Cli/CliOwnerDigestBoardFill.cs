@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -24,9 +25,22 @@ internal static class CliOwnerDigestBoardFill
         if (!File.Exists(path)) return;
         try
         {
-            var rows = Build(new ConductorBoardFillDraftStore(path).ReadAll(), goals, now);
+            var rounds = new ConductorBoardFillDraftStore(path).ReadAll();
+            var rows = Build(rounds, goals, now);
+            var typed = rounds.Where(round => round.FinishedAt is { } finished && finished >= now.AddDays(-7) && finished <= now)
+                .OrderBy(round => round.FinishedAt).ThenBy(round => round.Id, StringComparer.Ordinal).ToArray();
             writer.WriteLine("Board-fill drafts (last 7 days):");
-            foreach (var row in rows) writer.WriteLine(row);
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var round = typed[i];
+                if (writer is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create(round.Id,
+                    new("backlog", "Backlog item ID", round.BacklogItemId), new("outcome", "Outcome", round.Outcome),
+                    new("fileable", "Fileable", round.Assessment?.Fileable.ToString()),
+                    new("reasons", "Failing reasons", round.Assessment is null ? null : string.Join("\n", round.Assessment.FailingReasons)),
+                    new("depends", "Dependency goal IDs", round.Assessment is null ? null : string.Join("\n", round.Assessment.Scope.Depends.Select(item => item.GoalId))),
+                    new("goals", "Operator goal IDs", string.Join("\n", goals.Where(goal => goal.SourceBacklogItemId == round.BacklogItemId).Select(goal => goal.Id.Value)))));
+                writer.WriteLine(rows[i]);
+            }
         }
         catch (Exception exception) when (exception is SqliteException or IOException or JsonException)
         { Console.Error.WriteLine($"Warning: board-fill drafts are unavailable: {exception.Message}"); }

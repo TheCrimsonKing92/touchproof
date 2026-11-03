@@ -4,6 +4,8 @@ using Microsoft.Data.Sqlite;
 
 public sealed class CohortAcceptanceStoreTestsAttributionSkip : AcceptanceCohortWorkflowTests
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void NoIdentitySkip_PersistsInteractionOnlyAndSuppressionWithoutPartitionRows()
     {

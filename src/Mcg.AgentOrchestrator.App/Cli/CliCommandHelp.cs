@@ -85,6 +85,10 @@ internal static class CliCommandHelp
     public const string EpicMembersUsage = "Usage: epic-members <epic>";
     public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
     public const string ProjectAddUsage = "Usage: project-add <title> | project-add --text-file <path>";
+    private static readonly CommandHelpEntry ProjectEventSources = new(
+        ProjectEventSourcesCommand.Usage,
+        "Export registered fleet conduct-tail sources as UTF-8 label=absolute-path records. Read-only; independent of project selection. Missing log files are valid.",
+        ["--help", "-h"]);
     public const string ProjectAssignUsage = "Usage: project-assign <epic> <project>";
     public const string PortfolioUsage = "Usage: portfolio | portfolio-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
@@ -1684,6 +1688,13 @@ internal static class CliCommandHelp
             args[0].Equals("epic-suggestions", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicSuggest;
+            return true;
+        }
+
+        if (args.Count > 1 && args[0].Equals("project", StringComparison.OrdinalIgnoreCase) &&
+            args[1].Equals("event-sources", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ProjectEventSources;
             return true;
         }
 

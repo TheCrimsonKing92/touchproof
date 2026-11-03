@@ -3,6 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CohortAcceptanceStoreTestsTerminalOutcomeConsumption : AcceptanceCohortWorkflowTests
 {
+    private protected override bool UsesGit => false;
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

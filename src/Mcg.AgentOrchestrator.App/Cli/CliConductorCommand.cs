@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -20,7 +21,7 @@ internal static class CliConductorCommand
         OrchestratorHome? home = null,
         Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null,
         Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null,
-        IProcessJobProbe? jobProbe = null)
+        IProcessJobProbe? jobProbe = null, Action<ConductorStatusSnapshot>? observeStatus = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -80,6 +81,7 @@ internal static class CliConductorCommand
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
                         mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership, now: (time ?? TimeProvider.System).GetUtcNow());
+                    observeStatus?.Invoke(snapshot);
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
                     else
@@ -96,6 +98,8 @@ internal static class CliConductorCommand
                     }
                     var stopFile = workspace.ConductorStopFilePath;
                     using (new FileStream(stopFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) { }
+                    if (output is OwnerConsoleStructuredWriter stopped) stopped.Mark(OwnerConsoleFieldSnapshot.Create("conductor-stop",
+                        new("pid", "Conductor PID", owner?.ToString()), new("path", "Stop file path", stopFile)));
                     output.WriteLine($"Stop requested for conductor pid {owner}. {stopFile}");
                     output.WriteLine("This is a detach, not a drain: live workers are detached without waiting for them to finish.");
                     return 0;
@@ -270,6 +274,8 @@ internal static class CliConductorCommand
         using var receipt = JsonDocument.Parse(result.StandardOutput ?? "");
         var pid = receipt.RootElement.GetProperty("pid").GetInt32();
         var stdoutPath = receipt.RootElement.GetProperty("stdoutPath").GetString();
+        if (output is OwnerConsoleStructuredWriter started) started.Mark(OwnerConsoleFieldSnapshot.Create("conductor-start",
+            new("pid", "Conductor PID", pid.ToString(System.Globalization.CultureInfo.InvariantCulture)), new("path", "Stdout log path", stdoutPath)));
         output.WriteLine($"Conductor launched: pid {pid}; stdout log: {stdoutPath}");
         output.WriteLine("Check status: touchproof.cmd conductor status");
         return 0;

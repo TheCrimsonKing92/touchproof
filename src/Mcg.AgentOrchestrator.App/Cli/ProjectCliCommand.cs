@@ -17,11 +17,21 @@ internal static class ProjectCliCommand
         TextWriter? discoveryOutput = null,
         Func<IUnitCommandMeasurer>? measurerFactory = null,
         Func<DefaultStateMover>? defaultStateMoverFactory = null,
-        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory = null)
+        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory = null,
+        Stream? eventSourcesOutput = null,
+        TextWriter? eventSourcesError = null,
+        string? tenant = null,
+        OrchestratorWorkspace? homeWorkspace = null,
+        WorkspaceInvocationBinding? eventSourcesBinding = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
         {
+            case "event-sources":
+                return ProjectEventSourcesCommand.Execute(parts, registry, defaultRootDirectory,
+                    eventSourcesOutput ?? Console.OpenStandardOutput(), eventSourcesError ?? Console.Error,
+                    tenant, homeWorkspace, eventSourcesBinding);
+
             case "move-default-state":
                 if (parts.Skip(2).Any(part => part is not "--undo" and not "--dry-run"))
                     throw new ArgumentException("Usage: project move-default-state [--undo] [--dry-run]");
@@ -75,7 +85,7 @@ internal static class ProjectCliCommand
                 return ProjectInstallManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]|answer [name] <fact-key> <value> [--reason <text>]|emit-manifest [name] --out <path>|install-manifest [name] --from <path>");
+                throw new ArgumentException("Usage: project list|event-sources|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]|answer [name] <fact-key> <value> [--reason <text>]|emit-manifest [name] --out <path>|install-manifest [name] --from <path>");
         }
     }
 

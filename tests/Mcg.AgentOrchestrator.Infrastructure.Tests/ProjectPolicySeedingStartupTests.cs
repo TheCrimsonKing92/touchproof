@@ -8,6 +8,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each test owns its SQLite stores, registry and routed console capture.
 public sealed class ProjectPolicySeedingStartupTests : HostCapacityBoundTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void Create_CommittedTemplate_LoopResolvesProjectPermissiveFromFile()
     {
