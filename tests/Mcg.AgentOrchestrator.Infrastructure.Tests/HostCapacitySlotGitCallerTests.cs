@@ -297,8 +297,9 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
     private static string Key(string method, string command) => $"test:HostCapacitySlotGitCallerTests.{method}|{command}";
     private static void Succeeded(GitCli.GitResult result) => Assert.True(result.Succeeded, result.Error);
     private static JsonDocument ReadRow(string path) => JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
-    private static Dictionary<string, int> Callers(JsonDocument row) => row.RootElement.GetProperty("git_callers")
-        .EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetInt32());
+    private static IReadOnlyDictionary<string, int> Callers(JsonDocument row) => HostCapacitySlotGitCensus.GroupByCaller(
+        row.RootElement.GetProperty("git_callers").EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.GetInt32()));
 
     private sealed class GenericCaller<T>
     {

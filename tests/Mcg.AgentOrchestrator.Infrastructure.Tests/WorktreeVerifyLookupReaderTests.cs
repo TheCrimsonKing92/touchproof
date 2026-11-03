@@ -228,7 +228,7 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
         var delta = Observe(() => { for (var i = 0; i < 3; i++) check(); });
         Assert.Equal(1, delta.Subcommands.GetValueOrDefault("cat-file"));
         Assert.NotNull(delta.Callers);
-        Assert.DoesNotContain(delta.Callers.Keys, key =>
+        Assert.DoesNotContain(HostCapacitySlotGitCensus.GroupByCaller(delta.Callers).Keys, key =>
             key.EndsWith("GoalWorktrees.TryReadGit|rev-parse", StringComparison.Ordinal) ||
             key.EndsWith("GitRevisionReader.TryResolve|rev-parse", StringComparison.Ordinal));
     }
