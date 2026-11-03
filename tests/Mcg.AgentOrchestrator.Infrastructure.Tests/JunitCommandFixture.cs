@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 using TestResult = Mcg.AgentOrchestrator.Infrastructure.TestResult;
@@ -26,7 +27,8 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
         Project = project;
         Check = new() { Name = "declared-test", Type = "junit-command", Command = "suite-runner",
             Arguments = ["--report"], Project = project, Reports = reports ?? ["reports/*.xml"], TimeoutMinutes = 1 };
-        Root = CreateManifestWorkspace(JsonSerializer.Serialize(new { version = 1, checks = new[] { Check } }));
+        Root = CreateManifestWorkspace(JsonSerializer.Serialize(new { version = 1, checks = new[] { Check } },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         Directory.CreateDirectory(Path.Combine(Root, ".git"));
         Directory.CreateDirectory(ProjectRoot);
         var binary = Path.Combine(Root, "crosswalk.exe");
@@ -59,7 +61,8 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
                 extra = new { seed = "seed", outputRef = "output", reportedBy = "fixture" }
             });
             var json = JsonSerializer.Serialize(new { reportFormat = "CTRF", schemaVersion = "mcg-test-result/1",
-                results = new { tool = new { name = "declared-test" }, tests } });
+                results = new { tool = new { name = "declared-test" }, tests } },
+                new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, json) { StandardOutput = TransformJson?.Invoke(json) ?? json });
         }, new FrozenClock()) { CrosswalkExecutable = resolver };
     }
@@ -86,7 +89,8 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
         directory ??= Path.Combine(Root, "config");
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "acceptance-manifest.json"),
-            JsonSerializer.Serialize(new { version = 1, environmentContract = contract.ToJson(), checks = new[] { Check } }));
+            JsonSerializer.Serialize(new { version = 1, environmentContract = contract.ToJson(), checks = new[] { Check } },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     internal void WriteSkippedReport(string? reason, bool includePassed = false, string name = "skipped")

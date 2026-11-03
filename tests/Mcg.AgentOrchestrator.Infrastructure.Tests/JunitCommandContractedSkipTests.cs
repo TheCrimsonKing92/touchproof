@@ -44,7 +44,7 @@ public sealed class JunitCommandContractedSkipTests
         Assert.Equal(mixed ? 1 : 0, check.ExecutedTestCount);
         Assert.Equal(mixed ? 2 : 1, check.DiscoveredTestCount);
         Assert.Equal("junit-attempt", check.TestResultAttemptId);
-        Assert.Equal(1, check.TestResultRunOrdinal);
+        Assert.Equal(0, check.TestResultRunOrdinal);
         var cohort = Assert.IsType<Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence>(check.CohortEvidence);
         Assert.Equal(check.ExecutedTestCount, cohort.ExecutedTestCount);
         Assert.Equal(check.TestResultAttemptId, cohort.AttemptId);
