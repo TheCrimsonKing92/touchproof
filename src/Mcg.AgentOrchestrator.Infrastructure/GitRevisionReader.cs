@@ -173,6 +173,138 @@ internal sealed class GitRevisionReader : IDisposable
         return false;
     }
 
+    // Positive evidence of absence, never a cached negative lookup. Uncertainty retains git.
+    internal static bool TryConfirmBranchAbsent(string directory, string branch)
+        => TryConfirmBranchAbsent(directory, branch, Environment.GetEnvironmentVariable);
+
+    internal static bool TryConfirmBranchAbsent(string directory, string branch, Func<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        try
+        {
+            if (!TryConfirmWorkTree(directory, environment) || !IsBranchRefName(branch)) return false;
+            // rev-parse can resolve a describe-style name from its object suffix without any ref.
+            if (HasDescribeObjectSuffix(branch)) return false;
+            if (OperatingSystem.IsWindows() && branch.Split('/').Any(IsAmbiguousWindowsRefComponent)) return false;
+
+            // Worktree confirmation permits nested directories; this proof requires the root entry.
+            var root = Path.GetFullPath(directory);
+            var entry = Path.Combine(root, ".git");
+            if (!WorkTreeMetadataEntryExists(entry) ||
+                (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
+            var gitDirectory = ResolveBranchGitDirectory(root);
+            if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return false;
+
+            var commonDirectory = gitDirectory;
+            var commonPath = Path.Combine(gitDirectory, "commondir");
+            if (WorkTreeMetadataEntryExists(commonPath))
+            {
+                if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return false;
+                var common = ReadBranchMetadataLine(commonPath);
+                if (common is null) return false;
+                commonDirectory = Path.GetFullPath(common, gitDirectory);
+            }
+            if (!HasOrdinaryDirectoryPath(commonDirectory) ||
+                WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) ||
+                WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable")) ||
+                !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+
+            var candidates = new[] { $"refs/heads/{branch}", $"refs/refs/heads/{branch}",
+                $"refs/tags/refs/heads/{branch}", $"refs/heads/refs/heads/{branch}",
+                $"refs/remotes/refs/heads/{branch}" };
+            foreach (var candidate in candidates)
+                if (!IsLooseBranchRefAbsent(commonDirectory, candidate)) return false;
+
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var packedPath = Path.Combine(commonDirectory, "packed-refs");
+            if (WorkTreeMetadataEntryExists(packedPath))
+            {
+                if ((File.GetAttributes(packedPath) & FileAttributes.ReparsePoint) != 0) return false;
+                using var stream = File.OpenRead(packedPath);
+                const int limit = 1024 * 1024;
+                var bytes = new byte[limit + 1];
+                var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+                if (count > limit) return false;
+                var text = new UTF8Encoding(false, true).GetString(bytes, 0, count);
+                if (text.Contains('\0') || text.Contains('\r')) return false;
+                var lines = text.Split('\n');
+                if (!lines[0].StartsWith("# pack-refs with:", StringComparison.Ordinal)) return false;
+                var canPeel = false;
+                for (var i = 1; i < lines.Length; i++)
+                {
+                    var line = lines[i];
+                    if (i == lines.Length - 1 && line.Length == 0) continue;
+                    if (line.StartsWith('^'))
+                    {
+                        if (!canPeel || !IsBranchObjectId(line[1..])) return false;
+                        canPeel = false;
+                        continue;
+                    }
+                    var separator = line.IndexOf(' ');
+                    if (separator < 0 || !IsBranchObjectId(line[..separator])) return false;
+                    var name = line[(separator + 1)..];
+                    if (!name.StartsWith("refs/", StringComparison.Ordinal) || !IsBranchRefName(name)) return false;
+                    if (candidates.Any(candidate => name.Equals(candidate, comparison)) ||
+                        name.Equals($"refs/remotes/refs/heads/{branch}/HEAD", comparison) ||
+                        name.StartsWith($"refs/heads/{branch}/", comparison)) return false;
+                    canPeel = true;
+                }
+            }
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasDescribeObjectSuffix(string branch)
+    {
+        var suffixStart = branch.Length;
+        while (suffixStart > 0 && Uri.IsHexDigit(branch[suffixStart - 1])) suffixStart--;
+        return suffixStart < branch.Length && suffixStart >= 2 &&
+            branch[suffixStart - 2] == '-' && branch[suffixStart - 1] == 'g';
+    }
+
+    private static bool IsAmbiguousWindowsRefComponent(string component)
+    {
+        if (component != component.TrimEnd(' ', '.')) return true;
+        var stem = component.Split('.')[0];
+        return stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            stem.Length == 4 && stem[3] is >= '1' and <= '9' &&
+            (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsLooseBranchRefAbsent(string commonDirectory, string candidate)
+    {
+        var current = commonDirectory;
+        var components = candidate.Split('/');
+        for (var i = 0; i < components.Length; i++)
+        {
+            var next = Path.Combine(current, components[i]);
+            // Also decline case aliases in Windows directories with case sensitivity enabled.
+            if (OperatingSystem.IsWindows())
+            {
+                var inspected = 0;
+                foreach (var child in Directory.EnumerateFileSystemEntries(current))
+                {
+                    var name = Path.GetFileName(child);
+                    if (++inspected > 4096 || name.Equals(components[i], StringComparison.OrdinalIgnoreCase) &&
+                        !name.Equals(components[i], StringComparison.Ordinal)) return false;
+                }
+            }
+            if (!WorkTreeMetadataEntryExists(next)) return true;
+            var attributes = File.GetAttributes(next);
+            if (i == components.Length - 1 || (attributes & FileAttributes.Directory) == 0 ||
+                (attributes & FileAttributes.ReparsePoint) != 0) return false;
+            current = next;
+        }
+        return false;
+    }
+
     private static string? ResolveBranchGitDirectory(string root)
     {
         var gitDirectory = Path.Combine(root, ".git");
