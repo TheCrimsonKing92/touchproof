@@ -182,6 +182,23 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     [InlineData("[user]\n name\u00A0 = x\n")]
     [InlineData("[user]\n name\r = x\n")]
     [InlineData("[core]\n bare = false\u00A0\n")]
+    [InlineData("[core]\n filemode = nonsense\n")]
+    [InlineData("[core]\n symlinks = nonsense\n")]
+    [InlineData("[core]\n ignorecase = nonsense\n")]
+    [InlineData("[core]\n logallrefupdates = nonsense\n")]
+    [InlineData("[core]\n abbrev = nonsense\n")]
+    [InlineData("[core]\n compression = nonsense\n")]
+    [InlineData("[core]\n eol = nonsense\n")]
+    [InlineData("[core]\n checkstat = nonsense\n")]
+    [InlineData("[advice]\n detachedHead = nonsense\n")]
+    [InlineData("[color]\n ui = nonsense\n")]
+    [InlineData("[user]\n useconfigonly = nonsense\n")]
+    [InlineData("[index]\n version = nonsense\n")]
+    [InlineData("[pack]\n indexversion = nonsense\n")]
+    [InlineData("[feature]\n manyfiles = nonsense\n")]
+    [InlineData("[fetch]\n negotiationalgorithm = nonsense\n")]
+    [InlineData("[core]\n unknown = true\n")]
+    [InlineData("[other]\n unknown = true\n")]
     public void ConfigurationUncertainty_IsReadFreshAndUsesProbe(string config)
     {
         var repo = CreateRepository();
@@ -200,6 +217,9 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     [InlineData("\t[core]\r\n\tbare\t=\tfalse\t# comment\r\n")]
     [InlineData("[core]\n repositoryformatversion = 1\n[extensions]\n objectformat = sha1\n")]
     [InlineData("[extensions]\n objectformat = sha1\n[core]\n repositoryformatversion = 0\n repositoryformatversion = 1\n")]
+    [InlineData("[core]\n filemode = true\n symlinks = false\n ignorecase = true\n logallrefupdates = always\n")]
+    [InlineData("[core]\n filemode = YES\n symlinks = No\n ignorecase = ON\n logallrefupdates = OFF\n")]
+    [InlineData("[core]\n filemode = 1\n symlinks = 0\n ignorecase =\n logallrefupdates = AlWaYs\n")]
     public void ConfigurationSupportedSyntax_ConfirmsWithoutProbe(string config)
     {
         var repo = CreateRepository();

@@ -236,16 +236,33 @@ internal sealed class GitRevisionReader : IDisposable
             key = key.ToLowerInvariant();
             if (section == "core")
             {
-                if (key == "worktree" || key == "bare" && !value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
-                    key == "repositoryformatversion" && value is not ("0" or "1")) return false;
+                var isBoolean = value.Length == 0 || value is "0" or "1" ||
+                    value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("off", StringComparison.OrdinalIgnoreCase);
+                // Git interprets config before answering rev-parse. Only confirm settings whose
+                // values we validate; unknown keys (even in other sections) retain its probe.
+                var supported = key switch
+                {
+                    "repositoryformatversion" => value is "0" or "1",
+                    "bare" => value.Equals("false", StringComparison.OrdinalIgnoreCase),
+                    "filemode" or "symlinks" or "ignorecase" => isBoolean,
+                    "logallrefupdates" => isBoolean || value.Equals("always", StringComparison.OrdinalIgnoreCase),
+                    _ => false
+                };
+                if (!supported) return false;
                 if (key == "repositoryformatversion") repositoryFormatVersion = value;
             }
-            if (section == "extensions")
+            else if (section == "extensions")
             {
                 if (key == "objectformat" && value is "sha1" or "sha256") hasObjectFormat = true;
                 else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                     value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
             }
+            else return false;
         }
         return !hasObjectFormat || repositoryFormatVersion == "1";
     }
