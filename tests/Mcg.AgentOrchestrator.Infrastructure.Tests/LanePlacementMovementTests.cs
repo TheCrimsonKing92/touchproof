@@ -8,8 +8,8 @@ public sealed class LanePlacementMovementTests
     [Xunit.Fact]
     public void Move_FromRemainder_RequiresOnlyDestinationAndExclusionEdits()
     {
-        const string destination = "Goal acceptance build slots";
-        string[] group = ["Goal acceptance verifier", destination];
+        const string destination = "Goal acceptance build slots C";
+        string[] group = ["Goal acceptance verifier", "Goal acceptance build slots A", "Goal acceptance build slots B", destination];
         var lanes = IsolatedProcessSpawningLaneSplitTests.LoadLanes();
         var types = IsolatedProcessSpawningLaneSplitTests.RunnableTypes();
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
