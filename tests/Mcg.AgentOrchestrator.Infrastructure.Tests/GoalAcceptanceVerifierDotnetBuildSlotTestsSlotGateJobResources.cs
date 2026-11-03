@@ -1042,7 +1042,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var previousWindow = TestOverrides.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = TestOverrides.TransientNoHolderBuildLockPollInterval;
         var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == slotEnvironment.ExecutionLockPath &&
                 Interlocked.Increment(ref leasePrepareAttempts) <= 2)
@@ -1050,7 +1050,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 var lockedPath = Path.Combine(current.ArtifactsPath, "bin", "Core.Tests.dll");
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -1135,7 +1135,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             TestOverrides.TransientNoHolderBuildLockWaitWindow = previousWindow;
             TestOverrides.TransientNoHolderBuildLockPollInterval = previousPoll;
             TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
@@ -1186,9 +1186,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var root = CreateRunnerWorkspace();
         var events = new List<string>();
         var buildAttempts = 0;
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => events.Add("shutdown");
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => events.Add("shutdown"));
 
-        try
         {
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
@@ -1219,11 +1218,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             Assert.True(result.Passed);
             Assert.True(result.Retried);
             Assert.Equal(["initial-build", "shutdown", "retry-build"], events);
-        }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
 
