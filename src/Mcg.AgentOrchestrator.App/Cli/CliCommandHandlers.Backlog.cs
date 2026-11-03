@@ -271,6 +271,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 foreach (var dependent in item.Dependents)
                     Console.WriteLine($"- {dependent.DependentId}");
             }
+            Console.Write(BacklogTextView.RenderBacklogRelations(item, id => store.GetByExactIdAsync(id).GetAwaiter().GetResult()));
             if (!string.IsNullOrWhiteSpace(item.Body))
             {
                 Console.WriteLine();
@@ -338,13 +339,12 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-link":
         {
-            CliArgumentParser.RequirePartCount(parts, 3, "backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related]");
+            CliArgumentParser.RequirePartCount(parts, 3, "backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related | --related-cause]");
+            var kind = HasCliConfirmation(parts, "--related-cause") ? (HasCliConfirmation(parts, "--related") ? throw new ArgumentException(CliCommandHelp.BacklogLinkUsage) : BacklogLinkKind.RelatedCause) : HasCliConfirmation(parts, "--related") ? BacklogLinkKind.Related : BacklogLinkKind.Duplicate;
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var first = ResolveBacklogItemByPrefix(store, parts[1]);
             var second = ResolveBacklogItemByPrefix(store, parts[2]);
-            var kind = HasCliConfirmation(parts, "--related") ? BacklogLinkKind.Related : BacklogLinkKind.Duplicate;
-            var link = store.LinkAsync(first.Id, second.Id, kind).GetAwaiter().GetResult();
-            Console.WriteLine($"{(kind == BacklogLinkKind.Duplicate ? "Linked duplicate" : "Linked related")}: [{link.Item1Id[..Math.Min(8, link.Item1Id.Length)]}] <-> [{link.Item2Id[..Math.Min(8, link.Item2Id.Length)]}]");
+            Console.WriteLine(BacklogTextView.RenderBacklogLinkResult(kind, first.Id, second.Id, store.LinkAsync(first.Id, second.Id, kind).GetAwaiter().GetResult()));
             return false;
         }
 

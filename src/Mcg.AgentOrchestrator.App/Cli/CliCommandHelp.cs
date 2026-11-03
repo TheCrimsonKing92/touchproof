@@ -56,7 +56,7 @@ internal static class CliCommandHelp
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
     public const string BacklogSupersedeUsage = "Usage: backlog-supersede <old-id-prefix> <new-id-prefix>";
     public const string BacklogUnsupersedeUsage = "Usage: backlog-unsupersede <id-prefix>";
-    public const string BacklogLinkUsage = "Usage: backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related]";
+    public const string BacklogLinkUsage = "Usage: backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related | --related-cause]";
     public const string BacklogDependsUsage = "Usage: backlog-depends <item-prefix> --on <prerequisite-prefix> | backlog-depends <item-prefix> --remove <prerequisite-prefix> | backlog-depends <item-prefix> --clear";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
@@ -486,8 +486,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogLink = new(
         BacklogLinkUsage,
-        "Link duplicate or related backlog items.",
-        ["--related", "--help", "-h"]);
+        "Link duplicate, related, or suspected same-cause backlog items.",
+        ["--related", "--related-cause", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogDepends = new(
         BacklogDependsUsage,
