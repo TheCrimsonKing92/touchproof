@@ -15,7 +15,25 @@ internal sealed record OwnerConsoleScopeCommandResult(string Message, bool Succe
 internal sealed record AttentionWorkspaceEntry(string Name, OrchestratorWorkspace? Workspace,
     Exception? Error = null, bool DeliveryAnswered = false, bool UseLearnedBranch = false);
 internal sealed record AttentionWorkspaceCatalog(IReadOnlyList<AttentionWorkspaceEntry> Projects,
-    Exception? RegistryError = null);
+    Exception? RegistryError = null)
+{
+    // Equivalence comes only from resolved canonical state paths; unresolved entries stay separate.
+    internal IEnumerable<AttentionWorkspaceEntry[]> CanonicalGroups()
+    {
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        return Projects.Where(entry => entry.Workspace is not null)
+            .GroupBy(entry => WorkspaceInvocationBinding.CanonicalPath(entry.Workspace!.SqliteStatePath), comparer)
+            .Select(group => group.OrderBy(entry => entry.Name.Equals("home", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => entry.Name, StringComparer.Ordinal).ToArray())
+            .Concat(Projects.Where(entry => entry.Workspace is null).Select(entry => new[] { entry }))
+            .OrderBy(group => group[0].Name, StringComparer.Ordinal);
+    }
+
+    internal static string[] Aliases(AttentionWorkspaceEntry[] group) => group.Skip(1)
+        .Select(entry => entry.Name).Distinct(StringComparer.Ordinal).Where(name => name != group[0].Name)
+        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ThenBy(name => name, StringComparer.Ordinal).ToArray();
+}
 
 // Owns BOARD-only reads. Foreign builders and their goal-id caches never escape a refresh.
 internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsoleProjectScope initialScope,
