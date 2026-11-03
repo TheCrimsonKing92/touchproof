@@ -9,6 +9,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // CaptureConsole uses the repository's scoped console capture; no process-global console mutation.
 public sealed class CliBacklogUpdateDescriptionRoundTripTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData(true)]
     [Xunit.InlineData(false)]
