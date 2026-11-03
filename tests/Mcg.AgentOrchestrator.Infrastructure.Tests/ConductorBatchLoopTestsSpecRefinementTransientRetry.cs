@@ -173,6 +173,7 @@ public sealed class ConductorBatchLoopTestsSpecRefinementTransientRetry(ITestOut
     private sealed class RetryFixture : IDisposable
     {
         private readonly string _root = CreateTempDirectory("mcg-refinement-transient-retry");
+        private readonly IDisposable _clockScope;
         public OrchestratorWorkspace Workspace { get; }
         public SqliteOrchestratorStateRepository Repository { get; }
         public AgentOrchestratorKernel Kernel { get; } = new();
@@ -190,7 +191,7 @@ public sealed class ConductorBatchLoopTestsSpecRefinementTransientRetry(ITestOut
                 "Plan a focused implementation with tests.");
             GoalRefinementWorkCoordinator.RecordPending(Kernel, Goal.Id);
             Message = GoalRefinementWorkCoordinator.CreateMessage(Goal.Id) with { CreatedAt = Now };
-            GoalRefinementWorkCoordinator.UtcNowOverride = () => Now;
+            _clockScope = GoalRefinementWorkCoordinator.UseClock(() => Now);
             GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
             {
                 if (!LaunchStarts)
@@ -242,7 +243,7 @@ public sealed class ConductorBatchLoopTestsSpecRefinementTransientRetry(ITestOut
         public void Dispose()
         {
             GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+            _clockScope.Dispose();
             TryDeleteDirectory(_root);
         }
     }

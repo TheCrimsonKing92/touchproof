@@ -1468,29 +1468,30 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 GoalRefinementWorkCoordinator.MessageId(goalId),
                 workspace.SqliteStatePath));
         var launches = 0;
-        GoalRefinementWorkCoordinator.UtcNowOverride = () => processingStartedAt.AddMinutes(1);
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        using (GoalRefinementWorkCoordinator.UseClock(() => processingStartedAt.AddMinutes(1)))
         {
-            launches++;
-            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
-        };
-        try
-        {
-            var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
-                workspace,
-                goalId,
-                OrchestratorStateOutboxStatus.Processing,
-                processingStartedAt);
+            GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            {
+                launches++;
+                return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+            };
+            try
+            {
+                var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                    workspace,
+                    goalId,
+                    OrchestratorStateOutboxStatus.Processing,
+                    processingStartedAt);
 
-            Assert.False(result.Started);
-            Assert.Equal(GoalRefinementWorkCoordinator.ClaimInProgressDetail, result.Detail);
-            Assert.Equal(0, launches);
-            Assert.Null(SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId));
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+                Assert.False(result.Started);
+                Assert.Equal(GoalRefinementWorkCoordinator.ClaimInProgressDetail, result.Detail);
+                Assert.Equal(0, launches);
+                Assert.Null(SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId));
+            }
+            finally
+            {
+                GoalRefinementWorkCoordinator.LaunchOverride = null;
+            }
         }
     }
 
@@ -1510,29 +1511,30 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 GoalRefinementWorkCoordinator.MessageId(goalId),
                 workspace.SqliteStatePath));
         var launches = 0;
-        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        using (GoalRefinementWorkCoordinator.UseClock(() => now))
         {
-            launches++;
-            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
-        };
-        try
-        {
-            var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
-                workspace,
-                goalId,
-                OrchestratorStateOutboxStatus.Processing,
-                launchedAt);
+            GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            {
+                launches++;
+                return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+            };
+            try
+            {
+                var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                    workspace,
+                    goalId,
+                    OrchestratorStateOutboxStatus.Processing,
+                    launchedAt);
 
-            Assert.False(result.Started);
-            Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", result.Detail, StringComparison.Ordinal);
-            Assert.Equal(0, launches);
-            Assert.Equal(3, GoalRefinementWorkCoordinator.GetConsecutiveFailedClaims(workspace, goalId));
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+                Assert.False(result.Started);
+                Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", result.Detail, StringComparison.Ordinal);
+                Assert.Equal(0, launches);
+                Assert.Equal(3, GoalRefinementWorkCoordinator.GetConsecutiveFailedClaims(workspace, goalId));
+            }
+            finally
+            {
+                GoalRefinementWorkCoordinator.LaunchOverride = null;
+            }
         }
     }
 
@@ -1543,36 +1545,37 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         var goalId = GoalId.New();
         var now = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
         var launches = 0;
-        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        using (GoalRefinementWorkCoordinator.UseClock(() => now))
         {
-            launches++;
-            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
-        };
-        try
-        {
-            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
-            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
-            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
-            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
-            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
-            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+            GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            {
+                launches++;
+                return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+            };
+            try
+            {
+                Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+                now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+                Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+                now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+                Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+                now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
 
-            var escalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
-            var stillEscalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+                var escalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+                var stillEscalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
 
-            Assert.False(escalated.Started);
-            Assert.False(stillEscalated.Started);
-            Assert.Equal(3, launches);
-            Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", escalated.Detail, StringComparison.Ordinal);
-            Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", escalated.Detail, StringComparison.Ordinal);
-            Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", escalated.Detail, StringComparison.Ordinal);
-            Assert.Contains("consecutive_failed_claims=3", escalated.Detail, StringComparison.Ordinal);
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+                Assert.False(escalated.Started);
+                Assert.False(stillEscalated.Started);
+                Assert.Equal(3, launches);
+                Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", escalated.Detail, StringComparison.Ordinal);
+                Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", escalated.Detail, StringComparison.Ordinal);
+                Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", escalated.Detail, StringComparison.Ordinal);
+                Assert.Contains("consecutive_failed_claims=3", escalated.Detail, StringComparison.Ordinal);
+            }
+            finally
+            {
+                GoalRefinementWorkCoordinator.LaunchOverride = null;
+            }
         }
     }
 
@@ -1618,25 +1621,26 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             CreatedAt = new DateTimeOffset(2026, 9, 21, 1, 0, 0, TimeSpan.Zero)
         };
         await repository.EnsureOutboxMessageAsync(message);
-        GoalRefinementWorkCoordinator.UtcNowOverride = () =>
-            new DateTimeOffset(2026, 9, 21, 15, 2, 0, TimeSpan.Zero);
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
-            new GoalRefinementWorkLaunchResult(true, 7, "test-launch");
-        try
+        using (GoalRefinementWorkCoordinator.UseClock(() =>
+            new DateTimeOffset(2026, 9, 21, 15, 2, 0, TimeSpan.Zero)))
         {
-            var pending = Assert.Throws<InvalidOperationException>(() =>
-                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
-                    kernel,
-                    workspace,
-                    providers: null,
-                    kernel.GetGoal(goal.Id)));
+            GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+                new GoalRefinementWorkLaunchResult(true, 7, "test-launch");
+            try
+            {
+                var pending = Assert.Throws<InvalidOperationException>(() =>
+                    GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                        kernel,
+                        workspace,
+                        providers: null,
+                        kernel.GetGoal(goal.Id)));
 
-            Assert.Contains("pending_age=14h02m", pending.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+                Assert.Contains("pending_age=14h02m", pending.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                GoalRefinementWorkCoordinator.LaunchOverride = null;
+            }
         }
     }
 }
