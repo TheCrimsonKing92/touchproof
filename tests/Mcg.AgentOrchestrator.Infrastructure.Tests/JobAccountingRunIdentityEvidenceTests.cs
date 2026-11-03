@@ -18,7 +18,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
     public void Lane_job_pid_and_slot_sites_have_run_identity_or_live_named_exception()
     {
         var repository = VerifiedRepositoryRoot.Find();
-        var classes = new[] { "Goal acceptance verifier", "Goal acceptance build slots" }
+        var classes = new[] { "Goal acceptance verifier", "Goal acceptance build slots A", "Goal acceptance build slots B", "Goal acceptance build slots C" }
             .SelectMany(lane => LaneIsolatedRootScanner.ResolveLaneClasses(repository, lane, GetType().Assembly))
             .Distinct().ToArray();
         var sources = AcceptanceTestClassSourcesMemo.Get(repository).ToDictionary(item => item.FullName);
