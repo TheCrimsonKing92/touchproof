@@ -1,5 +1,27 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Fleet attention
+
+`attention fleet [--json] [--limit N]` reads home and every registered project through the console's workspace registry and binding authority. The default limit is 50; N must be a nonnegative integer. Duplicate flags, missing values and invalid values fail with exit 1 before stores are opened. All projects are read even with `--limit 0`.
+
+The query lists live unresolved human waits (including owner input, landing approvals and escalations), reach-up collaboration items and owner-question holds. Answered, parked and terminal attention stays excluded, as does prospective Acceptance/Reviewer evidence. It does not select a project, create/migrate stores or acquire a state writer. The selected-project file is neither consulted nor changed. Explicit invocation root/state expectations are still verified. Existing single-project attention output is unchanged.
+
+One proven canonical state-store path produces one read and one project outcome. Sharing a repository root alone does not merge projects. Home wins an alias group; otherwise the first registration under OrdinalIgnoreCase then Ordinal ordering wins. Remaining distinct names appear in `aliases`, sorted by the same order. Unresolved registrations remain separate. Follow-up commands bind the canonical project (displayed home uses `--project=default`) and tenant, retain full known identities and reuse existing answer/dismiss/retry templates. An unavailable or unsafe-to-qualify action is null.
+
+Items sort by original UTC raised/requested time, oldest first, then project, goal, source and item ID ordinally; unknown times sort last and null goal sorts before a non-null goal. A source's unset minimum timestamp is unknown. Deduplication uses the complete `(project, source, goalId, itemId)` tuple. The limit applies after sorting; `total` counts observed unique actionable items before limiting and `omitted = total - items.length`.
+
+JSON uses an `AgentReadEnvelope`: `schema` is `mcg.fleet-attention`, `schemaVersion` is integer 1, `generatedAt` is a UTC ISO-8601 round-trip string, and `payload` is an object with these always-present fields:
+
+| Field | Contract |
+| --- | --- |
+| `items` | Array of objects with exactly `project` (canonical string), `source` (`human-wait`, `collaboration-item`, or `owner-question`), `goalId` (full string or null), `itemId` (full opaque stable string), `kind` (existing source kind string), `raisedAt` (original UTC round-trip string or null), `question` (full original display question/reason), and `nextAction` (qualified command string or null). |
+| `projects` | Array sorted by canonical name ordinally. Each object has `project` (string), `aliases` (string array excluding canonical name), `status` (`available` or `unavailable`), `itemCount` (pre-limit integer when available, null otherwise), and `error` (null when available, otherwise `{code, message}` strings). |
+| `total`, `omitted` | Nonnegative integers covering successfully read projects only. |
+| `complete` | Boolean, true only if inventory enumeration and all workspace reads succeeded. |
+| `errors` | Array of enumeration failures as `{code, message}` strings; registry enumeration failure uses `registry-unavailable`. Workspace errors remain on their project outcome. |
+
+Empty arrays and nullable fields are always emitted. Per-project errors use `missing-store`, `unreadable-store`, `unsupported-store`, or `read-failed`, based on the observed failure. A project contributes rows only after its complete read succeeds. Healthy projects' rows survive another project's failure; text prints `project-unavailable` diagnostics and JSON preserves the failed outcome. Exit 0 means complete inventory, exit 1 means incomplete inventory or argument failure. Partial totals are observed counts, never an estimate for unavailable projects. Cancellation terminates the read and cannot report complete success. Reads are independent per project, with no fleet-wide atomic snapshot.
+
 ## Backlog item detail
 
 `backlog-show <id-prefix> [--summary] [--json]` reads a backlog item without changing state. Default human and `--json` detail remain unchanged; full JSON uses `mcg.backlog-item`.

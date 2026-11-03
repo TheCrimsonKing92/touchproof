@@ -11,6 +11,12 @@ internal sealed record OwnerConsoleBoardScope(string Label, int ProjectCount, st
     IReadOnlyList<string>? Sections = null);
 internal sealed record OwnerConsoleScopeCommandResult(string Message, bool Success, bool Changed);
 
+// Shared registry/binding inventory. A failed resolution never supplies a guessed store path.
+internal sealed record AttentionWorkspaceEntry(string Name, OrchestratorWorkspace? Workspace,
+    Exception? Error = null, bool DeliveryAnswered = false, bool UseLearnedBranch = false);
+internal sealed record AttentionWorkspaceCatalog(IReadOnlyList<AttentionWorkspaceEntry> Projects,
+    Exception? RegistryError = null);
+
 // Owns BOARD-only reads. Foreign builders and their goal-id caches never escape a refresh.
 internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsoleProjectScope initialScope,
     Func<IReadOnlyList<OwnerConsoleBoardProject>> catalog, TimeProvider clock,
@@ -23,36 +29,63 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
         string repositoryRoot, OrchestratorProjectRegistry registry, TimeProvider clock) =>
         new(OwnerConsoleProjectLabel.ForWorkspace(workspace), OwnerConsoleProjectScope.ForLaunch(workspace), () =>
         {
-            var projects = new List<OwnerConsoleBoardProject>();
-            var registered = registry.ListProjects();
-            OwnerConsoleBoardProject Describe(string name, Func<OrchestratorWorkspace> resolve)
-            {
-                try
-                {
-                    var target = name.Equals(OwnerConsoleProjectLabel.ForWorkspace(workspace), StringComparison.OrdinalIgnoreCase)
-                        ? workspace : resolve();
-                    return new(name, target.SqliteStatePath, target.PortfolioStorePath,
-                        OrchestratorDirectory: target.OrchestratorDirectory, ConductEventsLogPath: target.ConductEventsLogPath,
-                        DeliveryAnswered: registered.FirstOrDefault(project =>
-                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.DeliveryAnswer is not null,
-                        UseLearnedBranch: registered.FirstOrDefault(project =>
-                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.UseLearnedIntegrationBranch == true);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                { return new(name, "", "", ex.Message); }
-            }
-            projects.Add(Describe("home", () => OrchestratorWorkspace.ForDirectory(repositoryRoot, null, workspace.TenantName, registry)));
-            foreach (var project in registered)
-            {
-                if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase)) continue;
-                projects.Add(Describe(project.Name, () => OrchestratorWorkspace.ForProject(project.Name,
-                    project.RootDirectory, tenantName: workspace.TenantName, integrationBranch: project.IntegrationBranch,
-                    dataRootDirectory: registry.DataRootDirectory)));
-            }
-            return projects;
+            var inventory = ReadWorkspaceCatalog(repositoryRoot, workspace.TenantName, registry, workspace);
+            if (inventory.RegistryError is { } error) throw error;
+            return inventory.Projects.Select(entry => entry.Workspace is { } target
+                ? new OwnerConsoleBoardProject(entry.Name, target.SqliteStatePath, target.PortfolioStorePath,
+                    OrchestratorDirectory: target.OrchestratorDirectory, ConductEventsLogPath: target.ConductEventsLogPath,
+                    DeliveryAnswered: entry.DeliveryAnswered, UseLearnedBranch: entry.UseLearnedBranch)
+                : new OwnerConsoleBoardProject(entry.Name, "", "", entry.Error!.Message)).ToArray();
         }, clock, new(OwnerConsoleProjectLabel.ForWorkspace(workspace), workspace.SqliteStatePath,
             workspace.PortfolioStorePath, OrchestratorDirectory: workspace.OrchestratorDirectory,
             ConductEventsLogPath: workspace.ConductEventsLogPath));
+
+    internal static AttentionWorkspaceCatalog ReadWorkspaceCatalog(string repositoryRoot, string? tenant,
+        OrchestratorProjectRegistry registry, OrchestratorWorkspace? launchWorkspace = null,
+        CancellationToken cancellationToken = default)
+    {
+        var entries = new List<AttentionWorkspaceEntry>();
+        cancellationToken.ThrowIfCancellationRequested();
+        try { _ = File.GetAttributes(registry.RegistryPath); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Registry.LoadFile's legacy File.Exists probe cannot distinguish access denial.
+            // Preserve a supplied launch binding, but never guess a default state location.
+            if (launchWorkspace is { IsProjectScoped: false }) entries.Add(new("home", launchWorkspace));
+            else entries.Add(new("home", null, ex));
+            return new(entries, ex);
+        }
+        AttentionWorkspaceEntry Describe(string name, Func<OrchestratorWorkspace> resolve,
+            bool deliveryAnswered = false, bool useLearnedBranch = false)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var target = launchWorkspace is not null && name.Equals(
+                    OwnerConsoleProjectLabel.ForWorkspace(launchWorkspace), StringComparison.OrdinalIgnoreCase)
+                    ? launchWorkspace : resolve();
+                return new(name, target, DeliveryAnswered: deliveryAnswered, UseLearnedBranch: useLearnedBranch);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return new(name, null, ex); }
+        }
+        entries.Add(Describe("home", () => OrchestratorWorkspace.ForDirectory(repositoryRoot, null, tenant, registry)));
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var project in registry.ListProjects())
+            {
+                if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase)) continue;
+                entries.Add(Describe(project.Name, () => OrchestratorWorkspace.ForProject(project.Name,
+                    project.RootDirectory, tenantName: tenant, integrationBranch: project.IntegrationBranch,
+                    dataRootDirectory: registry.DataRootDirectory), project.DeliveryAnswer is not null,
+                    project.UseLearnedIntegrationBranch));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(entries);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return new(entries, ex); }
+    }
 
     internal IReadOnlyList<OwnerConsoleBoardProject> InScopeProjects()
     {
