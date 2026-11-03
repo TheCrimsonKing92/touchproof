@@ -170,8 +170,7 @@ public sealed class ProjectInstallManifestCliTests
         var backup = fixture.Live + ".bak-20261011T225000Z";
         File.WriteAllText(backup, "existing backup bytes");
         var before = fixture.Snapshot();
-        ProjectInstallManifestCommand.UtcNowForTests = () => new DateTimeOffset(2026, 10, 11, 22, 50, 0, TimeSpan.Zero);
-        try
+        using (ProjectInstallManifestCommand.UseClock(() => new DateTimeOffset(2026, 10, 11, 22, 50, 0, TimeSpan.Zero)))
         {
             var (exit, lines) = fixture.Install(fixture.Emitted);
 
@@ -180,10 +179,6 @@ public sealed class ProjectInstallManifestCliTests
             fixture.AssertUnchanged(before);
             Assert.Equal(backup, Assert.Single(Directory.GetFiles(fixture.ModelDirectory, "*.bak-*")));
             Assert.Empty(Directory.GetFiles(fixture.ModelDirectory, "*.tmp"));
-        }
-        finally
-        {
-            ProjectInstallManifestCommand.UtcNowForTests = null;
         }
     }
 
