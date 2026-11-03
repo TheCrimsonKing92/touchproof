@@ -28,8 +28,8 @@ public sealed class ConductorStartFixtureCleanupTests(ITestOutputHelper output)
                     afterCallerStarted: started =>
                     {
                         root = started.Root;
-                        stdout = started.Caller.StandardOutput.ReadToEndAsync();
-                        stderr = started.Caller.StandardError.ReadToEndAsync();
+                        stdout = started.CallerOutput;
+                        stderr = started.CallerError;
                         Assert.True(started.Caller.WaitForExit(60000), "Diagnostic caller did not exit.");
                         DrainCaller();
                         Assert.Equal(0, started.Caller.ExitCode);
@@ -43,8 +43,8 @@ public sealed class ConductorStartFixtureCleanupTests(ITestOutputHelper output)
                     beforeRootRemoval: removing =>
                     {
                         // Observe BEFORE the diagnostic harness releases anything.
-                        // Normal Dispose has already run its cleanup here; constructor
-                        // rollback reaches this same boundary without that cleanup.
+                        // Both normal disposal and constructor rollback must have
+                        // completed the same owned-resource cleanup here.
                         try
                         {
                             Assert.True(Directory.Exists(removing.Root));
@@ -63,13 +63,7 @@ public sealed class ConductorStartFixtureCleanupTests(ITestOutputHelper output)
                             if (conductor is not null)
                                 Assert.True(conductor.WaitForExit(60000),
                                     "Validated diagnostic conductor did not exit after release.");
-                            if (failStartup)
-                            {
-                                Assert.True(removing.Caller.WaitForExit(60000),
-                                    "Diagnostic caller did not finish during rollback.");
-                                DrainCaller();
-                                removing.Caller.Dispose();
-                            }
+                            DrainCaller();
                             WriteReceipt("diagnostic-release-complete", conductor?.HasExited);
                         }
                     });
@@ -82,8 +76,8 @@ public sealed class ConductorStartFixtureCleanupTests(ITestOutputHelper output)
             Assert.False(Directory.Exists(root));
             WriteReceipt("root-removed", conductor?.HasExited);
             Assert.NotNull(exitedAtRemoval);
-            // Expected diagnostic RED on original partial-startup rollback. A
-            // subsequent repair must satisfy this SAME assertion and boundary.
+            // Original partial-startup rollback is RED at this same boundary;
+            // the harness releases the conductor only after recording its state.
             Assert.True(exitedAtRemoval.Value,
                 "Root removal began before the validated fixture-owned conductor exited; see lifecycle receipts.");
         }
