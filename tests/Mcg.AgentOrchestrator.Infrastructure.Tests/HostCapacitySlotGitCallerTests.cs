@@ -105,9 +105,8 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         notify(ForwardingObserver(census), ["rev-parse"]);
         var delta = window.Close()!;
         Assert.Equal(1, delta.Launches);
-        Assert.Equal(KeyValuePair.Create(
-            Key(nameof(Record_ForwardingObserver_UsesCallerOutsideLaunchBoundary), "rev-parse"), 1),
-            Assert.Single(delta.Callers!));
+        AssertSingleCaller(delta.Callers,
+            Key(nameof(Record_ForwardingObserver_UsesCallerOutsideLaunchBoundary), "rev-parse"), 1);
     }
 
     [Fact]
@@ -298,6 +297,18 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         [MethodImpl(MethodImplOptions.NoInlining)] (command) => census.Record(command);
 
     private static string Key(string method, string command) => $"test:HostCapacitySlotGitCallerTests.{method}|{command}";
+
+    internal static void AssertSingleCaller(
+        IReadOnlyDictionary<string, int>? callers, string expectedKey, int expectedCount)
+    {
+        var matches = callers is { Count: 1 } &&
+            HostCapacitySlotGitCensus.GroupByCaller(callers).Single().Equals(KeyValuePair.Create(expectedKey, expectedCount));
+        var fullKeys = callers is null ? "<null>" :
+            string.Join(Environment.NewLine, callers.Select(entry => $"{entry.Key} = {entry.Value}"));
+        Assert.True(matches,
+            $"Expected single caller {expectedKey} = {expectedCount}.{Environment.NewLine}Full keys:{Environment.NewLine}{fullKeys}");
+    }
+
     private static void Succeeded(GitCli.GitResult result) => Assert.True(result.Succeeded, result.Error);
     private static JsonDocument ReadRow(string path) => JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
     private static IReadOnlyDictionary<string, int> Callers(JsonDocument row) => HostCapacitySlotGitCensus.GroupByCaller(
