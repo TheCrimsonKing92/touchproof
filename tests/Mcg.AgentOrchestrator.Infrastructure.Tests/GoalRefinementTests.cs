@@ -776,7 +776,6 @@ public sealed class GoalRefinementTests
         finally
         {
             GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
             GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
         }
     }
@@ -891,34 +890,35 @@ public sealed class GoalRefinementTests
         var launches = 0;
         var now = new DateTimeOffset(2026, 8, 19, 12, 0, 0, TimeSpan.Zero);
         GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
-        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
-        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        using (GoalRefinementWorkCoordinator.UseClock(() => now))
         {
-            launches++;
-            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
-        };
-        try
-        {
-            var first = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
-            Xunit.Assert.True(first.Started);
-            Xunit.Assert.Equal(1, launches);
+            GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            {
+                launches++;
+                return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+            };
+            try
+            {
+                var first = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+                Xunit.Assert.True(first.Started);
+                Xunit.Assert.Equal(1, launches);
 
-            now = now.AddMinutes(1);
-            var deferred = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
-            Xunit.Assert.False(deferred.Started);
-            Xunit.Assert.Equal(GoalRefinementWorkCoordinator.CadenceDeferredDetail, deferred.Detail);
-            Xunit.Assert.Equal(1, launches);
+                now = now.AddMinutes(1);
+                var deferred = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+                Xunit.Assert.False(deferred.Started);
+                Xunit.Assert.Equal(GoalRefinementWorkCoordinator.CadenceDeferredDetail, deferred.Detail);
+                Xunit.Assert.Equal(1, launches);
 
-            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence;
-            var second = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
-            Xunit.Assert.True(second.Started);
-            Xunit.Assert.Equal(2, launches);
-        }
-        finally
-        {
-            GoalRefinementWorkCoordinator.LaunchOverride = null;
-            GoalRefinementWorkCoordinator.UtcNowOverride = null;
-            GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+                now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence;
+                var second = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+                Xunit.Assert.True(second.Started);
+                Xunit.Assert.Equal(2, launches);
+            }
+            finally
+            {
+                GoalRefinementWorkCoordinator.LaunchOverride = null;
+                GoalRefinementWorkCoordinator.ResetRecoveryLaunchesForTests();
+            }
         }
     }
 
