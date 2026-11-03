@@ -13,7 +13,13 @@ internal static class CliFleetCapacityQueryCommand
 
     internal static bool Parse(IReadOnlyList<string> args)
     {
-        if (!IsCommand(args) || args.Count > 2 || args.Count == 2 && args[1] != "--json")
+        if (!IsCommand(args)) throw new ArgumentException(Usage);
+        foreach (var arg in args.Skip(1))
+        {
+            if (arg.StartsWith('-') && arg != "--json")
+                throw new ArgumentException($"Unknown option '{arg}'.{Environment.NewLine}{Usage}");
+        }
+        if (args.Count > 2 || args.Count == 2 && args[1] != "--json")
             throw new ArgumentException(Usage);
         return args.Count == 2;
     }

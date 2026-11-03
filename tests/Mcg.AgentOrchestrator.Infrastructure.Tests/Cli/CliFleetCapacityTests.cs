@@ -15,7 +15,7 @@ public sealed class CliFleetCapacityTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-11-03T12:00:00Z", CultureInfo.InvariantCulture);
     [Fact]
-    public void Executable_JsonEnumeratesHomeAndAllRegistrations_WithoutWritableStartupOrHydration()
+    public void Executable_JsonEnumeratesFleet_WithoutWritableStartupOrHydration()
     {
         using var fixture = new Fixture();
         var alpha = fixture.Register("alpha");
@@ -227,12 +227,13 @@ public sealed class CliFleetCapacityTests
     }
 
     [Theory]
-    [InlineData("--json", "--json")]
-    [InlineData("--unknown", "")]
-    [InlineData("--json=true", "")]
-    [InlineData("position", "")]
-    [InlineData("--limit", "2")]
-    public void MalformedArguments_UseUsageHandlingBeforeReadingCatalogOrStartingWritableServices(string first, string second)
+    [InlineData("--json", "--json", null)]
+    [InlineData("--unknown", "", "--unknown")]
+    [InlineData("--json=true", "", "--json=true")]
+    [InlineData("position", "", null)]
+    [InlineData("--limit", "2", "--limit")]
+    [InlineData("--json", "--zz-not-a-real-flag", "--zz-not-a-real-flag")]
+    public void MalformedArguments_ReportUsageBeforeAnyStartup(string first, string second, string? unknownOption)
     {
         using var fixture = new Fixture();
         var home = fixture.Home;
@@ -241,11 +242,16 @@ public sealed class CliFleetCapacityTests
         string[] args = second.Length == 0 ? ["fleet-capacity", first] : ["fleet-capacity", first, second];
         Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
         Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
-        Assert.Equal(CliFleetCapacityQueryCommand.Usage, Assert.Throws<ArgumentException>(() => CliCommandHelp.ThrowIfInvalidFlags(args)).Message);
+        var error = Assert.Throws<ArgumentException>(() => CliCommandHelp.ThrowIfInvalidFlags(args));
+        Assert.Contains(CliFleetCapacityQueryCommand.Usage, error.Message);
+        if (unknownOption is not null)
+            Assert.Contains($"Unknown option '{unknownOption}'", error.Message);
         var before = fixture.Snapshot();
         var child = Run(fixture, args);
         Assert.NotEqual(0, child.ExitCode);
         Assert.Contains(CliFleetCapacityQueryCommand.Usage, child.StandardError + child.StandardOutput);
+        if (unknownOption is not null)
+            Assert.Contains($"Unknown option '{unknownOption}'", child.StandardError + child.StandardOutput);
         Assert.DoesNotContain("registry-unavailable", child.StandardError + child.StandardOutput);
         Assert.Equal(before, fixture.Snapshot());
         Assert.False(Directory.Exists(home.OrchestratorDirectory));
