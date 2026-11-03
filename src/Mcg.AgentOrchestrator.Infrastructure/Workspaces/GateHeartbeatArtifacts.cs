@@ -27,7 +27,8 @@ public sealed record AcceptanceGateProgress(
     string? Executor = null,
     string? TreeRevision = null,
     string? EvidenceKind = null,
-    string? ReproductionMemberId = null)
+    string? ReproductionMemberId = null,
+    string? ExecutionId = null)
 {
     internal GateLaneSlowdownDiff.GateLaneSlowdownResult? Slowdown { get; init; }
     public string ShardOutcomeTokens => Phase switch
