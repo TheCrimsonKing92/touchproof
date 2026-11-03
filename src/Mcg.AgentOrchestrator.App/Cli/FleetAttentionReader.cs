@@ -1,11 +1,11 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal sealed record FleetAttentionError(string Code, string Message);
 internal sealed record FleetAttentionItem(string Project, string Source, string? GoalId, string ItemId,
