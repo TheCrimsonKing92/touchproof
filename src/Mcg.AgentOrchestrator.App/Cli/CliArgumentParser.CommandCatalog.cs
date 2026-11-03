@@ -6,6 +6,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
 [
     "ask-goal",
     "attention",
+    "fleet-capacity",
     "console",
     "goals",
     "status",
