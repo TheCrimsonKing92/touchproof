@@ -26,12 +26,12 @@ public sealed class LandingExecutorTestsConfiguredTrunk
             ReadGit(repo, "checkout", "-b", branch);
             AppendCommit(repo, "goal.txt", "goal change");
             ReadGit(repo, "checkout", "master");
-            RemoteGitMirror.GitRunner = (directory, args) =>
+            using var gitRunnerScope = RemoteGitMirror.UseGitRunner((directory, args) =>
             {
                 if (args.Count == 0 || args[0] != "push") return previousRunner(directory, args);
                 pushes.Add(args.ToArray());
                 return new GitCli.GitResult(0, string.Empty, string.Empty);
-            };
+            });
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
 
             var result = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id, integrationBranch: "master");
@@ -44,7 +44,6 @@ public sealed class LandingExecutorTestsConfiguredTrunk
         }
         finally
         {
-            RemoteGitMirror.GitRunner = previousRunner;
             TryDeleteDirectory(repo);
         }
     }

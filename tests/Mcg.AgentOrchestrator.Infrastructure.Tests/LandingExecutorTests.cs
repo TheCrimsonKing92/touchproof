@@ -1294,10 +1294,10 @@ public sealed class LandingExecutorTests
             AddGoalBranchCommit(repo, goalBranch, "journal-mirror.txt", "journal");
 
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
-            RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = RemoteGitMirror.UseGitRunner((workingDirectory, args) =>
                 args.Count > 0 && args[0] == "push"
                     ? new GitCli.GitResult(0, string.Empty, string.Empty)
-                    : oldGitRunner(workingDirectory, args);
+                    : oldGitRunner(workingDirectory, args));
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
             var mirror = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
@@ -1312,7 +1312,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            RemoteGitMirror.GitRunner = oldGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -1362,7 +1361,7 @@ public sealed class LandingExecutorTests
         using var hooks = WithMirrorTestHooks();
         var pushCount = 0;
         var oldGitRunner = RemoteGitMirror.GitRunner;
-        RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+        using var gitRunnerScope = RemoteGitMirror.UseGitRunner((workingDirectory, args) =>
         {
             if (args.Count > 0 && args[0] == "push")
             {
@@ -1370,7 +1369,7 @@ public sealed class LandingExecutorTests
             }
 
             return oldGitRunner(workingDirectory, args);
-        };
+        });
 
         try
         {
@@ -1392,7 +1391,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            RemoteGitMirror.GitRunner = oldGitRunner;
             TryDeleteDirectory(repo);
             TryDeleteDirectory(remote);
         }
@@ -1524,7 +1522,6 @@ public sealed class LandingExecutorTests
         var repo = CreateGitRepository();
         var remote = CreateBareRepository(repo, "mirror");
         using var _ = WithMirrorTestHooks();
-        var oldGitRunner = RemoteGitMirror.GitRunner;
         var enqueuedSecondGoal = 0;
         try
         {
@@ -1545,7 +1542,7 @@ public sealed class LandingExecutorTests
 
             var landing = LandingExecutor.Execute(kernel, firstGoal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, firstGoal);
-            RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = RemoteGitMirror.UseGitRunner((workingDirectory, args) =>
             {
                 if (args.Count > 0 &&
                     args[0] == "push" &&
@@ -1555,7 +1552,7 @@ public sealed class LandingExecutorTests
                 }
 
                 return new GitCli.GitResult(0, string.Empty, string.Empty);
-            };
+            });
             var mirror = RemoteGitMirror.ProcessDue(kernel, repo, firstGoal.Id);
 
             Assert.True(landing.MainAdvanced);
@@ -1572,7 +1569,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            RemoteGitMirror.GitRunner = oldGitRunner;
             TryDeleteDirectory(repo);
             TryDeleteDirectory(remote);
         }
@@ -1858,12 +1854,7 @@ public sealed class LandingExecutorTests
 
     private static IDisposable WithMirrorTestHooks()
     {
-        var oldBackoff = RemoteGitMirror.BackoffForAttempt;
-        RemoteGitMirror.BackoffForAttempt = _ => TimeSpan.Zero;
-        return new DelegateDisposable(() =>
-        {
-            RemoteGitMirror.BackoffForAttempt = oldBackoff;
-        });
+        return RemoteGitMirror.UseBackoffForAttempt(_ => TimeSpan.Zero);
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)

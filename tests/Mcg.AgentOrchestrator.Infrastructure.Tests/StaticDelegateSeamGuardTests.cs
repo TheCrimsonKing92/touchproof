@@ -32,10 +32,6 @@ public sealed class StaticDelegateSeamGuardTests
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolutionSave"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "HoldWriteBackoff"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "HoldStoreWriteAllText"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "Mcg.AgentOrchestrator.App.Orchestration.RemoteGitMirror", "UtcNow"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "Mcg.AgentOrchestrator.App.Orchestration.RemoteGitMirror", "BackoffForAttempt"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "Mcg.AgentOrchestrator.App.Orchestration.RemoteGitMirror", "GitRunner"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "Mcg.AgentOrchestrator.App.Orchestration.RemoteGitMirror", "StatusWriter")
     ];
 
     [Fact]
@@ -48,7 +44,7 @@ public sealed class StaticDelegateSeamGuardTests
             .Select(path => (Path.GetRelativePath(root, path).Replace('\\', '/'), snapshot.GetSyntaxTree(path)))
             .ToArray();
 
-        Assert.Equal(26, AllowList.Length);
+        Assert.Equal(22, AllowList.Length);
         Assert.Equal(AllowList.Length, AllowList.Distinct().Count());
         Assert.Empty(AllowListViolations(Scan(trees), AllowList));
     }
