@@ -7,6 +7,7 @@ internal static class CliReadOnlyCommandRunner
 {
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
         CliFleetAttentionQueryCommand.IsCommand(args) ||
+        CliFleetCapacityQueryCommand.IsCommand(args) ||
         EpicOutcomeMigrationProposals.IsCommand(args) ||
         CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
         CliStorageHealthQueryCommand.IsStorageHealthQueryCommand(args) ||
@@ -53,6 +54,14 @@ internal static class CliReadOnlyCommandRunner
         out bool changed,
         IClock? diagnosticsClock = null)
     {
+        if (CliFleetCapacityQueryCommand.IsCommand(args))
+        {
+            Environment.ExitCode = CliFleetCapacityQueryCommand.ExecuteAsync(args, workspace.RootDirectory,
+                workspace.TenantName, Orchestration.OrchestratorProjectRegistry.CreateDefault(), Console.Out,
+                workspace).GetAwaiter().GetResult();
+            changed = false;
+            return true;
+        }
         if (CliFleetAttentionQueryCommand.IsCommand(args))
         {
             Environment.ExitCode = CliFleetAttentionQueryCommand.ExecuteAsync(args, workspace.RootDirectory,
