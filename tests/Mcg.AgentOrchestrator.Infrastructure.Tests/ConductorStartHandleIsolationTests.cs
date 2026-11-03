@@ -95,26 +95,31 @@ public sealed class ConductorStartHandleIsolationTests
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-start-pipe-" + Guid.NewGuid().ToString("N"));
         internal EventWaitHandle Ready { get; } = null!;
         internal EventWaitHandle Release { get; } = null!;
+        internal EventWaitHandle ReleaseWatchdogExpired { get; } = null!;
         internal Process Caller { get; } = null!;
         internal Task<string> CallerOutput => callerOutput!;
         internal Task<string> CallerError => callerError!;
         private Task<string>? callerOutput;
         private Task<string>? callerError;
         private readonly Action<LaunchFixture>? beforeRootRemoval;
+        private readonly Action<LaunchFixture, Process>? beforeConductorRelease;
         private bool disposed;
 
         // Diagnostic seams observe the real acquisition/removal boundaries. They
         // use the same cleanup path for rollback and normal disposal.
         internal LaunchFixture(Action<LaunchFixture>? afterCallerStarted = null,
-            Action<LaunchFixture>? beforeRootRemoval = null)
+            Action<LaunchFixture>? beforeRootRemoval = null,
+            Action<LaunchFixture, Process>? beforeConductorRelease = null)
         {
             this.beforeRootRemoval = beforeRootRemoval;
+            this.beforeConductorRelease = beforeConductorRelease;
             try
             {
                 Directory.CreateDirectory(Root);
                 var token = @"Local\mcg-start-pipe-" + Guid.NewGuid().ToString("N");
                 Ready = new EventWaitHandle(false, EventResetMode.ManualReset, token);
                 Release = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release");
+                ReleaseWatchdogExpired = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-release-watchdog");
                 var location = DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(GetType());
                 Assert.NotNull(location.Directory);
                 var probe = Path.Combine(location.Directory!, "Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll");
@@ -190,8 +195,12 @@ public sealed class ConductorStartHandleIsolationTests
                     using var conductor = OpenConductor();
                     // Validate and retain the owned identity before releasing the
                     // probe's lifecycle gate; Ready alone does not mean completion.
+                    beforeConductorRelease?.Invoke(this, conductor);
                     Release.Set();
                     Assert.True(conductor.WaitForExit(60000), "Test-owned fake conductor did not exit during cleanup.");
+                    if (conductor.ExitCode != 0)
+                        throw new InvalidOperationException(
+                            $"Test-owned fake conductor did not complete cooperatively; exit code: {conductor.ExitCode}.");
                 }
             });
             Attempt(() =>
@@ -206,6 +215,7 @@ public sealed class ConductorStartHandleIsolationTests
             if (failures.Count == 0)
                 Attempt(() => beforeRootRemoval?.Invoke(this));
             Attempt(() => Release?.Dispose());
+            Attempt(() => ReleaseWatchdogExpired?.Dispose());
             if (failures.Count == 0 && Directory.Exists(Root))
                 Attempt(() => Directory.Delete(Root, recursive: true));
             if (failures.Count != 0)
