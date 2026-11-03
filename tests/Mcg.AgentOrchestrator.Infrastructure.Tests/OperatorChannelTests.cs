@@ -412,38 +412,28 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var workspace = BuildTestWorkspace();
         var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
-        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
-        var previousBackoff = OperatorInbox.HoldWriteBackoff;
         var writeAttempts = 0;
         var backoffs = new List<TimeSpan>();
-        try
+        using var backoff = OperatorInbox.UseHoldWriteBackoff(backoffs.Add);
+        using var writer = OperatorInbox.UseHoldStoreWriteAllText((path, contents) =>
         {
-            OperatorInbox.HoldWriteBackoff = backoffs.Add;
-            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase) &&
+                Interlocked.Increment(ref writeAttempts) <= 2)
             {
-                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase) &&
-                    Interlocked.Increment(ref writeAttempts) <= 2)
-                {
-                    throw new IOException("transient hold write failure");
-                }
+                throw new IOException("transient hold write failure");
+            }
 
-                File.WriteAllText(path, contents);
-            };
+            File.WriteAllText(path, contents);
+        });
 
-            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
 
-            Assert.Equal(3, writeAttempts);
-            Assert.Equal([TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200)], backoffs);
-            var hold = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
-                .Items
-                .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
-            Assert.Equal(task.Id.Value, hold.TaskId);
-        }
-        finally
-        {
-            OperatorInbox.HoldStoreWriteAllText = previousWriter;
-            OperatorInbox.HoldWriteBackoff = previousBackoff;
-        }
+        Assert.Equal(3, writeAttempts);
+        Assert.Equal([TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200)], backoffs);
+        var hold = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+            .Items
+            .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
+        Assert.Equal(task.Id.Value, hold.TaskId);
     }
 
     [Xunit.Fact(DisplayName = "RecordOwnershipHolds_all_retries_failed_raises_distinct_persistence_failure")]
@@ -451,42 +441,32 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var workspace = BuildTestWorkspace();
         var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
-        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
-        var previousBackoff = OperatorInbox.HoldWriteBackoff;
         var writeAttempts = 0;
-        try
+        using var backoff = OperatorInbox.UseHoldWriteBackoff(_ => { });
+        using var writer = OperatorInbox.UseHoldStoreWriteAllText((path, contents) =>
         {
-            OperatorInbox.HoldWriteBackoff = _ => { };
-            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
             {
-                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
-                {
-                    Interlocked.Increment(ref writeAttempts);
-                    throw new IOException("persistent hold write failure");
-                }
+                Interlocked.Increment(ref writeAttempts);
+                throw new IOException("persistent hold write failure");
+            }
 
-                File.WriteAllText(path, contents);
-            };
+            File.WriteAllText(path, contents);
+        });
 
-            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
 
-            Assert.Equal(OperatorInbox.MaxHoldWriteRetries, writeAttempts);
-            var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
-            Assert.DoesNotContain(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
-            var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldPersistenceFailure));
-            Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
-            Assert.Equal(task.Id.Value, failure.TaskId);
-            Assert.Contains("persistent hold write failure", failure.Evidence);
-            var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
-            Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
-            Assert.True(action.RequiresInput);
-            Assert.Contains("HOLD_PERSISTENCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
-        }
-        finally
-        {
-            OperatorInbox.HoldStoreWriteAllText = previousWriter;
-            OperatorInbox.HoldWriteBackoff = previousBackoff;
-        }
+        Assert.Equal(OperatorInbox.MaxHoldWriteRetries, writeAttempts);
+        var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+        Assert.DoesNotContain(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+        var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldPersistenceFailure));
+        Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
+        Assert.Equal(task.Id.Value, failure.TaskId);
+        Assert.Contains("persistent hold write failure", failure.Evidence);
+        var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
+        Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
+        Assert.True(action.RequiresInput);
+        Assert.Contains("HOLD_PERSISTENCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
     }
 
     [Xunit.Fact(DisplayName = "ClearOwnershipHoldsAfterLanding_resolves_open_holds_and_emits_receipt")]
@@ -516,42 +496,32 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var workspace = BuildTestWorkspace();
         var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
-        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
-        var previousBackoff = OperatorInbox.HoldWriteBackoff;
         var command = $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto";
-        try
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+        using var backoff = OperatorInbox.UseHoldWriteBackoff(_ => { });
+        using var writer = OperatorInbox.UseHoldStoreWriteAllText((path, contents) =>
         {
-            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
-            OperatorInbox.HoldWriteBackoff = _ => { };
-            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
             {
-                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new IOException("clearance write failure");
-                }
+                throw new IOException("clearance write failure");
+            }
 
-                File.WriteAllText(path, contents);
-            };
+            File.WriteAllText(path, contents);
+        });
 
-            var receipt = OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, command);
+        var receipt = OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, command);
 
-            Assert.Empty(receipt.ClearedHoldIds);
-            var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
-            Assert.Contains(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
-            var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldClearanceFailure));
-            Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
-            Assert.Contains(goal.Id.Value, failure.GoalId);
-            Assert.Contains("clearance write failure", failure.Evidence);
-            var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
-            Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
-            Assert.True(action.RequiresInput);
-            Assert.Contains("HOLD_CLEARANCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
-        }
-        finally
-        {
-            OperatorInbox.HoldStoreWriteAllText = previousWriter;
-            OperatorInbox.HoldWriteBackoff = previousBackoff;
-        }
+        Assert.Empty(receipt.ClearedHoldIds);
+        var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+        Assert.Contains(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+        var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldClearanceFailure));
+        Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
+        Assert.Contains(goal.Id.Value, failure.GoalId);
+        Assert.Contains("clearance write failure", failure.Evidence);
+        var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
+        Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
+        Assert.True(action.RequiresInput);
+        Assert.Contains("HOLD_CLEARANCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
     }
 
     // ---- Deep link rendered in message content ----
