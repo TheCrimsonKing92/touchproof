@@ -10,7 +10,8 @@ internal sealed record PreparedOperatorAdjudication(
     string WorkingDirectory,
     string? Cause,
     string? Reversibility,
-    string? Precedent);
+    string? Precedent,
+    string? RulingText = null);
 
 internal static partial class CliCommandHandlers
 {
@@ -22,6 +23,11 @@ internal static partial class CliCommandHandlers
         var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, CliCommandHelp.AdjudicateUsage);
         var shapeIndex = taskIndex + 1;
         RequireRemainingArgument(parts, shapeIndex, CliCommandHelp.AdjudicateUsage);
+        var rulingTextFile = GetFlagValue(parts, "--ruling-text-file");
+        if (rulingTextFile is not null && !parts[shapeIndex].Trim().Equals("route", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("ruling-requires-route: --ruling-text-file is accepted only with route. " + CliCommandHelp.AdjudicateUsage);
+        if (rulingTextFile is not null && !File.Exists(rulingTextFile))
+            throw new FileNotFoundException($"Adjudication ruling text file not found: {rulingTextFile}", rulingTextFile);
         var textFile = GetFlagValue(parts, "--text-file")
             ?? throw new ArgumentException($"adjudicate requires --text-file <path>. {CliCommandHelp.AdjudicateUsage}");
         if (!File.Exists(textFile))
@@ -34,7 +40,8 @@ internal static partial class CliCommandHandlers
             workspace.RootDirectory,
             GetFlagValue(parts, "--cause"),
             GetFlagValue(parts, "--reversibility"),
-            GetFlagValue(parts, "--precedent"));
+            GetFlagValue(parts, "--precedent"),
+            rulingTextFile is null ? null : File.ReadAllText(rulingTextFile, System.Text.Encoding.UTF8));
         return new GoalScopedTaskMutationCommand(
             OperatorIntentVerbs.Adjudicate,
             parts,
@@ -69,7 +76,8 @@ internal static partial class CliCommandHandlers
             prepared.Cause,
             prepared.Reversibility,
             prepared.Precedent,
-            Mcg.AgentOrchestrator.App.Orchestration.AdjudicationPrecondition.Capture(goal, task));
+            Mcg.AgentOrchestrator.App.Orchestration.AdjudicationPrecondition.Capture(goal, task),
+            RulingText: prepared.RulingText);
     }
 
     internal static OperatorActorKind ParseOperatorActorKind(string? value)

@@ -41,7 +41,8 @@ internal sealed partial class WorkerArtifactWriter
         string? modelName = null,
         string? orchestratorStoreRoot = null,
         IReadOnlyList<string>? answeredEvidenceTexts = null,
-        IClock? clock = null)
+        IClock? clock = null,
+        string? linkedBacklogRecord = null)
     {
         var preserveCompleteArtifacts = WorkerContextHelpers.UsesTypedContextPackage(
             task.RequiredRole,
@@ -50,6 +51,23 @@ internal sealed partial class WorkerArtifactWriter
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
+        // This enrichment is best effort; cleanup also covers prior tasks in a reused directory.
+        foreach (var priorTask in goal.Tasks)
+        {
+            DeleteLinkedBacklogFile(Path.Combine(contextDirectory, "packages", priorTask.Id.Value, LinkedBacklogRecordEvidence.FileName));
+            DeleteLinkedBacklogFile(Path.Combine(contextDirectory, "authoritative", priorTask.Id.Value, "typed", "context", LinkedBacklogRecordEvidence.FileName));
+        }
+        var linkedBacklogPath = Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName);
+        DeleteLinkedBacklogFile(linkedBacklogPath);
+        try
+        {
+            if (task.RequiredRole == AgentRole.Planner && linkedBacklogRecord is not null)
+                WriteOptionalArtifact(linkedBacklogPath, linkedBacklogRecord);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            DeleteLinkedBacklogFile(linkedBacklogPath);
+        }
         WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory, ProjectStackResolver.GuidanceStack(
             ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome));
 
@@ -1070,6 +1088,10 @@ internal sealed partial class WorkerArtifactWriter
         if (CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole) is not null)
             lines.Add($"- {CriteriaSelfCheckPromptContext.FileName}: full self-check procedure and role contract additions; read before WORKER_RESULT.");
 
+        if (task.RequiredRole == AgentRole.Planner && contextDirectory is not null &&
+            File.Exists(Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName)))
+            lines.Add($"- {LinkedBacklogRecordEvidence.FileName}: full linked backlog record; delivery mode OnDemandFile; read before planning.");
+
         if (!string.IsNullOrWhiteSpace(contextDirectory) &&
             File.Exists(Path.Combine(contextDirectory, "research-notes.md")))
         {
@@ -1132,9 +1154,19 @@ internal sealed partial class WorkerArtifactWriter
         Directory.CreateDirectory(packageDirectory);
         // Optional artifacts must not survive a refresh after their source disappears.
         File.Delete(Path.Combine(packageDirectory, "prior-goal-evidence.md"));
+        DeleteLinkedBacklogFile(Path.Combine(packageDirectory, LinkedBacklogRecordEvidence.FileName));
         SnapshotStoreReferences(contextDirectory, packageDirectory);
         foreach (var file in Directory.EnumerateFiles(contextDirectory, "*", SearchOption.TopDirectoryOnly))
         {
+            if (Path.GetFileName(file) == LinkedBacklogRecordEvidence.FileName)
+            {
+                try { File.Copy(file, Path.Combine(packageDirectory, Path.GetFileName(file)), overwrite: true); }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    DeleteLinkedBacklogFile(Path.Combine(packageDirectory, LinkedBacklogRecordEvidence.FileName));
+                }
+                continue;
+            }
             File.Copy(file, Path.Combine(packageDirectory, Path.GetFileName(file)), overwrite: true);
         }
         foreach (var relativePath in guidanceFiles.Where(path => path.Contains('/')))
@@ -1193,7 +1225,15 @@ internal sealed partial class WorkerArtifactWriter
         var entries = artifactNames
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(name => BuildRegistryEntry(contextDirectory, name, task.RequiredRole))
-            .ToArray();
+            .ToList();
+        if (task.RequiredRole == AgentRole.Planner && File.Exists(Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName)))
+        {
+            try { entries.Add(BuildRegistryEntry(contextDirectory, LinkedBacklogRecordEvidence.FileName, task.RequiredRole)); }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                DeleteLinkedBacklogFile(Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName));
+            }
+        }
         var registry = new ContextArtifactRegistry(
             1,
             goal.Id.Value,
@@ -1239,6 +1279,7 @@ internal sealed partial class WorkerArtifactWriter
     {
         return relativePath switch
         {
+            LinkedBacklogRecordEvidence.FileName => "Full linked backlog record available on demand before planning.",
             "digest.md" => "Compact role-aware current context and evidence pointers.",
             "objective.md" => "Full goal objective and status.",
             "current-task.md" => "Current task, verification plan, retry evidence, and worker result contract schema.",
@@ -1270,6 +1311,7 @@ internal sealed partial class WorkerArtifactWriter
     {
         return relativePath switch
         {
+            LinkedBacklogRecordEvidence.FileName => "read from the backlog store at dispatch preparation",
             "prior-task-evidence.md" or "prior-task-summaries.md" => "generated from completed prior task verification records at dispatch preparation",
             "prior-goal-evidence.md" => "resolved read-only from prior goal/task snapshots explicitly cited by author-controlled brief fields",
             "deterministic-verification.md" => "generated from current task state and prior verification records at dispatch preparation",
@@ -1292,6 +1334,7 @@ internal sealed partial class WorkerArtifactWriter
     {
         return relativePath switch
         {
+            LinkedBacklogRecordEvidence.FileName => ["Planner"],
             WorkerStandingRules.ContextFileName => ["Developer", "Tester"],
             WorkerStandingRules.PlannerContextFileName => ["Planner"],
             "deterministic-verification.md" => ["Tester", "Reviewer"],
@@ -1590,6 +1633,32 @@ internal sealed partial class WorkerArtifactWriter
     private static void WriteText(string path, string content)
     {
         File.WriteAllText(path, content);
+    }
+
+    internal static void RequireRegistryArtifactReady(string logicalPath, bool exists, bool hashVerified)
+    {
+        var identity = new LogicalArtifactIdentity($"context/{logicalPath.Replace('\\', '/')}");
+        if (!exists)
+        {
+            throw new WorkerContextPreparationException(
+                identity,
+                "registry-artifact-missing",
+                "A required registry artifact is marked missing; dispatch cannot omit it.");
+        }
+
+        if (!hashVerified)
+        {
+            throw new WorkerContextPreparationException(
+                identity,
+                "registry-artifact-hash-unverified",
+                "A required registry artifact is not hash-verified; dispatch cannot omit it.");
+        }
+    }
+
+    internal static void DeleteLinkedBacklogFile(string path)
+    {
+        try { File.Delete(path); }
+        catch (Exception exception) when (exception is not OperationCanceledException) { }
     }
 
     private static void WriteOptionalArtifact(string path, string? content)

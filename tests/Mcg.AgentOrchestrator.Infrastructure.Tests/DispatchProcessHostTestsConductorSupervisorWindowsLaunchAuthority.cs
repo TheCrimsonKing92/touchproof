@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -148,16 +149,20 @@ public sealed class DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuth
     private static readonly string[] ProbeFiles = [ProbeProject + ".dll", ProbeProject + ".runtimeconfig.json"];
 
     internal static TestBuildOutputLocator.Location LocateProbe(Type anchor)
+        => LocateProbe(Path.GetDirectoryName(anchor.Assembly.Location)!,
+            anchor.Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()!.Configuration);
+
+    internal static TestBuildOutputLocator.Location LocateProbe(string closureDirectory, string configuration)
     {
         // Managed invocations publish the probe beside this exact test assembly. Native builds
         // can copy only its runtimeconfig here; resolve a complete build-bound sibling/export
         // in that case. Never combine files from separate directories or search other builds.
-        var currentClosure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+        var currentClosure = closureDirectory;
         if (ProbeFiles.All(name => File.Exists(Path.Combine(currentClosure, name))))
             return new(currentClosure, [currentClosure]);
 
-        var directory = FixtureProbeLocator.FindDirectory(anchor, ProbeProject, ProbeFiles);
-        return new(directory, [currentClosure, .. FixtureProbeLocator.TriedPaths(anchor, ProbeProject, ProbeFiles)]);
+        var directory = FixtureProbeLocator.FindDirectory(currentClosure, configuration, ProbeProject, ProbeFiles);
+        return new(directory, [currentClosure, .. FixtureProbeLocator.TriedPaths(currentClosure, configuration, ProbeProject, ProbeFiles)]);
     }
 
     private static EventWaitHandle NewEvent(string name) => new(false, EventResetMode.ManualReset, name);

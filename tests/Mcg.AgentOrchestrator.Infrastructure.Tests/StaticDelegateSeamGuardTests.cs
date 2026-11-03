@@ -34,7 +34,6 @@ public sealed class StaticDelegateSeamGuardTests
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalRefinementWorkCoordinator", "LaunchOverride"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalRefinementWorkCoordinator", "UtcNowOverride"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/GoalReplacementEvidence.cs", "Mcg.AgentOrchestrator.App.Orchestration.GoalReplacementEvidence", "AfterFinalTransferValidation"),
-        new("src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs", "Mcg.AgentOrchestrator.App.Orchestration.LandingExecutor", "GitRunner"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolution"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "BeforeLandingEscalationResolutionSave"),
         new("src/Mcg.AgentOrchestrator.App/Orchestration/OperatorInbox.cs", "Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox", "HoldWriteBackoff"),
@@ -55,7 +54,7 @@ public sealed class StaticDelegateSeamGuardTests
             .Select(path => (Path.GetRelativePath(root, path).Replace('\\', '/'), snapshot.GetSyntaxTree(path)))
             .ToArray();
 
-        Assert.Equal(33, AllowList.Length);
+        Assert.Equal(32, AllowList.Length);
         Assert.Equal(AllowList.Length, AllowList.Distinct().Count());
         Assert.Empty(AllowListViolations(Scan(trees), AllowList));
     }

@@ -93,12 +93,12 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
             var mainBefore = GitCli.Run(root, "rev-parse", "main").Output.Trim();
             if (failPersistence)
                 ExecuteSql(workspace.SqliteStatePath, "CREATE TRIGGER fail_fact BEFORE INSERT ON goal_promotion_facts BEGIN SELECT RAISE(ABORT, 'forced fact failure'); END");
-            else
-                LandingExecutor.GitRunner = (directory, args) => args[0] == "read-tree"
-                    ? new GitCli.GitResult(1, "", "forced checkout failure") : previousRunner(directory, args);
-
-            Assert.ThrowsAny<Exception>(() => LandingExecutor.Execute(kernel, goal, workspace,
-                promotionClock: new FixedClock(At)));
+            using (failPersistence ? null : LandingExecutor.UseGitRunner((directory, args) => args[0] == "read-tree"
+                ? new GitCli.GitResult(1, "", "forced checkout failure") : previousRunner(directory, args)))
+            {
+                Assert.ThrowsAny<Exception>(() => LandingExecutor.Execute(kernel, goal, workspace,
+                    promotionClock: new FixedClock(At)));
+            }
             var mainAfter = GitCli.Run(root, "rev-parse", "main").Output.Trim();
             Assert.NotEqual(mainBefore, mainAfter);
             var fact = Assert.Single(await repository.ListGoalMetadataAsync()).PromotionFact;
@@ -114,7 +114,6 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
                 Assert.Equal(At, fact.PromotedAt);
                 Assert.Equal(mainAfter, fact.PromotedMainRevision);
             }
-            LandingExecutor.GitRunner = previousRunner;
             var recovered = LandingExecutor.Execute(kernel, goal, workspace, promotionClock: new UnusedClock());
             Assert.IsType<LandingDecision.Promote>(recovered.Decision);
             Assert.Equal(fact, Assert.Single(await repository.ListGoalMetadataAsync()).PromotionFact);
@@ -123,7 +122,6 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
         }
         finally
         {
-            LandingExecutor.GitRunner = previousRunner;
             SharedTestSupport.RemoveTempDirectory(root);
         }
     }
@@ -142,8 +140,7 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
             await repository.SaveAsync(kernel);
             var mainBefore = GitCli.Run(root, "rev-parse", "main").Output.Trim();
             var reachedMainMutation = false;
-            if (!pending)
-                LandingExecutor.GitRunner = (directory, args) =>
+            using var gitRunnerScope = pending ? null : LandingExecutor.UseGitRunner((directory, args) =>
                 {
                     if (args[0] == "update-ref" && args.Contains("refs/heads/main"))
                     {
@@ -151,7 +148,7 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
                         return new GitCli.GitResult(1, "", "forced main compare-and-swap failure");
                     }
                     return previousRunner(directory, args);
-                };
+                });
             var result = LandingExecutor.Execute(kernel, goal, workspace,
                 mutationBlocker: pending ? () => "pending operator gate" : null, promotionClock: new UnusedClock());
             Assert.False(result.MainAdvanced);
@@ -161,7 +158,6 @@ public sealed class LandingExecutorTestsPromotionFactBoundary
         }
         finally
         {
-            LandingExecutor.GitRunner = previousRunner;
             SharedTestSupport.RemoveTempDirectory(root);
         }
     }

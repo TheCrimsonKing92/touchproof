@@ -165,11 +165,11 @@ public sealed class LandingExecutorTests
             Assert.True(first.MainAdvanced, first.Message);
             Assert.NotNull(first.MergeCommitSha);
             GoalOperationJournal.Completed(repo, goal, "conductor:land", first.Message);
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args is ["merge-base", "--is-ancestor", var revision, "main"] &&
                 revision.Equals(first.MergeCommitSha, StringComparison.OrdinalIgnoreCase)
                     ? new GitCli.GitResult(1, string.Empty, string.Empty)
-                    : oldGitRunner(workingDirectory, args);
+                    : oldGitRunner(workingDirectory, args));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -181,7 +181,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = oldGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -543,18 +542,17 @@ public sealed class LandingExecutorTests
     public void InterruptedPublicationRestoresIntegrationPredecessorBeforeRetry()
     {
         var repo = CreateGitRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/interrupted.txt");
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using (LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args is ["update-ref", "refs/heads/main", _, _]
                     ? throw new InvalidOperationException("simulated process interruption during main publication")
-                    : GitCli.Run(workingDirectory, args);
-
-            _ = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
-            Assert.True(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
-            LandingExecutor.GitRunner = previousGitRunner;
+                    : GitCli.Run(workingDirectory, args)))
+            {
+                _ = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
+                Assert.True(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
+            }
 
             var retry = LandingExecutor.Execute(kernel, goal, workspace, mutationBlocker: () => "stop after recovery");
 
@@ -564,7 +562,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -573,7 +570,6 @@ public sealed class LandingExecutorTests
     public void RecoveredAncestorPublicationDoesNotRewriteCheckoutWhenMainHasAdvanced()
     {
         var repo = CreateGitRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-ancestor.txt");
@@ -590,14 +586,14 @@ public sealed class LandingExecutorTests
                 "fixture recovered ancestor",
                 boundMainRevision: boundMain);
             var readTreeCalls = 0;
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
             {
                 if (args is ["read-tree", "-m", "-u", _, _])
                 {
                     readTreeCalls++;
                 }
                 return GitCli.Run(workingDirectory, args);
-            };
+            });
 
             var recovered = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -607,7 +603,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -616,7 +611,6 @@ public sealed class LandingExecutorTests
     public void RecoveredPublicationDrainTimeoutFailsClosed()
     {
         var repo = CreateGitRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-drain-timeout.txt");
@@ -631,10 +625,10 @@ public sealed class LandingExecutorTests
                 candidate,
                 "fixture drain timeout",
                 boundMainRevision: boundMain);
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args is ["merge-base", "--is-ancestor", _, _]
                     ? new GitCli.GitResult(0, string.Empty, string.Empty, DrainTimedOut: true)
-                    : GitCli.Run(workingDirectory, args);
+                    : GitCli.Run(workingDirectory, args));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -644,7 +638,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -968,17 +961,16 @@ public sealed class LandingExecutorTests
     public void LandingExecutorMainMergeFailureTombstonesLandingIntent()
     {
         var repo = CreateGitRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/main-merge-fails.txt", "goal work");
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args is ["update-ref", "refs/heads/main", _, _]
                     ? new GitCli.GitResult(1, string.Empty, "simulated main merge failure")
-                    : GitCli.Run(workingDirectory, args);
+                    : GitCli.Run(workingDirectory, args));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -993,7 +985,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -1072,19 +1063,18 @@ public sealed class LandingExecutorTests
     public void LandingExecutorGitDiffDrainTimeoutFailsClosedEvenWithEmptyStdout()
     {
         var repo = CreateGitRepository();
-        var previousGitRunner = LandingExecutor.GitRunner;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.App/TimeoutTouched.cs", "namespace TestApp; internal sealed class TimeoutTouched;");
-            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
                 args.Length == 3 &&
                 args[0].Equals("diff", StringComparison.Ordinal) &&
                 args[1].Equals("--name-only", StringComparison.Ordinal)
                     ? new GitCli.GitResult(0, string.Empty, string.Empty, DrainTimedOut: true)
-                    : GitCli.Run(workingDirectory, args);
+                    : GitCli.Run(workingDirectory, args));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -1098,7 +1088,6 @@ public sealed class LandingExecutorTests
         }
         finally
         {
-            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
