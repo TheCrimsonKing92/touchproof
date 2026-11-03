@@ -8,7 +8,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDeny
 [Collection(TestCollections.LandingGitRunner)]
 public sealed class PassedCohortApprovalOverlapEventTests : AcceptanceCohortWorkflowTests
 {
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(true)]
     [InlineData(false)]
     [Trait("Category", "CrossTick")]
@@ -35,7 +35,23 @@ public sealed class PassedCohortApprovalOverlapEventTests : AcceptanceCohortWork
                 tickCount++;
                 Assert.NotNull(summary.ProgressLines);
                 Assert.Single(summary.ProgressLines.Where(line => line.StartsWith("COHORT_APPROVAL_OVERLAP ", StringComparison.Ordinal)));
-                scenario.AssertPartnerReleased(summary.ProgressLines, heldIndex: 0);
+                Assert.Contains(summary.ProgressLines, line => line.StartsWith("COHORT_RECEIPT_RELEASED ", StringComparison.Ordinal) &&
+                    line.Contains($"held={scenario.Goals[0].Id.Value[..8]} released={scenario.Goals[1].Id.Value[..8]} path=requeue", StringComparison.Ordinal));
+                Assert.DoesNotContain(summary.ProgressLines, line =>
+                    line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal) &&
+                    line.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(field =>
+                        field.StartsWith("goal=", StringComparison.Ordinal)) == $"goal={scenario.Goals[1].Id.Value[..8]}");
+                // Both the released partner and the added candidate wait for the paused gate slots.
+                // The shared two-member fixture helper pins deferred=1 and cannot describe this setup.
+                var capacityDeferral = Assert.Single(summary.ProgressLines.Where(line =>
+                    line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+                    line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal)));
+                Assert.Contains("deferred=2", capacityDeferral.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(scenario.Driver.ProjectGroupedAdmissionCandidate(
+                    scenario.Goals[0], ConductorAutonomyPolicy.Permissive, scenario.Kernel));
+                foreach (var readyGoal in new[] { scenario.Goals[1], other })
+                    Assert.IsType<GateReadyCandidateProjectionResult.Ready>(scenario.Driver.ProjectGroupedAdmissionCandidate(
+                        readyGoal, ConductorAutonomyPolicy.Permissive, scenario.Kernel));
                 // Runs inside the normal event-writer scope: an unrelated prefix must stay rejected.
                 ConductorBatchLoop.EmitProgress("UNRELATED_APPROVAL_OBSERVATION unknown=true");
             });
