@@ -19,6 +19,9 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         var environment = GitEnvironment();
         Succeeded(GitCli.RunWithEnvironment(repo, environment, "init"));
         Succeeded(GitCli.RunWithEnvironment(repo, environment, "commit", "--allow-empty", "-m", "seed"));
+        // Git accepts this HEAD spelling; the conservative in-process check defers to the probe.
+        var headPath = Path.Combine(repo, ".git", "HEAD");
+        File.WriteAllText(headPath, File.ReadAllText(headPath).Replace("ref: ", "ref:", StringComparison.Ordinal));
         var path = Path.Combine(root, "fixture.jsonl");
         var budget = new HostCapacityTestBudget(1, _ => path);
         await using (var held = await budget.EnterAsync())
