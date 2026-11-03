@@ -2275,7 +2275,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("junit-command", StringComparison.OrdinalIgnoreCase))
-            return (await JunitCommandAcceptanceCheck.RunOwnedAsync(check, worktreePath,
+            return (await JunitCommandAcceptanceCheck.RunWithEnvironmentContractAsync(check, worktreePath,
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
                 (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(

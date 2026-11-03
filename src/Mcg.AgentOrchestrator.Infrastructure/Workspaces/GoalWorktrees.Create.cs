@@ -112,16 +112,19 @@ public static partial class GoalWorktrees
     {
         try
         {
-            var gitDirResult = GitCli.Run(executionDirectory, "rev-parse", "--git-dir");
-            if (gitDirResult.ExitCode != 0 || string.IsNullOrWhiteSpace(gitDirResult.Output))
+            if (!GitRevisionReader.TryResolveRootGitDirectory(executionDirectory, out var gitDir))
             {
-                return;
-            }
+                var gitDirResult = GitCli.Run(executionDirectory, "rev-parse", "--git-dir");
+                if (gitDirResult.ExitCode != 0 || string.IsNullOrWhiteSpace(gitDirResult.Output))
+                {
+                    return;
+                }
 
-            var gitDir = gitDirResult.Output.Trim();
-            if (!Path.IsPathRooted(gitDir))
-            {
-                gitDir = Path.GetFullPath(Path.Combine(executionDirectory, gitDir));
+                gitDir = gitDirResult.Output.Trim();
+                if (!Path.IsPathRooted(gitDir))
+                {
+                    gitDir = Path.GetFullPath(Path.Combine(executionDirectory, gitDir));
+                }
             }
 
             var infoDirectory = Path.Combine(gitDir, "info");

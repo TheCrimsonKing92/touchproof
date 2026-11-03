@@ -13,7 +13,6 @@ public sealed class StaticDelegateSeamGuardTests
         new("src/Mcg.AgentOrchestrator.Execution/Processes/ChildConsoleLaunchPolicy.cs", "Mcg.AgentOrchestrator.Infrastructure.ChildConsoleLaunchPolicy", "PrepareDelayHookForTests"),
         new("src/Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs", "Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "AttributeForTests"),
         new("src/Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs", "Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "ConfigureHandleProbeForTests"),
-        new("src/Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs", "Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "ProcessCommandLineSnapshotForTests"),
         new("src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs", "Mcg.AgentOrchestrator.Infrastructure.WorkerProcessJobs", "TryKillPidTree"),
         new("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalChangesReader.cs", "Mcg.AgentOrchestrator.Infrastructure.GoalChangesReader", "RunGit"),
         new("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.AcceptanceCohorts.cs", "Mcg.AgentOrchestrator.Infrastructure.AcceptanceCohortWorkspace", "WorkspaceRemover"),
@@ -34,7 +33,7 @@ public sealed class StaticDelegateSeamGuardTests
             .Select(path => (Path.GetRelativePath(root, path).Replace('\\', '/'), snapshot.GetSyntaxTree(path)))
             .ToArray();
 
-        Assert.Equal(12, AllowList.Length);
+        Assert.Equal(11, AllowList.Length);
         Assert.Equal(AllowList.Length, AllowList.Distinct().Count());
         Assert.Empty(AllowListViolations(Scan(trees), AllowList));
     }
