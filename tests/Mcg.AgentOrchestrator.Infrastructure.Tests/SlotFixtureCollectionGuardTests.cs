@@ -63,7 +63,8 @@ public sealed class SlotFixtureCollectionGuardTests
         var lanes = AcceptanceGateEngineSettings.Load(repository).InfrastructureTestLanes;
         foreach (var user in users.Where(type => DeclaredCollection(type) == TestCollections.JobAccounting))
             Assert.Contains(AcceptanceLaneMembership.LanesIncluding(lanes, user.FullName!),
-                lane => lane.Name == "Goal acceptance build slots" || lane.Name == "Goal acceptance verifier");
+                lane => lane.Name is "Goal acceptance build slots A" or "Goal acceptance build slots B" or
+                    "Goal acceptance build slots C" or "Goal acceptance verifier");
     }
 
     [Xunit.Fact]
@@ -76,7 +77,7 @@ public sealed class SlotFixtureCollectionGuardTests
         {
             Assert.Equal(TestCollections.JobAccounting, DeclaredCollection(type));
             foreach (var membership in new[] { lanes, resolved })
-                Assert.Equal("Goal acceptance build slots", Assert.Single(
+                Assert.Equal("Goal acceptance build slots C", Assert.Single(
                     AcceptanceLaneMembership.LanesIncluding(membership, type.FullName!)).Name);
         }
     }
@@ -91,7 +92,7 @@ public sealed class SlotFixtureCollectionGuardTests
         Assert.Equal(new[] { typeof(Controls.NestedSlotUser), typeof(Controls.UnattributedSlotUser) }, violations);
         // The lane-contract guard enumerates hidden classes too, even though xunit cannot discover them.
         var lanes = AcceptanceGateEngineSettings.Load(VerifiedRepositoryRoot.Find()).InfrastructureTestLanes;
-        Assert.Equal("Goal acceptance build slots", Assert.Single(AcceptanceLaneMembership.LanesIncluding(
+        Assert.Equal("Goal acceptance build slots C", Assert.Single(AcceptanceLaneMembership.LanesIncluding(
             lanes, typeof(Controls.GoalAcceptanceVerifierDotnetBuildSlotTestsAttributedSlotUser).FullName!)).Name);
         var stale = new Dictionary<string, (string, string)>
         {

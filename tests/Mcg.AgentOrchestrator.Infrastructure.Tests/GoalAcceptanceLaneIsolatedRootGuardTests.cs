@@ -11,7 +11,9 @@ public sealed class GoalAcceptanceLaneIsolatedRootGuardTests : GoalAcceptanceVer
 
     [Xunit.Theory]
     [Xunit.InlineData("Goal acceptance verifier")]
-    [Xunit.InlineData("Goal acceptance build slots")]
+    [Xunit.InlineData("Goal acceptance build slots A")]
+    [Xunit.InlineData("Goal acceptance build slots B")]
+    [Xunit.InlineData("Goal acceptance build slots C")]
     public void Lane_members_keep_isolated_roots_or_live_named_exceptions(string laneName)
     {
         var collections = LaneIsolatedRootScanner.IsolatedCollections(GetType().Assembly);
