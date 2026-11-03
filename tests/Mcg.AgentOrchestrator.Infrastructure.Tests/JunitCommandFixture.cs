@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 using TestResult = Mcg.AgentOrchestrator.Infrastructure.TestResult;
@@ -19,13 +20,15 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
     internal int ExitCode { get; set; }
     internal bool TimedOut { get; set; }
     internal Func<string, string>? TransformJson { get; set; }
+    internal string? ProjectHomeDirectory { get; set; }
 
     internal JunitCommandFixture(string project = ".", string[]? reports = null)
     {
         Project = project;
         Check = new() { Name = "declared-test", Type = "junit-command", Command = "suite-runner",
             Arguments = ["--report"], Project = project, Reports = reports ?? ["reports/*.xml"], TimeoutMinutes = 1 };
-        Root = CreateManifestWorkspace(JsonSerializer.Serialize(new { version = 1, checks = new[] { Check } }));
+        Root = CreateManifestWorkspace(JsonSerializer.Serialize(new { version = 1, checks = new[] { Check } },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         Directory.CreateDirectory(Path.Combine(Root, ".git"));
         Directory.CreateDirectory(ProjectRoot);
         var binary = Path.Combine(Root, "crosswalk.exe");
@@ -50,13 +53,16 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
             {
                 testId = test.Attribute("file")!.Value.Replace('\\', '/') + "::" + test.Attribute("name")!.Value,
                 filePath = test.Attribute("file")!.Value,
-                name = test.Attribute("name")!.Value, status = test.Element("failure") is null ? "passed" : "failed",
-                message = "original message", trace = "original trace", suite = new[] { "suite" }, duration = 12,
+                name = test.Attribute("name")!.Value,
+                status = test.Element("skipped") is not null ? "skipped" : test.Element("failure") is null ? "passed" : "failed",
+                message = test.Element("skipped") is { } skipped ? skipped.Attribute("message")?.Value : "original message",
+                trace = "original trace", suite = new[] { "suite" }, duration = 12,
                 retryAttempts = new[] { new { status = "passed", duration = 2 } },
                 extra = new { seed = "seed", outputRef = "output", reportedBy = "fixture" }
             });
             var json = JsonSerializer.Serialize(new { reportFormat = "CTRF", schemaVersion = "mcg-test-result/1",
-                results = new { tool = new { name = "declared-test" }, tests } });
+                results = new { tool = new { name = "declared-test" }, tests } },
+                new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, json) { StandardOutput = TransformJson?.Invoke(json) ?? json });
         }, new FrozenClock()) { CrosswalkExecutable = resolver };
     }
@@ -78,10 +84,31 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
         return (await Verifier.RunInvocationForOwnerTestsAsync(owner, owner.CreateInvocation(Check.Name), check ?? Check, Root, token)).Result;
     }
 
+    internal void SetContract(EnvironmentContract contract, string? directory = null)
+    {
+        directory ??= Path.Combine(Root, "config");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, "acceptance-manifest.json"),
+            JsonSerializer.Serialize(new { version = 1, environmentContract = contract.ToJson(), checks = new[] { Check } },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    internal void WriteSkippedReport(string? reason, bool includePassed = false, string name = "skipped")
+    {
+        var full = WriteReport($"reports/{name}.xml", Now,
+            includePassed ? [($"src/{name}.case", name, false), ("src/passed.case", "passed", false)]
+                : [($"src/{name}.case", name, false)]);
+        var document = XDocument.Load(full);
+        document.Descendants("testcase").First().Add(new XElement("skipped",
+            reason is null ? null : new XAttribute("message", reason)));
+        document.Save(full);
+        File.SetLastWriteTimeUtc(full, Now.UtcDateTime);
+    }
+
     internal AcceptanceAttemptExecutionOwner Owner(CancellationToken token = default) => new(
         new("junit-attempt", "goal", Root, "tree", "main", "commit",
             Path.Combine(Root, ".orchestrator", "acceptance-gate-attempts", "junit", "attempt-current"), null, Environment.ProcessId, null),
-        new AcceptanceGateEngineSettings(), token);
+        new AcceptanceGateEngineSettings(), token, new(ProjectHomeDirectory: ProjectHomeDirectory));
 
     internal static IReadOnlyList<TestResult> ReadRows(AcceptanceCheckResult check)
     {
