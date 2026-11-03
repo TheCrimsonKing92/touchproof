@@ -315,6 +315,44 @@ public sealed class CliFleetAttentionTests
     }
 
     [Theory]
+    [InlineData("author-owner-question")]
+    [InlineData("steward-owner-question")]
+    public async Task OwnerHold_MalformedMarker_ExpandsFallbackWithCollidingGoals(string holdState)
+    {
+        using var fixture = new Fixture();
+        await fixture.SeedAsync(fixture.Home);
+        var workspace = fixture.Register("alpha");
+        var kernel = new AgentOrchestratorKernel();
+        var goalId = new GoalId(GoalIdValue);
+        kernel.CreateGoal(goalId, "Owner hold");
+        kernel.CreateGoal(new GoalId("11111111bbbbbbbbbbbbbbbbbbbbbbbb"), "Same prefix");
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal.Id == goalId.Value ? goal with
+            {
+                CurrentHold = new GoalHoldSnapshot("malformed-owner-hold", holdState,
+                    "Malformed owner hold marker", Now)
+            } : goal).ToArray()
+        });
+        var heldGoal = kernel.Goals.Single(goal => goal.Id == goalId);
+        Assert.Equal("attention show 11111111", OwnerQuestionHoldBlocker.TryRead(heldGoal)!.NextAction);
+        Assert.Throws<InvalidOperationException>(() => AttentionReadGoalSelection.Resolve(kernel, "11111111"));
+        await fixture.SeedAsync(workspace, kernel);
+
+        var result = await FleetAttentionReader.ReadAsync(fixture.Catalog(), 50, Now);
+
+        Assert.True(result.Complete);
+        var row = Assert.Single(result.Items);
+        Assert.Equal("alpha", row.Project);
+        Assert.Equal("owner-question", row.Source);
+        Assert.Equal(GoalIdValue, row.GoalId);
+        const string commandPrefix = "--project=alpha --tenant=default attention show ";
+        Assert.Equal(commandPrefix + GoalIdValue, row.NextAction);
+        Assert.Equal(goalId, AttentionReadGoalSelection.Resolve(kernel, row.NextAction![commandPrefix.Length..]).Id);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(true, true)]

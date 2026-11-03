@@ -121,6 +121,7 @@ internal static class FleetAttentionReader
         // Expand only identity arguments: a goal and a wait may share the same short prefix.
         command = ExpandArgument(command, @"^\s*answer\s+", itemId);
         command = ExpandArgument(command, @"^\s*attention\s+answer\s+", goalId);
+        command = ExpandArgument(command, @"^\s*attention\s+show\s+", goalId);
         command = ExpandArgument(command, @"^\s*attention\s+answer\s+(?:""(?:\\.|[^""\\])*""|\S+)\s+", itemId);
         command = ExpandArgument(command, @"(?<!\S)--goal(?:=|\s+)", goalId);
         command = ExpandArgument(command, @"(?<!\S)--item(?:=|\s+)", itemId);
