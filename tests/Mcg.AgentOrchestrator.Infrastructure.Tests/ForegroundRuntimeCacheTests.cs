@@ -47,6 +47,18 @@ public sealed class ForegroundRuntimeCacheTests
     }
 
     [Xunit.Fact]
+    public void Helper_preserves_native_failure_and_parent_environment()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CacheFixture();
+        var result = fixture.HelperWithExitCode(7, "goals");
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal(new[] { "goals" }, fixture.NativeArguments().Skip(1));
+        Assert.StartsWith(fixture.CacheRoot + Path.DirectorySeparatorChar, fixture.NativeArguments()[0]);
+        Assert.Equal(ReadEnvironment(fixture.BeforeEnvironment), ReadEnvironment(fixture.AfterEnvironment));
+    }
+
+    [Xunit.Fact]
     public void Helper_source_change_rebuilds_before_selecting_a_new_digest()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -351,16 +363,6 @@ public sealed class ForegroundRuntimeCacheTests
             var native = Path.Combine(output, "runtimes", "win-x64", "native");
             Directory.CreateDirectory(native);
             File.WriteAllText(Path.Combine(native, "e_sqlite3.dll"), "sqlite fixture");
-            File.WriteAllText(Path.Combine(ShimDirectory, "git.cmd"), $"""
-                @echo off
-                if "%~3"=="rev-parse" (
-                    echo {Head}
-                    exit /b 0
-                )
-                if "%~3"=="diff" exit /b 0
-                exit /b 91
-                """.ReplaceLineEndings("\r\n"));
-
             // A real executable records the native argv, avoiding a second batch or
             // PowerShell argument parser that could hide forwarding defects.
             var compileScript = Path.Combine(Root, "compile-native-host.ps1");
@@ -371,6 +373,17 @@ public sealed class ForegroundRuntimeCacheTests
                 using System.Text;
                 public static class NativeHost {
                     public static int Main(string[] args) {
+                        // Git must be an executable: invoking git.cmd without CALL in
+                        // the production launcher transfers control out of that batch.
+                        if (string.Equals(Path.GetFileName(Environment.GetCommandLineArgs()[0]),
+                            "git.exe", StringComparison.OrdinalIgnoreCase)) {
+                            if (args.Length < 3 || args[0] != "-C") return 91;
+                            if (args[2] == "rev-parse") {
+                                Console.WriteLine(Environment.GetEnvironmentVariable("FIXTURE_GIT_HEAD"));
+                                return 0;
+                            }
+                            return args[2] == "diff" ? 0 : 91;
+                        }
                         string app = Environment.GetEnvironmentVariable("FIXTURE_APP_DLL");
                         if (args.Length > 0 && args[0] == "build") {
                             File.AppendAllText(Environment.GetEnvironmentVariable("FIXTURE_BUILD_LOG"), "build\n");
@@ -393,12 +406,15 @@ public sealed class ForegroundRuntimeCacheTests
             var compile = RunPowerShell(compileScript, []);
             Assert.Equal(0, compile.ExitCode);
             Assert.True(File.Exists(NativeHost), compile.Stderr);
+            File.Copy(NativeHost, Path.Combine(ShimDirectory, "git.exe"));
             File.WriteAllText(Path.Combine(Root, "invoke-helper.ps1"), $"""
                 param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
                 $ErrorActionPreference = 'Stop'
                 [IO.File]::WriteAllText('{Ps(BeforeEnvironment)}', ([Environment]::GetEnvironmentVariables('Process') | ConvertTo-Json -Compress))
                 & '{Ps(Path.Combine(Repository, "scripts", "Invoke-OrchestratorCommand.ps1"))}' @Arguments
+                $helperExitCode = $LASTEXITCODE
                 [IO.File]::WriteAllText('{Ps(AfterEnvironment)}', ([Environment]::GetEnvironmentVariables('Process') | ConvertTo-Json -Compress))
+                exit $helperExitCode
                 """);
         }
 
@@ -411,12 +427,16 @@ public sealed class ForegroundRuntimeCacheTests
         internal TestChildProcessCapture.Result Helper(params string[] arguments) =>
             RunPowerShell(Path.Combine(Root, "invoke-helper.ps1"), arguments);
 
+        internal TestChildProcessCapture.Result HelperWithExitCode(int exitCode, params string[] arguments) =>
+            RunPowerShell(Path.Combine(Root, "invoke-helper.ps1"), arguments, exitCode);
+
         internal TestChildProcessCapture.Result BoundHelper(params string[] arguments) =>
             RunPowerShell(Path.Combine(Repository, "scripts", "Invoke-OrchestratorCommand.ps1"), arguments);
 
-        private TestChildProcessCapture.Result RunPowerShell(string script, string[] arguments)
+        private TestChildProcessCapture.Result RunPowerShell(string script, string[] arguments, int exitCode = 0)
         {
             var start = StartInfo(PowerShell);
+            start.Environment["FIXTURE_EXIT"] = exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
             foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script }.Concat(arguments))
                 start.ArgumentList.Add(argument);
             return TestChildProcessCapture.Run(start, TimeSpan.FromMinutes(3));
@@ -462,6 +482,7 @@ public sealed class ForegroundRuntimeCacheTests
             // Leave adoption eligible for helper calls; the explicit option must bypass it.
             start.Environment["MCG_ORCHESTRATOR_LAUNCHER_INTREE"] = "0";
             start.Environment["FIXTURE_NATIVE_HOST"] = NativeHost;
+            start.Environment["FIXTURE_GIT_HEAD"] = Head;
             start.Environment["FIXTURE_APP_DLL"] = AppDll;
             start.Environment["FIXTURE_ARGV_LOG"] = ArgumentsLog;
             start.Environment["FIXTURE_BUILD_LOG"] = BuildLog;
