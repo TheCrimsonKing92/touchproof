@@ -40,8 +40,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
     {
         var shutdownCount = 0;
         Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
-        try
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
         {
             using var first = RootedDotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 StorageRoot,
@@ -58,11 +57,6 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
             second.Dispose();
             Assert.Equal(1, shutdownCount);
         }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
-        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_counts_legacy_stream_until_it_releases_its_lock")]
@@ -70,8 +64,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
     {
         var shutdownCount = 0;
         Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
-        try
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
         {
             var legacyEnvironment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
             using var legacyLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(legacyEnvironment);
@@ -86,11 +79,6 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
             legacyLock.Dispose();
             legacyLock.Dispose();
             Assert.Equal(1, shutdownCount);
-        }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
 

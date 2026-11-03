@@ -78,13 +78,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsWriteFailureScope : Dotnet
     private void VerifyWriteFailureIsScoped(bool releaseFailure)
     {
         var foreignRoot = ForeignRoot();
-        var priorFactory = DotnetBuildEnvironmentManager.OwnedRunRootRegistrarFactory;
         try
         {
-            DotnetBuildEnvironmentManager.OwnedRunRootRegistrarFactory = root =>
+            using var ownedRunRootRegistrarFactoryScope = DotnetBuildEnvironmentManager.UseOwnedRunRootRegistrarFactory(root =>
                 string.Equals(root.RootPath, StorageRoot.RootPath, StringComparison.OrdinalIgnoreCase)
                     ? new WriteThrowingRegistrar(releaseFailure)
-                    : null;
+                    : null);
             for (var index = 0; index < TerminalGoalSweep.MaxOwnedBuildRootsPerSweep; index++)
                 RootedDotnetBuildEnvironmentManager.CreateAttempt(foreignRoot, null, $"foreign-{index}");
 
@@ -118,7 +117,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsWriteFailureScope : Dotnet
         }
         finally
         {
-            DotnetBuildEnvironmentManager.OwnedRunRootRegistrarFactory = priorFactory;
             DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10, StorageRoot);
             DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
                 TerminalGoalSweep.MaxOwnedBuildRootsPerSweep, foreignRoot);

@@ -123,7 +123,7 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
     private sealed class Scenario : IDisposable
     {
         public string Root { get; } = CreateTempDirectory("mcg-evidence-queue");
-        private readonly Func<ProcessCommandLineSnapshot>? _priorSnapshot;
+        private readonly IDisposable _snapshotScope;
         private readonly ConductorParallelAcceptanceAttemptCoordinator _gateCoordinator;
         private readonly ConductorParallelAcceptanceAttemptCoordinator _evidenceCoordinator;
         private readonly ConductorParallelAcceptanceCandidate _gateCandidate;
@@ -148,8 +148,7 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
             _evidenceCandidate = ConductorParallelAcceptanceCandidate.Create(evidenceGoal, 0, ["src/EvidenceQueue.cs"], "branch", "main");
             _gateCoordinator = Coordinator("gate-attempts");
             _evidenceCoordinator = Coordinator("evidence-attempts");
-            _priorSnapshot = DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests;
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new(new Dictionary<int, string>());
+            _snapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new(new Dictionary<int, string>()));
         }
 
         private ConductorParallelAcceptanceAttemptCoordinator Coordinator(string name) => new(
@@ -206,7 +205,7 @@ public sealed class ConductorBatchLoopTestsEvidencePermitQueueScenario : Conduct
 
         public void Dispose()
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = _priorSnapshot;
+            _snapshotScope.Dispose();
             SharedTestSupport.RemoveTempDirectory(Root);
         }
     }

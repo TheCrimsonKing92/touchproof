@@ -122,20 +122,52 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public void Refresh_CancelledSuccess_PreservesBaselineReadiness()
     {
-        using var scenario = new Scenario();
-        var source = scenario.NewGoal();
-        scenario.Tick(source);
-        scenario.At("2026-10-17T11:08:00Z");
-        scenario.Finish(source, 0, "Success", "");
-        var target = scenario.NewGoal();
-        var snapshot = scenario.Kernel.ExportSnapshot();
-        scenario.Kernel.RefreshTrackedGoals(snapshot with
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var primary = ProviderHoldAgentSubstitutionTests.Scenario.Agent("xai-tester", "xAI", "grok-cli", "grok-4.7");
+        IReadOnlyList<AgentDefinition> agents = [primary];
+        var profiles = WorkerProfileCatalog.Default();
+        var source = InfrastructureTestSupport.MarkGoalRefined(kernel, kernel.CreateGoal("Verify the change.",
+            [new TaskSpec(TaskId.New(), "Verify fixture check 0 without editing repository files.", AgentRole.Tester)]));
+        kernel.ActivateGoal(source.Id, agents);
+        var task = source.Tasks.Single();
+
+        // Record the worker lifecycle in memory; these paths and PID are never used for execution.
+        var directory = Path.Combine(Path.GetTempPath(), "cancelled-success-records");
+        kernel.RecordTaskDispatch(source.Id, task.Id,
+            new("grok-cli", "fixture worker", directory, clock.UtcNow,
+                ProviderName: "xAI", ModelName: "grok-4.7", ReasoningEffort: "high",
+                WorkerProviderKind: ProviderKind.XaiGrokCli, AssignedAgentId: primary.Id.Value));
+        var dispatch = task.LastDispatch!;
+        var process = new TaskProcessRecord(12345, dispatch.Command, dispatch.WorkingDirectory,
+            Path.Combine(directory, "stdout"), Path.Combine(directory, "stderr"), Path.Combine(directory, "exit-code"),
+            dispatch.DispatchedAt, CompletedAt: null, ExitCode: null);
+        kernel.RecordTaskProcessStarted(source.Id, task.Id, process);
+        clock.UtcNow = DateTimeOffset.Parse("2026-10-17T11:08:00Z");
+        var kind = WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(0, "Success", ""));
+        kernel.RecordTaskVerification(source.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory, 0,
+            "Success", "", clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt));
+        kernel.RecordTaskProcessRefreshed(source.Id, task.Id,
+            process with { CompletedAt = clock.UtcNow, ExitCode = 0 }, verification: null);
+        Assert.True(task.LastVerification!.Succeeded);
+        Assert.Equal(dispatch.DispatchedAt, task.LastVerification.DispatchStartedAt);
+        Assert.Equal(clock.UtcNow, task.LastProcess!.CompletedAt);
+        Assert.Equal(0, task.LastProcess.ExitCode);
+        Assert.False(task.LastProcess.IsRunning);
+        Assert.False(task.LastProcess.WasCancelled);
+        Assert.False(task.LastProcess.WasCancelledByConductor);
+
+        var target = InfrastructureTestSupport.MarkGoalRefined(kernel, kernel.CreateGoal("Verify the change.",
+            [new TaskSpec(TaskId.New(), "Verify fixture check 0 without editing repository files.", AgentRole.Tester)]));
+        kernel.ActivateGoal(target.Id, agents);
+        var snapshot = kernel.ExportSnapshot();
+        kernel.RefreshTrackedGoals(snapshot with
         {
             Goals = snapshot.Goals.Where(goal => goal.Id == source.Id.Value)
                 .Select(goal => goal with { Status = GoalStatus.Cancelled }).ToArray()
         });
-        Assert.DoesNotContain(scenario.Kernel.Goals, goal => goal.Id == source.Id);
-        AssertBaseline(scenario.Kernel, scenario.Current(target), scenario.Agents, scenario.Profiles, scenario.Clock.UtcNow);
+        Assert.DoesNotContain(kernel.Goals, goal => goal.Id == source.Id);
+        AssertBaseline(kernel, kernel.GetGoal(target.Id), agents, profiles, clock.UtcNow);
     }
 
     [Fact]

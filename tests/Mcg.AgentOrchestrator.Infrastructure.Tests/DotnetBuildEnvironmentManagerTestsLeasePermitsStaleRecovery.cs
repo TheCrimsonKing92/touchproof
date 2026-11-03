@@ -27,12 +27,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             using var secondLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
                     DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, storageRoot: root), TimeSpan.Zero)).Lease;
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+            using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new ProcessCommandLineSnapshot(
                 new Dictionary<int, ProcessInspectionRecord>
                 {
                     [consumer.Id] = new(consumer.Id, Environment.ProcessId, "testhost", null, null,
                         $"testhost.exe --artifacts-path \"{goal.ArtifactsPath}\"", ProcessInspectionStatus.Available)
-                });
+                }));
 
             var result = firstAvailable
                 ? DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(goal, TimeSpan.Zero)
@@ -44,7 +44,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(consumer);
             if (Directory.Exists(root.RootPath)) Directory.Delete(root.RootPath, recursive: true);
         }
@@ -181,8 +180,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var shutdowns = 0;
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => Interlocked.Increment(ref shutdowns);
-        try
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => Interlocked.Increment(ref shutdowns));
         {
             using var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
@@ -193,11 +191,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             Assert.Equal(0, shutdowns);
             Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
         }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
-        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_execution_lock_release_observer_runs_once_after_permit_release")]
@@ -206,8 +199,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var notifications = 0;
         bool? permitAvailableDuringNotification = null;
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => { };
-        try
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => { });
         {
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
@@ -225,19 +217,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             Assert.True(permitAvailableDuringNotification);
             Assert.Equal(1, notifications);
         }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
-        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_execution_lock_release_observer_is_advisory")]
     public void DotnetBuildEnvironmentManagerExecutionLockReleaseObserverIsAdvisory()
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => { };
-        try
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => { });
         {
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
@@ -248,11 +234,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             Assert.Null(exception);
             Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
         }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
-        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_compiler_lock_recovery_shuts_down_after_releasing_the_permit")]
@@ -260,10 +241,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         bool? permitAvailableDuringShutdown = null;
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () =>
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() =>
             permitAvailableDuringShutdown =
-                RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0);
-        try
+                RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
         {
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
@@ -273,11 +253,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
 
             Assert.True(permitAvailableDuringShutdown ?? false);
             Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
-        }
-        finally
-        {
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
 
@@ -503,14 +478,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         var lockedPath = Path.Combine(environment.ArtifactsPath, "locked.dll");
         var prepareAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(987654321, "testhost", "dotnet test --artifacts-path slot-0", true)],
@@ -530,7 +505,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -552,11 +527,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         File.WriteAllText(
             environment.ExecutionLockPath,
             sleeper.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
             {
                 [sleeper.Id] = $"testhost.exe --artifacts-path \"{environment.ArtifactsPath}\""
-            });
+            }));
         var stopped = false;
 
         try
@@ -585,7 +560,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(sleeper);
         }
     }
@@ -600,11 +574,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
 
         File.WriteAllText(environment.ExecutionLockPath, "999999");
         using var sleeper = StartSleepProcess();
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
             {
                 [sleeper.Id] = $"testhost.exe --artifacts-path \"{environment.ArtifactsPath}\""
-            });
+            }));
         var foreignArtifact = Path.Combine(environment.ArtifactsPath, "foreign-owner-cache.txt");
         var stopped = false;
 
@@ -639,7 +613,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(sleeper);
         }
     }
@@ -657,16 +630,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         WriteValidPeFile(cachedDll);
         File.WriteAllText(environment.ExecutionLockPath, "999999");
         var probeAttempts = 0;
-        DotnetBuildEnvironmentManager.BeforeStaleLeaseIntegrityProbeForTests = attempt =>
+        using var beforeStaleLeaseIntegrityProbeScope = DotnetBuildEnvironmentManager.UseBeforeStaleLeaseIntegrityProbe(attempt =>
         {
             probeAttempts = attempt;
             if (attempt < 3)
             {
                 throw new IOException("transient probe contention");
             }
-        };
+        });
 
-        try
         {
             using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                 environment,
@@ -674,10 +646,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
 
             Assert.Equal(3, probeAttempts);
             Assert.True(File.Exists(cachedDll));
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.BeforeStaleLeaseIntegrityProbeForTests = null;
         }
     }
 

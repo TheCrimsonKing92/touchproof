@@ -134,14 +134,60 @@ public static class DotnetBuildEnvironmentManager
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private static readonly OwnedRunRootWriteFailureBuffer OwnedRunRootWriteFailures = new();
     private static int s_nextStableSlotScanStart = -1;
-    internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
-    internal static Action<int>? BeforeStaleLeaseIntegrityProbeForTests { get; set; }
-    internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
+    private static readonly AsyncLocal<Action<DotnetBuildEnvironment>?> PrepareArtifactsDirectoryOverride = new();
+    private static readonly AsyncLocal<Action<int>?> BeforeStaleLeaseIntegrityProbeOverride = new();
+    private static readonly AsyncLocal<Func<ProcessCommandLineSnapshot>?> ProcessCommandLineSnapshotOverride = new();
     internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
     internal static Action<TimeSpan> DefaultLeaseSleepForTests => DefaultLeaseSleep;
-    internal static Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?> OwnedRunRootRegistrarFactory { get; set; } =
-        DefaultOwnedRunRootRegistrarFactory;
+    private static readonly AsyncLocal<Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?>?> OwnedRunRootRegistrarFactoryOverride = new();
+    private static Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?> OwnedRunRootRegistrarFactory =>
+        OwnedRunRootRegistrarFactoryOverride.Value ?? DefaultOwnedRunRootRegistrarFactory;
     internal static TimeProvider OwnedRunRootTimeProvider { get; set; } = TimeProvider.System;
+
+    // Scopes inherit ExecutionContext and must be disposed in reverse order in their owning flow.
+    internal static IDisposable UsePrepareArtifactsDirectory(Action<DotnetBuildEnvironment> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        var scope = new OverrideScope<Action<DotnetBuildEnvironment>>(PrepareArtifactsDirectoryOverride, PrepareArtifactsDirectoryOverride.Value);
+        PrepareArtifactsDirectoryOverride.Value = callback;
+        return scope;
+    }
+
+    internal static IDisposable UseBeforeStaleLeaseIntegrityProbe(Action<int> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        var scope = new OverrideScope<Action<int>>(BeforeStaleLeaseIntegrityProbeOverride, BeforeStaleLeaseIntegrityProbeOverride.Value);
+        BeforeStaleLeaseIntegrityProbeOverride.Value = callback;
+        return scope;
+    }
+
+    internal static IDisposable UseProcessCommandLineSnapshot(Func<ProcessCommandLineSnapshot> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        var scope = new OverrideScope<Func<ProcessCommandLineSnapshot>>(ProcessCommandLineSnapshotOverride, ProcessCommandLineSnapshotOverride.Value);
+        ProcessCommandLineSnapshotOverride.Value = callback;
+        return scope;
+    }
+
+    internal static IDisposable UseOwnedRunRootRegistrarFactory(Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        var scope = new OverrideScope<Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?>>(OwnedRunRootRegistrarFactoryOverride, OwnedRunRootRegistrarFactoryOverride.Value);
+        OwnedRunRootRegistrarFactoryOverride.Value = callback;
+        return scope;
+    }
+
+    private sealed class OverrideScope<T>(AsyncLocal<T?> slot, T? previous) : IDisposable where T : class
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                slot.Value = previous;
+        }
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -721,7 +767,7 @@ public static class DotnetBuildEnvironmentManager
                 {
                     try
                     {
-                        PrepareArtifactsDirectoryForTests?.Invoke(environment);
+                        PrepareArtifactsDirectoryOverride.Value?.Invoke(environment);
                     }
                     catch
                     {
@@ -1574,9 +1620,9 @@ public static class DotnetBuildEnvironmentManager
 
     internal static ProcessCommandLineSnapshot CreateSlotCandidateProcessSnapshot()
     {
-        if (ProcessCommandLineSnapshotForTests is not null)
+        if (ProcessCommandLineSnapshotOverride.Value is not null)
         {
-            return ProcessCommandLineSnapshotForTests();
+            return ProcessCommandLineSnapshotOverride.Value();
         }
 
         return ProcessCommandLines.SnapshotByNames(["testhost", "vstest.console", "datacollector", "dotnet"]);
@@ -1598,7 +1644,7 @@ public static class DotnetBuildEnvironmentManager
         StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null,
         AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
     {
-        PrepareArtifactsDirectoryForTests?.Invoke(environment);
+        PrepareArtifactsDirectoryOverride.Value?.Invoke(environment);
         var clean = forceClean;
         var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
         var ownerMarkerMismatch = false;
@@ -2056,7 +2102,7 @@ public static class DotnetBuildEnvironmentManager
         {
             try
             {
-                BeforeStaleLeaseIntegrityProbeForTests?.Invoke(attempt);
+                BeforeStaleLeaseIntegrityProbeOverride.Value?.Invoke(attempt);
                 return ProbeStaleLeaseArtifactsOnce(environment, leaseAcquiredAt);
             }
             catch (Exception ex) when (

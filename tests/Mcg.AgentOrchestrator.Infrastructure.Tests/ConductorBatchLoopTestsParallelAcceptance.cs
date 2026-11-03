@@ -3814,8 +3814,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             buildPermitBusyTimeout: DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             buildPermitSleep: clock.Advance);
         var ran = false;
-        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
-            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
+        using var processCommandLineSnapshotScope = DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
 
         try
         {
@@ -3849,7 +3849,6 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             TryDeleteDirectory(attemptRoot);
         }
     }

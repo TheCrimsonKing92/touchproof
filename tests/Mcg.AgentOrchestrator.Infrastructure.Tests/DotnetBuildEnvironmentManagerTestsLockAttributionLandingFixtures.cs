@@ -203,14 +203,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var prepareAttempts = 0;
         var killedPids = new List<int>();
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(987654321, "testhost", "dotnet test --artifacts-path slot-0", true)],
@@ -237,7 +237,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -250,14 +250,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) <= 2)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -283,7 +283,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -449,13 +448,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var lockedPathByLeaseId = new Dictionary<string, string>(StringComparer.Ordinal);
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             var lockedPath = Path.Combine(current.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
             lockedPathByLeaseId[current.LeaseId] = lockedPath;
             throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
-        };
-        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
+        });
+        using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => shutdownCount++);
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(24680, "VBCSCompiler", "VBCSCompiler.exe -pipename:first-available", true)],
@@ -485,9 +484,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
-                AssemblyBuildServerShutdownIsolation.SafeDefault;
+
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -499,13 +497,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(987654322, "dotnet", "dotnet test --artifacts-path external", false)],
@@ -533,7 +531,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -596,14 +594,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var prepareAttempts = 0;
         DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(lockedPath);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot);
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
 
         try
@@ -632,7 +630,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -650,14 +648,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
         var fakeTimeProvider = new RecordingTimeProvider();
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(holder.Id, holder.ProcessName, "foreign fixture holder", false)],
@@ -693,7 +691,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             }
 
             holder.WaitForExit(5000);
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
@@ -711,14 +709,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 Interlocked.Increment(ref prepareAttempts);
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
 
         try
         {
@@ -743,7 +741,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             }
 
             holder.WaitForExit(5000);
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             TryDeleteDirectory(fixtureRoot);
         }
     }
@@ -759,14 +757,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             987654320,
             DateTimeOffset.UtcNow.AddHours(-3));
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
 
         try
@@ -783,7 +781,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
@@ -800,14 +797,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             987654320,
             DateTimeOffset.UtcNow.AddHours(-3));
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 Interlocked.Increment(ref prepareAttempts);
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(987654321, "dotnet", "live foreign stale fixture holder", false)],
@@ -830,7 +827,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
@@ -843,14 +839,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var fixtureRoot = LandingExecutorTests.CreateGitRepository();
         var lockedPath = CreateLandingFixtureLockPath(fixtureRoot);
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
                 Interlocked.Increment(ref prepareAttempts) == 1)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
 
         try
@@ -868,7 +864,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
@@ -881,13 +877,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var (_, lockedPath) = CreateLandingFixtureLockPath();
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(987654324, "dotnet", "dotnet test fixture", false)],
@@ -916,7 +912,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -928,13 +924,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(fixtureRoot, DateTime.UtcNow);
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
 
         try
@@ -951,7 +947,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
@@ -967,13 +963,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(otherFixtureRoot, DateTime.UtcNow.AddDays(-1));
         DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(currentLockedPath);
-        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
             {
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
-        };
+        });
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
 
         try
@@ -990,7 +986,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
-            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(currentFixtureRoot);
             TryDeleteDirectory(otherFixtureRoot);
