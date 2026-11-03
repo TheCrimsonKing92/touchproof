@@ -31,20 +31,21 @@ internal sealed class SystemConsoleOutput : IOwnerConsoleOutput
 
 internal sealed class OwnerDigestSummaryAdapter(OrchestratorWorkspace workspace) : IOwnerDigestSummary
 {
-    public IReadOnlyList<string> ReadSummaryLines()
+    public IReadOnlyList<string> ReadSummaryLines() => ReadStructuredSummary().Lines;
+    public (IReadOnlyList<string> Lines, OwnerConsoleStructuredText? Fields) ReadStructuredSummary()
     {
-        if (!File.Exists(workspace.SqliteStatePath)) return ["Owner digest: state unavailable"];
+        if (!File.Exists(workspace.SqliteStatePath)) return (["Owner digest: state unavailable"], null);
         try
         {
             var report = CliOwnerDigestCommand.Read(workspace, new SystemClock());
-            return
+            return (
             [
                 $"Owner digest: landed={report.Totals.LandedGoals} pending={report.Totals.Pending} reverts={report.Reverts}",
                 $"Interventions: {report.Totals.Interventions.Total}; escapes={report.Totals.Escapes}"
-            ];
+            ], new(CliOwnerDigestConsoleAdapter.SummaryFields(report)));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        { return ["Owner digest: unavailable"]; }
+        { return (["Owner digest: unavailable"], null); }
     }
 }
 

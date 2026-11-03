@@ -262,6 +262,10 @@ internal static class OwnerActivityNarrator
         (item.Spans ?? OwnerConsoleLineSpans.None).Shift(Line(item).Length - item.Phrase.Length);
 
     internal static string Explain(OwnerConsoleActivityItem item, IReadOnlyList<OwnerConsoleDecision>? decisions = null)
+        => ExplainWithFields(item, decisions).Text;
+
+    internal static (string Text, OwnerConsoleFieldSnapshot Fields) ExplainWithFields(
+        OwnerConsoleActivityItem item, IReadOnlyList<OwnerConsoleDecision>? decisions = null)
     {
         // Match the exact item; another question on the same goal never makes this event actionable.
         var decision = item.OwnerQuestionId is null ? null : decisions?.FirstOrDefault(value =>
@@ -290,11 +294,20 @@ internal static class OwnerActivityNarrator
                 lines.Add("  " + prefixes[i] + " " + item.Phrase.Substring(titles[i].Start, titles[i].Length));
         }
         else lines.Add("What happened: " + happened);
+        var why = item.Subject ?? item.Why;
+        var nextStep = (decision is not null || item.Resolution is not null || item.OwnerQuestionId is not null ? resolution + ". " : "") + next;
         lines.AddRange([
-            "Why: " + (item.Subject ?? item.Why),
-            "What happens next: " + (decision is not null || item.Resolution is not null || item.OwnerQuestionId is not null ? resolution + ". " : "") + next,
+            "Why: " + why,
+            "What happens next: " + nextStep,
             "Do you need to act: " + act]);
-        return string.Join("\n", lines);
+        var fields = item.Fields();
+        return (string.Join("\n", lines), fields with { Fields = [.. fields.Fields.Select(field => field.Key switch
+        {
+            "why" => field with { Value = why },
+            "next" => field with { Value = nextStep },
+            "act" => field with { Value = act },
+            _ => field
+        })] });
     }
 
     internal static string? FailureReason(OwnerConductEvent item)

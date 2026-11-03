@@ -11,9 +11,23 @@ internal static class OwnerLandingsQuery
     private const string Unavailable = "acceptance evidence unavailable";
 
     internal sealed record Row(string GoalId, string Title, DateTimeOffset LocalLandingTime,
-        string Revision, string Kind, string Acceptance, string? Epic = null);
+        string Revision, string Kind, string Acceptance, string? Epic = null)
+    {
+        internal string? FullRevision { get; init; }
+        internal string? AcceptanceAttemptId { get; init; }
+        internal DateTimeOffset? AcceptanceAt { get; init; }
+        internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(GoalId,
+            new("goal", "Goal ID", GoalId), new("title", "Title", Title),
+            new("time", "Landing time", LocalLandingTime.ToString("O")), new("revision", "Revision", FullRevision),
+            new("kind", "Kind", Kind), new("acceptance-id", "Acceptance attempt ID", AcceptanceAttemptId),
+            new("acceptance-at", "Acceptance passed at", AcceptanceAt?.ToString("O")), new("epic", "Epic", Epic));
+    }
     internal sealed record Result(bool InvalidWindow, string WindowDescription,
-        IReadOnlyList<Row> Rows, int UndatedCount);
+        IReadOnlyList<Row> Rows, int UndatedCount)
+    {
+        internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create("landings/" + WindowDescription,
+            new("window", "Window", WindowDescription), new("undated", "Undated landings", UndatedCount.ToString(CultureInfo.InvariantCulture)));
+    }
 
     internal static Result Load(IOrchestratorStateQueries state, string orchestratorDirectory,
         TimeProvider clock, string windowArgument, IOwnerGoalEpicLookup? epics = null)
@@ -46,10 +60,11 @@ internal static class OwnerLandingsQuery
                 GoalPromotionFact.PullRequestMergedProvenance => "pull request",
                 _ => "unknown"
             };
+            var acceptance = ReadAcceptance(orchestratorDirectory, goal.Id, fact.CandidateRevision, zone, out var attemptId, out var acceptanceAt);
             rows.Add(new(goal.Id, OwnerGoalTitle.From(goal.Objective), local,
                 Prefix(fact.PromotedMainRevision, 9), kind,
-                ReadAcceptance(orchestratorDirectory, goal.Id, fact.CandidateRevision, zone),
-                ReadEpic(epics, goal.Id)));
+                acceptance, ReadEpic(epics, goal.Id)) { FullRevision = fact.PromotedMainRevision,
+                    AcceptanceAttemptId = attemptId, AcceptanceAt = acceptanceAt });
         }
         return new(false, days == 1 ? "today" : $"the last {days} local calendar days",
             rows.OrderByDescending(row => row.LocalLandingTime)
@@ -63,7 +78,7 @@ internal static class OwnerLandingsQuery
         foreach (var row in result.Rows)
         {
             var epic = row.Epic is null ? "" : $"  current epic: {row.Epic}";
-            lines.Add($"{Prefix(row.GoalId, 8)}  {Time(row.LocalLandingTime)}  {row.Revision}  {row.Kind}{epic}  current title: {row.Title}");
+            lines.Add($"{Prefix(row.GoalId, 8)}  {Time(row.LocalLandingTime)}  {row.Revision}  {row.Kind}{epic}  current title: {row.Title.Replace('\r', ' ').Replace('\n', ' ')}");
             lines.Add("  " + row.Acceptance);
         }
         if (result.Rows.Count == 0) lines.Add($"No landings recorded in {result.WindowDescription}.");
@@ -90,8 +105,10 @@ internal static class OwnerLandingsQuery
         catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
     }
 
-    private static string ReadAcceptance(string directory, string goalId, string candidate, TimeZoneInfo zone)
+    private static string ReadAcceptance(string directory, string goalId, string candidate, TimeZoneInfo zone,
+        out string? fullAttemptId, out DateTimeOffset? completedAt)
     {
+        fullAttemptId = null; completedAt = null;
         if (goalId is "" or "." or ".." || goalId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             return Unavailable;
         DateTimeOffset? newest = null;
@@ -121,6 +138,7 @@ internal static class OwnerLandingsQuery
             }
         }
         catch (Exception ex) when (ReadFailure(ex)) { return Unavailable; }
+        fullAttemptId = attemptId; completedAt = newest;
         return newest is { } time && !string.IsNullOrEmpty(attemptId)
             ? $"acceptance {Prefix(attemptId, 8)} passed {Time(TimeZoneInfo.ConvertTime(time, zone))}"
             : Unavailable;

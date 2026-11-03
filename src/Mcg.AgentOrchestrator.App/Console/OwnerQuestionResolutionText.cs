@@ -2,6 +2,19 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerQuestionResolutionText
 {
+    internal static OwnerConsoleFieldSnapshot Fields(OwnerQuestionResolution row)
+    {
+        var fields = new List<OwnerConsoleField> {
+        new("goal", "Goal ID", row.GoalId), new("title", "Goal title", row.GoalTitle), new("stage", "Asked at stage", row.Stage),
+        new("question", "Question", row.Question), new("outcome", "Outcome", row.Outcome), new("answerer", "Answerer", row.Answerer),
+        new("at", "Resolved at", row.ResolvedAt.ToString("O")), new("answer", "Answer", row.Answer),
+        new("evidence", "Evidence", string.Join("\n", row.Evidence.Where(reference => !reference.StartsWith("author-item=", StringComparison.Ordinal)))),
+        new("next", "Next stage", row.NextStage) };
+        if (OwnerEvidenceRequestFields.Read(row.Question) is { } request)
+            foreach (var (label, value) in request)
+                fields.Add(new("request/" + label, label, value));
+        return new(row.Id, [.. fields]);
+    }
     internal static string Build(OwnerQuestionResolution resolution, TimeZoneInfo zone)
     {
         var lines = new List<string>

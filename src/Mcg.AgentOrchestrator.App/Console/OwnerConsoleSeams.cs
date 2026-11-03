@@ -48,16 +48,20 @@ internal interface IConductorLiveness
 internal interface IOwnerDigestSummary
 {
     IReadOnlyList<string> ReadSummaryLines();
+    (IReadOnlyList<string> Lines, OwnerConsoleStructuredText? Fields) ReadStructuredSummary() => (ReadSummaryLines(), null);
 }
 
 internal interface IOwnerConsoleConductor
 {
     int Run(IReadOnlyList<string> args, TextWriter output, TextWriter error);
+    int RunStructured(IReadOnlyList<string> args, TextWriter output, TextWriter error, Action<OwnerConsoleStructuredText> fields) =>
+        Run(args, output, error);
 }
 
 internal interface IOwnerConsoleDigestReport
 {
     int Run(TextWriter output);
+    int RunStructured(TextWriter output, Action<OwnerConsoleStructuredText> fields) => Run(output);
 }
 
 internal interface IGoalEventTail

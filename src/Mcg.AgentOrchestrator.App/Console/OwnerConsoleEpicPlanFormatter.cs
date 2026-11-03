@@ -6,6 +6,39 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // Presentation only: the reader and next-step projection own all plan state.
 internal static class OwnerConsoleEpicPlanFormatter
 {
+    internal static OwnerConsoleField[] Fields(Mcg.AgentOrchestrator.App.ReadModels.EpicPlanView? view)
+    {
+        if (view is null) return [new("plan/bar", "Plan bar", null)];
+        var fields = new List<OwnerConsoleField> { new("plan/bar", "Plan bar", view.Plan.Bar),
+            new("plan/outcome", "Outcome", view.OutcomeProgress.Render()),
+            new("plan/next", "Next step", EpicPlanNextStep.Compute(view.Items).Text),
+            new("plan/outcome-next", "Outcome next step", EpicPlanNextStep.Compute(view).Text) };
+        foreach (var item in view.Items)
+        {
+            var key = "plan/" + item.Item.Position + "/";
+            fields.AddRange(new OwnerConsoleField[] { new(key + "subject", "Plan item " + item.Item.Position + " subject", item.Subject),
+                new(key + "status", "Plan item " + item.Item.Position + " status", item.Status?.ToString()),
+                new(key + "detail", "Plan item " + item.Item.Position + " detail", item.Detail),
+                new(key + "backlog", "Plan item backlog ID", item.Item.BacklogItemId), new(key + "text", "Plan item text", item.Item.Text) });
+            if (item.SourceFacts is { } facts)
+            {
+                fields.AddRange(new OwnerConsoleField[] { new(key + "source-status", "Source status", facts.SourceStatus.ToString()),
+                    new(key + "owner", "Owner goal ID", facts.OwnerGoalId), new(key + "coverage", "Coverage", facts.Coverage?.ToString()),
+                    new(key + "ownership", "Ownership", facts.Resolution.ToString()) });
+                foreach (var goal in facts.LinkedGoals.Concat(facts.DeliveredGoals).DistinctBy(goal => goal.Id))
+                    fields.AddRange(new OwnerConsoleField[] { new(key + goal.Id + "/id", "Linked goal ID", goal.Id),
+                        new(key + goal.Id + "/status", "Linked goal status", goal.Status), new(key + goal.Id + "/coverage", "Linked goal coverage", goal.Coverage) });
+            }
+        }
+        foreach (var decision in view.Plan.Decisions)
+        {
+            var key = "decision/" + decision.Id + "/";
+            fields.AddRange(new OwnerConsoleField[] { new(key + "text", "Decision", decision.Text), new(key + "author", "Decided by", decision.DecidedBy),
+                new(key + "at", "Decided at", decision.DecidedAt.ToString("O")) });
+        }
+        foreach (var member in view.UnplannedMembers) fields.Add(new("unplanned/" + member.MemberId, "Unplanned member ID", member.MemberId));
+        return fields.ToArray();
+    }
     internal static IReadOnlyList<string> Lines(OwnerConsoleEpicViewModel.Detail detail, int width)
     {
         var view = detail.Plan;

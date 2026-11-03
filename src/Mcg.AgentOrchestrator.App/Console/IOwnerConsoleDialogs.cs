@@ -8,6 +8,14 @@ internal interface IOwnerConsoleDialogs
     Task<OwnerExperimentDecisionForm?> PromptExperimentDecisionAsync(string title, string text, string defaultEvidence) =>
         Task.FromResult<OwnerExperimentDecisionForm?>(null);
     Task ShowTextAsync(string title, string text);
+    Task ShowFieldsAsync(OwnerConsoleFieldSnapshot snapshot, string? selectedKey = null) => Task.CompletedTask;
+    async Task<int?> ShowStructuredAsync(string title, string text, OwnerConsoleStructuredText fields,
+        IReadOnlyList<int>? choiceLines = null)
+    {
+        if (choiceLines is { Count: > 0 }) return await ShowPageAsync(title, text, choiceLines);
+        await ShowTextAsync(title, text);
+        return null;
+    }
     Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => ShowTextAsync("Decision", detail.State.Text);
     async Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null)
     { await ShowTextAsync(title, text); return null; }

@@ -8,12 +8,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 {
     internal sealed record Content(string Text, IReadOnlyList<int> ChoiceLines,
         IReadOnlyList<OwnerQuestionResolution> Resolved, OwnerConsoleDecision? Question,
-        string? Failure, string? EpicId, string? GateGoalId = null);
+        string? Failure, string? EpicId, string? GateGoalId = null, OwnerConsoleStructuredText? Fields = null,
+        OwnerConsoleStructuredText? FailureFields = null);
 
     private readonly OwnerConsoleScreenController _controller;
     private readonly Func<CancellationToken, Task<Content?>> _load;
     private readonly Func<OwnerConsoleDecision, Task> _question;
     private readonly Func<string, string, Task> _text;
+    private readonly Func<string, string, OwnerConsoleStructuredText, Task>? _structuredText;
     private readonly CancellationTokenSource _session;
     private readonly object _gate = new();
     private readonly bool _loadOnStart;
@@ -40,6 +42,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         Action close, Func<char, Task> action)
     {
         var dialog = new OwnerConsoleTextDialog(Title, Current.Text, Current.ChoiceLines, Page) { TitleStatus = TitleStatus };
+        dialog.Structured = Current.Fields;
         dialog.Render();
         var closeButton = new Button { Text = "Close", IsDefault = true };
         closeButton.Accepting += (_, args) => { args.Handled = true; close(); };
@@ -69,12 +72,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     internal OwnerConsoleGoalDialog(OwnerConsoleScreenController controller, Content initial,
         Func<CancellationToken, Task<Content?>> load, Func<OwnerConsoleDecision, Task> question,
         Func<string, string, Task> text, CancellationToken token, bool loadOnStart = false,
-        bool initialContentLoaded = false, Action<Content>? remember = null)
+        bool initialContentLoaded = false, Action<Content>? remember = null,
+        Func<string, string, OwnerConsoleStructuredText, Task>? structuredText = null)
     {
         _controller = controller; Current = initial; _load = load; _question = question; _text = text;
         _session = CancellationTokenSource.CreateLinkedTokenSource(token);
         _loadOnStart = loadOnStart; _contentLoaded = !loadOnStart || initialContentLoaded;
         _remember = remember;
+        _structuredText = structuredText;
         TitleStatus = loadOnStart && _contentLoaded ? "refreshing" : null;
         Page = new(initial.Text, 60, 15, initial.ChoiceLines);
     }
@@ -186,7 +191,11 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         switch (OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key)?.Command)
         {
             case "question" when Current.Question is { } question: await _question(question); return true;
-            case "failure" when Current.Failure is { } failure: await _text("Last failure", failure); return true;
+            case "failure" when Current.Failure is { } failure:
+                if (Current.FailureFields is { } fields && _structuredText is not null)
+                    await _structuredText("Last failure", failure, fields);
+                else await _text("Last failure", failure);
+                return true;
             case "epics" when Current.EpicId is { } epic:
                 RequestedEpicId = epic; CloseRequested?.Invoke(); return true;
             case "gate" when Current.GateGoalId is { } goalId:
@@ -197,7 +206,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     }
 
     internal Task OpenResolutionAsync(int index) => index >= 0 && index < Current.Resolved.Count
-        ? _text("Question resolution", _controller.ResolutionText(Current.Resolved[index])) : Task.CompletedTask;
+        ? _controller.ShowResolutionAsync(Current.Resolved[index]) : Task.CompletedTask;
 
     public void Dispose()
     {

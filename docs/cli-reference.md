@@ -1,5 +1,30 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Fleet conduct-tail sources
+
+`project event-sources` exports home and every registered authoritative workspace as a complete conduct-tail source list. It accepts no project filter or output options and ignores the selected project. Aliases share one record: home is canonical when aliased, otherwise the stable registration order (OrdinalIgnoreCase then Ordinal) chooses the label. Different authoritative state stores remain distinct even when their repository roots match. Final labels sort ordinally; home has no special first position.
+
+Stdout is BOM-free UTF-8, one `label=absolute-path` record per line with LF terminators, including the final record. Split each record at its first equals sign. Spaces and equals signs inside paths are literal; no quoting or escaping is added. The exporter resolves and validates the entire list before writing stdout. Registry/binding failures or unrepresentable labels/paths return exit 1, a bounded diagnostic on stderr and no source records. It does not create or migrate stores, open or create logs, change selection or configuration, or start a follower.
+
+In Windows PowerShell or PowerShell 7, choose the file path and explicitly write successful output as BOM-free UTF-8:
+
+```powershell
+$sourceList = 'C:\operator files\fleet-sources.txt'
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$previousEncoding = [Console]::OutputEncoding
+try {
+    [Console]::OutputEncoding = $utf8 # Decode native stdout as UTF-8 in both PowerShell versions.
+    $sources = @(& .\mcg-orchestrator.cmd project event-sources)
+    if ($LASTEXITCODE -ne 0) { throw 'Fleet source export failed; source list was not updated.' }
+    [System.IO.File]::WriteAllText($sourceList, (($sources -join "`n") + "`n"), $utf8)
+} finally {
+    [Console]::OutputEncoding = $previousEncoding
+}
+conduct-tail follow --logs-from $sourceList
+```
+
+The installed conduct-tail starts at the end of existing logs, follows rotation and waits for missing log files to be created. Its source list is fixed for that run: export again and restart the follower after registrations change. Installing or modifying conduct-tail and resume checkpoint policy are separate operator concerns.
+
 ## Fleet attention
 
 `attention fleet [--json] [--limit N]` reads home and every registered project through the console's workspace registry and binding authority. The default limit is 50; N must be a nonnegative integer. Duplicate flags, missing values and invalid values fail with exit 1 before stores are opened. All projects are read even with `--limit 0`.

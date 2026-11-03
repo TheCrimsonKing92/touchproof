@@ -9,7 +9,8 @@ internal static class OwnerConsoleGoalDetailLoading
         new(row is null
             ? string.Join(Environment.NewLine, goalId, LoadingLine)
             : string.Join(Environment.NewLine, $"{row.GoalPrefix}  {row.Title}",
-                $"State: {OwnerConsoleStatusLabel.For(row.State)}", $"Stage: {row.Stage}", LoadingLine), [], [], null, null, null);
+                $"State: {OwnerConsoleStatusLabel.For(row.State)}", $"Stage: {row.Stage}", LoadingLine), [], [], null, null, null,
+                Fields: new(row?.Fields() ?? OwnerConsoleFieldSnapshot.Create(goalId, new OwnerConsoleField("goal", "Goal ID", goalId))));
 
     internal static OwnerConsoleGoalDialog.Content Unavailable(Exception? failure) =>
         new(failure is null ? UnavailableText

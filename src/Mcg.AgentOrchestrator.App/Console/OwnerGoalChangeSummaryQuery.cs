@@ -94,7 +94,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
                         $"Git {basis}..{candidate}; " + (promotionRange ? "promotion range" : "latest contributing dispatch range, not whole-goal coverage"),
-                        Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray())
+                        Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray(),
+                        SourceItems: facts.Files.Take(20).ToArray())
                     : new("unavailable — " + facts.Reason, [], $"Git {basis}..{candidate}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -274,7 +275,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                                     .Select(group => group.Key! + " [criteria " + string.Join(",", group.Select(item => item.Number)) + "]").ToArray();
                                 return new("completed plan", items.Take(5).Select(BoundItem).ToArray(),
                                     Source(verification, dispatch) + $"; brief v{dispatch.BriefVersion}; criteria {verification.AcceptanceCriteriaVersionHash}",
-                                    Math.Max(0, items.Length - 5), items.Take(5).Where(item => item.Length > 360).ToArray());
+                                    Math.Max(0, items.Length - 5), items.Take(5).Where(item => item.Length > 360).ToArray(),
+                                    SourceItems: items.Take(5).ToArray());
                             }
                         }
                         reason = "planning stale — criterion mapping incomplete or incompatible";
@@ -297,7 +299,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         return new(reason + "; Expected from brief", expectations.Take(5).Select(BoundItem).ToArray(),
             $"authoritative brief v{goal.AuthoritativeBrief.Version}" +
             (goal.AuthoritativeRefinedSpecVersion is { } version ? $"; spec v{version.Version}" : ""),
-            Math.Max(0, expectations.Count - 5), expectations.Take(5).Where(item => item.Length > 360).ToArray());
+            Math.Max(0, expectations.Count - 5), expectations.Take(5).Where(item => item.Length > 360).ToArray(),
+            SourceItems: expectations.Take(5).ToArray());
     }
 
     private async Task<OwnerGoalSummarySection> ReportedAsync(Goal goal, string? candidate, CancellationToken token)
@@ -317,7 +320,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 (string.Equals(commit, candidate, StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(commit, "none", StringComparison.OrdinalIgnoreCase)))
                 return new("worker-reported; not proof of behavior", [BoundItem(summary)], Source(record, dispatch) + "; candidate " + candidate,
-                    ExpandedItems: summary.Length > 360 ? [summary] : null);
+                    ExpandedItems: summary.Length > 360 ? [summary] : null, SourceItems: [summary]);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { return new("unavailable — " + ex.GetType().Name, [], Source(record, dispatch)); }
@@ -351,6 +354,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             (item.State == CriterionEvidenceState.Failed || item.HasSatisfiedEvidenceFor(candidate)) &&
             (item.ExpectedCandidateSha is null || item.ExpectedCandidateSha == candidate)).ToArray();
         var lines = applicable.Select(item => $"{item.DisplayLabel}: {item.State}; {item.RequiredScope}; receipt {item.ReceiptId}").Take(10).ToList();
+        var sourceLines = new List<string>(lines);
+        void AddLine(string value, bool bound = false)
+        { sourceLines.Add(value); lines.Add(bound ? BoundItem(value) : value); }
         var failed = applicable.Any(item => item.State == CriterionEvidenceState.Failed);
         var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
         var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :
@@ -369,10 +375,10 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     "pending — full acceptance passed; criterion evidence outstanding"
                 : failed ? state : outcome.Status == GoalOperationStatus.Failed || outcome.AcceptanceOutcome == "failed"
                     ? "failed — applicable full acceptance" : "pending — acceptance " + outcome.AcceptanceOutcome;
-            lines.Add(BoundItem($"Full acceptance: {outcome.AcceptanceOutcome}; event {outcome.IdempotencyKey}; main {outcome.MainHeadSha}; {outcome.At:O}"));
-            lines.AddRange((outcome.FailedCheckNames ?? []).Take(5).Select(BoundItem));
+            AddLine($"Full acceptance: {outcome.AcceptanceOutcome}; event {outcome.IdempotencyKey}; main {outcome.MainHeadSha}; {outcome.At:O}", bound: true);
+            foreach (var check in (outcome.FailedCheckNames ?? []).Take(5)) AddLine(check, bound: true);
         }
-        if (unavailable is not null) lines.Add("Acceptance evidence unavailable — " + unavailable);
+        if (unavailable is not null) AddLine("Acceptance evidence unavailable — " + unavailable);
         if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure &&
             string.Equals(failure.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase) &&
             (outcome is null || failure.OccurredAt > outcome.At))
@@ -382,20 +388,20 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 previewEvidence = new(OwnerGoalPreviewEvidenceKind.Gate, false, failure.OccurredAt,
                     failure.FailedChecks.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)));
                 state = "failed — recorded acceptance (main " + failure.MainHeadSha + ")";
-                lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
+                foreach (var check in failure.FailedChecks.Take(5)) AddLine(check, bound: true);
             }
             else
-                lines.Add("Retained acceptance failure " + (expectedMain is null ? "applicability unavailable" : "superseded") +
+                AddLine("Retained acceptance failure " + (expectedMain is null ? "applicability unavailable" : "superseded") +
                     "; recorded main " + (failure.MainHeadSha ?? "unknown") + "; expected main " + (expectedMain ?? "unavailable"));
         }
         if (obligations.Any(item => item.Owner == CriterionEvidenceOwner.Operator && !item.HasSatisfiedEvidenceFor(candidate)))
-            lines.Add("Operator obligation outstanding");
+            AddLine("Operator obligation outstanding");
         if (candidate is not null)
             foreach (var task in goal.Tasks)
                 foreach (var receipt in task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? [])
                              .GroupBy(item => item.ReceiptId).Select(group => group.Last())
                              .Where(item => item.Accepted && item.CandidateSha == candidate).Take(5))
-                    lines.Add($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
+                    AddLine($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
         if (previewEvidence is null && candidate is not null)
         {
             var focused = goal.Tasks.SelectMany(task => task.VerificationHistory.SelectMany(record =>
@@ -409,7 +415,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     focused.Record.CompletedAt);
         }
         return (new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance run events/retained failure; candidate " + (candidate ?? "unknown"),
-            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20)), previewEvidence);
+            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20), SourceItems: sourceLines.Take(20).ToArray()), previewEvidence);
     }
 
     private async Task<string?> ReadArtifactAsync(TaskVerificationRecord record, CancellationToken token)

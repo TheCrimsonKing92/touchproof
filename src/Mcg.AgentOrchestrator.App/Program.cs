@@ -173,6 +173,9 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.O
 {
     try
     {
+        if (startupArgs.Count > 1 && startupArgs[1].Equals("event-sources", StringComparison.OrdinalIgnoreCase))
+            return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName,
+                tenant: tenantSelection.TenantName, eventSourcesBinding: invocationBinding);
         if (invocationBinding.DisposableFixture || invocationBinding.ExpectedStateDirectory is not null)
             throw new InvalidOperationException("A state-directory binding cannot authorize project registry commands; manage the registry separately, then bind the resolved workspace.");
         return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName);
@@ -741,7 +744,8 @@ while (true)
         var command = CliArgumentParser.SplitCommand(line);
         if (command.Count > 0 && command[0].Equals("project", StringComparison.OrdinalIgnoreCase))
         {
-            ProjectCliCommand.Execute(command, projectRegistry, repoRoot, projectSelection.ProjectName);
+            ProjectCliCommand.Execute(command, projectRegistry, repoRoot, projectSelection.ProjectName,
+                tenant: tenantSelection.TenantName);
             continue;
         }
 

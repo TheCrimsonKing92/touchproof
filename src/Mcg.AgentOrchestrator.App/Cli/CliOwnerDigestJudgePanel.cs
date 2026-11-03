@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -50,13 +51,27 @@ internal static partial class CliOwnerDigestJudgePanel
         writer.WriteLine(ConductorJudgePanelPacketBuilder.AuthorityBoundary);
         foreach (var item in result.Cases)
         {
+            if (writer is OwnerConsoleStructuredWriter structured)
+            {
+                var fields = new List<OwnerConsoleField> { new("case", "Case ID", item.Id), new("goal", "Goal ID", item.GoalId),
+                    new("trigger", "Trigger kind", item.TriggerKind), new("at", "Triggered at", item.TriggerAt.ToString("O")),
+                    new("terminal", "Terminal", item.Terminal), new("resolution", "Resolution", item.Resolution.Token) };
+                foreach (var judge in item.Judges) fields.AddRange(new OwnerConsoleField[] {
+                    new(judge.Name + "/name", "Judge", judge.Name), new(judge.Name + "/outcome", "Outcome", judge.Outcome),
+                    new(judge.Name + "/kind", "Action kind", judge.Kind), new(judge.Name + "/owner", "Action owner", judge.Owner) });
+                structured.Mark(new(item.Id, [.. fields]));
+            }
             var judges = string.Join(" | ", item.Judges.Select(judge =>
                 $"{Part(judge.Name)}={judge.Outcome}" +
                 (judge.Kind is null ? "" : $" {judge.Kind}/{Part(judge.Owner!)}")));
             writer.WriteLine($"{item.GoalId[..Math.Min(8, item.GoalId.Length)]} | {Part(item.TriggerKind)} | {item.TriggerAt:O} | {item.Terminal} | {judges} | {item.Resolution.Token}");
         }
         if (result.MissingTriggerTimes > 0)
+        {
+            if (writer is OwnerConsoleStructuredWriter missing) missing.Mark(OwnerConsoleFieldSnapshot.Create("panel-missing-times",
+                new OwnerConsoleField("count", "Cases without trigger times", result.MissingTriggerTimes.ToString(CultureInfo.InvariantCulture))));
             writer.WriteLine($"Panel cases without a recorded trigger time: {result.MissingTriggerTimes}");
+        }
         if (result.Cases.Count == 0)
         {
             writer.WriteLine("Judge panel shadow cases: none in window");
@@ -64,11 +79,27 @@ internal static partial class CliOwnerDigestJudgePanel
         }
         var measures = Measures(result);
         foreach (var measure in measures)
+        {
+            if (writer is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create("judge/" + measure.Judge,
+                new("name", "Judge", measure.Judge), new("valid", "Valid output numerator", measure.ValidOutput.Numerator.ToString(CultureInfo.InvariantCulture)),
+                new("total", "Valid output denominator", measure.ValidOutput.Denominator.ToString(CultureInfo.InvariantCulture)),
+                new("rate", "Valid output rate", measure.ValidOutput.Share?.ToString("R", CultureInfo.InvariantCulture))));
             writer.WriteLine($"Panel valid output | {Part(measure.Judge)} | {measure.ValidOutput.Text} | rate={measure.ValidOutput.Rate}");
+        }
         var agreement = Agreement(result);
+        if (writer is OwnerConsoleStructuredWriter agreed) agreed.Mark(OwnerConsoleFieldSnapshot.Create("panel-agreement",
+            new("numerator", "Agreement numerator", agreement.Numerator.ToString(CultureInfo.InvariantCulture)),
+            new("denominator", "Agreement denominator", agreement.Denominator.ToString(CultureInfo.InvariantCulture)),
+            new("share", "Agreement share", agreement.Share?.ToString("R", CultureInfo.InvariantCulture))));
         writer.WriteLine($"Panel next_action agreement | {agreement.Text} | share={agreement.Rate}");
         foreach (var measure in measures)
+        {
+            if (writer is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create("judge/" + measure.Judge,
+                new("name", "Judge", measure.Judge), new("match", "Provisional match numerator", measure.ProvisionalMatch.Numerator.ToString(CultureInfo.InvariantCulture)),
+                new("total", "Provisional match denominator", measure.ProvisionalMatch.Denominator.ToString(CultureInfo.InvariantCulture)),
+                new("rate", "Provisional match share", measure.ProvisionalMatch.Share?.ToString("R", CultureInfo.InvariantCulture))));
             writer.WriteLine($"Panel provisional-match | {Part(measure.Judge)} | {measure.ProvisionalMatch.Text} | share={measure.ProvisionalMatch.Rate}");
+        }
     }
 
     internal static void AddJson(JsonObject root, Result result)
