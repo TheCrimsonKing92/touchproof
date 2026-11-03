@@ -351,7 +351,7 @@ internal static class CliCommandHelp
         ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Attention = new(
-        AttentionUsage,
+        AttentionUsage + " | attention fleet [--json] [--limit N]",
         "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
 
@@ -972,6 +972,11 @@ internal static class CliCommandHelp
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
+        if (CliFleetAttentionQueryCommand.IsCommand(args))
+        {
+            if (!IsCommandSpecificHelp(args)) _ = CliFleetAttentionQueryCommand.Parse(args);
+            return;
+        }
         if (args.Count > 0 && args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
             GoalCreationSummaryView.IsRequested(args) &&
             args.Skip(1).Any(arg => arg.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||
