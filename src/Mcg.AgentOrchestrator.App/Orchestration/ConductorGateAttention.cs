@@ -40,6 +40,9 @@ internal static class ConductorGateAttention
     internal static void ReconcileOutcome(
         AgentOrchestratorKernel kernel, ConductorDriver driver, Goal goal, ConductorAdvanceOutcome outcome)
     {
+        if (driver._cohortWorkspace is { } workspace)
+            PassedGateHoldFaultIsolation.Run(goal, "reconcile-build-report-attention",
+                () => OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, kernel.GetGoal(goal.Id), kernel.HumanInputRequests.ToArray()));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-outcome",
             () => driver.PassedGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-awaiting-verification-outcome",

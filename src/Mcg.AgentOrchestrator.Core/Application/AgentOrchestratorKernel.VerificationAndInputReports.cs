@@ -3,9 +3,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed partial class AgentOrchestratorKernel
 {
     public IReadOnlyDictionary<HumanInputRequestId, string> CloseRoleReportEvidence(
-        GoalId goalId, string landingCandidateSha, Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null, Func<string, string, bool>? conductorOnlyRange = null) =>
+        GoalId goalId, string landingCandidateSha, Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null, Func<string, string, bool>? conductorOnlyRange = null,
+        Func<TaskSpec, DeveloperBuildCandidateEvidence>? buildCandidateEvidence = null,
+        Func<string, string?>? buildPassedGateSourceForClass = null) =>
         new RoleReportEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m))
-            .Close(GetGoal(goalId), HumanInputRequests, landingCandidateSha, passedGateSourceForClass, removedTestClassSource, conductorOnlyRange);
+            .Close(GetGoal(goalId), HumanInputRequests, landingCandidateSha, passedGateSourceForClass, removedTestClassSource, conductorOnlyRange,
+                buildCandidateEvidence, buildPassedGateSourceForClass);
 
     public GoalVerificationGate BuildVerificationGate(GoalId goalId)
     {
