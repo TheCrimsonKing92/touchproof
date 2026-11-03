@@ -28,7 +28,7 @@ public sealed class RemainderBalanceDLaneMoveTests
         var types = RunnableTypes();
         if (resolveCollections) lanes = Resolve(lanes, types);
 
-        Assert.Equal(28, lanes.Count);
+        Assert.Equal(30, lanes.Count);
         foreach (var name in MovedClassNames)
         {
             var type = Assert.Single(types, type => type.Name == name);
@@ -51,8 +51,8 @@ public sealed class RemainderBalanceDLaneMoveTests
             beforeMove = Resolve(beforeMove, types);
         }
 
-        Assert.Equal(28, loaded.Count);
-        Assert.Equal(27, beforeMove.Count);
+        Assert.Equal(30, loaded.Count);
+        Assert.Equal(29, beforeMove.Count);
         foreach (var type in moved)
         {
             Assert.Equal(new[] { Remainder }, LaneNames(beforeMove, type));
