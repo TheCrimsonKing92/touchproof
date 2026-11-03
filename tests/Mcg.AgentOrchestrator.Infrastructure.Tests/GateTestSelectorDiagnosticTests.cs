@@ -173,14 +173,21 @@ public sealed class GateTestSelectorDiagnosticTests
         using var f = new ProspectiveEvidenceGateFixture();
         var version = f.Goal.AuthoritativeBrief.Version;
         var identity = new PlannerEvidenceIdentity(f.Goal.Id.Value, "planner-task", version, 2, "coverage");
+        var payload = new PlannerEvidencePayload(2, "coverage", "post-implementation", "acceptance-gate",
+            "Prospective coverage", "Awaiting candidate evidence", null, null, ["PredictedTests"]);
         var obligation = new GateTestObligation(identity.StableId, version, ["PredictedTests"], "planner-task",
-            "Prospective coverage", DateTimeOffset.UtcNow, identity);
+            "Prospective coverage", DateTimeOffset.UtcNow, identity, payload);
+        var oldIdentity = identity with { BriefVersion = version - 1 };
+        var oldObligation = obligation with
+        {
+            Id = oldIdentity.StableId, BriefVersion = oldIdentity.BriefVersion, PlannerIdentity = oldIdentity
+        };
         var snapshot = f.Kernel.ExportSnapshot();
         var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
         {
             Goals = snapshot.Goals.Select(goal => goal with
             {
-                GateTestObligations = [obligation, obligation with { Id = "old-brief", BriefVersion = version - 1 }]
+                GateTestObligations = [obligation, oldObligation]
             }).ToArray()
         });
         var entry = Assert.Single(Project(kernel.GetGoal(f.Goal.Id), f.CandidateSha, []));
