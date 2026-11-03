@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
@@ -7,6 +8,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class JunitCommandAcceptanceCheck(
     IAcceptanceRunExecutionContext owner,
     AcceptanceInvocationContext invocation,
+    EnvironmentContract? environmentContract,
     TimeProvider timeProvider,
     CrosswalkExecutableResolver executableResolver,
     bool requiresTestTelemetryReceipt,
@@ -14,9 +16,36 @@ internal sealed class JunitCommandAcceptanceCheck(
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runCommand,
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runParser)
 {
+    internal static Task<AcceptanceCheckResult> RunWithEnvironmentContractAsync(
+        AcceptanceManifestCheck check, string worktreePath,
+        IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,
+        TimeProvider timeProvider, CrosswalkExecutableResolver executableResolver, bool requiresTestTelemetryReceipt,
+        Func<string[], GateHeartbeatContext> createHeartbeat,
+        Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runCommand,
+        Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runParser,
+        CancellationToken cancellationToken)
+    {
+        EnvironmentContract? contract;
+        try
+        {
+            contract = EnvironmentContract.Load(worktreePath,
+                (owner as AcceptanceRunExecutionOwner)?.ProjectHomeDirectory);
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            return Task.FromResult(new AcceptanceCheckResult(check.Name, false, null,
+                $"JUnit environment contract could not be loaded: {exception.Message}", Advisory: check.Advisory));
+        }
+
+        return RunOwnedAsync(check, worktreePath, owner, invocation, contract, timeProvider, executableResolver,
+            requiresTestTelemetryReceipt, createHeartbeat, runCommand, runParser, cancellationToken);
+    }
+
     internal static Task<AcceptanceCheckResult> RunOwnedAsync(
         AcceptanceManifestCheck check, string worktreePath,
         IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,
+        EnvironmentContract? environmentContract,
         TimeProvider timeProvider, CrosswalkExecutableResolver executableResolver, bool requiresTestTelemetryReceipt,
         Func<string[], GateHeartbeatContext> createHeartbeat,
         Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runCommand,
@@ -25,7 +54,7 @@ internal sealed class JunitCommandAcceptanceCheck(
         new JunitCommandAcceptanceCheck(
             owner ?? throw new InvalidOperationException("JUnit command requires an acceptance execution owner."),
             invocation ?? throw new InvalidOperationException("JUnit command requires an owned invocation."),
-            timeProvider, executableResolver, requiresTestTelemetryReceipt, createHeartbeat, runCommand, runParser)
+            environmentContract, timeProvider, executableResolver, requiresTestTelemetryReceipt, createHeartbeat, runCommand, runParser)
             .RunAsync(check, worktreePath, cancellationToken);
 
     private async Task<AcceptanceCheckResult> RunAsync(AcceptanceManifestCheck check, string worktreePath, CancellationToken cancellationToken)
@@ -97,6 +126,11 @@ internal sealed class JunitCommandAcceptanceCheck(
             var failures = records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => record.Id).ToArray();
             if (failures.Length > 0)
                 diagnostics.Add(new(CrosswalkDiagnosticCategory.TestFailures, $"JUnit failed or error rows: {string.Join(", ", failures)}."));
+
+            foreach (var row in records.Where(record => record.Status == TestResultStatus.Skipped))
+                if (ContractedToolSkipPolicy.MissingTool(row.Message, environmentContract) is { } tool)
+                    diagnostics.Add(new(CrosswalkDiagnosticCategory.TestFailures,
+                        $"JUnit skipped test '{row.Id}' reports missing contracted tool '{tool}': {row.Message}"));
 
             if (records.Count > 0 && duplicates.Length == 0 && !Expired())
             {
