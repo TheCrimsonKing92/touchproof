@@ -86,17 +86,8 @@ internal sealed partial class ConductorDriver
     private static void AppendGateProgressEvent(
         ConductEventLogWriter writer,
         GoalId goalId,
-        AcceptanceGateProgress progress)
-    {
-        if (!writer.AppendRequired(
-                "gate-progress",
-                goalId.Value[..8],
-                FormatGateProgressConductEvent(progress)))
-        {
-            throw new IOException(
-                $"Required gate progress event could not be appended for goal {goalId.Value[..8]}.");
-        }
-    }
+        AcceptanceGateProgress progress) =>
+        GateProgressConductEvents.Append(writer, goalId, progress);
 
     internal static void AppendRemoteLaneEvent(ConductEventLogWriter writer, string? goalId, string detail) =>
         TryAppendGateProgressEvent(writer, goalId, detail, eventKind: "remote-lane");
@@ -105,37 +96,11 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
-        AcceptanceGateProgress progress)
-    {
-        var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
-        foreach (var member in bindings)
-        {
-            var goalId = member.GoalId.Value[..8];
-            var detail =
-                $"PHASE_PROGRESS goal={goalId} cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} " +
-                $"member={goalId} members={members} phase={progress.Phase} " +
-                $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
-                $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-                $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}" + progress.ShardOutcomeTokens;
-            if (!writer.AppendRequired("gate-progress", goalId, detail))
-            {
-                throw new IOException(
-                    $"Required cohort gate progress event could not be appended for goal {goalId}.");
-            }
-        }
-    }
+        AcceptanceGateProgress progress) =>
+        GateProgressConductEvents.AppendCohort(writer, identity, bindings, progress);
 
     private static string FormatGateProgressConductEvent(AcceptanceGateProgress progress) =>
-        $"PHASE_PROGRESS goal={progress.GoalId?[..Math.Min(8, progress.GoalId.Length)] ?? "unknown"} phase={progress.Phase} " +
-        $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
-        $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-        $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}" + progress.ShardOutcomeTokens +
-        (progress.ExecutionId is null ? "" : $" execution={FormatConductToken(progress.ExecutionId)}");
-
-    private static string FormatConductToken(string value) =>
-        value.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
-            ? value
-            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        GateProgressConductEvents.Format(progress);
 
     private static int CountAssignedTasks(Goal goal) =>
         goal.Tasks.Count(task => task.Status == WorkTaskStatus.Assigned);
