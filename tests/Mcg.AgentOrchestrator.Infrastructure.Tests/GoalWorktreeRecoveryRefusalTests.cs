@@ -188,23 +188,54 @@ public sealed class GoalWorktreeRecoveryRefusalTests : GoalWorktreeRecoveryTestB
         Assert.False(Directory.Exists(f.Path));
     }
 
-    [Xunit.Fact]
-    public void FailedAddPreservesPartialStateAndNextAttemptRefusesIt()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void FailedAddPreservesPartialStateAndNextAttemptRefusesIt(bool stale)
     {
-        using var f = new MissingFixture();
-        var reads = 0;
-        var result = f.Recover(() =>
-        {
-            if (++reads == 2)
-            {
-                Directory.CreateDirectory(f.Path);
-                File.WriteAllText(Path.Combine(f.Path, "interrupted.txt"), "preserve partial work");
-            }
-            return null;
-        });
-        Assert.False(result.Succeeded);
-        Assert.False(f.Recover().Succeeded);
-        Assert.Equal("preserve partial work", File.ReadAllText(Path.Combine(f.Path, "interrupted.txt")));
+        using var f = new MissingFixture(stale: stale);
+        var hooks = Path.Combine(f.Repo, "recovery-hooks");
+        Directory.CreateDirectory(hooks);
+        var hook = Path.Combine(hooks, "post-checkout");
+        // Git runs this hook inside the new checkout, after the real add is reached.
+        // Leave partial filesystem state and fail the add without moving any branch.
+        File.WriteAllText(hook, """
+            #!/bin/sh
+            git rev-parse HEAD > add-reached.txt
+            printf '%s' 'preserve partial work' > interrupted.txt
+            rm .git
+            exit 1
+
+            """.Replace("\r\n", "\n"));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        RunGit(f.Repo, "config", "core.hooksPath", hooks.Replace('\\', '/'));
+        Assert.False(Directory.Exists(f.Path));
+
+        var failure = Assert.Throws<InvalidOperationException>(() => GoalWorktrees.PrepareForDispatch(
+            f.Repo, f.Goal.Id, allowInitialCreation: false, () => null, f.Receipts.Add));
+        Assert.Contains("worktree add failed: exit=1", failure.Message);
+        var receipt = Assert.Single(f.Receipts);
+        Assert.False(receipt.Succeeded);
+        Assert.Equal(f.Tip, receipt.PreservedTip);
+        Assert.Equal(f.Tip, File.ReadAllText(Path.Combine(f.Path, "add-reached.txt")).Trim());
+        Assert.False(File.Exists(Path.Combine(f.Path, ".git")));
+        var partial = Path.Combine(f.Path, "interrupted.txt");
+        Assert.Equal("preserve partial work", File.ReadAllText(partial));
+        f.AssertTip();
+
+        // A fresh preparation call must reobserve and refuse the partial checkout,
+        // even after the injected failure is removed; receipts do not grant readiness.
+        RunGit(f.Repo, "config", "--unset", "core.hooksPath");
+        var registrations = GoalWorktreeRegistrationListing.RunGit(f.Repo).Output;
+        var restartReceipts = new List<GoalWorktreeRecoveryResult>();
+        var restart = Assert.Throws<InvalidOperationException>(() => GoalWorktrees.PrepareForDispatch(
+            f.Repo, f.Goal.Id, allowInitialCreation: false, () => null, restartReceipts.Add));
+        Assert.Contains("incomplete, partial or locked", restart.Message);
+        Assert.False(Assert.Single(restartReceipts).Succeeded);
+        Assert.Equal("preserve partial work", File.ReadAllText(partial));
+        Assert.Equal(f.Tip, File.ReadAllText(Path.Combine(f.Path, "add-reached.txt")).Trim());
+        Assert.Equal(registrations, GoalWorktreeRegistrationListing.RunGit(f.Repo).Output);
         f.AssertTip();
     }
 }
