@@ -17,9 +17,10 @@ internal static class OwnerConsoleStageDescriber
             gate?.ForMember(goal.Id.Value) is { } live)
         {
             var count = OwnerConsoleGateCount.Of(live);
+            if (!live.Live && live.Participation is not null) return "gate: " + live.Participation + OwnerConsoleGateFormatter.Identity(live);
             if (live.Failing) return OwnerConsoleGateBoardStatus.Failing(count);
-            return count.Total > 0 ? $"in gate: {count.Done}/{count.Total}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
-                $"gate running {(int)live.Elapsed.TotalMinutes}m";
+            return $"in gate: {OwnerConsoleGateFormatter.CountText(live)}, " +
+                (live.HasEta ? OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds) + " left" : "ETA unknown") + OwnerConsoleGateFormatter.Identity(live);
         }
         if (OwnerConsoleDeliveredForReviewText.For(goal) is { } delivered) return delivered;
         if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null))

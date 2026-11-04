@@ -4,11 +4,12 @@ internal static class OwnerConsoleGateBoardStatus
 {
     internal static string Failing(OwnerConsoleGateCount count)
     {
-        var text = $"in gate: FAILING, {count.Failed} failed";
+        var failures = Math.Max(count.Failed, count.FailedItems.Count);
+        var text = $"in gate: FAILING, {failures} failed";
         if (count.FailedItems.Count > 0)
         {
             text += ": " + count.FailedItems[0].Name;
-            if (count.Failed > 1) text += $" +{count.Failed - 1}";
+            if (failures > 1) text += $" +{failures - 1}";
         }
         return text + (count.Confirming ? ", confirming" : "");
     }

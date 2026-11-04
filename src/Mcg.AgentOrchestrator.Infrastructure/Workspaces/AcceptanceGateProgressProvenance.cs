@@ -9,6 +9,7 @@ internal static class AcceptanceGateProgressProvenance
         while (owner is AcceptanceRunExecutionContextView view) owner = view.Owner;
         return progress with
         {
+            ExecutionId = context.RunId,
             TreeRevision = progress.TreeRevision ?? context.TreeRevision,
             EvidenceKind = progress.EvidenceKind ?? context.EvidenceKind ?? (context.FocusedRunBinding is not null ? "member-reproduction" :
                 owner is AcceptanceFocusedVerificationOwner ? "candidate-rerun" : "candidate"),

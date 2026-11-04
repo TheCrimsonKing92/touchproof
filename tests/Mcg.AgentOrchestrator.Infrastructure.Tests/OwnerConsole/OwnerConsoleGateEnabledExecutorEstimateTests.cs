@@ -1,6 +1,7 @@
 // Parallel-safe: pure snapshots, an injected clock, and a unique temporary directory per loader.
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
 {
@@ -22,7 +23,7 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
         Assert.Equal(onlyEnabled.Fraction, disabled.Fraction);
         Assert.Equal(enabled.Lanes, disabled.Lanes);
         Assert.Equal(1, disabled.Lanes.Count(lane => lane.State == OwnerConsoleGateLaneState.Running));
-        Assert.Equal(4, disabled.Lanes.Count(lane => lane.State == OwnerConsoleGateLaneState.Queued));
+        Assert.Equal(4, disabled.Lanes.Count(lane => lane.State == OwnerConsoleGateLaneState.Planned));
     }
 
     [Theory]
@@ -30,7 +31,7 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
     [InlineData(2, 180)]
     public void Build_NoEnabledExecutors_PreservesLocalEstimate(int capacity, int expected)
     {
-        var omitted = OwnerConsoleGateProgress.Build(Now, Events(), Manifest, [], capacity: capacity);
+        var omitted = OwnerConsoleGatePlannedTestBuild.Build(Now, Events(), Manifest, [], capacity: capacity);
         var empty = Build([], capacity);
         var disabled = Build([new("a", 2, false), new("b", 2, false)], capacity);
 
@@ -47,9 +48,9 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
         var events = Events().Append(Parse(Event(-120, "gate-progress",
             "PHASE_PROGRESS goal=99999999 phase=gate-phase-breakdown elapsed_ms=0 " +
             "target=scope=verifier-run;outcome=failed;shard_concurrency_effective=1", "99999999"))).ToArray();
-        var enabled = OwnerConsoleGateProgress.Build(Now, events, Manifest, [], capacity: 5,
+        var enabled = OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest, [], capacity: 5,
             executors: [new("a", 2), new("b", 2)]);
-        var disabled = OwnerConsoleGateProgress.Build(Now, events, Manifest, [], capacity: 5,
+        var disabled = OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest, [], capacity: 5,
             executors: [new("a", 2), new("b", 2, false)]);
 
         Assert.Equal(60, enabled.RemainingSeconds);
@@ -62,7 +63,7 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
         var events = new[] { Entry() }.Concat(Manifest.Select(lane => Event(0, "gate-progress",
             $"PHASE_PROGRESS goal=776a132e members=776a132e,eade84cb phase=remote-shard-started " +
             $"target=\"infrastructure tests: {lane.Name}\" executor=b elapsed_ms=0"))).Select(Parse).ToArray();
-        var gate = OwnerConsoleGateProgress.Build(Now, events, Manifest, [], capacity: 1,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest, [], capacity: 1,
             executors: [new("a", 2), new("b", 2, false)]);
 
         Assert.Equal(5, gate.Lanes.Count(lane => lane.State == OwnerConsoleGateLaneState.Running));
@@ -80,7 +81,15 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
             var log = Path.Combine(directory, "conduct-events.log");
             var manifest = Path.Combine(directory, "acceptance-manifest.json");
             var config = Path.Combine(directory, "remote-executors.json");
-            File.WriteAllLines(log, EventLines());
+            const string execution = "776a132e-gate-20261029010000000-0123456789abcdef0123456789abcdef";
+            var plan = Path.Combine(directory, execution + AcceptanceGateLanePlan.ArtifactSuffix);
+            File.WriteAllText(plan, new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion,
+                execution, Manifest.Select(lane => lane.Name).ToArray(), []).ToJson());
+            var lines = Events().Select(item => item with { Detail = item.Detail + " execution=" + execution }).Append(
+                new(Now.AddSeconds(-60), "gate-progress", "776a132e",
+                    $"phase=lane-plan execution={execution} members=776a132e,eade84cb heartbeat={JsonSerializer.Serialize(plan)}"));
+            File.WriteAllLines(log, lines.Select(item => JsonSerializer.Serialize(new
+            { timestamp = item.Timestamp, eventKind = item.EventKind, goalId = item.GoalId, detail = item.Detail })));
             File.WriteAllText(manifest, JsonSerializer.Serialize(new
             {
                 engine = new
@@ -127,7 +136,7 @@ public sealed class OwnerConsoleGateEnabledExecutorEstimateTests
     }
 
     private static OwnerConsoleGateProgress Build(IReadOnlyList<OwnerConsoleGateExecutorSlots> executors, int capacity = 1) =>
-        OwnerConsoleGateProgress.Build(Now, Events(), Manifest, [], capacity: capacity, executors: executors);
+        OwnerConsoleGatePlannedTestBuild.Build(Now, Events(), Manifest, [], capacity: capacity, executors: executors);
 
     private static OwnerConductEvent[] Events() => EventLines().Select(Parse).ToArray();
     private static OwnerConductEvent Parse(string line) => Assert.IsType<OwnerConductEvent>(OwnerConsoleGateProgress.ParseEvent(line));
