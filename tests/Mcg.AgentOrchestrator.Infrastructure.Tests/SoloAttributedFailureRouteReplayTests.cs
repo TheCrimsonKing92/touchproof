@@ -21,7 +21,9 @@ public sealed class SoloAttributedFailureRouteReplayTests
         Assert.Single(fixture.Starts);
         var task = fixture.Goal.Tasks.Single();
         AttributedFailureAutoRouteScenarioTests.CompleteRecordedProcess(fixture.Kernel, fixture.Goal, task);
-        PassVerification(fixture.Kernel, fixture.Goal, task, hasCommittedChanges: false);
+        fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, task.Id,
+            new("fixture", fixture.Repo, 0, "No new commit", "", DateTimeOffset.UtcNow, HasCommittedChanges: false));
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
         var firstDigest = fixture.Summary.SoloFailureReceipt!.Evidence.Sha256;
         fixture.ReplaceProof(proof => proof with { Bindings = proof.Bindings.Reverse().ToArray() });
         Assert.NotEqual(firstDigest, fixture.Summary.SoloFailureReceipt!.Evidence.Sha256);

@@ -139,7 +139,9 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 
     internal async Task Restart()
     {
-        var repository = new SqliteOrchestratorStateRepository(Path.Combine(Root, "state.db"));
+        var databasePath = Path.Combine(Root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(databasePath);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
         await repository.SaveAsync(Kernel);
         Kernel = await repository.LoadAsync();
         Goal = Kernel.GetGoal(Goal.Id);
