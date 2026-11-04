@@ -54,6 +54,34 @@ public sealed class BrokerDeliveryRepositoryTemplateTests
     }
 
     [Fact]
+    public void Initialization_PinsAuthorAndCommitterInGitChildEnvironment()
+    {
+        using var owner = new BrokerDeliveryRepositoryTemplate();
+        using var cases = new CaseRoots();
+        var copy = cases.Next();
+        Dictionary<string, string?>? commitEnvironment = null;
+        var previous = GitCli.StartInfoObserver;
+        GitCli.StartInfoObserver = info =>
+        {
+            previous?.Invoke(info);
+            if (info.ArgumentList.Contains("commit"))
+                commitEnvironment = new Dictionary<string, string?>(info.Environment);
+        };
+        try { owner.CopyTo(copy, new Variant(false, false, false, null)); }
+        finally { GitCli.StartInfoObserver = previous; }
+
+        // Observe explicit child values even on hosts without inherited identity overrides.
+        // This fails before the fix regardless of whether user.* config happens to work locally.
+        Assert.NotNull(commitEnvironment);
+        Assert.Equal("Broker Tests", commitEnvironment["GIT_AUTHOR_NAME"]);
+        Assert.Equal("broker@example.invalid", commitEnvironment["GIT_AUTHOR_EMAIL"]);
+        Assert.Equal("Broker Tests", commitEnvironment["GIT_COMMITTER_NAME"]);
+        Assert.Equal("broker@example.invalid", commitEnvironment["GIT_COMMITTER_EMAIL"]);
+        Assert.Equal("Broker Tests <broker@example.invalid>", Git(copy, "log", "-1", "--format=%an <%ae>"));
+        Assert.Equal("Broker Tests <broker@example.invalid>", Git(copy, "log", "-1", "--format=%cn <%ce>"));
+    }
+
+    [Fact]
     public void MutationsAndCaseCleanup_LeaveOtherCopiesAndTemplatePristine()
     {
         using var owner = new BrokerDeliveryRepositoryTemplate();

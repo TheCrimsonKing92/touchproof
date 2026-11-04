@@ -128,7 +128,15 @@ internal sealed class BrokerDeliveryRepositoryTemplate : IDisposable
 
     private static string Git(string root, params string[] args)
     {
-        var result = GitCli.Run(root, args);
+        // Acceptance pins author/committer environment variables, which override user.* config.
+        // Pin only this Git child's identity; changing process environment would affect parallel cases.
+        var result = GitCli.RunWithEnvironment(root, new Dictionary<string, string>
+        {
+            ["GIT_AUTHOR_NAME"] = "Broker Tests",
+            ["GIT_AUTHOR_EMAIL"] = "broker@example.invalid",
+            ["GIT_COMMITTER_NAME"] = "Broker Tests",
+            ["GIT_COMMITTER_EMAIL"] = "broker@example.invalid"
+        }, args);
         Assert.True(result.Succeeded && !result.DrainTimedOut,
             $"git fixture failed: exit={result.ExitCode}; stderr={result.Error}");
         return result.Output;
