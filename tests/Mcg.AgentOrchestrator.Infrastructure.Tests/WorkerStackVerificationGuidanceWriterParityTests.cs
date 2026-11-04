@@ -46,7 +46,25 @@ public sealed class WorkerStackVerificationGuidanceWriterParityTests : IDisposab
         var findings = Array.IndexOf(deterministic, "## Findings");
         Assert.True(findings >= 0, "Deterministic verification must include the Findings heading.");
         var section = WorkerStackVerificationGuidance.DeterministicVerificationSection(toolchain, goal.Id);
-        Assert.Equal(section, deterministic.Skip(findings + 1).Take(section.Count));
+        Assert.Equal(section.Select(NormalizeStorageRoot),
+            deterministic.Skip(findings + 1).Take(section.Count).Select(NormalizeStorageRoot));
+
+        // Placement is independent of the process storage-root override. Validate the rendered
+        // goal path, then compare all guidance text without a second ambient-root equality check.
+        string NormalizeStorageRoot(string line)
+        {
+            const string prefix = "- The helper performs build-only verification through isolated artifacts under `";
+            if (!line.StartsWith(prefix, StringComparison.Ordinal))
+                return line;
+
+            var end = line.IndexOf('`', prefix.Length);
+            Assert.True(end > prefix.Length, "Build guidance must contain its artifact path.");
+            var path = line[prefix.Length..end];
+            Assert.True(Path.IsPathFullyQualified(path), "Build artifact path must be absolute.");
+            var suffix = Path.Combine("goals", DotnetBuildStorageLayout.Prefix(goal.Id), "artifacts");
+            Assert.EndsWith(Path.DirectorySeparatorChar + suffix, path);
+            return prefix + "<storage-root>" + Path.DirectorySeparatorChar + suffix + line[end..];
+        }
 
         var brokers = ReadLines(context, "workflow-brokers.md");
         if (marker == "MyApp.csproj" && role == AgentRole.Developer)

@@ -18,7 +18,8 @@ internal static class VerificationFindingEvidencePolicy
         var obligation = matches.Length == 1 ? matches[0] : null;
         // A legacy/malformed record has no authoritative ownership; do not
         // convert it into a deferred obligation based on worker prose.
-        return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
+        return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown ||
+            !goal.HasCurrentPlannerExecutionAuthority(obligation);
     }
 
     internal static CriterionEvidenceObligation? FindAuthoritativelyDeferredOffWorkerObligation(

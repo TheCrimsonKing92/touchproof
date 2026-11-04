@@ -1,69 +1,81 @@
-using System.Threading;
 using Mcg.AgentOrchestrator.Core;
 
 // Only immutable history is shared. Each invocation owns its repository, kernel and stores.
 internal static class MergeTrainRecheckFixtureTemplate
 {
-    private static readonly Dictionary<string, Lazy<PreparedRepository>> Templates = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, MergeTrainFixtureObservation.Initialization<PreparedRepository>> Templates = new(StringComparer.Ordinal);
     private static readonly object Sync = new();
 
-    private static PreparedRepository Template(string mode)
+    private static PreparedRepository Template(string mode, MergeTrainFixtureObservation? observer = null)
     {
-        Lazy<PreparedRepository> template;
+        MergeTrainFixtureObservation.Initialization<PreparedRepository> template;
         lock (Sync)
         {
             if (!Templates.TryGetValue(mode, out template!))
             {
-                template = new(() => Builder.Build(mode), LazyThreadSafetyMode.ExecutionAndPublication);
+                template = new(observer => Builder.Build(mode, observer));
                 Templates.Add(mode, template);
             }
         }
         // Different modes can prepare independently; same-mode callers share one build or failure.
-        return template.Value;
+        return template.Get(observer);
     }
 
     internal static string TemplateDirectory(string mode) => Template(mode).Repo;
 
-    internal static PreparedRepository Copy(string mode)
+    internal static PreparedRepository Copy(string mode, MergeTrainFixtureObservation? observer = null)
     {
-        var source = Template(mode);
+        var source = MergeTrainFixtureObservation.Run(observer, "template-access", () => Template(mode, observer));
+        return MergeTrainFixtureObservation.Run(observer, "copy", () => CopyRepository(mode, source, observer));
+    }
+
+    private static PreparedRepository CopyRepository(string mode, PreparedRepository source,
+        MergeTrainFixtureObservation? observer)
+    {
         var repo = Path.Combine(Builder.ProcessRoot, Guid.NewGuid().ToString("n"), "repo");
         try
         {
-            Directory.CreateDirectory(repo);
-            foreach (var directory in Directory.EnumerateDirectories(source.Repo, "*", SearchOption.AllDirectories))
-                Directory.CreateDirectory(Path.Combine(repo, Path.GetRelativePath(source.Repo, directory)));
-            foreach (var file in Directory.EnumerateFiles(source.Repo, "*", SearchOption.AllDirectories))
+            MergeTrainFixtureObservation.Run(observer, "files", () =>
             {
-                var target = Path.Combine(repo, Path.GetRelativePath(source.Repo, file));
-                File.Copy(file, target);
-                // Git for Windows uses creation time as ctime. Preserve both index timestamps
-                // so copied candidate indexes need no additional git refresh processes.
-                File.SetCreationTimeUtc(target, File.GetCreationTimeUtc(file));
-                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(file));
-            }
+                Directory.CreateDirectory(repo);
+                foreach (var directory in Directory.EnumerateDirectories(source.Repo, "*", SearchOption.AllDirectories))
+                    Directory.CreateDirectory(Path.Combine(repo, Path.GetRelativePath(source.Repo, directory)));
+                foreach (var file in Directory.EnumerateFiles(source.Repo, "*", SearchOption.AllDirectories))
+                {
+                    var target = Path.Combine(repo, Path.GetRelativePath(source.Repo, file));
+                    File.Copy(file, target);
+                    // Git for Windows uses creation time as ctime. Preserve both index timestamps
+                    // so copied candidate indexes need no additional git refresh processes.
+                    File.SetCreationTimeUtc(target, File.GetCreationTimeUtc(file));
+                    File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(file));
+                }
 
-            // commondir is relative; repair the two absolute worktree links only in the copy.
-            foreach (var entry in Directory.EnumerateDirectories(Path.Combine(repo, ".git", "worktrees")))
+            });
+
+            MergeTrainFixtureObservation.Run(observer, "backlinks", () =>
             {
-                var backlink = Path.Combine(entry, "gitdir");
-                var oldGitFile = File.ReadAllText(backlink).Trim();
-                var relative = Path.GetRelativePath(source.Repo, oldGitFile);
-                if (Path.IsPathRooted(relative) || relative == ".." ||
-                    relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                    throw new InvalidOperationException($"Recheck template '{mode}' has an external worktree: {oldGitFile}");
-                var gitFile = Path.Combine(repo, relative);
-                File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
-                // Truncate the existing hidden .git file in place, as in CohortCandidateTemplate.
-                using var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write));
-                writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
-            }
-            Builder.RefreshIndex(repo);
+                // commondir is relative; repair the two absolute worktree links only in the copy.
+                foreach (var entry in Directory.EnumerateDirectories(Path.Combine(repo, ".git", "worktrees")))
+                {
+                    var backlink = Path.Combine(entry, "gitdir");
+                    var oldGitFile = File.ReadAllText(backlink).Trim();
+                    var relative = Path.GetRelativePath(source.Repo, oldGitFile);
+                    if (Path.IsPathRooted(relative) || relative == ".." ||
+                        relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                        throw new InvalidOperationException($"Recheck template '{mode}' has an external worktree: {oldGitFile}");
+                    var gitFile = Path.Combine(repo, relative);
+                    File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
+                    // Truncate the existing hidden .git file in place, as in CohortCandidateTemplate.
+                    using var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write));
+                    writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
+                }
+            });
+            MergeTrainFixtureObservation.Run(observer, "index-refresh", () => Builder.RefreshIndex(repo));
             return source with { Repo = repo };
         }
         catch
         {
-            Builder.Remove(repo);
+            MergeTrainFixtureObservation.Run(observer, "copy-cleanup", () => Builder.Remove(repo));
             throw;
         }
     }
@@ -82,7 +94,7 @@ internal static class MergeTrainRecheckFixtureTemplate
         internal static void Remove(string repo) => DeleteDirectory(repo);
         internal static void RefreshIndex(string repo) => RunGit(repo, "update-index", "--refresh");
 
-        internal static PreparedRepository Build(string mode)
+        internal static PreparedRepository Build(string mode, MergeTrainFixtureObservation? observer)
         {
             // Process-root janitor owns this template for the lifetime of the test process.
             var repo = CreateReducedAcceptanceCohortRepository();
@@ -126,7 +138,7 @@ internal static class MergeTrainRecheckFixtureTemplate
             }
             catch (Exception exception)
             {
-                Remove(repo);
+                MergeTrainFixtureObservation.Run(observer, "builder-cleanup", () => Remove(repo));
                 throw new InvalidOperationException($"Recheck fixture template '{mode}' could not be prepared.", exception);
             }
         }

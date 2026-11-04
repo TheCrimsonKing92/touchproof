@@ -58,19 +58,35 @@ internal static class LinkedBacklogRecordEvidence
             if (item is null)
                 return null;
 
-            var links = item.Links.Select(link =>
-            {
-                var id = link.OtherId(item.Id);
-                var target = store.GetByExactIdAsync(id).GetAwaiter().GetResult();
-                return $"- {id} | {link.Kind} | {SingleLine(target?.Title ?? "[item unavailable]")}\n";
-            }).ToArray();
-            return new Snapshot(RenderPointer(item, links), RenderRecord(item));
+            return Capture(item, id => store.GetByExactIdAsync(id).GetAwaiter().GetResult());
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Optional enrichment must not turn an unavailable store into a failed dispatch.
             return null;
         }
+    }
+
+    internal static Snapshot Capture(BacklogItem item, Func<string, BacklogItem?> loadOther)
+    {
+        // Preserve distinct edges and their stored order, but capture each neighbor only once.
+        // Store only presentation values: neighbors' bodies/links never enter this snapshot.
+        var edges = item.Links.ToArray();
+        var neighbors = new Dictionary<string, string>(StringComparer.Ordinal);
+        var links = edges.Select(link =>
+        {
+            var id = link.OtherId(item.Id);
+            if (!neighbors.TryGetValue(id, out var evidence))
+            {
+                BacklogItem? other;
+                try { other = loadOther(id); }
+                catch (Exception error) when (error is not OperationCanceledException) { other = null; }
+                evidence = other is null ? "[item unavailable]" : $"{SingleLine(other.Title)} | Status: {other.Status}";
+                neighbors.Add(id, evidence);
+            }
+            return $"- {id} | {link.Kind} | {evidence}\n";
+        }).ToArray();
+        return new Snapshot(RenderPointer(item, links), RenderRecord(item, links));
     }
 
     private static string RenderPointer(BacklogItem item, IReadOnlyList<string> links)
@@ -87,17 +103,27 @@ internal static class LinkedBacklogRecordEvidence
         return prefix + Omitted(links.Count - included) + instruction;
     }
 
-    private static string RenderRecord(BacklogItem item)
+    private static string RenderRecord(BacklogItem item, IReadOnlyList<string> links)
     {
-        var header = $"# Linked backlog record\nId: {item.Id}\nStatus: {item.Status}\nTitle: {BoundedTitle(item.Title, 1_000)}\n\n## Body\n";
+        var header = $"# Linked backlog record\nId: {item.Id}\nStatus: {item.Status}\nTitle: {BoundedTitle(item.Title, 1_000)}\n";
         const string notesHeader = "\n\n## Notes\n";
+        var bodyScalars = item.Body.EnumerateRunes().Count();
+        string Footer(int dropped, int omitted) => $"Omitted {dropped} notes and {omitted} body characters.\n";
+        // Reserve bounded relationship space before applying the existing body/note policy.
+        // A trailing prefix preserves the pointer's ordering and omission conventions.
+        var relations = "\n## Relations\n";
+        string OmittedLinks(int count) => $"Omitted {count} links.\n";
+        var included = 0;
+        while (included < links.Count &&
+               Bytes(header + relations + links[included] + OmittedLinks(links.Count - included - 1) +
+                   "\n## Body\n" + notesHeader + Footer(item.Notes.Count, bodyScalars)) <= RecordMaxBytes)
+            relations += links[included++];
+        header += relations + OmittedLinks(links.Count - included) + "\n## Body\n";
         var notes = item.Notes.OrderBy(note => note.CreatedAt)
             .Select(note => $"### {note.CreatedAt.ToString("O", CultureInfo.InvariantCulture)}\n{note.Text.ReplaceLineEndings("\n")}\n")
             .ToArray();
         var notesBytes = notes.Sum(Bytes);
         var body = item.Body.ReplaceLineEndings("\n");
-        var bodyScalars = item.Body.EnumerateRunes().Count();
-        string Footer(int dropped, int omitted) => $"Omitted {dropped} notes and {omitted} body characters.\n";
         var dropped = 0;
         while (dropped < notes.Length &&
                Bytes(header + body + notesHeader + Footer(dropped, 0)) + notesBytes > RecordMaxBytes)

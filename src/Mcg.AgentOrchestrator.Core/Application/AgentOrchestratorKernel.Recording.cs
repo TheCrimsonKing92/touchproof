@@ -556,6 +556,18 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var outcomeRule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt);
+        if (task.RequiredRole == AgentRole.Planner && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess &&
+            incomingPlannerBatch is { } acceptedBatch && acceptedBatch.Directives.Any(item => item.PlannerEvidence is not null) &&
+            verification.Succeeded && terminalContract.AllowsCompletion)
+        {
+            PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var acceptedBrief);
+            var diagnostic = ProjectAcceptedPlannerOwnership(goal, task, acceptedBatch, acceptedBrief, verification.CompletedAt);
+            if (diagnostic is not null)
+            {
+                PlannerEvidenceCompletion.Reject(this, goal, task, verification, diagnostic);
+                return;
+            }
+        }
         task.RecordCompletionVerdict(
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess,
             outcomeRule);
@@ -846,7 +858,6 @@ public sealed partial class AgentOrchestratorKernel
         bool enforceFailureEvidenceRule)
     {
         var goal = GetGoal(goalId);
-        string? nonPassingCriteriaDiagnostic = null;
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
             WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out _) &&
@@ -903,137 +914,12 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
-        if (verification.WorkerResultPresent &&
-            task.RequiredRole == AgentRole.Reviewer &&
-            goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } refinedSpec)
+        var attestationDiagnostic = ReviewerCriteriaAttestation.Evaluate(
+            goal, task, verification, _clock, (g, t, k, m) => Append(g, t, k, m), out var nonPassingCriteriaDiagnostic);
+        if (attestationDiagnostic is not null)
         {
-            if (!WorkerResultBlockers.TryFindCriteriaVerdicts(
-                    verification,
-                    out var criterionVerdicts,
-                    out var criteriaDiagnostic))
-            {
-                ReportWorkerTaskProgress(
-                    goalId,
-                    task.Id,
-                    WorkTaskStatus.Failed,
-                    $"Reviewer WORKER_RESULT criteria attestation invalid: {criteriaDiagnostic}");
-                return true;
-            }
-
-            var registeredVerdicts = criterionVerdicts
-                .Where(item => item.CriterionIndex < refinedSpec.AcceptanceCriteria.Count)
-                .ToArray();
-            var actualIndices = registeredVerdicts
-                .Select(item => item.CriterionIndex)
-                .OrderBy(index => index)
-                .ToArray();
-            var expectedIndices = Enumerable.Range(0, refinedSpec.AcceptanceCriteria.Count).ToArray();
-            if (!actualIndices.SequenceEqual(expectedIndices))
-            {
-                var received = string.Join(", ", actualIndices);
-                var missing = string.Join(", ", expectedIndices.Except(actualIndices).Select(index => index + 1));
-                var duplicated = string.Join(", ", actualIndices
-                    .GroupBy(index => index)
-                    .Where(group => group.Count() > 1)
-                    .Select(group => group.Key + 1));
-                ReportWorkerTaskProgress(
-                    goalId,
-                    task.Id,
-                    WorkTaskStatus.Failed,
-                    "Reviewer WORKER_RESULT criteria attestation invalid: " +
-                    $"expected every registered criterion_index 0..{expectedIndices.Length - 1} (criteria 1 to {expectedIndices.Length}) exactly once; " +
-                    $"received registered indices {(received.Length == 0 ? "none" : received)}; " +
-                    $"missing criteria: {(missing.Length == 0 ? "none" : missing)}; " +
-                    $"duplicated criteria: {(duplicated.Length == 0 ? "none" : duplicated)}.");
-                return true;
-            }
-
-            var nonPassingVerdicts = registeredVerdicts
-                .Where(item =>
-                    !item.Verdict.Equals("met", StringComparison.Ordinal) &&
-                    !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
-                        correction.IsWaiver &&
-                        string.Equals(
-                            correction.SupersededCriterion,
-                            refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
-                            StringComparison.OrdinalIgnoreCase)))
-                .ToArray();
-            var workerOwnedNonPassingVerdicts = nonPassingVerdicts
-                .Where(item => !item.Verdict.Equals("not-verifiable", StringComparison.Ordinal) ||
-                    VerificationFindingEvidencePolicy.IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex))
-                .ToArray();
-            foreach (var deferred in nonPassingVerdicts.Except(workerOwnedNonPassingVerdicts))
-            {
-                var matches = goal.CriterionEvidenceObligations.Where(item =>
-                    item.CriterionIndex == deferred.CriterionIndex &&
-                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version).ToArray();
-                if (matches.Length != 1)
-                {
-                    nonPassingCriteriaDiagnostic =
-                        $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: {VerificationFindingEvidencePolicy.FormatCriterionIndex(deferred.CriterionIndex)} has {matches.Length} authoritative obligation records; operator repair is required.";
-                    continue;
-                }
-                var obligation = goal.BindDeferredCriterionObligation(
-                    deferred.CriterionIndex,
-                    goal.AuthoritativeRefinedSpecVersion.Version,
-                    verification.ReviewedCommit,
-                    _clock.UtcNow) ?? matches[0];
-                Append(goal, task.Id, ProgressKind.TaskNote,
-                    $"Deferred criterion evidence remains pending: obligation={obligation.DisplayLabel}; owner={obligation.Owner}; " +
-                    $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}; " +
-                    $"expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
-            }
-            foreach (var advisory in registeredVerdicts.Where(item =>
-                         item.Verdict.Equals("met", StringComparison.Ordinal) &&
-                         !VerificationFindingEvidencePolicy.IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex) &&
-                         !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
-                             correction.IsWaiver &&
-                             string.Equals(
-                                 correction.SupersededCriterion,
-                                 refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
-                                 StringComparison.OrdinalIgnoreCase))))
-            {
-                var version = goal.AuthoritativeRefinedSpecVersion!.Version;
-                var obligation = goal.BindDeferredCriterionObligation(
-                    advisory.CriterionIndex,
-                    version,
-                    verification.ReviewedCommit,
-                    _clock.UtcNow);
-                if (obligation?.Owner != CriterionEvidenceOwner.Acceptance)
-                    continue;
-                Append(goal, task.Id, ProgressKind.TaskNote,
-                    $"Acceptance-gate-owned criterion met verdict is advisory; the gate remains the evidence: " +
-                    $"obligation={obligation.DisplayLabel}; state={obligation.State}; expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
-            }
-            if (workerOwnedNonPassingVerdicts.Length > 0)
-            {
-                var details = string.Join(
-                    "; ",
-                    workerOwnedNonPassingVerdicts.Select(item =>
-                        $"{VerificationFindingEvidencePolicy.FormatCriterionIndex(item.CriterionIndex)} verdict={item.Verdict} evidence={item.Evidence}"));
-                var repairCommands = string.Join(
-                    "; ",
-                    workerOwnedNonPassingVerdicts
-                        .Where(item => item.Verdict.Equals("not-verifiable", StringComparison.Ordinal))
-                        .Select(item =>
-                            $"criterion-evidence-map --goal {goal.Id.Value} --criterion {item.CriterionIndex + 1} " +
-                            $"--version {goal.AuthoritativeRefinedSpecVersion!.Version} acceptance {CriterionEvidenceScopes.FullAcceptanceGate} " +
-                            $"deferred-criterion-{item.CriterionIndex} {verification.ReviewedCommit ?? "missing"}"));
-                nonPassingCriteriaDiagnostic =
-                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}." +
-                    (repairCommands.Length == 0 ? string.Empty : $" Operator repair: {repairCommands}.");
-            }
-
-            foreach (var extra in criterionVerdicts.Where(item =>
-                         item.CriterionIndex >= refinedSpec.AcceptanceCriteria.Count))
-            {
-                Append(
-                    goal,
-                    task.Id,
-                    ProgressKind.TaskNote,
-                    $"Reviewer informational extra criterion attestation recorded: " +
-                    $"{VerificationFindingEvidencePolicy.FormatCriterionIndex(extra.CriterionIndex)}; verdict={extra.Verdict}; evidence={extra.Evidence}");
-            }
+            ReportWorkerTaskProgress(goalId, task.Id, WorkTaskStatus.Failed, attestationDiagnostic);
+            return true;
         }
 
         IReadOnlyList<ReviewFinding> mergedFindings = verification.MergedReviewFindings ?? [];
@@ -2214,6 +2100,17 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
+        if (task.RequiredRole == AgentRole.Planner && task.LastVerification.PlannerEvidenceBatch is { } acceptedBatch &&
+            acceptedBatch.Directives.Any(item => item.PlannerEvidence is not null))
+        {
+            var diagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, task.LastVerification, out var acceptedBrief);
+            diagnostic ??= ProjectAcceptedPlannerOwnership(goal, task, acceptedBatch, acceptedBrief, task.LastVerification.CompletedAt);
+            if (diagnostic is not null)
+            {
+                ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
+                return false;
+            }
+        }
         TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Completed), TaskStatusTransitionRecorder.RecordingTryCompleteTaskWithPassingVerification);
         Append(goal, task.Id, ProgressKind.TaskCompleted, message);
         ReconcileRetainedDownstreamTasks(goal, task, _clock.UtcNow);

@@ -51,16 +51,19 @@ internal static class AcceptanceDotnetTestBatchScheduler
         Func<bool> sharedApparatusInvalidated,
         Func<AcceptanceDotnetTestBatchGroup<TCheck>, SemaphoreSlim, CancellationToken, Task<TPart>> runPartitionGroup,
         Func<TCheck, CancellationToken, Task<(TPart Part, bool StopBatch)>> runSingleCheck,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<TCheck, AcceptanceLaneWaitCollector.Occurrence?>? observe = null)
         where TPart : class
     {
         using var slots = new SemaphoreSlim(budget);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var failures = new ConcurrentQueue<Exception>();
         var parts = new TPart?[groups.Sum(group => group.Checks.Length)];
+        var followersEligible = false;
 
         async Task RunGroupAsync(AcceptanceDotnetTestBatchGroup<TCheck> group)
         {
+            AcceptanceLaneWaitCollector.Occurrence? wait = null;
             try
             {
                 stop.Token.ThrowIfCancellationRequested();
@@ -72,7 +75,21 @@ internal static class AcceptanceDotnetTestBatchScheduler
                     return;
                 }
 
+                if (observe is not null)
+                {
+                    try { wait = observe(group.Checks[0]); }
+                    catch (Exception) { /* An optional observer has no scheduling authority. */ }
+                    wait?.Expect("scheduler-slot");
+                }
+                // The first group may own prebuild. Its pre-eligibility slot acquisition
+                // remains unknown rather than being counted as ready-and-waiting.
+                if (followersEligible)
+                {
+                    wait?.Ready();
+                    wait?.Start("scheduler-slot");
+                }
                 await slots.WaitAsync(stop.Token).ConfigureAwait(false);
+                wait?.End("scheduler-slot", "slot-acquired");
                 try
                 {
                     stop.Token.ThrowIfCancellationRequested();
@@ -97,6 +114,7 @@ internal static class AcceptanceDotnetTestBatchScheduler
                 failures.Enqueue(exception);
                 await stop.CancelAsync().ConfigureAwait(false);
             }
+            finally { wait?.Stop(stop.IsCancellationRequested ? "cancelled" : "scheduler-ended"); }
         }
 
         // Preserve the first plan entry's build attribution and prevent a second consumer
@@ -105,6 +123,7 @@ internal static class AcceptanceDotnetTestBatchScheduler
         await Task.WhenAny(buildCompleted, owner).ConfigureAwait(false);
         if (prebuildPassed() && !stop.IsCancellationRequested)
         {
+            followersEligible = true;
             var started = new List<Task> { owner };
             foreach (var group in groups.Skip(1))
                 started.Add(RunGroupAsync(group));

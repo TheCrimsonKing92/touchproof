@@ -309,8 +309,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = ResolveBacklogItemByPrefix(store, parts[1]);
             var reason = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: null, "--reason-file", "--text-file");
-            var closed = store.CloseAsync(item.Id, reason).GetAwaiter().GetResult();
-            Console.WriteLine($"Closed: [{closed.Id}] {closed.Title}");
+            CliBacklogCloseCommand.Execute(store, item.Id, reason);
             return false;
         }
 
