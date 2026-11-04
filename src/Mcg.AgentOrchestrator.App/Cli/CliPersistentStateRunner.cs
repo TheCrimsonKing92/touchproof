@@ -1763,13 +1763,18 @@ internal static partial class CliPersistentStateRunner
         var task = CliCommandHandlers.ResolveGoalScopedTaskMutationTarget(preparedCommand, context);
         EnsureGoalScopedTaskMutationTargetMatchesSelector(preparedCommand, goal, task);
 
+        var attribution = ResolveOperatorIntentAttribution(args, submissionSource);
         object payload = preparedCommand.Command switch
         {
             OperatorIntentVerbs.Progress => new ProgressOperatorIntentPayload(
                 preparedCommand.ProgressStatus
                     ?? throw new InvalidOperationException("Prepared progress command is missing a status."),
                 preparedCommand.Text
-                    ?? throw new InvalidOperationException("Prepared progress command is missing text.")),
+                    ?? throw new InvalidOperationException("Prepared progress command is missing text."),
+                CompletionVerification: attribution.ActorKind == OperatorActorKind.Human &&
+                    preparedCommand.ProgressStatus == WorkTaskStatus.Completed
+                    ? new ManualVerificationRequest(true, preparedCommand.Text!, workspace.RootDirectory)
+                    : null),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
             OperatorIntentVerbs.VerifyManual => preparedCommand.ManualVerification is { } manual
                 ? new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
@@ -1787,7 +1792,6 @@ internal static partial class CliPersistentStateRunner
         var payloadFiles = ResolveFlagValue(args, "--text-file") is { } payloadFile
             ? new[] { Path.GetFullPath(payloadFile) }
             : [];
-        var attribution = ResolveOperatorIntentAttribution(args, submissionSource);
         var intent = new OperatorIntentRecord(
             intentId,
             idempotencyKey,
