@@ -8,6 +8,8 @@ internal sealed partial record OwnerConsoleGateProgress
     private static string ExecutionOf(Observation item)
     {
         var execution = item.Get("execution");
+        if (execution.Length == 0 && item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal))
+            execution = item.Get("attempt");
         return execution.Length > 0 ? execution : AttemptFromHeartbeat(item.Get("heartbeat"));
     }
 
@@ -16,6 +18,7 @@ internal sealed partial record OwnerConsoleGateProgress
     {
         var gates = new Dictionary<string, Gate>(StringComparer.OrdinalIgnoreCase);
         var owners = new Dictionary<string, Observation>(StringComparer.Ordinal);
+        var completedOwners = new HashSet<string>(StringComparer.Ordinal);
         ejections = [];
         lastEnd = null;
         foreach (var item in parsed)
@@ -68,6 +71,7 @@ internal sealed partial record OwnerConsoleGateProgress
                 owners[outer] = item;
                 if (terminal)
                 {
+                    completedOwners.Add(outer);
                     lastEnd = item.Event.Timestamp;
                     foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer)) child.Live = false;
                 }
@@ -95,7 +99,7 @@ internal sealed partial record OwnerConsoleGateProgress
                     gate.Participation = "admission execution unresolved";
                 }
                 if (execution.Length > 0 && phase != "execution-admitted" && ejections.Any(ejection =>
-                    ejection.Outer == outer && members.Any(id => MemberMatches(id, ejection.Goal))))
+                    (ejection.Outer is null || ejection.Outer == outer) && members.Any(id => MemberMatches(id, ejection.Goal))))
                 {
                     gate.Live = false;
                     gate.Participation = "participation unresolved after ejection";
@@ -112,6 +116,13 @@ internal sealed partial record OwnerConsoleGateProgress
                             gate.Participation = "current execution unresolved";
                         }
                     }
+            }
+            // A retained outer completion also governs children first seen later
+            // in a truncated tail. Neither progress nor admission reopens that owner.
+            if (completedOwners.Contains(outer))
+            {
+                gate.Live = false;
+                gate.Participation = "outer attempt completed";
             }
             if (terminal)
             {
@@ -133,7 +144,7 @@ internal sealed partial record OwnerConsoleGateProgress
             {
                 // Retain observations for explicit historical execution selection,
                 // without asserting which unresolved child is current.
-                if (gate.Participation is "participation unresolved after ejection" or "current execution unresolved")
+                if (gate.Participation is "participation unresolved after ejection" or "current execution unresolved" or "outer attempt completed")
                 {
                     gate.Events.Add(item);
                     gate.Last = item.Event.Timestamp;
@@ -163,7 +174,8 @@ internal sealed partial record OwnerConsoleGateProgress
             if (members.Length == 0) continue;
             gates["owner:" + outer] = new(members, owner.Event.Timestamp)
             {
-                OuterAttemptId = outer, Live = false, Participation = "awaiting execution evidence"
+                OuterAttemptId = outer, Live = false,
+                Participation = completedOwners.Contains(outer) ? "outer attempt completed" : "awaiting execution evidence"
             };
         }
         return gates;
@@ -199,8 +211,7 @@ internal sealed partial record OwnerConsoleGateProgress
             var live = dispositions.Where(gate => gate.Live).ToArray();
             var unlinkedEjection = ejections.LastOrDefault(item => MemberMatches(item.Goal, member) && item.Outer is null);
             if (unlinkedEjection is not null)
-                live = live.Where(gate => gate.AdmittedAt > unlinkedEjection.At ||
-                    gate.TrainIdentity is not null && gate.TrainIdentity != unlinkedEjection.Train).ToArray();
+                live = live.Where(gate => gate.AdmittedAt > unlinkedEjection.At).ToArray();
             if (live.Length > 1)
                 views[member] = Idle() with { Kind = "unresolved", Members = [new(member, "")],
                     Participation = "multiple independent executions; select an execution", LanePlanAvailable = false, EtaAvailable = false };

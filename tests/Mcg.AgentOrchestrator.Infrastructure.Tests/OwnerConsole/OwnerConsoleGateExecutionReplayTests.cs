@@ -1,9 +1,64 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 using static OwnerConsoleGateExecutionReplayFixture;
 
 // Parallel-safe: fixed timestamps and unique per-test plan artifacts.
 public sealed class OwnerConsoleGateExecutionReplayTests
 {
+    [Fact]
+    public void CohortExecutionIdentityReachesPlanAndIsolatesSameRosterReruns()
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        AcceptanceCohortMemberBinding Member(char digit) => new(new GoalId(new string(digit, 32)),
+            new string('a', 40), new string('b', 40), ["src/A.cs"], ["resource:a"], ChangeRiskTier.Behavior,
+            ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected");
+        var members = new[] { Member('1'), Member('2') };
+        var identity = AcceptanceCohortIdentity.Create(members, new string('c', 40), new string('d', 40), "manifest-v1");
+        const string oldExecution = "operator-gate-20261103203920616-979ad9a676b14827bc504e99f624e75e";
+        const string currentExecution = "operator-gate-20261103210123951-847dff45d61847a9a48953b999850b28";
+        fixture.WritePlan(oldExecution, ["Console", "Obsolete"]);
+        fixture.WritePlan(currentExecution, ["Console", "Console:expanded"]);
+        var path = Path.Combine(fixture.Root, "conduct-events.log");
+        var writer = new ConductEventLogWriter(path);
+        foreach (var execution in new[] { oldExecution, currentExecution })
+        {
+            // A null goal produces operator-gate run IDs, outside the legacy
+            // goal-prefixed heartbeat pattern. The explicit token must survive.
+            var progress = new AcceptanceGateProgress(null, "lane-plan", "plan", null, null, null,
+                OwnerConsoleGateExecutionReplayFixture.Now, OwnerConsoleGateExecutionReplayFixture.Now,
+                OwnerConsoleGateExecutionReplayFixture.Now, TimeSpan.Zero, 0, fixture.PlanPath(execution), ExecutionId: execution);
+            ConductorDriver.AppendCohortGateProgressEvents(writer, identity, members, progress);
+            ConductorDriver.AppendCohortGateProgressEvents(writer, identity, members, progress with
+            {
+                Phase = execution == oldExecution ? "check-complete" : "verification-check",
+                CurrentTarget = "Console", Outcome = execution == oldExecution ? "failed" : null
+            });
+        }
+        var events = File.ReadAllLines(path).Select(line => OwnerConsoleGateProgress.ParseEvent(line)!).ToArray();
+        Assert.Equal(8, events.Length);
+        Assert.All(events, item =>
+        {
+            Assert.Contains(" execution=operator-gate-", item.Detail);
+            Assert.Contains("cohort=" + identity.Value[..18], item.Detail);
+            Assert.Contains("members=11111111,22222222", item.Detail);
+        });
+        var replay = OwnerConsoleGateProgress.Build(events.Max(item => item.Timestamp), events,
+            fixture.Manifest, [], planReader: new OwnerConsoleGateLanePlanReader());
+        Assert.Equal(2, replay.Executions!.Count);
+        Assert.True(replay.ForExecution(oldExecution)!.Failing);
+        var current = Assert.IsType<OwnerConsoleGateProgress>(replay.ForExecution(currentExecution));
+        Assert.Equal(new[] { "11111111", "22222222" }, current.Members.Select(member => member.Id));
+        Assert.True(current.LanePlanAvailable);
+        Assert.Equal(2, current.TotalCount);
+        Assert.Equal(0, current.DoneCount);
+        Assert.False(current.Failing);
+        Assert.Equal(OwnerConsoleGateLaneState.Running, Assert.Single(current.Lanes, row => row.Name == "Console").State);
+        Assert.DoesNotContain(current.Lanes, row => row.Name == "Obsolete");
+    }
+
     [Fact]
     public void EjectionAndSurvivorOverrideStaleOuterRosterWithoutImportingOldFailures()
     {
@@ -129,6 +184,65 @@ public sealed class OwnerConsoleGateExecutionReplayTests
         Assert.Equal("awaiting execution evidence", ownershipOnly.Participation);
     }
 
+    [Theory]
+    [InlineData("passed")]
+    [InlineData("failed")]
+    public void SoloProducerLifecycleAndProgressShareOneExecutionThroughCompletion(string outcome)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        OwnerConductEvent Lifecycle(int age, string result) => new(Now.AddSeconds(age), "acceptance", Survivor,
+            AcceptanceLifecycleEventFormatter.Format(Survivor, 0, result, Current, 1));
+        OwnerConductEvent[] events = [Lifecycle(-30, "started"), Lifecycle(-20, "running")];
+        var started = fixture.Build(events);
+        Assert.Equal(Current, started.ForMember(Survivor)!.ExecutionId);
+        Assert.Single(started.Executions!);
+
+        var progress = new AcceptanceGateProgress(Survivor, "verification-check", "Console", 0, null, null,
+            Now.AddSeconds(-30), Now.AddSeconds(-10), Now.AddSeconds(-10), TimeSpan.FromSeconds(20), 0, "",
+            ExecutionId: Current);
+        events = [.. events, new(Now.AddSeconds(-10), "gate-progress", Survivor, GateProgressConductEvents.Format(progress))];
+        var running = fixture.Build(events);
+        Assert.Equal(Current, running.ForMember(Survivor)!.ExecutionId);
+        Assert.True(running.ForMember(Survivor)!.Live);
+        Assert.Single(running.Executions!);
+
+        var completed = fixture.Build(events.Append(Lifecycle(-5, outcome)));
+        Assert.False(completed.Live);
+        Assert.False(completed.ForExecution(Current)!.Live);
+        Assert.False(completed.ForMember(Survivor)?.Live ?? false);
+        Assert.Single(completed.Executions!);
+        Assert.Empty(completed.OtherLiveGates!);
+    }
+
+    [Theory]
+    [InlineData("verification-check")]
+    [InlineData("execution-admitted")]
+    public void CompletedOuterOwnerCannotBeReopenedByUnseenChildOrStaleRoster(string phase)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        OwnerConductEvent[] events = [
+            new(Now.AddSeconds(-40), "acceptance-cohort", Survivor,
+                $"ACCEPTANCE_COHORT_CHILD_COMPLETED attempt={Outer} members={Survivor},{Companion} outcome=passed"),
+            OuterEvent(-30),
+            Progress(-20, Current, phase, "Console"),
+            Progress(-10, Current, "execution-admitted", ""),
+            Progress(-5, Current, "verification-check", "Console")];
+        var completed = fixture.Build(events);
+        Assert.False(completed.Live);
+        var child = Assert.IsType<OwnerConsoleGateProgress>(completed.ForExecution(Current));
+        Assert.False(child.Live);
+        Assert.Equal("outer attempt completed", child.Participation);
+        Assert.Equal(Outer, child.OuterAttemptId);
+        Assert.Equal("Console", Assert.Single(child.Lanes).Name);
+        Assert.False(completed.ForMember(Survivor)!.Live);
+
+        // Terminal authority belongs to this owner, not every later execution.
+        var independent = fixture.Build(events.Append(Progress(-1, Original, "execution-admitted", "",
+            members: "aaaaaaaa", outer: "independent-owner")));
+        Assert.True(independent.ForExecution(Original)!.Live);
+        Assert.False(independent.ForExecution(Current)!.Live);
+    }
+
     [Fact]
     public void SameRosterRerunDoesNotInheritTerminalLanesFromEarlierExecution()
     {
@@ -179,6 +293,37 @@ public sealed class OwnerConsoleGateExecutionReplayTests
         Assert.Null(selected.ExecutionId);
         Assert.Null(selected.OuterAttemptId);
         Assert.Equal(OriginalTrain, selected.TrainIdentity);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void LegacyEjectionRequiresAdmissionEvenForADifferentTrain(bool admission, bool admissionAfterProgress)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var events = new List<OwnerConductEvent> {
+            new(Now.AddSeconds(-40), "acceptance-cohort", Ejected,
+                $"ACCEPTANCE_COHORT goal={Ejected} result=held reason=\"ejected from train {OriginalTrain} reason=RedNewestMember surviving-receipt=pending\"") };
+        if (admission && !admissionAfterProgress)
+            events.Add(Progress(-30, Current, "execution-admitted", "", members: Ejected, outer: "different-owner"));
+        events.Add(Progress(-20, Current, "verification-check", "Console", members: Ejected, outer: "different-owner"));
+        if (admission && admissionAfterProgress)
+            events.Add(Progress(-10, Current, "execution-admitted", "", members: Ejected, outer: "different-owner"));
+        events.Add(OuterEvent(-5));
+
+        var replay = fixture.Build(events);
+        var selected = Assert.IsType<OwnerConsoleGateProgress>(replay.ForMember(Ejected));
+        Assert.Equal(admission, selected.Live);
+        Assert.Equal(admission, replay.ForExecution(Current)!.Live);
+        if (admission) Assert.Equal(Current, selected.ExecutionId);
+        else
+        {
+            Assert.False(replay.Live);
+            Assert.Null(selected.ExecutionId);
+            Assert.Equal("ejected / awaiting survivor", selected.Participation);
+            Assert.Equal(OriginalTrain, selected.TrainIdentity);
+        }
     }
 
     [Theory]

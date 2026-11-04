@@ -36,7 +36,8 @@ internal static class GateProgressConductEvents
                 $"member={goalId} members={members} phase={progress.Phase} " +
                 $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
                 $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-                $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}" + progress.ShardOutcomeTokens;
+                $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}" + progress.ShardOutcomeTokens +
+                (progress.ExecutionId is null ? "" : $" execution={FormatConductToken(progress.ExecutionId)}");
             if (!writer.AppendRequired("gate-progress", goalId, detail))
             {
                 throw new IOException(
