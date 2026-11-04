@@ -167,6 +167,8 @@ public sealed class LandingBuildReportAttentionTests
         var original = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
         var unrelated = store.RaiseAsync(CollaborationItemType.Decision, records.Goal.Id.Value,
             "Independent approval", reason, "independent-approval").GetAwaiter().GetResult();
+        // Compare persisted snapshots so read-time answer-history normalization is already reflected.
+        var unrelatedBefore = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult().Single(row => row.Id == unrelated.Id);
         var hold = new GoalLandingBlocker("landing/mutation-boundary", "Train still in flight", "train:other",
             DateTimeOffset.UnixEpoch, "conductor", "next-tick");
         records.Goal.ObserveLandingBlocker(hold);
@@ -179,7 +181,7 @@ public sealed class LandingBuildReportAttentionTests
         Assert.Equal(expected, replacement.Body);
         Assert.DoesNotContain(prefix, replacement.Body);
         Assert.NotEqual(original.CorrelationKey, replacement.CorrelationKey);
-        Assert.Equal(JsonSerializer.Serialize(unrelated), JsonSerializer.Serialize(rows.Single(row => row.Id == unrelated.Id)));
+        Assert.Equal(JsonSerializer.Serialize(unrelatedBefore), JsonSerializer.Serialize(rows.Single(row => row.Id == unrelated.Id)));
         Assert.Equal(hold, records.Goal.LandingBlocker);
         if (unresolved is not null) Assert.False(unresolved.IsCompleted);
         var persisted = ReadEscalations(workspace);
