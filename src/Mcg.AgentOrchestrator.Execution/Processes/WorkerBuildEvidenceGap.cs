@@ -4,5 +4,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public enum WorkerBuildEvidenceGap
 {
     Unclassified,
-    MissingApplicableInvocation
+    MissingApplicableInvocation,
+    // Invalid authority/history is a refusal, never authorization for apparatus recovery.
+    Rejected
 }

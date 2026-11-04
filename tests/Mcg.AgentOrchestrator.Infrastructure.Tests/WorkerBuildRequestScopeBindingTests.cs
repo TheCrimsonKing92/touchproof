@@ -184,7 +184,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
         Assert.Equal("worker_build_host=origin-invalid; current dispatch/host identity is required", result.Diagnostic);
-        Assert.Equal(WorkerBuildEvidenceGap.Unclassified, result.Gap);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
         Assert.Equal(2, WorkerBuildRequestScopeSupport.Load(fixture).GetTask(fixture.GoalId, fixture.TaskId).DispatchHistory.Count);
     }

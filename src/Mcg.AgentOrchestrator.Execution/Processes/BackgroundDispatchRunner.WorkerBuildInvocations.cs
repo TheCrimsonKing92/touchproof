@@ -18,6 +18,12 @@ public sealed partial class BackgroundDispatchRunner
         }
         var receipt = WorkerBuildInvocations.Consume(kernel, goalId, taskId, changedPaths, dirtyPaths);
         var host = new OrchestratorBuildEvidenceResolution(receipt.MissingEvidence, receipt.CompilerFailed, receipt.Diagnostic);
+        if (receipt.Gap == WorkerBuildEvidenceGap.Rejected)
+        {
+            orchestratorFailureReason ??= "worker-build-authority-rejected";
+            return host with { Diagnostic = AppendDiagnostic(host.Diagnostic,
+                "completion_build_hold=authority-rejected; operator decision required before build execution") };
+        }
         var task = kernel.GetTask(goalId, taskId);
         var infrastructure = WorkerBuildInfrastructureEvidence.Classify(task);
         var missingOutcome = receipt.Gap == WorkerBuildEvidenceGap.MissingApplicableInvocation &&

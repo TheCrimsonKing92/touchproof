@@ -13,7 +13,7 @@ internal static class WorkerBuildEvidenceRecoveryHold
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Status == WorkTaskStatus.Failed &&
             candidate.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
             candidate.LastVerification is { } verification &&
-            (verification.OrchestratorFailureReason == "completion-build-coordinator-unavailable" ||
+            (verification.OrchestratorFailureReason is "completion-build-coordinator-unavailable" or "worker-build-authority-rejected" ||
              DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(TaskOutcomeClassifier.TryExtractRule(
                  DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt)) &&
              candidate.CompletionBuildEvidence is { IsPending: false, Phase: not CompletionBuildEvidencePhase.CompilerFailure } &&
@@ -21,7 +21,9 @@ internal static class WorkerBuildEvidenceRecoveryHold
         if (task is null) return UnverifiedChannelHold(goal, state, identity);
         var operationState = task.CompletionBuildEvidence is { } build
             ? $"operation={build.Id}; outcome={build.Phase}; automatic attempt exhausted"
-            : "existing completion-build coordinator unavailable";
+            : task.LastVerification!.OrchestratorFailureReason == "worker-build-authority-rejected"
+                ? "host build authority rejected; inspect task verification before restoring authority"
+                : "existing completion-build coordinator unavailable";
         var reason = $"Completion build evidence hold: task={task.Id.Value}; {operationState}. " +
             "Candidate edits are retained; genuine successful current build evidence with exact project coverage is required. " +
             "An operator decision is required before further build execution; no paid coding retry is authorized solely for missing evidence.";

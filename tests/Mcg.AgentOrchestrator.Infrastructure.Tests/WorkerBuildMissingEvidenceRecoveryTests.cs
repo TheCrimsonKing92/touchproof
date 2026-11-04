@@ -267,9 +267,66 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
                 { LastProcess = task.LastProcess! with { ProcessId = task.LastProcess.ProcessId + 1 } });
         var consumption = Consume(fixture);
         Assert.True(consumption.MissingEvidence);
-        Assert.Equal(WorkerBuildEvidenceGap.Unclassified, consumption.Gap);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, consumption.Gap);
         Assert.Null(fixture.Task.CompletionBuildEvidence);
         Assert.Equal(0, fixture.Launches);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("malformed")]
+    [InlineData("store")]
+    [InlineData("execution")]
+    [InlineData("dispatch")]
+    [InlineData("output")]
+    public void MissingOutcome_InvalidEnrollment_RefusesRecoveryAcrossReload(string control)
+    {
+        var fixture = Fixture();
+        var process = fixture.Task.LastProcess!;
+        var path = process.StandardOutputPath[..^".out.log".Length] + ".dispatch.json";
+        var parameters = DispatchProcessHost.ReadParameters(path);
+        var enrolled = parameters.WorkerBuildHost!;
+        if (control == "missing") File.Delete(path);
+        else if (control == "malformed") File.WriteAllText(path, "{invalid");
+        else DispatchProcessHost.WriteParameters(path, parameters with
+        {
+            StdoutPath = control == "output" ? process.StandardOutputPath + ".foreign" : parameters.StdoutPath,
+            WorkerBuildHost = enrolled with
+            {
+                StatePath = control == "store" ? fixture.StatePath + ".foreign" : enrolled.StatePath,
+                ExecutionDirectory = control == "execution" ? Path.Combine(fixture.Root, "foreign") : enrolled.ExecutionDirectory,
+                DispatchId = control == "dispatch" ? "foreign-dispatch" : enrolled.DispatchId
+            }
+        });
+        var receipt = Consume(fixture);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, receipt.Gap);
+        Assert.Contains("enrollment-invalid", receipt.Diagnostic);
+        Runner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Save(fixture);
+        fixture.Reload();
+        Runner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(0, fixture.Launches);
+        Assert.Equal(0, fixture.Authorizations);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
+        Assert.False(fixture.Task.LastVerification!.Succeeded);
+        Assert.Contains("enrollment-invalid", fixture.Task.LastVerification.StandardError);
+        Assert.Equal("worker-build-authority-rejected", fixture.Task.LastVerification.OrchestratorFailureReason);
+        AssertConductorHold(fixture);
+    }
+
+    [Fact]
+    public void MissingOutcome_LiveHost_DoesNotAuthorizeCompletionBuild()
+    {
+        var fixture = Fixture();
+        var operations = new WorkerBuildInvocationOperations(fixture.StatePath, fixture.Root, fixture.Storage,
+            isHostAlive: _ => true);
+        var result = operations.Consume(fixture.Kernel, fixture.GoalId, fixture.TaskId,
+            ["src/Feature/Feature.cs"], ["src/Feature/Feature.cs"]);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, result.Gap);
+        Assert.Contains("worker host has not exited", result.Diagnostic);
+        Assert.Equal(0, fixture.Launches);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
     }
 
     private static CompletionBuildEvidenceFixture Fixture(string? declaration = "true", AgentRole role = AgentRole.Developer)
@@ -289,6 +346,13 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
         if (declaration is not null)
             File.WriteAllText(outputPath, File.ReadAllText(outputPath).Replace("END_WORKER_RESULT",
                 $"assigned_scope_complete: {declaration}\nEND_WORKER_RESULT", StringComparison.Ordinal));
+        var process = fixture.Task.LastProcess;
+        const string suffix = ".out.log";
+        Assert.EndsWith(suffix, process.StandardOutputPath);
+        var enrollment = Operations(fixture).Prepare(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        DispatchProcessHost.WriteParameters(process.StandardOutputPath[..^suffix.Length] + ".dispatch.json",
+            new(fixture.Task.LastDispatch!.Command, worktree, process.StandardOutputPath,
+                process.StandardErrorPath, process.ExitCodePath, null, true, WorkerBuildHost: enrollment));
         Save(fixture);
         return fixture;
     }
@@ -301,7 +365,7 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
         new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
 
     private static WorkerBuildInvocationOperations Operations(CompletionBuildEvidenceFixture fixture) =>
-        new(fixture.StatePath, fixture.Root, fixture.Storage);
+        new(fixture.StatePath, fixture.Root, fixture.Storage, isHostAlive: _ => false);
 
     private static WorkerBuildConsumption Consume(CompletionBuildEvidenceFixture fixture) =>
         Operations(fixture).Consume(fixture.Kernel, fixture.GoalId, fixture.TaskId, ["src/Feature/Feature.cs"], ["src/Feature/Feature.cs"]);

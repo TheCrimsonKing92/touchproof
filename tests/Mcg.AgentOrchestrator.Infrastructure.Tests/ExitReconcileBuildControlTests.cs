@@ -38,11 +38,13 @@ public sealed class ExitReconcileBuildControlTests
 
     [Theory]
     [InlineData("missing", "missing-current-candidate-outcome")]
-    [InlineData("prior-dispatch", "missing-current-candidate-outcome")]
-    [InlineData("other-dispatch", "missing-current-candidate-outcome")]
+    [InlineData("prior-dispatch", "history-invalid")]
+    [InlineData("other-dispatch", "history-invalid")]
     [InlineData("tree", "missing-current-candidate-outcome")]
     [InlineData("scope", "scope-invalid")]
-    [InlineData("coverage", "missing-current-candidate-outcome")]
+    [InlineData("coverage", "history-invalid")]
+    [InlineData("worktree", "history-invalid")]
+    [InlineData("invalid-apparatus", "history-invalid")]
     public async Task TerminalSweep_InapplicableBuild_RejectsWithoutConsumption(
         string control, string diagnostic)
     {
@@ -67,6 +69,14 @@ public sealed class ExitReconcileBuildControlTests
                         DispatchAt = invocation.DispatchAt.AddTicks(-1), DispatchId = "prior-dispatch"
                     },
                     "other-dispatch" => invocation with { DispatchId = "other-unconsumed-dispatch" },
+                    "worktree" => invocation with { WorktreeRoot = fixture.Build.Root },
+                    "invalid-apparatus" => invocation with
+                    {
+                        Projects = [], Children = [], Outcome = WorkerBuildOutcome.CapacityBeforeStart, CompilerExitCode = null,
+                        Observations = [new(WorkerBuildPhase.Requested, invocation.DispatchAt),
+                            new(WorkerBuildPhase.WaitingForBuildSlot, invocation.DispatchAt),
+                            new(WorkerBuildPhase.Completed, invocation.DispatchAt)]
+                    },
                     _ => invocation with { Projects = [] }
                 }] }
             });
@@ -85,7 +95,11 @@ public sealed class ExitReconcileBuildControlTests
                 Assert.NotEqual(invocation.TreeDigest, digest);
                 break;
             case "coverage":
+            case "invalid-apparatus":
                 Assert.Empty(fixture.StoredInvocation().Projects);
+                break;
+            case "worktree":
+                Assert.NotEqual(invocation.WorktreeRoot, fixture.StoredInvocation().WorktreeRoot);
                 break;
             default:
                 Assert.NotEqual(invocation.DispatchId, fixture.StoredInvocation().DispatchId);
@@ -93,9 +107,42 @@ public sealed class ExitReconcileBuildControlTests
                 break;
         }
 
-        Assert.Equal(1, fixture.TerminalSweep());
+        var runner = fixture.ControlledCompletionRunner();
+        Assert.Equal(1, fixture.TerminalSweep(runner: runner));
 
-        AssertRejected(fixture, "worker_build_host=" + diagnostic);
+        if (control is "missing" or "tree")
+        {
+            var operation = Assert.IsType<CompletionBuildEvidenceOperation>(fixture.Task.CompletionBuildEvidence);
+            Assert.Equal(CompletionBuildEvidencePhase.Pending, operation.Phase);
+            Assert.Equal(new[] { WorkerBuildRequestFixture.Project }, operation.Projects);
+            Assert.True(WorktreeTreeDigest.TryCompute(fixture.Build.RepositoryRoot, out var currentDigest, out _));
+            Assert.Equal(currentDigest, operation.TreeDigest);
+            Assert.Equal(fixture.Task.LastDispatch!.DispatchedAt, operation.DispatchAt);
+            Assert.Null(fixture.Task.LastVerification);
+            Assert.Null(fixture.Task.LastDispatch.ResultCommit);
+            Assert.Equal(1, fixture.CompletionLaunches);
+            fixture.Save();
+            fixture.Reload();
+            runner = fixture.ControlledCompletionRunner();
+            runner.RefreshLatestProcess(fixture.Kernel, fixture.Build.GoalId, fixture.Build.TaskId);
+            Assert.Equal(operation.Id, fixture.Task.CompletionBuildEvidence!.Id);
+            Assert.Equal(1, fixture.CompletionLaunches);
+            Assert.Null(fixture.Task.LastVerification);
+            fixture.ReleaseCompletion();
+            runner.RefreshLatestProcess(fixture.Kernel, fixture.Build.GoalId, fixture.Build.TaskId);
+            Assert.Equal(WorkTaskStatus.Completed, fixture.Task.Status);
+            Assert.True(fixture.Task.LastVerification!.CompletionVerdictVerifiedSuccess, fixture.Describe());
+            Assert.True(fixture.Task.CompletionBuildEvidence.Applied);
+            Assert.NotNull(fixture.Task.LastDispatch.ResultCommit);
+            Assert.Single(fixture.Task.VerificationHistory);
+            Assert.Equal(1, fixture.CompletionLaunches);
+        }
+        else
+        {
+            AssertRejected(fixture, "worker_build_host=" + diagnostic);
+            Assert.Null(fixture.Task.CompletionBuildEvidence);
+            Assert.Equal(0, fixture.CompletionLaunches);
+        }
         var stored = fixture.Build.Operations.Load(fixture.Build.GoalId.Value)
             .GetTask(fixture.Build.GoalId, fixture.Build.TaskId).WorkerBuildInvocations;
         if (control == "missing") Assert.Empty(stored);
@@ -147,15 +194,23 @@ public sealed class ExitReconcileBuildControlTests
         _ = StateDbMigrations.EnsureUpToDate(foreign.SqliteStatePath);
         await new SqliteOrchestratorStateRepository(foreign.SqliteStatePath).SaveAsync(foreignKernel);
 
-        var reconciled = path switch
+        fixture.Kernel = foreignKernel;
+        int Reconcile() => path switch
         {
             "terminal" => fixture.TerminalSweep(foreign),
             "batch" => fixture.BatchRecovery(foreign),
             _ => fixture.DispatchPreflight(foreign)
         };
 
-        Assert.Equal(1, reconciled);
-        AssertRejected(fixture, "worker_build_host=missing-current-candidate-outcome");
+        Assert.Equal(1, Reconcile());
+        AssertRejected(fixture, "worker_build_host=enrollment-invalid");
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        var repository = new SqliteOrchestratorStateRepository(foreign.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        fixture.Kernel = await repository.LoadGoalsAsync([fixture.Build.GoalId]);
+        Assert.Equal(0, Reconcile());
+        AssertRejected(fixture, "worker_build_host=enrollment-invalid");
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
         Assert.False(fixture.StoredInvocation().Consumed);
         Assert.Equal(invocation.Version, fixture.StoredInvocation().Version);
         Assert.Empty((await new SqliteOrchestratorStateRepository(foreign.SqliteStatePath)
