@@ -9,6 +9,21 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // All authority comes from retained dispatches, parsed completions and the existing receipt selector.
 internal static class ReviewerPassingFindingEvidenceRouter
 {
+    internal static bool TryObserveContinuationCap(Goal goal, TaskSpec task,
+        ConductorAutonomyPolicy policy, out FailedGoalFindingObservation observation)
+    {
+        observation = FailedGoalFindingObservation.None;
+        if (task.RequiredRole != AgentRole.Reviewer || task.LastVerification?.CandidateIdentity is null ||
+            !ReviewFindings.GetOpenBlockingFindings(task.LastVerification.MergedReviewFindings ?? [],
+                goal.EffectiveAcceptanceCriteriaCorrections).All(finding => finding.Category == FindingCategory.TestEvidence) ||
+            !ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier).IsAtCap)
+            return false;
+
+        observation = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingRetryCapReached,
+            "Finding evidence continuation held: the normal Reviewer retry budget is exhausted.");
+        return true;
+    }
+
     internal static bool TryObserve(ConductorDriver driver, Goal goal, TaskSpec task,
         ConductorAutonomyPolicy policy, out FailedGoalFindingObservation observation)
     {

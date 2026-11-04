@@ -36,15 +36,8 @@ internal sealed partial class ConductorDriver
         }
         if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy, out decision))
             return true;
-        if (requestingTask.RequiredRole == AgentRole.Reviewer && requestingTask.LastVerification?.CandidateIdentity is not null &&
-            ReviewFindings.GetOpenBlockingFindings(mergedFindings, goal.EffectiveAcceptanceCriteriaCorrections)
-                .All(finding => finding.Category == FindingCategory.TestEvidence) &&
-            ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier).IsAtCap)
-        {
-            decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingRetryCapReached,
-                "Finding evidence continuation held: the normal Reviewer retry budget is exhausted.");
+        if (ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, requestingTask, policy, out decision))
             return true;
-        }
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
         var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
