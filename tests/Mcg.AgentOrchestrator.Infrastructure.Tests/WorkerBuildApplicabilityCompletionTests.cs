@@ -5,13 +5,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WorkerBuildApplicabilityCompletionTests
 {
     [Theory]
-    [InlineData("missing", "no-invocation-recorded")]
-    [InlineData("tree", "tree-mismatch")]
-    [InlineData("corrupt-digest", "unresolved-candidate")]
-    [InlineData("scope", "unresolved-scope")]
-    [InlineData("candidate", "unresolved-candidate")]
+    [InlineData("missing", "no-invocation-recorded", 1, null)]
+    [InlineData("tree", "tree-mismatch", 1, null)]
+    [InlineData("corrupt-digest", "unresolved-candidate", 1, null)]
+    [InlineData("scope", "unresolved-scope", 0, "worker-build-authority-rejected")]
+    [InlineData("candidate", "unresolved-candidate", 1, null)]
     public void Refresh_InapplicableEvidence_PersistsExplanationAndFailureDetail(
-        string control, string expectedReason)
+        string control, string expectedReason, int expectedExitCode, string? expectedFailureReason)
     {
         var fixture = new WorkerBuildApplicabilityFixture();
         var originalProcess = fixture.Task.LastProcess!;
@@ -34,7 +34,9 @@ public sealed class WorkerBuildApplicabilityCompletionTests
         var verification = Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
         Assert.Contains("worker_build_applicability=" + expectedReason + "; next=", payload.StandardError);
         Assert.Contains("worker_build_applicability=" + expectedReason + "; next=", verification.StandardError);
-        Assert.Equal(1, verification.ExitCode);
+        // Authority refusal preserves the observed host exit and records its own failure channel.
+        Assert.Equal(expectedExitCode, verification.ExitCode);
+        Assert.Equal(expectedFailureReason, verification.OrchestratorFailureReason);
         Assert.Equal(0, verification.ObservedRootExitCode);
         Assert.Equal(originalProcess.ChildExitCode, verification.ChildExitCode);
         Assert.False(verification.ReconciledToSuccess);
@@ -48,6 +50,9 @@ public sealed class WorkerBuildApplicabilityCompletionTests
         Assert.Contains("worker_build_applicability=" + expectedReason + "; next=", failure.EvidenceSummary);
         fixture.Save();
         fixture.Build.Reload();
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Equal(expectedExitCode, fixture.Task.LastVerification!.ExitCode);
+        Assert.Equal(expectedFailureReason, fixture.Task.LastVerification.OrchestratorFailureReason);
         Assert.Equal(verification.StandardError, fixture.Task.LastVerification!.StandardError);
         Assert.Equal(failure.EvidenceSummary,
             DispatchFailureClassifier.Classify(fixture.Task, fixture.Task.LastVerification).EvidenceSummary);
