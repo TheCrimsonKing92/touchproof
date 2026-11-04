@@ -7,7 +7,7 @@ using static AttributedFailureDeveloperRouteTests;
 // Parallel-safe: fixture owns all I/O and its injected dispatch runner.
 public sealed class SoloAttributedFailureRouteScenarioTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task ProducerCompletionReloadRoutesOneExactDeveloperCorrection()
     {

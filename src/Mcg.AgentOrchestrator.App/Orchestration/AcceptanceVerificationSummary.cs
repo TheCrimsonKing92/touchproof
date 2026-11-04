@@ -37,11 +37,11 @@ internal sealed record AcceptanceVerificationSummary(
 
     public static AcceptanceVerificationSummary Failed { get; } = new(false, []);
 
-    public IReadOnlyList<AcceptanceCheckResult> RequiredUnmetCriteria { get; } = UnmetCriteria
+    public IReadOnlyList<AcceptanceCheckResult> RequiredUnmetCriteria => UnmetCriteria
         .Where(check => !check.Advisory && !check.Passed)
         .ToArray();
 
-    public IReadOnlyList<AcceptanceCheckResult> AdvisoryUnmetCriteria { get; } = UnmetCriteria
+    public IReadOnlyList<AcceptanceCheckResult> AdvisoryUnmetCriteria => UnmetCriteria
         .Where(check => check.Advisory && !check.Passed)
         .ToArray();
 }

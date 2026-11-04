@@ -7,6 +7,21 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceVerificationSummaryTransportTests
 {
     [Fact]
+    public void RecordCopyDerivesRequiredAndAdvisoryFailuresFromReplacementChecks()
+    {
+        var original = new AcceptanceVerificationSummary(false,
+            [new("old required", false, 1, null), new("old advisory", false, 1, null, Advisory: true)]);
+        var required = new AcceptanceCheckResult("new required", false, 1, null);
+        var advisory = new AcceptanceCheckResult("new advisory", false, 1, null, Advisory: true);
+        var copy = original with { UnmetCriteria = [required, advisory, new("passed", true, 0, null)] };
+
+        Assert.Same(required, Assert.Single(copy.RequiredUnmetCriteria));
+        Assert.Same(advisory, Assert.Single(copy.AdvisoryUnmetCriteria));
+        Assert.Equal("old required", Assert.Single(original.RequiredUnmetCriteria).Name);
+        Assert.Equal("old advisory", Assert.Single(original.AdvisoryUnmetCriteria).Name);
+    }
+
+    [Fact]
     public void SoloReceiptSurvivesNativeConversionNormalizationAndSerialization()
     {
         var receipt = new SoloAcceptanceFailureReceipt(1, "goal", "attempt", "candidate", "tree", "main", "baseline",

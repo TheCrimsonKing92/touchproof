@@ -76,6 +76,17 @@ internal sealed class SoloAcceptanceFailureHandler(
             $"evidence={receipt?.Evidence?.Path ?? "absent"}; sha256={receipt?.Evidence?.Sha256 ?? "absent"}";
         recordEscalation(goal, GoalLifecycleState.AcceptanceFailed, detail);
         return new(goal.Id.Value, prefix, policy.Name,
-            new ConductorAdvanceOutcome.Held(GoalLifecycleState.AcceptanceFailed, detail));
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.AcceptanceFailed, detail)
+            {
+                Decision = new("solo-acceptance-correction", "Hold", 1, reason, detail,
+                [
+                    new("goalId", goal.Id.Value),
+                    new("attemptId", failure?.AttemptId ?? "absent"),
+                    new("candidateSha", failure?.BranchHeadSha ?? "absent"),
+                    new("mainSha", failure?.MainHeadSha ?? "absent"),
+                    new("evidencePath", receipt?.Evidence?.Path ?? "absent"),
+                    new("evidenceSha256", receipt?.Evidence?.Sha256 ?? "absent")
+                ])
+            });
     }
 }

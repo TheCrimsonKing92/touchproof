@@ -77,6 +77,10 @@ internal sealed partial class ConductorDriver
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null ||
             acceptance.AttemptId is not null && acceptance.CheckAttributions is { Count: > 0 }))
         {
+            // Preserve the existing apparatus disposition before admitting solo evidence.
+            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
+                return soloApparatus;
+
             // A solo test finding must use the evidence route, never the generic
             // criterion feedback retry (which cannot establish attribution).
             return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);

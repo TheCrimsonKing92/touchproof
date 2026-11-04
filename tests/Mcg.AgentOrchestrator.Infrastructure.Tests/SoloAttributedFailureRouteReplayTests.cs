@@ -8,7 +8,7 @@ using static AttributedFailureDeveloperRouteTests;
 
 public sealed class SoloAttributedFailureRouteReplayTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task SameCandidateSignatureSurvivesRestartAndDifferentReceiptDigest()
     {
@@ -55,7 +55,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
         Assert.Equal(ConductorAutonomyPolicy.Permissive.MaxCriterionRetries, fixture.Goal.AutomaticAcceptanceRetryCount);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(PaidRouteClassification.Paid)]
     [InlineData(PaidRouteClassification.NonPaid)]
@@ -98,7 +98,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
         Assert.Equal(1, fixture.Goal.AutomaticAcceptanceRetryCount);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task UnstartedCorrectionResumesWithoutAnotherRetryCharge()
     {

@@ -109,6 +109,14 @@ public sealed class SoloAttributedFailureRouteControlTests
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
         Assert.Contains(reason, held.Reason);
         Assert.Contains("evidence=", held.Reason);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal("solo-acceptance-correction", decision.Stage);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Contains(reason, decision.DiscriminatingEvidence);
+        Assert.Equal(held.Reason, decision.Reason);
+        Assert.Contains(new PolicyDecisionFact("goalId", fixture.Goal.Id.Value), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("attemptId", summary.AttemptId!), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("evidencePath", summary.SoloFailureReceipt?.Evidence.Path ?? "absent"), decision.Facts);
         Assert.Empty(fixture.Starts);
         Assert.Empty(MarkerRetries(fixture.Goal));
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
@@ -128,7 +136,7 @@ public sealed class SoloAttributedFailureRouteControlTests
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task ActiveWorkerDoesNotConsumeReceiptAndLaterTickRevalidatesIt()
     {
