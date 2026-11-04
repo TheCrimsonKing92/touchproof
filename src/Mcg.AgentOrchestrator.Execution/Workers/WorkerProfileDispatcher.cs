@@ -158,7 +158,7 @@ public static partial class WorkerProfileDispatcher
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
         ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
@@ -193,10 +193,16 @@ public static partial class WorkerProfileDispatcher
             ref reviewerMergeTreeConflictPaths,
             ref reviewerMergeTreeTotalConflictPathCount);
 
+        var targetContext = TryReadCurrentTargetContext(workingDirectory);
+        IReadOnlyList<string> preparationFindings = [];
+        if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer && preparationFindingsResolver is not null)
+        {
+            preparationFindings = preparationFindingsResolver(goal, targetContext?.HeadCommit);
+            preflightFindings = (preflightFindings ?? []).Concat(preparationFindings).ToArray();
+        }
         var generatedHandoff = WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var (contextDirectory, linkedBacklogPointer) = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
             preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath);
-        var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
@@ -240,6 +246,8 @@ public static partial class WorkerProfileDispatcher
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
         if (!usesTypedContextPackage && linkedBacklogPointer is not null)
             brief = brief with { Content = brief.Content + "\n\n" + linkedBacklogPointer };
+        if (!usesTypedContextPackage && preparationFindings.Count > 0)
+            brief = brief with { Content = brief.Content + "\n\n" + string.Join(Environment.NewLine, preparationFindings) };
         WorkerContextPackageReceipt? contextPackageReceipt = null;
         WorkerContextPackage? contextPackage = null;
         var packagedBrief = brief;
@@ -468,7 +476,7 @@ public static partial class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null, string? integrationBranch = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
@@ -483,7 +491,7 @@ public static partial class WorkerProfileDispatcher
                 dispatchedAt,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
                 sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default, integrationBranch: integrationBranch,
-                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath));
+                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver));
         }
 
         return results;
@@ -506,7 +514,7 @@ public static partial class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -582,7 +590,7 @@ public static partial class WorkerProfileDispatcher
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
             claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
-            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath);
+            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1123,7 +1131,7 @@ public static partial class WorkerProfileDispatcher
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
         int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? integrationBranch = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1139,7 +1147,7 @@ public static partial class WorkerProfileDispatcher
             citedPriorEvidenceResolver,
             sandboxOptions,
             plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, integrationBranch: integrationBranch,
-            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath).Dispatches;
+            deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1160,7 +1168,7 @@ public static partial class WorkerProfileDispatcher
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
         Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
-        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null)
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1256,7 +1264,7 @@ public static partial class WorkerProfileDispatcher
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
                 claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
-                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath));
+                deferredEvidenceResolver: deferredEvidenceResolver, backlogStorePath: backlogStorePath, preparationFindingsResolver: preparationFindingsResolver));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
@@ -2158,7 +2166,9 @@ public static partial class WorkerProfileDispatcher
                 codexPolicyAutoLoad &&
                 bytes.Length <= workerProfile!.RepositoryPolicyMaxBytes
                     ? ContextDeliveryMode.OnDemandFile
-                    : source.DeliveryModeOverride);
+                    : entry.Path.Equals("subscription-preflight.md", StringComparison.OrdinalIgnoreCase) &&
+                        Encoding.UTF8.GetString(bytes).Contains("GATE_TEST_SELECTOR_DIAGNOSTIC", StringComparison.Ordinal)
+                        ? ContextDeliveryMode.InlineFull : source.DeliveryModeOverride);
         }
 
         foreach (var recovered in WorkerCompatibilityHandoffSource.ResolveArtifacts(goal, task, workingDirectory, generatedHandoff))
