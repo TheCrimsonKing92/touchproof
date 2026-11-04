@@ -151,12 +151,18 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
         var scopeDigest = Task.LastDispatch?.WorkerBuildScope is not null
             ? WorkerBuildProjectScope.ResolveForDispatch(Task.LastProcess.WorkingDirectory, [],
                 GoalId, TaskId, Task.LastDispatch).MetadataDigest : null;
+        var projectResults = projects.Select((project, index) =>
+        {
+            var logPath = Path.Combine(Root, $"project-build-{index}.log");
+            File.WriteAllText(logPath, "controlled owned build output");
+            return new { project, exitCode = 0, logPath };
+        }).ToArray();
         File.WriteAllText(ReceiptPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1, treeDigest = digest, digestAlgorithm = WorktreeTreeDigest.Algorithm,
             buildOutcome = "success", generatedAtUtc = Clock.UtcNow.ToString("O"),
             worktreeRoot = Task.LastProcess.WorkingDirectory, configuration = "Debug", projects,
-            scopeMetadataDigest = scopeDigest
+            scopeMetadataDigest = scopeDigest, projectResults
         }));
     }
 

@@ -35,6 +35,10 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
         Assert.Equal(1, fixture.Launches);
 
         fixture.Release(); // Terminal result and exact coverage, released by a signal.
+        var receipt = WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, dispatch.WorkingDirectory, null,
+            new(fixture.GoalId, fixture.TaskId, fixture.Task.LastDispatch!));
+        Assert.True(receipt.Matches, $"{receipt.Reason}: {receipt.Detail}");
+        Assert.Empty(WorkerBuildReceiptCoverage.FindMissingProjects(operation.Projects, receipt.Projects));
         var runner = Runner(fixture);
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
@@ -160,6 +164,8 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
     [InlineData("coverage")]
     [InlineData("foreign")]
     [InlineData("failed")]
+    [InlineData("execution-missing")]
+    [InlineData("log-missing")]
     public void MissingOutcome_InvalidReceipt_CannotCertifySuccess(string control)
     {
         var fixture = Fixture();
@@ -178,11 +184,27 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
         {
             fixture.WriteReceipt(fixture.Task.CompletionBuildEvidence!.Projects);
             File.WriteAllText(fixture.ReceiptPath, File.ReadAllText(fixture.ReceiptPath)
-                .Replace("\"success\"", "\"failed\"", StringComparison.Ordinal));
+                .Replace("\"success\"", "\"failure\"", StringComparison.Ordinal));
+        }
+        if (control is "execution-missing" or "log-missing")
+        {
+            fixture.WriteReceipt(fixture.Task.CompletionBuildEvidence!.Projects);
+            var receipt = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(fixture.ReceiptPath))!;
+            if (control == "execution-missing") receipt.AsObject().Remove("projectResults");
+            else File.Delete(receipt["projectResults"]![0]!["logPath"]!.GetValue<string>());
+            File.WriteAllText(fixture.ReceiptPath, receipt.ToJsonString());
         }
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
         Assert.False(fixture.Task.LastVerification!.Succeeded);
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
+            fixture.Task.LastVerification.StandardError);
+        if (control is "execution-missing" or "log-missing")
+        {
+            Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+            Assert.Contains("worker_build_receipt=project-execution-incomplete", fixture.Task.LastVerification.StandardError);
+            Assert.Contains("receipt_coverage=False", fixture.Task.LastVerification.StandardError);
+        }
         Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
         Assert.Equal(1, fixture.Launches);
     }

@@ -8,10 +8,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class WorkerBuildEvidenceRecoveryHold
 {
     internal static ConductorAdvanceOutcome.Held? Decide(
-        Goal goal, GoalLifecycleState state, FailedGoalRecoveryIdentity identity) =>
-        CompletionEvidenceHold(goal, state, identity) ?? UnverifiedChannelHold(goal, state, identity);
-
-    private static ConductorAdvanceOutcome.Held? CompletionEvidenceHold(
         Goal goal, GoalLifecycleState state, FailedGoalRecoveryIdentity identity)
     {
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Status == WorkTaskStatus.Failed &&
@@ -22,7 +18,7 @@ internal static class WorkerBuildEvidenceRecoveryHold
                  DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt)) &&
              candidate.CompletionBuildEvidence is { IsPending: false, Phase: not CompletionBuildEvidencePhase.CompilerFailure } &&
              BackgroundDispatchRunner.HasCurrentCompletionBuildWorker(candidate)));
-        if (task is null) return null;
+        if (task is null) return UnverifiedChannelHold(goal, state, identity);
         var operationState = task.CompletionBuildEvidence is { } build
             ? $"operation={build.Id}; outcome={build.Phase}; automatic attempt exhausted"
             : "existing completion-build coordinator unavailable";
