@@ -47,6 +47,8 @@ public static class AcceptanceEngineSurfaceRegistry
             // Command-line validation is reached through the acceptance shell process builder.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCmdCommandLineLimit",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
+            // Stall policy is reached through the command summary and stall monitor.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",
             "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",
@@ -110,7 +112,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunEvidence",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneTestFailureRerun",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneWaitObservation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaunchLockSummary",
