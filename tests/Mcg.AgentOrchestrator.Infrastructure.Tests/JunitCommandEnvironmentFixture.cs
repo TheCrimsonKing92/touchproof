@@ -15,6 +15,7 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
     internal GoalAcceptanceVerifier Verifier { get; }
     internal string CommandObservation => Path.Combine(ProjectRoot, "command-observed.json");
     internal string ParserObservation => Path.Combine(ProjectRoot, "parser-observed.json");
+    internal Func<string>? CleanupProcessEvidence { get; init; }
 
     internal JunitCommandEnvironmentFixture(string variable, bool optIn, string? pipe = null,
         int exitCode = 0, bool failParser = false, string? diagnostic = null)
@@ -73,19 +74,23 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         try { DeleteDirectoryWithRetry(Root); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // The cancellation fixture already waits for its pinned child and launcher.
-            // Collect evidence at the remaining failure instead of guessing another owner
-            // or extending the deletion retry. Never stop processes from this snapshot.
-            var report = AssemblyTempRootCleanupHolderDiagnostics.Describe(Root, ProcessCommandLines.Snapshot);
+            // Correlate the remaining holders with the identities pinned by the event gate.
+            // Preserve observed exit/handle-release state after those handles are disposed;
+            // a holder PID alone cannot establish which process the gate already awaited.
+            // Never stop processes from this snapshot.
+            var snapshot = ProcessCommandLines.Snapshot();
+            var report = AssemblyTempRootCleanupHolderDiagnostics.Describe(Root, () => snapshot);
             var holders = report.Holders.Take(8).Select(holder =>
                 $"pid={holder.ProcessId} parent_pid={holder.ParentProcessId} " +
+                $"start_utc_ticks={snapshot.Records.GetValueOrDefault(holder.ProcessId)?.StartedAt?.UtcTicks} " +
                 $"image={holder.Image} match={holder.Match}");
             // Omit command lines and current-directory paths: fixture input values must
             // not become diagnostic excerpts, even while diagnosing fixture teardown.
             var detail = string.Join(Environment.NewLine, holders);
             throw new IOException($"{exception.Message}{Environment.NewLine}" +
                 $"JUnit fixture cleanup failed; holder_candidates={report.Holders.Count} " +
-                $"unreadable_cwd_count={report.UnreadableCurrentDirectoryCount}{Environment.NewLine}{detail}", exception);
+                $"unreadable_cwd_count={report.UnreadableCurrentDirectoryCount}{Environment.NewLine}{detail}" +
+                $"{Environment.NewLine}JUnit fixture process waits: {CleanupProcessEvidence?.Invoke() ?? "not-observed"}", exception);
         }
     }
 }

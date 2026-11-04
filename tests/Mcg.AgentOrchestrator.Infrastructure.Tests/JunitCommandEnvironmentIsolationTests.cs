@@ -14,8 +14,10 @@ public sealed class JunitCommandEnvironmentIsolationTests
         Assert.Null(before);
         using var firstGate = new ChildGate();
         using var secondGate = new ChildGate();
-        using var first = new JunitCommandEnvironmentFixture(variable, true, firstGate.Name);
-        using var second = new JunitCommandEnvironmentFixture(variable, false, secondGate.Name);
+        using var first = new JunitCommandEnvironmentFixture(variable, true, firstGate.Name)
+            { CleanupProcessEvidence = firstGate.DescribeProcesses };
+        using var second = new JunitCommandEnvironmentFixture(variable, false, secondGate.Name)
+            { CleanupProcessEvidence = secondGate.DescribeProcesses };
         using var cleanup = new CancellationTokenSource();
         var firstRun = first.RunAsync(cleanup.Token);
         Task<AcceptanceCheckResult>? secondRun = null;
@@ -69,7 +71,8 @@ public sealed class JunitCommandEnvironmentIsolationTests
         var variable = "FIXTURE_" + Guid.NewGuid().ToString("N");
         var before = Environment.GetEnvironmentVariable(variable);
         using var gate = new ChildGate();
-        using var fixture = new JunitCommandEnvironmentFixture(variable, true, gate.Name, exitCode: 9);
+        using var fixture = new JunitCommandEnvironmentFixture(variable, true, gate.Name, exitCode: 9)
+            { CleanupProcessEvidence = gate.DescribeProcesses };
         using var lifetime = new CancellationTokenSource();
         var run = fixture.RunAsync(lifetime.Token);
         try
@@ -114,6 +117,10 @@ public sealed class JunitCommandEnvironmentIsolationTests
         private StreamWriter? _writer;
         private Process? _child;
         private Process? _launcher;
+        private string _childIdentity = "child=unobserved";
+        private string _launcherIdentity = "launcher=unobserved";
+        private bool _childExitObserved;
+        private bool _launcherExitObserved;
         internal ChildGate()
         {
             _pipe = new(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -132,6 +139,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 // handle now, so teardown observes this child rather than a later reuse of its PID.
                 _child = Process.GetProcessById(observation.RootElement.GetProperty("processId").GetInt32());
                 _ = _child.SafeHandle;
+                _childIdentity = DescribeIdentity(_child, "child");
                 if (OperatingSystem.IsWindows())
                 {
                     // cmd.exe owns the command working directory independently of pwsh. Pin it
@@ -142,6 +150,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
                     _launcher = Process.GetProcessById(Assert.IsType<int>(parent.ParentProcessId));
                     _ = _launcher.SafeHandle;
                     Assert.Equal("cmd", _launcher.ProcessName, ignoreCase: true);
+                    _launcherIdentity = DescribeIdentity(_launcher, "launcher");
                 }
                 _writer = new StreamWriter(_pipe, leaveOpen: true) { AutoFlush = true };
             }
@@ -153,7 +162,9 @@ public sealed class JunitCommandEnvironmentIsolationTests
             try
             {
                 await WaitForExit(_child, "Fixture child");
+                _childExitObserved = _child is not null;
                 await WaitForExit(_launcher, "Fixture command launcher");
+                _launcherExitObserved = _launcher is not null;
             }
             finally
             {
@@ -177,6 +188,13 @@ public sealed class JunitCommandEnvironmentIsolationTests
             _child?.Dispose();
             _child = null;
         }
+        internal string DescribeProcesses() =>
+            $"{_childIdentity} child_exit_observed={_childExitObserved} child_handle_released={_child is null}; " +
+            $"{_launcherIdentity} launcher_exit_observed={_launcherExitObserved} launcher_handle_released={_launcher is null}";
+
+        private static string DescribeIdentity(Process process, string role) =>
+            $"{role}_pid={process.Id} {role}_start_utc_ticks={process.StartTime.ToUniversalTime().Ticks} {role}_image={process.ProcessName}";
+
         public void Dispose() { DisposeProcesses(); _writer?.Dispose(); _pipe.Dispose(); }
     }
 }
