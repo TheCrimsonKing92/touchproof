@@ -3,9 +3,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed partial class AgentOrchestratorKernel
 {
     public IReadOnlyDictionary<HumanInputRequestId, string> CloseRoleReportEvidence(
-        GoalId goalId, string landingCandidateSha, Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null, Func<string, string, bool>? conductorOnlyRange = null) =>
+        GoalId goalId, string landingCandidateSha, Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null, Func<string, string, bool>? conductorOnlyRange = null,
+        Func<TaskSpec, DeveloperBuildCandidateEvidence>? buildCandidateEvidence = null,
+        Func<string, string?>? buildPassedGateSourceForClass = null) =>
         new RoleReportEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m))
-            .Close(GetGoal(goalId), HumanInputRequests, landingCandidateSha, passedGateSourceForClass, removedTestClassSource, conductorOnlyRange);
+            .Close(GetGoal(goalId), HumanInputRequests, landingCandidateSha, passedGateSourceForClass, removedTestClassSource, conductorOnlyRange,
+                buildCandidateEvidence, buildPassedGateSourceForClass);
 
     public GoalVerificationGate BuildVerificationGate(GoalId goalId)
     {
@@ -86,7 +89,7 @@ public sealed partial class AgentOrchestratorKernel
         if (goal.LatestAcceptanceFailure is { } failure)
         {
             var failedChecks = string.Join(", ", failure.FailedChecks);
-            var candidate = FormatAcceptanceCandidate(failure);
+            var candidate = AcceptanceFailureCandidateText.Format(failure);
             blockers.Add(new GoalAcceptanceBlocker(
                 GoalAcceptanceBlockerKind.AcceptanceFailed,
                 null,
@@ -123,18 +126,4 @@ public sealed partial class AgentOrchestratorKernel
             items);
     }
 
-    private static string FormatAcceptanceCandidate(AcceptanceFailureSummary failure)
-    {
-        if (string.IsNullOrWhiteSpace(failure.BranchHeadSha) && string.IsNullOrWhiteSpace(failure.MainHeadSha))
-        {
-            return string.Empty;
-        }
-
-        return $" for candidate branch={FormatShortSha(failure.BranchHeadSha)} main={FormatShortSha(failure.MainHeadSha)}";
-    }
-
-    private static string FormatShortSha(string? sha) =>
-        string.IsNullOrWhiteSpace(sha)
-            ? "unknown"
-            : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
 }
