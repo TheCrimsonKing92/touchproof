@@ -163,14 +163,7 @@ public static partial class WorkerProfileDispatcher
     {
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
-        var retainedDispatch = restorePreparedContext
-            ? task.LastDispatch ?? throw new InvalidOperationException("Context restoration requires a recorded dispatch.")
-            : null;
-        if (retainedDispatch is not null &&
-            (task.LastProcess is not null || retainedDispatch.DispatchedAt != dispatchedAt ||
-             retainedDispatch.WorkingDirectory != workingDirectory || retainedDispatch.WorkerName != profile.Name ||
-             string.IsNullOrWhiteSpace(retainedDispatch.PromptPath)))
-            throw new InvalidOperationException("Context restoration requires the exact unstarted prepared dispatch.");
+        var retainedDispatch = WorkerDispatchPromptPreparation.RetainForRestoration(task, profile, workingDirectory, dispatchedAt, restorePreparedContext);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
         if (retainedDispatch is null) OperatorRoutingNoteLedger.PrepareDispatch(task, dispatchedAt);
         var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
@@ -324,21 +317,8 @@ public static partial class WorkerProfileDispatcher
         }
         var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions, providerName);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
-        var commandTemplate = BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
-        var preparation = retainedDispatch is not null
-            ? new WorkerDispatchPreparation(retainedDispatch.PromptPath!, retainedDispatch.Command, budgetedBrief.Content.Length)
-            : WorkerCommandTemplate.Prepare(
-            budgetedBrief,
-            profile.Name,
-            commandTemplate,
-            promptRoot,
-            dispatchVariables,
-            dispatchedAt);
-        if (retainedDispatch is not null)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(preparation.PromptPath)!);
-            File.WriteAllText(preparation.PromptPath, budgetedBrief.Content);
-        }
+        var preparation = WorkerDispatchPromptPreparation.Prepare(
+            budgetedBrief, profile, workerProviderKind, promptRoot, dispatchVariables, dispatchedAt, retainedDispatch);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
         var retryContextFingerprint = FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
@@ -346,12 +326,7 @@ public static partial class WorkerProfileDispatcher
             currentMainIdentity);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
         if (retainedDispatch is not null)
-        {
-            if (contextPackageReceipt is null)
-                throw new InvalidOperationException("Prepared context restoration requires a typed context package.");
-            kernel.RecordDispatchContextPackageReceipt(goal.Id, task.Id, retainedDispatch.DispatchedAt, contextPackageReceipt);
-            return new WorkerProfileDispatchResult(task, preparation.PromptPath);
-        }
+            return WorkerDispatchPromptPreparation.RecordRestoredReceipt(kernel, goal, task, retainedDispatch, contextPackageReceipt, preparation);
         var reviewEvidenceContext = FindingEvidenceDispatchContext.Capture(goal, task, targetContext?.HeadCommit, dispatchedAt, usesTypedContextPackage);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
