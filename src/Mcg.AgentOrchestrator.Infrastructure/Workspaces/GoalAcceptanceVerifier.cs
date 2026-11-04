@@ -855,7 +855,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
-        var verification = new AcceptanceVerificationResult(
+        var verification = soloFailure.AttachTo(new AcceptanceVerificationResult(
             Passed: failedCheck is null,
             Skipped: false,
             ExitCode: failedCheck?.ExitCode ?? 0,
@@ -866,17 +866,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Checks: checks,
             TestResultPaths: testResultPaths)
         {
-            AttemptId = executionOwner.Identity.AttemptId,
-            SoloFailureReceipt = soloFailure.Receipt,
-            // This run entered solo attribution even if preparation or baseline
-            // execution returned before the capture callback could run.
-            RequiresSoloFailureReceipt = true,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
                 (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase) ||
                  check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))).Select(check => check.Name).ToArray()
-        };
+        });
         if (verification.Passed)
         {
             AcceptanceLaneDurationStore.Flush();

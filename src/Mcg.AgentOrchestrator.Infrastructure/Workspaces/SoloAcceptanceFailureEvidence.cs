@@ -67,7 +67,7 @@ internal static class SoloAcceptanceFailureEvidenceWriter
     internal static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
 
-/// <summary>Owns the attempt-scoped capture callback and its completed receipt.</summary>
+/// <summary>Owns attempt-scoped evidence capture and its binding to the acceptance result.</summary>
 internal sealed class SoloAcceptanceFailureCapture(AcceptanceAttemptIdentity identity)
 {
     internal SoloAcceptanceFailureReceipt? Receipt { get; private set; }
@@ -75,4 +75,13 @@ internal sealed class SoloAcceptanceFailureCapture(AcceptanceAttemptIdentity ide
     internal void Capture(IReadOnlyList<AcceptanceCheckResult> checks,
         FocusedEvidenceArmRunResult baseline, IReadOnlyList<SoloAcceptanceCheckBinding> bindings) =>
         Receipt = SoloAcceptanceFailureEvidenceWriter.Capture(identity, baseline.Sha, checks, baseline, bindings);
+
+    internal AcceptanceVerificationResult AttachTo(AcceptanceVerificationResult result) => result with
+    {
+        AttemptId = identity.AttemptId,
+        SoloFailureReceipt = Receipt,
+        // Entering solo attribution owns the evidence obligation even if preparation
+        // or baseline execution returned before the capture callback could run.
+        RequiresSoloFailureReceipt = true
+    };
 }
