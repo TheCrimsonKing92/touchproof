@@ -130,7 +130,7 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
         IReadOnlyList<OwnerConsoleGateExecutorSlots>? executors = null,
         OwnerConsoleGateLanePlanReader? planReader = null)
     {
-        var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
+        var parsed = events.OrderBy(item => item.Timestamp).Select((item, order) => new Observation(item, Tokens(item.Detail), order)).ToArray();
         var breakdownConcurrency = BreakdownConcurrency(parsed) ?? Math.Max(1, capacity ?? 1);
         var executorSlots = executors?.Where(executor => executor.Enabled).Sum(executor => Math.Max(0, executor.Slots)) ?? 0;
         var gates = Reconstruct(parsed, out var ejections, out var lastEnd);
@@ -160,7 +160,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                 (currentAttempt.Length > 0 ? item.Get("attempt").Equals(currentAttempt, StringComparison.OrdinalIgnoreCase) :
                     !AttemptId.IsMatch(item.Get("attempt")) && item.Event.Timestamp >= gate.Start &&
                     gate.Members.Any(id => Prefix(id) == Prefix(item.Event.GoalId ?? "")))).ToArray();
-            var lastObserved = remote.Select(item => item.Event.Timestamp).Append(gate.Last).Max();
+            var attribution = AttributionObservations(parsed, gate).ToArray();
+            var lastObserved = remote.Concat(attribution).Select(item => item.Event.Timestamp).Append(gate.Last).Max();
             var resolver = plan is null ? lanes : new OwnerConsoleGateLaneResolver(
                 plan.Scheduled.Concat(plan.Skipped.Select(row => row.Name))
                     .Select(name => new OwnerConsoleGateManifestLane(name, 0)).ToArray());
@@ -195,15 +196,15 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                     return new OwnerConsoleGateLane(name, OwnerConsoleGateLaneState.Skipped, "skipped", "",
                         TimeSpan.Zero, median, samples.Length == 0, IsManifestLane: lane is not null, SkipReason: reason, IsScheduled: false);
                 var observations = observationsByLane[name].ToArray();
-                var latest = observations.LastOrDefault();
                 var remoteLane = remoteByLane[name].ToArray();
                 var offer = remoteLane.LastOrDefault(item => item.Get("decision") == "offer");
-                latest ??= remoteLane.LastOrDefault(item => item.Get("outcome") is "accepted" or "completed");
-                if (offer is not null && (latest is null || offer.Event.Timestamp > latest.Event.Timestamp)) latest = offer;
+                var latest = observations.Concat(remoteLane.Where(item =>
+                        item.Get("decision") == "offer" || item.Get("outcome") is "accepted" or "completed"))
+                    .OrderBy(item => item.Order).LastOrDefault();
                 var noSlot = remoteLane.LastOrDefault();
                 var waiting = noSlot?.Event.Detail.StartsWith("REMOTE_LANE ", StringComparison.Ordinal) == true &&
                     noSlot.Get("outcome") == "offer-skipped-no-executor" &&
-                    (observations.Length == 0 || noSlot.Event.Timestamp > observations[^1].Event.Timestamp);
+                    (latest is null || noSlot.Order > latest.Order);
                 var state = latest?.Get("phase") switch
                 {
                     "verification-check" or "remote-shard-started" => OwnerConsoleGateLaneState.Running,
@@ -211,8 +212,7 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                     "cache-hit" or "reuse" => OwnerConsoleGateLaneState.Cached,
                     _ => offer is null ? latest is null ? OwnerConsoleGateLaneState.Planned : OwnerConsoleGateLaneState.Queued : OwnerConsoleGateLaneState.Running
                 };
-                if (latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") == "completed") state = OwnerConsoleGateLaneState.Done;
-                else if (latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") == "accepted") state = OwnerConsoleGateLaneState.Running;
+                if (latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") is "accepted" or "completed") state = OwnerConsoleGateLaneState.Done;
                 if (waiting) state = OwnerConsoleGateLaneState.Queued;
                 var elapsed = TimeSpan.FromMilliseconds(latest?.Number("elapsed_ms") ?? 0);
                 if (state == OwnerConsoleGateLaneState.Running)
@@ -231,14 +231,14 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                         quietSeconds?.TryGetValue(latest.Get("target"), out supplied) == true) quiet = supplied;
                     else quiet = SecondsSinceOutput(now, observations);
                 }
-                return new OwnerConsoleGateLane(name, state, latest?.Get("outcome") is "passed" or "failed" ?
+                return new OwnerConsoleGateLane(name, state, latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") == "accepted" ? "passed" : latest?.Get("outcome") is "passed" or "failed" ?
                     latest.Get("outcome") : "unknown", location, elapsed, median, samples.Length == 0, quiet, lane is not null,
                     latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
                     IsAttributionTarget(latest?.Get("target") ?? name),
                     TreeRevision: latest?.Get("tree"), EvidenceKind: latest?.Get("evidence_kind"),
                     ReproductionMemberId: latest?.Get("reproduction_member"),
                     IsScheduled: plan?.Scheduled.Contains(name, StringComparer.Ordinal) == true);
-            }).ToArray();
+            }).Concat(AttributionRows(attribution, gate)).ToArray();
             var counted = rows.Where(row => row.IsScheduled == true).ToArray();
             var total = counted.Sum(row => row.MedianSeconds ?? 0);
             var done = counted.Where(IsDone).ToArray();
@@ -325,7 +325,7 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
             var value = group.Last().Groups["value"].Value;
             return value.StartsWith('"') ? value[1..^1].Replace("\\\"", "\"", StringComparison.Ordinal) : value;
         }, StringComparer.Ordinal);
-    private sealed record Observation(OwnerConductEvent Event, Dictionary<string, string> Fields)
+    private sealed record Observation(OwnerConductEvent Event, Dictionary<string, string> Fields, int Order)
     {
         internal string Get(string key) => Fields.GetValueOrDefault(key, "");
         internal double Number(string key) => double.TryParse(Get(key), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&

@@ -12,13 +12,13 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortIdentity identity, IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
         string pairFingerprint, IReadOnlyList<string> cohortFailingTests,
         IReadOnlyList<AcceptanceCheckResult> cohortFailedChecks, ConductEventLogWriter writer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, CohortAttributionProgressIdentity? progressIdentity = null)
     {
         AppendCohortAttributionStartEvent(writer, identity, bindings);
         if (cohortFailingTests.Count == 0)
             return ConductorCohortAttributionSkip.Record(store, identity, pairFingerprint,
                 cohortFailingTests, cohortFailedChecks.Count, writer);
-        var runner = CohortPartitionRunner ?? new DefaultCohortPartitionRunner(this);
+        var runner = CohortPartitionRunner ?? new DefaultCohortPartitionRunner(this, progressIdentity);
         var selection = ConductorAcceptanceCohortFocusedAttribution.TrySelect(cohortFailingTests, cohortFailedChecks);
         if (selection is not null)
         {
@@ -141,16 +141,17 @@ internal sealed partial class ConductorDriver
             $"ATTRIBUTION_FOCUSED {identity.Value} result={result} reason={reason} scope=attribution",
             eventKind: "cohort-attribution-focused");
 
-    private sealed class DefaultCohortPartitionRunner(ConductorDriver driver) : IConductorCohortPartitionRunner
+    private sealed class DefaultCohortPartitionRunner(ConductorDriver driver,
+        CohortAttributionProgressIdentity? progressIdentity) : IConductorCohortPartitionRunner
     {
         public AcceptanceCohortPartitionReceipt RunFull(AcceptanceCohortMemberBinding member, int ordinal,
             AcceptanceCohortIdentity identity, ConductEventLogWriter writer, CancellationToken cancellationToken) =>
-            driver.RunCohortPartition(member, ordinal, identity, writer, cancellationToken);
+            driver.RunCohortPartition(member, ordinal, identity, writer, cancellationToken, progressIdentity: progressIdentity);
 
         public AcceptanceCohortPartitionReceipt RunFullScoped(AcceptanceCohortMemberBinding member, int ordinal,
             AcceptanceCohortIdentity identity, AcceptanceAttributionLaneScope? scope,
             ConductEventLogWriter writer, CancellationToken cancellationToken) =>
-            driver.RunCohortPartition(member, ordinal, identity, writer, cancellationToken, scope);
+            driver.RunCohortPartition(member, ordinal, identity, writer, cancellationToken, scope, progressIdentity);
 
         public ConductorCohortFocusedPassResult RunFocused(AcceptanceCohortMemberBinding member, int ordinal,
             AcceptanceCohortIdentity identity, ConductorCohortFocusedSelection selection,

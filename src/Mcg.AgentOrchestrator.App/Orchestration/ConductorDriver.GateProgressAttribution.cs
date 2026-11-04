@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record CohortAttributionProgressIdentity(string? ParentExecutionId, string? OuterAttemptId);
+
     internal static string CohortGateRunIdentity(IEnumerable<string> memberGoalIds) =>
         string.Join(':', memberGoalIds.Order(StringComparer.Ordinal));
 
@@ -15,13 +17,17 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         AcceptanceCohortMemberBinding member,
-        AcceptanceAttributionLaneScope? scope) =>
+        AcceptanceAttributionLaneScope? scope,
+        CohortAttributionProgressIdentity? progressIdentity) =>
         new(ProgressSink: progress =>
         {
             var goalId = member.GoalId.Value[..8];
-            var detail = FormatGateProgressConductEvent(progress with { GoalId = member.GoalId.Value }) +
+            var detail = FormatGateProgressConductEvent(progress with { GoalId = member.GoalId.Value,
+                ReproductionMemberId = member.GoalId.Value, EvidenceKind = "member-reproduction" }) +
                 $" cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} member={goalId} " +
-                $"members={string.Join(',', identity.Members.Select(binding => binding.GoalId.Value[..8]))} scope=attribution";
+                $"members={goalId} scope=attribution" +
+                (progressIdentity?.ParentExecutionId is null ? "" : $" parent_execution={progressIdentity.ParentExecutionId}") +
+                (progressIdentity?.OuterAttemptId is null ? "" : $" outer_attempt={progressIdentity.OuterAttemptId}");
             TryAppendGateProgressEvent(writer, goalId, detail);
         }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
             GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),

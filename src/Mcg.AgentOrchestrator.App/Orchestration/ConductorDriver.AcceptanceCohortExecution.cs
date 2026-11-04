@@ -397,6 +397,13 @@ internal sealed partial class ConductorDriver
         var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings,
             workspace.ProjectHomeDirectoryOrNull, CohortMemberTestRemovalSelection.FromBatch(_cohortKernel?.Goals ?? [], bindings),
             outerAttemptId: outerAttemptId);
+        string? parentExecutionId = null;
+        var progressSink = executionOptions.ProgressSink;
+        executionOptions = executionOptions with { ProgressSink = progress =>
+        {
+            parentExecutionId = progress.ExecutionId;
+            progressSink?.Invoke(progress);
+        } };
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
@@ -495,7 +502,8 @@ internal sealed partial class ConductorDriver
             try
             {
                 receipt = AttributeFailedCohort(store, identity, bindings, pairFingerprint,
-                    cohortFailingTests, cohortFailedChecks, gateProgressEventWriter, cancellationToken);
+                    cohortFailingTests, cohortFailedChecks, gateProgressEventWriter, cancellationToken,
+                    new(parentExecutionId, outerAttemptId));
             }
             catch (CohortStableSlotsDeferredException) { return null; }
         }
@@ -509,7 +517,8 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortIdentity identity,
         ConductEventLogWriter gateProgressEventWriter,
         CancellationToken cancellationToken,
-        AcceptanceAttributionLaneScope? scope = null)
+        AcceptanceAttributionLaneScope? scope = null,
+        CohortAttributionProgressIdentity? progressIdentity = null)
     {
         var workspace = _cohortWorkspace
             ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
@@ -534,7 +543,7 @@ internal sealed partial class ConductorDriver
                 partition.Path,
                 member.LandingPaths);
             var result = RunCohortPartitionAttempt(
-                verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken, scope);
+                verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken, scope, progressIdentity);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             failingTestIdentities = CohortFailingTestIdentities(result);
             failedChecks = AcceptanceCohortVerificationClassifier.FailedCheckNames(result);

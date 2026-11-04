@@ -27,6 +27,9 @@ internal sealed partial record OwnerConsoleGateProgress
             var cohort = detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal);
             var solo = detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal);
             if (!cohort && !solo && item.Event.EventKind != "gate-progress") continue;
+            // Partition run IDs describe auxiliary reproduction, never admission
+            // to a new gate. Only an explicit parent link can attach their activity.
+            if (item.Get("scope") == "attribution") continue;
             var execution = ExecutionOf(item);
             var outer = item.Get("outer_attempt");
             if (cohort && outer.Length == 0) outer = item.Get("attempt");
@@ -222,4 +225,26 @@ internal sealed partial record OwnerConsoleGateProgress
         }
         return views;
     }
+
+    private static IEnumerable<Observation> AttributionObservations(Observation[] parsed, Gate gate) =>
+        parsed.Where(item => gate.ExecutionId is not null && item.Get("scope") == "attribution" &&
+                item.Get("parent_execution") == gate.ExecutionId &&
+                item.Get("outer_attempt") == (gate.OuterAttemptId ?? "") &&
+                ExecutionOf(item).Length > 0 &&
+                gate.Members.Any(member => MemberMatches(member, item.Get("goal"))));
+
+    private static IEnumerable<OwnerConsoleGateLane> AttributionRows(Observation[] observations, Gate gate) =>
+        observations.GroupBy(item => ExecutionOf(item), StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var latest = group.Last();
+                var member = latest.Get("reproduction_member") is { Length: > 0 } full ? full : latest.Get("goal");
+                var complete = latest.Get("phase") == "attribution-complete";
+                return new OwnerConsoleGateLane($"attribution {Prefix(member)}: {group.Key}",
+                    complete || !gate.Live ? OwnerConsoleGateLaneState.Done : OwnerConsoleGateLaneState.Running,
+                    complete ? latest.Get("outcome") : "unknown", "",
+                    TimeSpan.FromMilliseconds(latest.Number("elapsed_ms")), null, false,
+                    IsManifestLane: false, Target: latest.Get("target"), IsAttribution: true,
+                    EvidenceKind: "attribution", ReproductionMemberId: member, IsScheduled: false);
+            });
 }

@@ -149,7 +149,7 @@ public sealed class OwnerConsoleGateExecutionReplayTests
     }
 
     [Fact]
-    public void AttemptBoundRemoteActivityRetainsObservedRunningLaneWithoutInventingSchedule()
+    public void RemoteAcceptedReceiptRetainsPassedLaneWithoutInventingSchedule()
     {
         using var fixture = new OwnerConsoleGateExecutionReplayFixture();
         var gate = fixture.Build([
@@ -160,9 +160,69 @@ public sealed class OwnerConsoleGateExecutionReplayTests
         Assert.False(gate.ScheduleKnown);
         var row = Assert.Single(gate.Lanes);
         Assert.Equal("Console", row.Name);
-        Assert.Equal(OwnerConsoleGateLaneState.Running, row.State);
+        Assert.Equal(OwnerConsoleGateLaneState.Done, row.State);
+        Assert.Equal("passed", row.Outcome);
         Assert.Equal("executor-one", row.Location);
         Assert.Equal(0, gate.TotalCount);
+    }
+
+    [Theory]
+    [InlineData(-10, false, true)]
+    [InlineData(-20, false, true)] // Equal timestamps preserve input event order.
+    [InlineData(-30, false, false)]
+    [InlineData(-10, true, false)] // Another execution cannot complete this lane.
+    public void RemoteReceiptAndLocalProgressUseExecutionLaneAndEventOrder(
+        int remoteAge, bool otherExecution, bool completed)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var gate = fixture.Build([
+            Progress(-1800, Current, "execution-admitted", ""),
+            Progress(-20, Current, "remote-shard-started", "Console"),
+            new(Now.AddSeconds(remoteAge), "remote-lane", null,
+                $"REMOTE_LANE attempt={(otherExecution ? Original : Current)} executor=executor-one lane=Console outcome=accepted"),
+            new(Now.AddSeconds(-5), "remote-lane", null,
+                $"REMOTE_LANE attempt={Current} executor=executor-one lane=Other outcome=accepted")]);
+        var row = Assert.Single(gate.Lanes, row => row.Name == "Console");
+        Assert.Equal(completed ? OwnerConsoleGateLaneState.Done : OwnerConsoleGateLaneState.Running, row.State);
+        Assert.Equal(completed ? "passed" : "unknown", row.Outcome);
+        Assert.False(gate.ScheduleKnown);
+        Assert.False(gate.HasEta);
+        Assert.Equal(0, gate.TotalCount);
+        Assert.Equal(OwnerConsoleGateLaneState.Done, Assert.Single(gate.Lanes, row => row.Name == "Other").State);
+    }
+
+    [Theory]
+    [InlineData("matching", true)]
+    [InlineData("missing", false)]
+    [InlineData("different-parent", false)]
+    [InlineData("different-owner", false)]
+    public void AttributionRequiresExplicitParentAndOwnerWithoutCreatingParticipation(
+        string link, bool visible)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var parent = link == "missing" ? "" : " parent_execution=" + (link == "different-parent" ? Original : Current);
+        var owner = link == "different-owner" ? "independent" : Outer;
+        var events = new[] {
+            Progress(-1800, Current, "execution-admitted", ""),
+            new OwnerConductEvent(Now.AddSeconds(-10), "gate-progress", Survivor,
+                $"PHASE_PROGRESS goal={Survivor} execution=partition-run phase=verification-check target=Console " +
+                $"members={Survivor} scope=attribution outer_attempt={owner}" + parent)
+        };
+        var projection = fixture.Build(events);
+        var execution = Assert.Single(projection.Executions!);
+        Assert.Equal(Current, execution.ExecutionId);
+        Assert.Empty(projection.OtherLiveGates!);
+        Assert.Equal(Current, projection.ForExecution(Current)!.ExecutionId);
+        Assert.Equal(visible ? 1 : 0, execution.Lanes.Count(row => row.IsAttribution));
+        if (visible)
+        {
+            Assert.True(execution.Live); // Recent auxiliary activity keeps its parent observable.
+            Assert.Equal(Current, projection.ForMember(Survivor)!.ExecutionId);
+            var row = Assert.Single(execution.Lanes);
+            Assert.Equal(Survivor, row.ReproductionMemberId);
+            Assert.False(row.IsScheduled);
+            Assert.Equal(0, OwnerConsoleGateCount.Of(execution).Total);
+        }
     }
 
     [Fact]
