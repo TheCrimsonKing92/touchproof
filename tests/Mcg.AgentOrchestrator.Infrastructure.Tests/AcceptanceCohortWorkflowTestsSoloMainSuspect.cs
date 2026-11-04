@@ -13,6 +13,46 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     internal const string TestC = "Fixture.OtherMainRedTests.FailsC";
     internal const string OtherSource = "tests/MainSuspectFixture/OtherMainRedTests.cs";
 
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task RealSoloInheritedFailure_PreservesExcludedHoldAndReceipt()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true);
+        var summary = fixture.Summary;
+        Assert.True(summary.RequiresSoloFailureReceipt);
+        Assert.NotNull(summary.SoloFailureReceipt);
+        var attributions = summary.RequiredUnmetCriteria
+            .SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
+        Assert.NotEmpty(attributions);
+        Assert.All(attributions, attribution =>
+        {
+            Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin);
+            Assert.Equal($"same focused identity failed at merge-base {fixture.Context.MainSha}", attribution.Evidence);
+        });
+        var candidate = ConductorParallelAcceptanceCandidate.Create(fixture.Goal, 0, ["README.md"],
+            fixture.Context.CandidateSha, fixture.Context.MainSha);
+        using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [fixture.Goal],
+            [candidate], ["README.md"], fixture.Context.MainSha);
+
+        var result = scenario.Complete(0, summary);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal(AcceptanceApparatusDispositionPolicy.StageName, decision.Stage);
+        Assert.StartsWith($"acceptance-unattributable:{fixture.Context.CandidateSha}:{fixture.Context.MainSha}:", held.StableIdentity);
+        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        var receipt = Assert.Single(scenario.ReadReceipts());
+        Assert.Equal(fixture.Goal.Id, receipt.GoalId);
+        Assert.Equal(fixture.Context.CandidateSha, receipt.CandidateRevision);
+        Assert.Equal(fixture.Context.MainSha, receipt.ObservedMainRevision);
+        Assert.Equal(fixture.Context.MainSha, receipt.MergeBaseRevision);
+        Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long }, receipt.InheritedTests);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.DoesNotContain(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
+        Assert.Empty(await scenario.Events.ReadAllAsync());
+        Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+    }
+
     [Fact]
     public async Task TwoSoloGoals_SharedUntouchedFailure_TripCircuit()
     {
@@ -208,7 +248,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 BranchHeadSha: Candidates[index].BranchHeadSha, MainHeadSha: main);
         }
 
-        internal void Complete(int index, AcceptanceVerificationSummary summary)
+        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary)
         {
             // Retain the failed gate evidence as the background completion path does.
             Kernel.RecordAcceptanceFailure(Goals[index].Id, summary.FailedChecks ?? [],
@@ -221,6 +261,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             Assert.Equal(0, _verifier.RunCount);
             Assert.Equal(GoalStatus.Verified, Goals[index].Status);
             Assert.Equal(0, Goals[index].Tasks.Single().CriterionRetryCount);
+            return result;
         }
 
         internal sealed record Receipt(GoalId GoalId, string CandidateRevision, string ObservedMainRevision,

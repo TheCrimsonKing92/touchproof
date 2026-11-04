@@ -62,7 +62,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Goal = CompletedGoal(Kernel, committed: committed);
     }
 
-    internal async Task Produce(bool baselineThrows = false, bool buildFails = false)
+    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false)
     {
         var failedBuilds = 0;
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
@@ -89,9 +89,10 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             var method = Array.IndexOf(args, "--filter-method");
             string[] names = method < 0 ? [First, Long] : [args[method + 1].Trim('*')];
             Directory.CreateDirectory(args[results + 1]);
-            WriteTrx(Path.Combine(args[results + 1], args[filename + 1]), baseline, names);
-            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(baseline ? 0 : 1,
-                baseline ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
+            var passed = baseline && !baselineFails;
+            WriteTrx(Path.Combine(args[results + 1], args[filename + 1]), passed, names);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(passed ? 0 : 1,
+                passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(Repo, Goal.Id,
@@ -118,13 +119,17 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
         Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
-            attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed : AcceptanceTestFailureOrigin.Introduced,
+            attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed :
+                baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
                 attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
             Context.CandidateSha, Context.MainSha, verification.TestResultPaths,
             buildFails ? null : failed.Select(check => new AcceptanceCheckAttribution(check.Name,
-                baselineThrows ? AcceptanceFailureOrigin.Unattributed : AcceptanceFailureOrigin.Introduced,
-                baselineThrows ? "fixture baseline execution failed" : "fixture authoritative baseline is green")).ToArray(), null);
+                baselineThrows ? AcceptanceFailureOrigin.Unattributed :
+                    baselineFails ? AcceptanceFailureOrigin.Inherited : AcceptanceFailureOrigin.Introduced,
+                baselineThrows ? "fixture baseline execution failed" :
+                    baselineFails ? "fixture authoritative baseline fails the same identities" :
+                    "fixture authoritative baseline is green")).ToArray(), null);
     }
 
     internal ConductorDriver Driver()

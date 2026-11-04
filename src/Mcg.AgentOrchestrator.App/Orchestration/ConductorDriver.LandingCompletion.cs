@@ -76,11 +76,23 @@ internal sealed partial class ConductorDriver
 
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
+            // Prepared solo attribution can prove every failure is inherited. Keep
+            // the existing excluded hold and main-suspect evidence before routing
+            // actionable findings through the solo receipt consumer.
+            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            var attemptedAllFlakyDisposition = false;
+            if (acceptance.RequiredUnmetCriteria.Count > 0 && retryDisposition.ActionableCriteria.Count == 0 &&
+                TryDisposeExcludedAcceptanceFailures(
+                    goal, goalPrefix, policy, acceptance, apparatusRedReading,
+                    ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
+                return excludedResult;
+
             // Attempt IDs also identify legacy and background completions. Only
             // producer-owned solo evidence selects this path; keep that obligation
             // when a captured receipt is subsequently lost during transport.
             // Preserve the existing apparatus disposition before admitting solo evidence.
-            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
+            if (!attemptedAllFlakyDisposition &&
+                TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
                 return soloApparatus;
 
             // A solo test finding must use the evidence route, never the generic
