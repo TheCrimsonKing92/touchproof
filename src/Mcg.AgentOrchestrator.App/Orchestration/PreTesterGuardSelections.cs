@@ -7,19 +7,22 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class PreTesterGuardSelections
 {
     private readonly DeveloperDeferredTestSelection _changedFileGuards;
+    private readonly IReadOnlyList<FindingEvidenceSelection> _cliSelections;
     internal IReadOnlyList<FindingEvidenceSelection> Selections { get; }
     internal IReadOnlyList<string> NotRun => _changedFileGuards.NotRun;
 
     private PreTesterGuardSelections(DeveloperDeferredTestSelection changedFileGuards,
-        IReadOnlyList<FindingEvidenceSelection> selections)
+        IReadOnlyList<FindingEvidenceSelection> selections, IReadOnlyList<FindingEvidenceSelection> cliSelections)
     {
         _changedFileGuards = changedFileGuards;
         Selections = selections;
+        _cliSelections = cliSelections;
     }
 
     internal static PreTesterGuardSelections Create(PreTesterChangedFileGuardClasses cache,
         string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
-        Action<string>? progress = null)
+        Action<string>? progress = null, AcceptanceGateEngineSettings? settings = null,
+        IReadOnlyList<string>? priorSelections = null)
     {
         var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
         foreach (var selection in changedFileGuards.Selections)
@@ -28,9 +31,16 @@ internal sealed class PreTesterGuardSelections
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={guard.Class} kind={guard.Kind} path={guard.Path}");
         }
+        var cli = priorSelections is null
+            ? PreTesterCliSurfaceSelections.Select(worktreePath, changedPaths, settings)
+            : (Selections: (IReadOnlyList<FindingEvidenceSelection>)[],
+                Provenance: (IReadOnlyList<PreTesterChangedFileGuardClasses.Provenance>)[]);
+        foreach (var reason in cli.Provenance)
+            (progress ?? Console.WriteLine)(
+                $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
         return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
             .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
-            .Concat(changedFileGuards.Selections).ToArray());
+            .Concat(changedFileGuards.Selections).Concat(cli.Selections).ToArray(), cli.Selections);
     }
 
     internal static string ReadMainRevision(string worktreePath, OrchestratorWorkspace? workspace)
@@ -42,23 +52,21 @@ internal sealed class PreTesterGuardSelections
             : throw new InvalidDataException("Pre-Tester changed-file guards could not resolve the candidate merge base.");
     }
 
-    internal IReadOnlyList<FindingEvidenceSelection> Normalize(AcceptanceGateEngineSettings settings)
+    internal DeveloperDeferredTestSelection NormalizeWithNotRun(AcceptanceGateEngineSettings settings)
     {
-        var selected = new List<FindingEvidenceSelection>();
-        foreach (var selection in Selections)
-        {
-            if (FindingEvidenceRequestNormalization.TryNormalize(
-                    new FindingEvidenceRequest([selection]), settings, (_, _) => [],
-                    out var normalized, out _, out _, out _))
-                selected.AddRange(normalized.Selections);
-        }
-        return selected;
+        return DeveloperDeferredTestSelectionNormalization.Normalize(new(Selections, NotRun), settings);
     }
 
     internal FindingEvidenceSelection[] RetainStartedSelections(
         IEnumerable<FindingEvidenceSelection> selected, IReadOnlyList<string>? priorSelections,
         Func<FindingEvidenceSelection, string> format)
     {
+        var cli = priorSelections is null ? _cliSelections : PreTesterCliSurfaceSelections.RecordedSelections(priorSelections).ToArray();
+        // Legacy declarations name the umbrella project. Its executor routes these same classes
+        // to CLI; canonicalize that overlap before normal duplicate elimination.
+        selected = selected.Select(selection => selection.TestProject == "Infrastructure.Tests" &&
+            priorSelections?.Contains(format(selection), StringComparer.OrdinalIgnoreCase) != true
+            ? cli.FirstOrDefault(item => item.TestClass == selection.TestClass) ?? selection : selection);
         // Pre-change attempts keep their original request identity and per-class TRX obligation.
         return selected.DistinctBy(format).Where(selection => priorSelections is null ||
             !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) ||
