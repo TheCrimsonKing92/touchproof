@@ -300,6 +300,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal SourceRevertedEvidenceContinuation? SourceRevertedContinuation { get; init; }
     private string IntegrationBranch => _executionContext?.IntegrationBranch ?? TrunkBranchName.Default;
     private readonly AcceptanceInvocationContext? _invocationContext;
+    private AcceptanceLaneWaitCollector.Occurrence? _laneWait;
+    internal TimeProvider WaitTimeProvider => _timeProvider;
+    private AcceptanceLaneWaitCollector? LaneWaitCollector => _executionContext?.GetLaneWaitCollector(_timeProvider);
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
     private readonly bool _requiresTestTelemetryReceipt;
@@ -1569,6 +1572,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ThrowIfGateCancellationRequested(cancellationToken);
         var invocation = invocationOverride ?? AllocateTestTelemetryInvocation(check);
         var invocationVerifier = new GoalAcceptanceVerifier(this, invocation);
+        if (check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+            invocationVerifier._laneWait = LaneWaitCollector?.BindLocal(check.Name, invocation);
         var invocationTask = AcceptanceGateCancellationMonitor.RunAsync(
                 activeToken => invocationVerifier.RunCheckAsync(check,
                     worktreePath,
@@ -1579,7 +1584,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     activeToken,
                     testResultsDirectoryOverride),
                 _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
-        var result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false);
+        (AcceptanceCheckResult Result, bool Retried) result;
+        try { result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false); }
+        finally { invocationVerifier._laneWait?.Stop(cancellationToken.IsCancellationRequested ? "cancelled" : "invocation-ended"); }
         ThrowIfGateCancellationRequested(cancellationToken);
         return AcceptanceInvocationEvidenceProvenance.Bind(result,
             (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId, invocation.Ordinal);

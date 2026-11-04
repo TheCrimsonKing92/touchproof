@@ -47,7 +47,7 @@ public sealed partial class GoalAcceptanceVerifier
                     stopToken).ConfigureAwait(false);
                 return (new CheckBatchResult([run.Result], run.Retried),
                     !run.Result.Passed && !continueAfterFailure && ShouldStopAfterFailedCheck(cacheContext, check));
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken, check => LaneWaitCollector?.Begin(check.Name)).ConfigureAwait(false);
         var results = parts.Where(part => part is not null).SelectMany(part => part!.Results).ToArray();
         return new CheckBatchResult(cacheContext?.ApplySharedApparatusInvalidation(results) ?? results,
             parts.Any(part => part?.Retried == true));

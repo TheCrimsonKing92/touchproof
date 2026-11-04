@@ -24,6 +24,23 @@ internal static class GateStatsReader
     private static readonly Regex RunSuffix = new(@"^(?<lane>.+)-run-(?<run>\d+)$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    internal static IReadOnlyList<(string Attempt, DateTimeOffset Time, string Lane, int Retry)> DiscoverWaitRuns(
+        string directory, out int skipped)
+    {
+        var groups = DiscoverAttempts(directory, null, int.MaxValue, out skipped);
+        var runs = new List<(string, DateTimeOffset, string, int)>();
+        foreach (var group in groups)
+        foreach (var file in group)
+        {
+            var suffix = RunSuffix.Match(file.Lane);
+            var retry = 0;
+            if (suffix.Success && !int.TryParse(suffix.Groups["run"].Value, NumberStyles.None,
+                CultureInfo.InvariantCulture, out retry)) { skipped++; continue; }
+            runs.Add((group.Key, file.Time, suffix.Success ? suffix.Groups["lane"].Value : file.Lane, retry));
+        }
+        return runs;
+    }
+
     internal static IReadOnlyList<LaneObservation> ReadLaneObservations(string directory, out int skipped)
     {
         skipped = 0;
