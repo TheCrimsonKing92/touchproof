@@ -42,8 +42,18 @@ public sealed class WorkerPreparedContextRestorationTests : GoalWorktreeRecovery
         using var f = new MissingFixture();
         Assert.True(f.Recover().Succeeded);
         var task = f.Goal.Tasks.Single();
-        f.Kernel.RecordTaskDispatch(f.Goal.Id, task.Id, new("fixture", "Write-Output safe", f.Path, DateTimeOffset.UtcNow));
-        var dispatch = task.LastDispatch;
+        // StartDispatches requires retry admission even for a promptless direct record.
+        // Supply that prerequisite so the assertion exercises context restoration and start.
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            f.Goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI",
+            AgentCatalog.OpenAiSubscriptionModelAlias, PaidRouteClassification.Unknown,
+            f.Tip, "criteria", [], [], [], [], f.Tip, f.MainBranch));
+        f.Kernel.RecordTaskDispatch(f.Goal.Id, task.Id, new("fixture", "Write-Output safe", f.Path,
+            DateTimeOffset.UtcNow, RetryContextFingerprint: fingerprint));
+        var dispatch = task.LastDispatch!;
+        Assert.Null(dispatch.PromptPath);
+        Assert.Null(dispatch.ContextPackageReceipt);
+        Assert.False(Directory.Exists(Path.Combine(f.Path, ".orchestrator-context")));
 
         var stop = Assert.Throws<InvalidOperationException>(() => new GoalDispatchOperations().StartDispatches(
             f.Kernel, OrchestratorWorkspace.ForDirectory(f.Repo, f.Repo), f.Goal,
@@ -52,6 +62,7 @@ public sealed class WorkerPreparedContextRestorationTests : GoalWorktreeRecovery
 
         Assert.Contains("process start is disabled", stop.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Same(dispatch, task.LastDispatch);
+        Assert.Equal(fingerprint, task.LastDispatch!.RetryContextFingerprint);
         Assert.Single(task.DispatchHistory);
         Assert.False(Directory.Exists(Path.Combine(f.Path, ".orchestrator-context")));
         Assert.Null(task.LastProcess);
