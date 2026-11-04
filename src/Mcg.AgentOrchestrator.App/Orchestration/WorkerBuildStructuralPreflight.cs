@@ -12,6 +12,19 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
     internal static WorkerBuildStructuralPolicy CapturePolicy(TaskDispatchRecord dispatch,
         string? projectHomeDirectory, string integrationBranch)
     {
+        try { return CaptureRequiredPolicy(dispatch, projectHomeDirectory, integrationBranch); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            // Policy discovery is evidence preparation, not dispatch-start authority.
+            // Enroll the unresolved context so the build response can report it honestly.
+            return new(projectHomeDirectory, integrationBranch, false, false,
+                UnavailableDiagnostic: $"{error.GetType().Name}: {error.Message}");
+        }
+    }
+
+    private static WorkerBuildStructuralPolicy CaptureRequiredPolicy(TaskDispatchRecord dispatch,
+        string? projectHomeDirectory, string integrationBranch)
+    {
         var baseline = dispatch.WorkerBuildScope?.GoalBaseline ?? dispatch.BaseCommit
             ?? throw new InvalidOperationException("Structural enrollment needs the dispatch baseline.");
         var paths = GitCli.RunForRepository(dispatch.WorkingDirectory, "ls-tree", "-r", "--name-only", baseline, "--",
@@ -60,6 +73,8 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
             validateCurrent();
             if (reference.StructuralPolicy is not { } policy)
                 return Unavailable(invocation, policyDigest, "Host enrollment has no structural policy context.");
+            if (policy.UnavailableDiagnostic is { } diagnostic)
+                return Unavailable(invocation, policyDigest, diagnostic);
             var findings = BoundedStructuralPreflight.Run(() =>
             {
                 if (policy.RequiresSizeAuthority && !File.Exists(Path.Combine(invocation.WorktreeRoot, SourceSizeRatchet.SourcePath)))

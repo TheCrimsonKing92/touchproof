@@ -215,8 +215,11 @@ public sealed class LaneSubstringCollisionCheckTests
         Assert.Equal(1, calls);
         Assert.False(noBase.HasViolation);
         Assert.Equal(PassMessage, noBase.Message);
+        Assert.False(noBase.EvaluationComplete);
+        Assert.Contains("baseline could not be read or parsed", noBase.UnavailableDiagnostic);
         Assert.False(defaultCall.HasViolation);
         Assert.Equal(PassMessage, defaultCall.Message);
+        Assert.True(defaultCall.EvaluationComplete);
     }
 
     [Theory]
@@ -231,6 +234,8 @@ public sealed class LaneSubstringCollisionCheckTests
 
         Assert.False(result.HasViolation);
         Assert.Equal(PassMessage, result.Message);
+        Assert.False(result.EvaluationComplete);
+        Assert.Contains("baseline could not be read or parsed", result.UnavailableDiagnostic);
         File.Delete(Path.Combine(fixture.Root, TestCollectionGuardRules.ExemptionsRelativePath));
         var guarded = DeveloperCompletionStructuralPreflight.Evaluate(fixture.Root, null,
             readBase: _ => new LaneSubstringCollisionBase(baseManifest, AddedDiff(IncidentClass)));

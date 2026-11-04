@@ -7,6 +7,102 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WorkerBuildRequestStructuralFailureTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DefaultHostEvaluatorIncludesUncommittedLaneDeclarations(bool untracked)
+    {
+        const string relative = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Collision.cs";
+        const string name = "WorkerBuildRequestCandidateCollisionTests";
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
+            seedRepository: root =>
+            {
+                Write(root, "config/acceptance-manifest.json", """
+                    { "version": 1, "engine": {
+                      "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],
+                      "infrastructureTestLanes": [
+                      { "name": "Dotnet build slots", "filter": "FullyQualifiedName~ConductorBatchLoopTests", "ownedCollections": ["DotnetBuildSlots"] },
+                      { "name": "Balance", "filter": "FullyQualifiedName~WorkerBuildRequest" },
+                      { "name": "Remainder", "filter": "FullyQualifiedName!~WorkerBuildRequest&FullyQualifiedName!~ConductorBatchLoopTests" }
+                    ] } }
+                    """);
+                Write(root, TestCollectionGuardRules.ExemptionsRelativePath, "[]");
+                if (!untracked) Write(root, relative, "public class HarborBaselineFixture { [Xunit.Fact] public void Case() { } }");
+            });
+        Write(fixture.RepositoryRoot, relative, $"public class {name} {{ [Xunit.Fact] public void Case() {{ }} }}");
+        var invocation = await fixture.RunHelper(); // Exercise the production project-home/baseline binding.
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        Assert.Equal(0, invocation.CompilerExitCode);
+        Assert.Equal(WorkerBuildStructuralStatus.Violation, invocation.StructuralCheck!.Status);
+        Assert.Contains("[lane-substring-collision]", invocation.StructuralCheck.Diagnostic);
+        Assert.Contains(name, invocation.StructuralCheck.Diagnostic);
+        Assert.Contains(relative, invocation.StructuralCheck.Diagnostic);
+        Assert.Equal(1, Assert.Single(fixture.Responses).ExitCode);
+        Assert.True(invocation.CustodyReleased);
+        fixture.AssertSlotsFree();
+    }
+
+    [Fact]
+    public async Task DefaultHostEvaluatorTreatsMissingGuardedSourceAsViolation()
+    {
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
+            seedRepository: root =>
+            {
+                WorkerBuildRequestFixture.SeedSizePolicy(root);
+                File.AppendAllText(Path.Combine(root, SourceSizeRatchet.SourcePath),
+                    "new SourceSizeCeiling(\"renamed-or-deleted.cs\", 10)\n");
+            });
+        var invocation = await fixture.RunHelper();
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        Assert.Equal(WorkerBuildStructuralStatus.Violation, invocation.StructuralCheck!.Status);
+        Assert.Contains("renamed-or-deleted.cs", invocation.StructuralCheck.Diagnostic);
+        Assert.Contains("does not exist", invocation.StructuralCheck.Diagnostic);
+        Assert.Contains("update SourceSizeRatchet.SeededCeilings", invocation.StructuralCheck.Diagnostic);
+        Assert.DoesNotContain("host/operator owns recovery", invocation.StructuralCheck.Diagnostic);
+        Assert.Equal(1, Assert.Single(fixture.Responses).ExitCode);
+        Assert.True(invocation.CustodyReleased);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuthorityParserIgnoresCommentsButRejectsUnsupportedRows(bool unsupported)
+    {
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
+            seedRepository: root =>
+            {
+                WorkerBuildRequestFixture.SeedSizePolicy(root);
+                File.WriteAllText(Path.Combine(root, SourceSizeRatchet.SourcePath),
+                    $"new SourceSizeCeiling(\"{WorkerBuildRequestFixture.Source}\", 100);\n" +
+                    (unsupported ? "new SourceClassCeiling(\"Feature\", UnknownLimit, 1);"
+                        : "// new SourceSizeCeiling(\"ignored.cs\", 1)\n// new SourceClassCeiling(\"Ignored\", 1, 1)"));
+            });
+        var invocation = await fixture.RunHelper();
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        Assert.Equal(unsupported ? WorkerBuildStructuralStatus.Unavailable : WorkerBuildStructuralStatus.Passed,
+            invocation.StructuralCheck!.Status);
+        Assert.Equal(unsupported ? 1 : 0, Assert.Single(fixture.Responses).ExitCode);
+    }
+
+    [Fact]
+    public void IncompleteMeasurementsKeepKnownSourceViolationsActionable()
+    {
+        using var fixture = new WorkerBuildRequestFixture(seedRepository: root =>
+        {
+            WorkerBuildRequestFixture.SeedSizePolicy(root);
+            File.WriteAllText(Path.Combine(root, WorkerBuildRequestFixture.Source), "public class Feature { }\n// over ceiling");
+            Write(root, "src/Locked.cs", "// measurement unavailable");
+            File.AppendAllText(Path.Combine(root, SourceSizeRatchet.SourcePath), "new SourceSizeCeiling(\"src/Locked.cs\", 1)\n");
+        });
+        using var locked = new FileStream(Path.Combine(fixture.RepositoryRoot, "src/Locked.cs"), FileMode.Open, FileAccess.Read, FileShare.None);
+        var findings = DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
+        Assert.False(findings.EvaluationComplete);
+        Assert.True(findings.HasViolation);
+        Assert.Contains("ceiling of 1", findings.UnavailableDiagnostic);
+        Assert.Contains(WorkerBuildRequestFixture.Source, findings.UnavailableDiagnostic);
+        Assert.Contains("src/Locked.cs", findings.UnavailableDiagnostic);
+    }
+
+    [Theory]
     [InlineData("unreadable")]
     [InlineData("skipped")]
     [InlineData("malformed")]
@@ -200,6 +296,14 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         try
         {
             File.WriteAllText(Path.Combine(home, "acceptance-manifest.json"), "{}");
+            using (var control = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
+                projectHomeDirectory: home, seedRepository: root => Write(root, "config/acceptance-manifest.json", "{invalid")))
+            {
+                var accepted = await control.RunHelper();
+                Assert.Equal(WorkerBuildStructuralStatus.Passed, accepted.StructuralCheck!.Status);
+                Assert.Equal(home, accepted.StructuralCheck.ProjectHomeDirectory);
+                Assert.Equal(0, Assert.Single(control.Responses).ExitCode);
+            }
             using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
                 projectHomeDirectory: home, seedRepository: root => Write(root, "config/acceptance-manifest.json", "{invalid"));
             var reached = false;
@@ -258,6 +362,23 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         Assert.Equal("config/acceptance-manifest.json", policy.RequiredManifestPath);
         Assert.Equal(fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastDispatch!.WorkerBuildScope!.GoalBaseline,
             policy.BaselineRevision);
+    }
+
+    [Fact]
+    public async Task UnresolvedEnrollmentReportsUnavailableWithoutPreventingCompilerRun()
+    {
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
+        var dispatch = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastDispatch!;
+        var policy = WorkerBuildStructuralPreflight.CapturePolicy(dispatch with
+        {
+            WorkerBuildScope = dispatch.WorkerBuildScope! with { GoalBaseline = "unresolvable-fixture-baseline" }
+        }, null, "main");
+        Assert.Contains("could not read baseline policy membership", policy.UnavailableDiagnostic);
+        var host = new WorkerBuildRequestHost(fixture.Reference with { StructuralPolicy = policy }, fixture.Time,
+            storageRoot: fixture.Storage, launchOverride: fixture.LaunchOverride);
+        var invocation = await fixture.RunHelper(service: host);
+        AssertUnavailable(fixture, invocation);
+        Assert.Contains(policy.UnavailableDiagnostic!, invocation.StructuralCheck!.Diagnostic);
     }
 
     private static void AssertUnavailable(WorkerBuildRequestFixture fixture, WorkerBuildInvocation invocation)

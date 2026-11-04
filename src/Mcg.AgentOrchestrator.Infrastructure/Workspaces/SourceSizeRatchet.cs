@@ -822,14 +822,14 @@ internal static class SourceSizeRatchet
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     violations.Add(new SourceSizeViolation(
-                        relativePath, null, 0, BuildUnreadableFileMessage(relativePath, exception)));
+                        relativePath, null, 0, BuildUnreadableFileMessage(relativePath, exception), SourceSizeViolationKind.Unavailable));
                 }
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             violations.Add(new SourceSizeViolation(
-                "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
+                "src/", null, 0, BuildUnreadableFileMessage("src/", exception), SourceSizeViolationKind.Unavailable));
         }
 
         return Enumerable.Range(0, names.Length).Where(index => counts[index] > 0)
@@ -857,16 +857,6 @@ internal static class SourceSizeRatchet
             var sourcePath = Path.Combine(
                 repositoryRoot,
                 ceiling.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(sourcePath))
-            {
-                violations.Add(new SourceSizeViolation(
-                    ceiling.RelativePath,
-                    null,
-                    ceiling.MaximumLineCount,
-                    BuildMissingFileMessage(ceiling.RelativePath)));
-                continue;
-            }
-
             try
             {
                 var actualLineCount = readLines(sourcePath).Count();
@@ -879,13 +869,18 @@ internal static class SourceSizeRatchet
                         BuildOverCeilingMessage(ceiling, actualLineCount)));
                 }
             }
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                violations.Add(new SourceSizeViolation(ceiling.RelativePath, null, ceiling.MaximumLineCount,
+                    BuildMissingFileMessage(ceiling.RelativePath), SourceSizeViolationKind.MissingSource));
+            }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 violations.Add(new SourceSizeViolation(
                     ceiling.RelativePath,
                     null,
                     ceiling.MaximumLineCount,
-                    BuildUnreadableFileMessage(ceiling.RelativePath, exception)));
+                    BuildUnreadableFileMessage(ceiling.RelativePath, exception), SourceSizeViolationKind.Unavailable));
             }
         }
 
@@ -1037,10 +1032,13 @@ internal sealed record SourceSizeCeiling(string RelativePath, int MaximumLineCou
 
 internal sealed record SourceClassCeiling(string ClassName, int MaximumTotalLineCount, int MaximumPartialFileCount);
 
+internal enum SourceSizeViolationKind { LimitExceeded, MissingSource, Unavailable }
+
 internal sealed record SourceSizeViolation(
     string RelativePath,
     int? ActualLineCount,
     int MaximumLineCount,
-    string Message);
+    string Message,
+    SourceSizeViolationKind Kind = SourceSizeViolationKind.LimitExceeded);
 
 internal sealed record SourceSizeDocumentationViolation(string Rule, int? LineNumber, string Message);

@@ -23,4 +23,5 @@ public sealed record WorkerBuildStructuralCheck(WorkerBuildStructuralStatus Stat
 
 // Host-selected policy expectations survive deletion of policy from the candidate.
 public sealed record WorkerBuildStructuralPolicy(string? ProjectHomeDirectory, string IntegrationBranch,
-    bool RequiresSizeAuthority, bool RequiresManifest, string? RequiredManifestPath = null, string? BaselineRevision = null);
+    bool RequiresSizeAuthority, bool RequiresManifest, string? RequiredManifestPath = null, string? BaselineRevision = null,
+    string? UnavailableDiagnostic = null);

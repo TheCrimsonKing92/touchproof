@@ -20,7 +20,7 @@ internal static class DeveloperCompletionStructuralPreflight
         var complete = ratchet.AuthorityAvailable ? ratchet.EvaluationComplete : !hasSizePolicy;
         var unavailable = complete ? null : ratchet.AuthorityAvailable
             ? $"{SourceSizeRatchet.SourcePath}: incomplete authority or unreadable measurements. " +
-                string.Join(Environment.NewLine, ratchet.Violations.Where(v => v.ActualLineCount is null).Select(v => v.Message))
+                string.Join(Environment.NewLine, ratchet.Violations.Select(v => v.Message))
             : $"{SourceSizeRatchet.SourcePath}: source size authority could not be read or parsed.";
         if (ratchet.HasBlockingViolation)
         {
@@ -43,10 +43,13 @@ internal static class DeveloperCompletionStructuralPreflight
         try
         {
             var violations = EvaluateTestCollectionGuards(worktreePath, settings.InfrastructureTestLanes,
-                projectHomeDirectory, readBase, out var guardsComplete);
+                projectHomeDirectory, readBase, out var guardsComplete, out var guardUnavailable);
+            complete &= guardsComplete;
+            if (!guardsComplete)
+                unavailable = string.Join(Environment.NewLine, new[] { unavailable, guardUnavailable, violations }
+                    .Where(message => !string.IsNullOrWhiteSpace(message)));
             if (violations is not null)
-                return new DeveloperCompletionStructuralFindings(true, violations, complete && guardsComplete, applicable,
-                    guardsComplete ? unavailable : violations);
+                return new DeveloperCompletionStructuralFindings(true, violations, complete, applicable, unavailable);
         }
         catch (InvalidDataException exception)
         {
@@ -60,9 +63,11 @@ internal static class DeveloperCompletionStructuralPreflight
     }
 
     private static string? EvaluateTestCollectionGuards(string worktreePath, IReadOnlyList<AcceptanceTestLane> lanes,
-        string? projectHomeDirectory, Func<string, LaneSubstringCollisionBase?>? readBase, out bool evaluationComplete)
+        string? projectHomeDirectory, Func<string, LaneSubstringCollisionBase?>? readBase, out bool evaluationComplete,
+        out string? unavailableDiagnostic)
     {
         evaluationComplete = true;
+        unavailableDiagnostic = null;
         if (!Directory.Exists(Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests")) ||
             !lanes.Any(lane => lane.Name == TestCollectionGuardRules.DotnetBuildSlotsLaneName))
             return null;
@@ -85,13 +90,13 @@ internal static class DeveloperCompletionStructuralPreflight
         if (readBase is not null && string.Equals(
                 Path.GetFullPath(AcceptanceManifestLocator.Resolve(worktreePath, projectHomeDirectory)),
                 Path.GetFullPath(Path.Combine(worktreePath, "config", "acceptance-manifest.json")),
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
-            readBase(worktreePath) is { } baseline)
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {
+            var baseline = readBase(worktreePath);
             AcceptanceGateEngineSettings? baseSettings = null;
             try
             {
-                baseSettings = AcceptanceGateEngineSettings.Parse(baseline.BaseManifestJson);
+                if (baseline is not null) baseSettings = AcceptanceGateEngineSettings.Parse(baseline.BaseManifestJson);
             }
             catch (Exception exception) when (exception is JsonException or InvalidDataException)
             {
@@ -99,7 +104,12 @@ internal static class DeveloperCompletionStructuralPreflight
             }
             if (baseSettings is not null)
                 violations.AddRange(LaneSubstringCollisionCheck.Find(baseSettings.InfrastructureTestLanes,
-                    lanes, descriptors, baseline.DiffText));
+                    lanes, descriptors, baseline!.DiffText));
+            else
+            {
+                evaluationComplete = false;
+                unavailableDiagnostic = "config/acceptance-manifest.json: Lane substring comparison baseline could not be read or parsed.";
+            }
         }
         if (exemptions is not null)
             violations.AddRange(TestCollectionGuardRules.FindUnisolatedLaneClasses(lanes, descriptors,

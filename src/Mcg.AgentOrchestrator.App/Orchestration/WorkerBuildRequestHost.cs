@@ -67,7 +67,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             var evidence = previous.StructuralCheck;
             if (evidence is null && previous.StructuralPolicy is not null)
                 evidence = _structural.Unavailable(previous, "unavailable", "Structural evaluation was not published by this invocation.");
-            if (evidence is not null)
+            else if (evidence is not null)
             {
                 try
                 {
