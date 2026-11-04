@@ -14,7 +14,9 @@ public sealed class WorkerBuildApplicabilityCompletionTests
     public void Refresh_ObservationPaths_CannotChangeRecoveryDecision(bool changedPath, string marker)
     {
         var fixture = new WorkerBuildApplicabilityFixture();
-        var path = $"src/{marker}/Feature.{(changedPath ? "cs" : "csproj")}";
+        // Keep changed compiled sources under the fixture's owning project so strict
+        // scope resolution reaches the observation/recovery boundary being tested.
+        var path = $"src/Feature/{marker}/Feature.{(changedPath ? "cs" : "csproj")}";
         string Tree()
         {
             Assert.True(GitCli.RunForRepository(fixture.Root, "add", "-A").Succeeded);
@@ -51,6 +53,9 @@ public sealed class WorkerBuildApplicabilityCompletionTests
 
         var outcome = fixture.Runner().RefreshLatestProcessWithOutcome(fixture.Build.Kernel,
             fixture.Build.GoalId, fixture.Build.TaskId);
+        // Root exit evidence belongs to the live completion record; the persisted
+        // verification snapshot retains the effective exit, not ObservedRootExitCode.
+        Assert.Equal(0, Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification).ObservedRootExitCode);
         fixture.Save();
         fixture.Build.Reload();
         var verification = Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
@@ -65,7 +70,6 @@ public sealed class WorkerBuildApplicabilityCompletionTests
         Assert.Null(WorkerBuildEvidenceRecoveryHold.Decide(fixture.Build.Goal, GoalLifecycleState.Failed, identity));
         Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
         Assert.Equal(1, verification.ExitCode);
-        Assert.Equal(0, verification.ObservedRootExitCode);
         Assert.False(Assert.Single(fixture.Task.WorkerBuildInvocations).Consumed);
         Assert.Null(fixture.Task.CompletionBuildEvidence);
         Assert.Equal(0, fixture.Build.Launches);
