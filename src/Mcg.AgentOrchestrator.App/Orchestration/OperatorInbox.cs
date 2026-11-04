@@ -89,7 +89,7 @@ internal sealed record LandingEscalationWriteResult(
         new(0, "error", 0, "skipped", 0, "skipped");
 }
 
-internal static class OperatorInbox
+internal static partial class OperatorInbox
 {
     internal enum LandingEscalationResolution
     {

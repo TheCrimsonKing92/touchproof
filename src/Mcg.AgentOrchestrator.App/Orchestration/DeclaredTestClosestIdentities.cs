@@ -3,13 +3,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class DeclaredTestClosestIdentities
 {
     internal static IReadOnlyList<string> Find(IEnumerable<string> selectors,
-        IReadOnlyList<DeclaredTestReportRows.Row> rows)
+        IReadOnlyList<DeclaredTestReportRows.Row> rows, int maximum = 3)
     {
         var requested = selectors.ToArray();
         if (requested.Length == 0) return [];
         return rows.Select(row => row.Identity).Distinct(StringComparer.Ordinal)
             .OrderBy(identity => requested.Min(selector => Distance(selector, identity)))
-            .ThenBy(identity => identity, StringComparer.Ordinal).Take(3).ToArray();
+            .ThenBy(identity => identity, StringComparer.Ordinal).Take(maximum).ToArray();
     }
 
     private static int Distance(string left, string right)
