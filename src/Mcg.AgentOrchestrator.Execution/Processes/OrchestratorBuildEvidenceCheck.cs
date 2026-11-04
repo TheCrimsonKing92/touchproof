@@ -25,8 +25,6 @@ internal sealed record OrchestratorBuildEvidenceResolution(
     public string AppendDiagnostic(string? standardError)
     {
         var combined = Append(standardError, Diagnostic);
-        if (Applicability is not null)
-            combined = Append(combined, WorkerBuildApplicabilityFormatter.Format(Applicability));
         if (BuildFailed)
         {
             combined = Append(
@@ -40,6 +38,11 @@ internal sealed record OrchestratorBuildEvidenceResolution(
                 combined,
                 DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
         }
+
+        // Keep this block adjacent to the final host marker so failure-detail extraction
+        // cannot mistake preceding worker-authored reasons for the host explanation.
+        if (Applicability is not null)
+            combined = Append(combined, WorkerBuildApplicabilityFormatter.Format(Applicability));
 
         return combined;
     }
