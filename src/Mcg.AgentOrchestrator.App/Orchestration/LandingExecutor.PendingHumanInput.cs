@@ -20,7 +20,10 @@ internal static partial class LandingExecutor
                 RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision),
                 RemovedTestClassSource(workspace, goal.Id, candidateRevision),
                 (reviewed, landing) => ConductorOnlyCandidateRange.IsConductorOnly(
-                    workspace.ResolveExecutionDirectory(goal.Id), workspace.IntegrationBranch, reviewed, landing));
+                    workspace.ResolveExecutionDirectory(goal.Id), workspace.IntegrationBranch, reviewed, landing),
+                task => DeveloperBuildCandidateProof.Read(workspace, goal, task, candidateRevision),
+                RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision, goal.AuthoritativeBrief.Version));
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, goal, kernel.HumanInputRequests.ToArray());
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
             new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray(),
             journalDirectory: workspace.ExecutionDirectory);

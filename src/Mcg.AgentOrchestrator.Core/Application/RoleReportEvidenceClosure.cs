@@ -9,7 +9,9 @@ internal sealed class RoleReportEvidenceClosure(
     internal IReadOnlyDictionary<HumanInputRequestId, string> Close(Goal goal,
         IEnumerable<HumanInputRequest> requests, string landingCandidateSha,
         Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null,
-        Func<string, string, bool>? conductorOnlyRange = null)
+        Func<string, string, bool>? conductorOnlyRange = null,
+        Func<TaskSpec, DeveloperBuildCandidateEvidence>? buildCandidateEvidence = null,
+        Func<string, string?>? buildPassedGateSourceForClass = null)
     {
         lock (requestLock)
         {
@@ -20,6 +22,9 @@ internal sealed class RoleReportEvidenceClosure(
                 .ToArray())
             {
                 var owner = request.EvidenceOwner?.Trim().ToLowerInvariant();
+                var buildReport = DeveloperBuildReportEvidence.IsBuildReportRequest(request);
+                // A structured build request must never fall through to another role's generic pass closure.
+                if (buildReport && owner != "developer") continue;
                 var workerReport = owner == "worker" && DeveloperReportWait.IsReportWait(goal, request);
                 if (workerReport) owner = "developer";
                 if (owner is not ("developer" or "tester" or "reviewer")) continue;
@@ -33,8 +38,12 @@ internal sealed class RoleReportEvidenceClosure(
                 string? tests = null;
                 string? gate = null;
                 var testsPass = false;
+                string? buildEvidence = null;
                 var reason = request.PlannerIdentity?.BriefVersion != goal.AuthoritativeBrief.Version
                     ? "brief-version-differs"
+                    : buildReport
+                        ? DeveloperBuildReportEvidence.Validate(goal, request, task, landingCandidateSha,
+                            buildPassedGateSourceForClass ?? passedGateSourceForClass, buildCandidateEvidence, out buildEvidence)
                     : owner == "developer"
                         ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
                         : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange, out testsPass);
@@ -56,7 +65,8 @@ internal sealed class RoleReportEvidenceClosure(
                 var answer = $"ROLE_REPORT_EVIDENCE owner={owner} task={ownerTask.Id.Value} " +
                     $"criterion={request.PlannerIdentity!.CriterionIndex} candidate={Available(commit)} " +
                     $"landing_candidate={landingCandidateSha} worker_result_log={Available(log)}";
-                if (owner == "developer") answer += $" tests={tests} gate={gate}";
+                if (buildReport) answer += $" {buildEvidence}";
+                else if (owner == "developer") answer += $" tests={tests} gate={gate}";
                 if (owner == "reviewer") answer += " verdict=pass";
                 if (owner == "tester" && testsPass) answer += " tests=pass";
                 if (workerReport) answer += " requested_owner=worker";

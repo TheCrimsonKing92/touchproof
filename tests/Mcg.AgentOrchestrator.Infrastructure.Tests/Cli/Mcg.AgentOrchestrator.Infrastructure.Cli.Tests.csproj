@@ -9,6 +9,8 @@
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\AcceptanceLaneWaitArtifactFixture.cs" Link="AcceptanceLaneWaitArtifactFixture.cs" />
+    <Compile Include="..\AcceptanceLaneWaitTestClock.cs" Link="AcceptanceLaneWaitTestClock.cs" />
     <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <Compile Include="..\CliChildProcessRunner.cs" Link="CliChildProcessRunner.cs" />
     <Compile Include="..\FixtureProbeLocator.cs" Link="FixtureProbeLocator.cs" />

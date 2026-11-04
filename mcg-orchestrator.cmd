@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal DisableDelayedExpansion
 set "MCG_CLI_LAUNCHER_STARTED_UTC="
 set "MCG_CLI_LAUNCHER_PATH=fresh"
 set "ROOT=%~dp0"
@@ -23,6 +23,10 @@ if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNE
 :: Directory.Build.rsp; do not export those settings here because unrelated descendants own their runtimes.
 set "DOTNET_GCConserveMemory=7"
 
+:: Launcher options are a prefix only. Keep the omitted-option fast path and its
+:: original %* forwarding untouched. Explicit selection always verifies freshness.
+set "RUNTIME_CACHE_ROOT="
+if "%~1"=="--runtime-cache-root" goto selected_cache_path
 :: The home publisher projects its adopted record into two batch-readable lines.
 if "%MCG_ORCHESTRATOR_LAUNCHER_INTREE%"=="1" goto intree_path
 set "ADOPTION_POINTER=%ROOT%.orchestrator\continuity\home-build-adoption.cmd.txt"
@@ -46,6 +50,52 @@ if not "%ERRORLEVEL%"=="0" goto intree_path
 set "MCG_CLI_LAUNCHER_PATH=fast"
 "%DOTNET_HOST%" "%ADOPTED_DLL%" %*
 exit /b %ERRORLEVEL%
+
+:selected_cache_path
+if "%~2"=="" goto invalid_cache_option
+set "RUNTIME_CACHE_ROOT=%~2"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%" -CacheRoot "%RUNTIME_CACHE_ROOT%" -ValidateCacheRootOnly
+if errorlevel 1 exit /b 1
+shift
+shift
+if "%~1"=="--runtime-cache-root" goto invalid_cache_option
+:: Batch parameters split unquoted = , and ;, so never rebuild the native tail
+:: from %1/SHIFT. Slice only the two launcher tokens from the original %* text.
+:: Capture with delayed expansion disabled to preserve literal exclamation marks.
+set NATIVE_ARGS=%*
+setlocal EnableDelayedExpansion
+set "PREFIX_TOKENS=0"
+set "PREFIX_IN_TOKEN="
+set "PREFIX_QUOTED="
+:strip_launcher_prefix
+if not defined NATIVE_ARGS goto launcher_prefix_stripped
+set "PREFIX_CHAR=!NATIVE_ARGS:~0,1!"
+set "NATIVE_ARGS=!NATIVE_ARGS:~1!"
+set "PREFIX_NONQUOTE=!PREFIX_CHAR:"=!"
+if not defined PREFIX_NONQUOTE goto launcher_prefix_quote
+if defined PREFIX_QUOTED goto strip_launcher_prefix
+if "!PREFIX_CHAR!"==" " goto launcher_prefix_separator
+if "!PREFIX_CHAR!"=="	" goto launcher_prefix_separator
+set "PREFIX_IN_TOKEN=1"
+goto strip_launcher_prefix
+:launcher_prefix_quote
+set "PREFIX_IN_TOKEN=1"
+if defined PREFIX_QUOTED (set "PREFIX_QUOTED=") else set "PREFIX_QUOTED=1"
+goto strip_launcher_prefix
+:launcher_prefix_separator
+if not defined PREFIX_IN_TOKEN goto strip_launcher_prefix
+set "PREFIX_IN_TOKEN="
+set /a PREFIX_TOKENS+=1
+if !PREFIX_TOKENS! lss 2 goto strip_launcher_prefix
+:launcher_prefix_stripped
+:: All subsequent launcher work and native execution retain their existing
+:: expansion rules. The nested SETLOCAL scopes unwind when the launcher exits.
+setlocal DisableDelayedExpansion
+goto intree_path
+
+:invalid_cache_option
+echo ERROR: --runtime-cache-root requires one absolute directory path and may appear only once before the native command. >&2
+exit /b 1
 
 :intree_path
 for /f "delims=" %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToString('o')" 2^>nul') do set "MCG_CLI_LAUNCHER_STARTED_UTC=%%T"
@@ -96,17 +146,27 @@ del "%BUILD_LOG%" 2>nul
 set "MCG_CLI_LAUNCHER_PATH=built"
 
 :run_app
-:: Run from an isolated copy of the complete app closure under %TEMP%\mcg-run\v2\<digest>.
+:: Run from a verified complete closure under the selected cache base/v2/<digest>.
+:: Omitted cache selection retains %TEMP%\mcg-run.
 :: The resolver reuses or repairs the current digest and removes other digest directories only when
 :: no process holds their App.dll open. A live run keeps its directory intact while the in-tree output
 :: can be rebuilt. Native SQLite assets are required; fail if the build output cannot supply them.
 set "RUNDIR="
+if defined RUNTIME_CACHE_ROOT goto resolve_selected_cache
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%"`) do set "RUNDIR=%%R"
+goto resolved_cache
+:resolve_selected_cache
+for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%" -CacheRoot "%RUNTIME_CACHE_ROOT%"`) do set "RUNDIR=%%R"
+:resolved_cache
 if not defined RUNDIR (
     echo ERROR: could not prepare isolated orchestrator run directory; see resolver error above and retry after repair >&2
     exit /b 1
 )
+if defined RUNTIME_CACHE_ROOT goto run_selected_cache
 "%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
+exit /b %ERRORLEVEL%
+:run_selected_cache
+"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %NATIVE_ARGS%
 exit /b %ERRORLEVEL%
 
 :build_failed

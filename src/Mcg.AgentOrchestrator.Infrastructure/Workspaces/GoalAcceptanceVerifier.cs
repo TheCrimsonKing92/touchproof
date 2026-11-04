@@ -300,6 +300,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal SourceRevertedEvidenceContinuation? SourceRevertedContinuation { get; init; }
     private string IntegrationBranch => _executionContext?.IntegrationBranch ?? TrunkBranchName.Default;
     private readonly AcceptanceInvocationContext? _invocationContext;
+    private AcceptanceLaneWaitCollector.Occurrence? _laneWait;
+    internal TimeProvider WaitTimeProvider => _timeProvider;
+    private AcceptanceLaneWaitCollector? LaneWaitCollector => _executionContext?.GetLaneWaitCollector(_timeProvider);
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
     private readonly bool _requiresTestTelemetryReceipt;
@@ -1569,6 +1572,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ThrowIfGateCancellationRequested(cancellationToken);
         var invocation = invocationOverride ?? AllocateTestTelemetryInvocation(check);
         var invocationVerifier = new GoalAcceptanceVerifier(this, invocation);
+        if (check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+            invocationVerifier._laneWait = LaneWaitCollector?.BindLocal(check.Name, invocation);
         var invocationTask = AcceptanceGateCancellationMonitor.RunAsync(
                 activeToken => invocationVerifier.RunCheckAsync(check,
                     worktreePath,
@@ -1579,7 +1584,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     activeToken,
                     testResultsDirectoryOverride),
                 _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
-        var result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false);
+        (AcceptanceCheckResult Result, bool Retried) result;
+        try { result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false); }
+        finally { invocationVerifier._laneWait?.Stop(cancellationToken.IsCancellationRequested ? "cancelled" : "invocation-ended"); }
         ThrowIfGateCancellationRequested(cancellationToken);
         return AcceptanceInvocationEvidenceProvenance.Bind(result,
             (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId, invocation.Ordinal);
@@ -3392,7 +3399,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried) =>
         AcceptanceCommandResultSummary.ManagedDotnet(result,
-            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output),
+            result.TimedOut ? AcceptanceCommandResultSummary.BuildTimeoutSummary(result) : AcceptanceCommandResultSummary.ExtractResultSummary(result.Output),
             transientCompilerLockRetried);
 
     private static string PrefixResultSummary(string prefix, string? summary) =>
@@ -3400,7 +3407,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string? BuildGenericCommandResultSummary(CommandResult result) =>
         AcceptanceCommandResultSummary.GenericCommand(result,
-            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output));
+            result.TimedOut ? AcceptanceCommandResultSummary.BuildTimeoutSummary(result) : AcceptanceCommandResultSummary.ExtractResultSummary(result.Output));
 
     // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
     // completed all-passed banner and no real test failure is an environmental abort, not a verdict. A
@@ -3837,73 +3844,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return Regex.IsMatch(normalizedPath, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private static string? ExtractResultSummary(string output)
-    {
-        return output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .LastOrDefault(line =>
-                line.Contains("Failed:", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Passed:", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Total:", StringComparison.OrdinalIgnoreCase));
-    }
-
-    internal static string? TailOutput(string output)
-    {
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return null;
-        }
-
-        const int maxChars = 2000;
-        const int maxLines = 40;
-
-        var trimmed = output.Trim();
-        var lines = trimmed.Split('\n');
-        var tail = lines.Length <= maxLines
-            ? trimmed
-            : string.Join('\n', lines[^maxLines..]);
-
-        return tail.Length <= maxChars ? tail : tail[^maxChars..];
-    }
-
-    private static string BuildTimeoutSummary(CommandResult result)
-    {
-        var fallback = new AcceptanceGateEngineSettings().ResolveCheckTimeout(null);
-        return $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? fallback)} budget={FormatTimeout(result.Timeout ?? fallback)}"
-            + AcceptanceLaneStallPolicy.FormatStallSuffix(result.LaneStallSilence, result.LaneStallLimit);
-    }
-
-    private static string BuildTimeoutFailureName(AcceptanceManifestCheck check, CommandResult result) =>
-        $"acceptance-check-timeout: {AcceptanceArtifactFileNames.Slug(check.Name)} {BuildTimeoutSummary(result)}";
-
-    private static string BuildTimeoutOutput(CommandResult result)
-    {
-        var details = new List<string>
-        {
-            $"Verification command timed out after {BuildTimeoutSummary(result)}.",
-        };
-
-        if (!string.IsNullOrWhiteSpace(result.CommandLine))
-            details.Add($"Command: {result.CommandLine}");
-        if (!string.IsNullOrWhiteSpace(result.StdoutPath))
-            details.Add($"stdout: {result.StdoutPath}");
-        if (!string.IsNullOrWhiteSpace(result.StderrPath))
-            details.Add($"stderr: {result.StderrPath}");
-
-        var tail = TailOutput(result.Output);
-        if (!string.IsNullOrWhiteSpace(tail))
-        {
-            details.Add("Last output:");
-            details.Add(tail);
-        }
-
-        return string.Join(Environment.NewLine, details);
-    }
-
-    private static string FormatTimeout(TimeSpan timeout) =>
-        timeout.TotalSeconds >= 60
-            ? $"{timeout.TotalMinutes:0.#}m"
-            : $"{timeout.TotalSeconds:0.#}s";
+    internal static string? TailOutput(string output) =>
+        AcceptanceCommandResultSummary.TailOutput(output);
 
     private Task<CommandResult> RunWithGateHeartbeatAsync(
         string[] arguments,
