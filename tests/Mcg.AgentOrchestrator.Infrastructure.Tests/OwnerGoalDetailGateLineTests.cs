@@ -14,7 +14,11 @@ public sealed class OwnerGoalDetailGateLineTests
     public void Render_LiveTrain_WritesExactLineAfterLanding(bool failing, string expected)
     {
         var gate = Train();
-        if (failing) gate = gate with { Lanes = [Failed(false), Failed(true)] };
+        if (failing) gate = gate with
+        {
+            Lanes = gate.Lanes.Select((lane, index) => index == 0
+                ? lane with { Outcome = "failed" } : lane).Append(FailedAttribution()).ToArray()
+        };
         var detail = new OwnerGoalDetailSnapshot(VerifyingGoal(), null, [], gate);
 
         var lines = Render(detail).Split(Environment.NewLine);
@@ -28,14 +32,16 @@ public sealed class OwnerGoalDetailGateLineTests
     [Theory]
     [InlineData(360)]
     [InlineData(399)]
-    public void Render_SoloWithoutLaneCount_WritesWholeElapsedMinutes(int elapsedSeconds)
+    public void Render_SoloWithoutPlan_WritesUnknownScheduleAndEta(int elapsedSeconds)
     {
-        var gate = Train() with { Kind = "solo", Members = [new(Id, "Member")], TotalCount = 0,
+        var gate = Train() with { Kind = "solo", Members = [new(Id, "Member")],
+            Lanes = [Train().Lanes[0] with { IsScheduled = false }], LanePlanAvailable = false,
             Elapsed = TimeSpan.FromSeconds(elapsedSeconds) };
 
         var text = Render(new(VerifyingGoal(), null, [], gate));
 
-        Assert.Contains("Gate: solo, 1 member, running 6m (g opens the gate view)", text.Split(Environment.NewLine));
+        Assert.Contains("Gate: solo, 1 member, schedule unknown, ETA unknown (g opens the gate view)",
+            text.Split(Environment.NewLine));
     }
 
     [Fact]
@@ -114,10 +120,13 @@ public sealed class OwnerGoalDetailGateLineTests
 
     private static OwnerConsoleGateProgress Train() => new(true, "train",
         [new(Id, "Member"), new("33333333", "Second"), new("44444444", "Third")], At,
-        TimeSpan.FromMinutes(6), [], .8, 540, 22, 27);
+        TimeSpan.FromMinutes(6), Enumerable.Range(0, 27).Select(index => new OwnerConsoleGateLane(
+            "Lane " + index, index < 22 ? OwnerConsoleGateLaneState.Done : OwnerConsoleGateLaneState.Planned,
+            index < 22 ? "passed" : "", "", TimeSpan.Zero, 20, false, IsScheduled: true)).ToArray(),
+        .8, 540, 22, 27, LanePlanAvailable: true);
 
-    private static OwnerConsoleGateLane Failed(bool attribution) => new("Failed", OwnerConsoleGateLaneState.Done,
-        "failed", "local", TimeSpan.FromSeconds(20), 20, false, IsAttribution: attribution);
+    private static OwnerConsoleGateLane FailedAttribution() => new("Failed attribution", OwnerConsoleGateLaneState.Done,
+        "failed", "local", TimeSpan.FromSeconds(20), 20, false, IsAttribution: true, IsScheduled: false);
 
     private static string Render(OwnerGoalDetailSnapshot detail)
     {

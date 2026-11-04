@@ -44,7 +44,6 @@ public sealed class ConductorDriverPartialLayoutTests
             ("AppendGateProgressEvent", 1),
             ("AppendCohortGateProgressEvents", 1),
             ("FormatGateProgressConductEvent", 1),
-            ("FormatConductToken", 1),
             ("CountAssignedTasks", 1),
             ("HasAssignedDeveloperReadyForDispatch", 1),
             ("FormatPreparedDispatchWithoutStart", 1),
@@ -61,6 +60,11 @@ public sealed class ConductorDriverPartialLayoutTests
             ("ExtractDispatchRecoveryDiagnostic", 1),
             ("FormatFailureTail", 1),
             ("IsBlockingTimeoutCheck", 1));
+
+    [Fact]
+    public void GateProgressTokensHaveOneOwningFile() =>
+        AssertMemberLocations("GateProgressConductEvents.cs",
+            ("FormatConductToken", 1));
 
     [Fact]
     public void GitAndLeaseHelpersMembersHaveOneOwningFile() =>
@@ -102,6 +106,7 @@ public sealed class ConductorDriverPartialLayoutTests
         var target = Path.Combine(folder, owningFile);
         Assert.True(File.Exists(target), $"Expected conductor partial: {owningFile}");
         var files = Directory.GetFiles(folder, "ConductorDriver*.cs")
+            .Append(target).Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(Path.GetFileName, File.ReadAllLines);
 
         foreach (var member in expectedMembers)

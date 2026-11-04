@@ -22,6 +22,7 @@ internal static class OwnerConsoleVerifyingGate
         entered ??= goal.Timeline.LastOrDefault()?.OccurredAt;
         if (detail.Gate is { } live)
         {
+            if (!live.Live && live.Participation is not null) return "gate: " + live.Participation;
             var started = live.StartedAt ?? entered;
             return "gate running" + (started is { } at ? " since " + Time(at, zone) : "");
         }

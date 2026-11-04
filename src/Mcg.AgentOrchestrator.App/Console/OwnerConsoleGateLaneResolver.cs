@@ -16,7 +16,7 @@ internal sealed class OwnerConsoleGateLaneResolver
             exact.TryAdd("infrastructure tests: " + lane.Name, lane.Name);
         }
         prefixes = manifest.OrderByDescending(lane => lane.Name.Length)
-            .Select(lane => (lane.Name, lane.Name + ":", "infrastructure tests: " + lane.Name + ":")).ToArray();
+            .Select(lane => (lane.Name, lane.Name + ": ", "infrastructure tests: " + lane.Name + ": ")).ToArray();
     }
 
     internal int Computations => computedTargets.Count;

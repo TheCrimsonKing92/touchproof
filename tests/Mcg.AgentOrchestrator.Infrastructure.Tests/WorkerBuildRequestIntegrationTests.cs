@@ -37,6 +37,11 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
             if (i.Phase != WorkerBuildPhase.Requested) return;
             Assert.Null(i.Outcome);
             AssertStatus(i);
+            var pending = fixture.Consume();
+            Assert.True(pending.MissingEvidence);
+            Assert.False(pending.CompilerFailed);
+            Assert.Equal(Mcg.AgentOrchestrator.Infrastructure.WorkerBuildEvidenceGap.Unclassified, pending.Gap);
+            Assert.Contains("reconciliation=pending", pending.Diagnostic);
             pendingObserved = true;
         });
         Assert.True(pendingObserved);

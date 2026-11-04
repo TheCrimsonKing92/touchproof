@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -30,10 +31,11 @@ public sealed class AcceptanceCohortBriefIdentityTests : AcceptanceCohortWorkflo
                     CriterionEvidenceOwner.Acceptance, "test", CriterionEvidenceScopes.FullAcceptanceGate,
                     expectedCandidateSha: candidate);
             }
-            var verifier = new SequenceAcceptanceVerifier([new AcceptanceVerificationResult(true, false, 0, null,
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var verifier = new GateProgressReportingVerifier(workspace.ConductEventsLogPath,
+                [new AcceptanceVerificationResult(true, false, 0, null,
                 Checks: [new AcceptanceCheckResult("combined", true, 0, null)],
                 TestResultPaths: [WritePassingTrx(repo, "brief-child.trx")])]);
-            var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
@@ -67,20 +69,59 @@ public sealed class AcceptanceCohortBriefIdentityTests : AcceptanceCohortWorkflo
                     goals[0].AuthoritativeBrief.Version);
                 var error = Assert.Throws<InvalidOperationException>(() => driver.RunGroupedGateAttemptBody(attempt));
                 Assert.Equal("Grouped cohort gate identity changed before child execution.", error.Message);
-                Assert.Equal(0, verifier.RunCount);
+                Assert.Empty(verifier.EventsAfterProgress);
                 Assert.Null(store.TryReadReceipt(identity.Value));
             }
             else
             {
                 var outcome = driver.RunGroupedGateAttemptBody(attempt);
                 Assert.NotNull(outcome);
-                Assert.Equal(1, verifier.RunCount);
+                var records = Assert.Single(verifier.EventsAfterProgress);
                 var receipt = Assert.IsType<AcceptanceCohortReceipt>(store.TryReadReceipt(identity.Value));
                 Assert.Equal(AcceptanceCohortGateOutcome.Passed, receipt.Outcome);
                 Assert.Equal(identity.Value, receipt.Identity.Value);
+                AssertGroupedCompletionClosesExecution(attempt, records);
             }
         }
         finally { DeleteDirectory(repo); }
+    }
+
+    private static void AssertGroupedCompletionClosesExecution(
+        ConductorGroupedGateAttempt attempt, ConductEventRecord[] records)
+    {
+        var progress = records.Where(record => record.EventKind == "gate-progress").ToArray();
+        Assert.NotEmpty(progress);
+        Assert.All(progress, record => Assert.Contains(" outer_attempt=" + attempt.AttemptId, record.Detail));
+        var events = progress.Select(record => new OwnerConductEvent(
+            record.Timestamp, record.EventKind, record.GoalId, record.Detail)).ToArray();
+        var at = events.Max(item => item.Timestamp);
+        var running = OwnerConsoleGateProgress.Build(at, events, [], []);
+        var execution = Assert.Single(running.Executions!);
+        Assert.True(execution.Live);
+        Assert.NotNull(execution.ExecutionId);
+        Assert.Equal(attempt.AttemptId, execution.OuterAttemptId);
+        foreach (var member in attempt.Members)
+            Assert.Equal(execution.ExecutionId, running.ForMember(member.GoalId)!.ExecutionId);
+
+        ConductorGroupedGateAttemptCoordinator.Save(attempt);
+        File.WriteAllText(attempt.ResultPath, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attempt.IdentityValue, Status = "completed", Verdict = "passed"
+        }));
+        var completionEvents = new List<string>();
+        var coordinator = new ConductorGroupedGateAttemptCoordinator(Path.GetDirectoryName(attempt.MetadataPath)!,
+            isProcessAlive: _ => false, utcNow: () => at.AddSeconds(1), eventSink: completionEvents.Add);
+        coordinator.TryReconcileDead(attempt, "child-result-published");
+        var completion = Assert.Single(completionEvents);
+        Assert.StartsWith("ACCEPTANCE_COHORT_CHILD_COMPLETED ", completion);
+        var completed = OwnerConsoleGateProgress.Build(at.AddSeconds(2), events.Append(
+            new OwnerConductEvent(at.AddSeconds(1), "acceptance-cohort", null, completion)), [], []);
+        Assert.False(completed.Live);
+        Assert.Empty(completed.OtherLiveGates!);
+        var closed = Assert.Single(completed.Executions!);
+        Assert.Equal(execution.ExecutionId, closed.ExecutionId);
+        Assert.Equal(attempt.AttemptId, closed.OuterAttemptId);
+        Assert.False(closed.Live);
     }
 
     private static RefinedSpec Spec(Goal goal) => new(goal.Objective,
