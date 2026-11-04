@@ -36,62 +36,72 @@ internal static class BrokerDeliveryTestFixture
 
     internal static DeliveryFixture Prepare(AgentRole role, bool retry,
         bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false,
-        bool includePackageJson = false, string? pythonMarker = null)
+        bool includePackageJson = false, string? pythonMarker = null,
+        BrokerDeliveryFixtureObservation? observation = null)
     {
         var root = SharedTestSupport.CreateTempDirectory();
         try
         {
             var workingDirectory = Path.Combine(root, "repo");
-            Directory.CreateDirectory(workingDirectory);
-            Git("init", "--initial-branch=main");
-            File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
-            if (includeDotnetProject)
+            var head = string.Empty;
+            Observe(BrokerDeliveryFixtureObservation.Phase.Repository, () =>
             {
-                // Node precedence is pinned against a root csproj; existing .NET/Go cases keep their layout.
-                var projectDirectory = includePackageJson ? workingDirectory : Path.Combine(workingDirectory, "src", "Fixture");
-                Directory.CreateDirectory(projectDirectory);
-                File.WriteAllText(Path.Combine(projectDirectory, "Fixture.csproj"),
-                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-            }
-            if (includeGoModule)
-                File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
-            if (includePackageJson)
-                File.WriteAllText(Path.Combine(workingDirectory, "package.json"),
-                    """{"name":"broker-fixture","private":true,"scripts":{"test":"node --test","build":"node build.js","lint":"eslint ."}}""");
-            if (pythonMarker is not null)
+                Directory.CreateDirectory(workingDirectory);
+                Git("init", "--initial-branch=main");
+                File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
+                if (includeDotnetProject)
+                {
+                    // Node precedence is pinned against a root csproj; existing .NET/Go cases keep their layout.
+                    var projectDirectory = includePackageJson ? workingDirectory : Path.Combine(workingDirectory, "src", "Fixture");
+                    Directory.CreateDirectory(projectDirectory);
+                    File.WriteAllText(Path.Combine(projectDirectory, "Fixture.csproj"),
+                        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+                }
+                if (includeGoModule)
+                    File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
+                if (includePackageJson)
+                    File.WriteAllText(Path.Combine(workingDirectory, "package.json"),
+                        """{"name":"broker-fixture","private":true,"scripts":{"test":"node --test","build":"node build.js","lint":"eslint ."}}""");
+                if (pythonMarker is not null)
+                {
+                    Assert.Contains(pythonMarker, new[] { "pyproject.toml", "requirements.txt" });
+                    File.WriteAllText(Path.Combine(workingDirectory, pythonMarker), pythonMarker == "pyproject.toml"
+                        ? "[project]\nname = \"broker-fixture\"\nversion = \"0.0.0\"\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"
+                        : "pytest\n");
+                }
+                if (!includeDotnetProject && !includeGoModule && !includePackageJson)
+                    File.WriteAllText(Path.Combine(workingDirectory, "README.md"),
+                        "# Broker fixture\nDiscover the project-standard build and test commands from the project CI configuration.\n");
+                Assert.Equal(includeGoModule ? Toolchain.Go : includePackageJson ? Toolchain.Node : includeDotnetProject ? Toolchain.Dotnet : pythonMarker is not null ? Toolchain.Python : Toolchain.Unknown,
+                    TargetToolchainDetector.Detect(workingDirectory));
+                Git("add", ".");
+                Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
+                head = Git("rev-parse", "HEAD").Trim();
+                // A real dirty file makes the diff artifact distinguishable from a boilerplate file.
+                File.AppendAllText(Path.Combine(workingDirectory, "fixture.txt"), "\nchanged broker fixture");
+                return 0;
+            });
+            var (kernel, task, goal) = Observe(BrokerDeliveryFixtureObservation.Phase.Scenario, () =>
             {
-                Assert.Contains(pythonMarker, new[] { "pyproject.toml", "requirements.txt" });
-                File.WriteAllText(Path.Combine(workingDirectory, pythonMarker), pythonMarker == "pyproject.toml"
-                    ? "[project]\nname = \"broker-fixture\"\nversion = \"0.0.0\"\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"
-                    : "pytest\n");
-            }
-            if (!includeDotnetProject && !includeGoModule && !includePackageJson)
-                File.WriteAllText(Path.Combine(workingDirectory, "README.md"),
-                    "# Broker fixture\nDiscover the project-standard build and test commands from the project CI configuration.\n");
-            Assert.Equal(includeGoModule ? Toolchain.Go : includePackageJson ? Toolchain.Node : includeDotnetProject ? Toolchain.Dotnet : pythonMarker is not null ? Toolchain.Python : Toolchain.Unknown,
-                TargetToolchainDetector.Detect(workingDirectory));
-            Git("add", ".");
-            Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
-            var head = Git("rev-parse", "HEAD").Trim();
-            // A real dirty file makes the diff artifact distinguishable from a boilerplate file.
-            File.AppendAllText(Path.Combine(workingDirectory, "fixture.txt"), "\nchanged broker fixture");
-            var kernel = new AgentOrchestratorKernel();
-            var task = new TaskSpec(TaskId.New(), "Keep broker artifacts satisfiable.", role);
-            var goal = kernel.CreateGoal(requireRiskReview
-                ? "Repair broker instructions with security review." : "Repair broker instructions.", [task]);
-            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            if (retry)
-            {
-                var location = new ReviewFindingLocation("fixture.txt", "broker");
-                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-                    "review", workingDirectory, 1, "broker requires clarification", string.Empty,
-                    DateTimeOffset.UtcNow, ReviewedCommit: head, ReviewFindingTouchedAnchors: [location],
-                    MergedReviewFindings: [new ReviewFinding("broker-contract", ReviewFindingState.Open, location, "repair instructions")],
-                    FullStandardOutput: "broker requires clarification", FullStandardError: string.Empty));
-                kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, Feedback,
-                    RetryCause.ContractClarification, retryRoundKind: RetryRoundKind.Standard);
-            }
-            var prepared = WorkerProfileDispatcher.PrepareTask(kernel, goal, task,
+                var scenarioKernel = new AgentOrchestratorKernel();
+                var scenarioTask = new TaskSpec(TaskId.New(), "Keep broker artifacts satisfiable.", role);
+                var scenarioGoal = scenarioKernel.CreateGoal(requireRiskReview
+                    ? "Repair broker instructions with security review." : "Repair broker instructions.", [scenarioTask]);
+                scenarioKernel.ActivateGoal(scenarioGoal.Id, AgentCatalog.Default().Agents);
+                if (retry)
+                {
+                    var location = new ReviewFindingLocation("fixture.txt", "broker");
+                    scenarioKernel.RecordTaskVerification(scenarioGoal.Id, scenarioTask.Id, new TaskVerificationRecord(
+                        "review", workingDirectory, 1, "broker requires clarification", string.Empty,
+                        DateTimeOffset.UtcNow, ReviewedCommit: head, ReviewFindingTouchedAnchors: [location],
+                        MergedReviewFindings: [new ReviewFinding("broker-contract", ReviewFindingState.Open, location, "repair instructions")],
+                        FullStandardOutput: "broker requires clarification", FullStandardError: string.Empty));
+                    scenarioKernel.RetryTaskWithAuthoritativeFeedback(scenarioGoal.Id, scenarioTask.Id, Feedback,
+                        RetryCause.ContractClarification, retryRoundKind: RetryRoundKind.Standard);
+                }
+                return (scenarioKernel, scenarioTask, scenarioGoal);
+            });
+            var prepared = Observe(BrokerDeliveryFixtureObservation.Phase.PrepareTask, () => WorkerProfileDispatcher.PrepareTask(kernel, goal, task,
                 new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
                 Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow,
                 providerName: "OpenAI", modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
@@ -101,7 +111,7 @@ internal static class BrokerDeliveryTestFixture
                 reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
                 reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
                 reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
-                targetHome: includePackageJson || (!includeDotnetProject && !includeGoModule) ? WorkerTargetHome.NotHome : null);
+                targetHome: includePackageJson || (!includeDotnetProject && !includeGoModule) ? WorkerTargetHome.NotHome : null));
             var receipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
             Assert.NotNull(receipt);
             var prompt = File.ReadAllText(prepared.PromptPath);
@@ -123,7 +133,7 @@ internal static class BrokerDeliveryTestFixture
             }
             return new DeliveryFixture(root, workingDirectory,
                 Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value), role, prompt, receipt,
-                goal.Id.Value, task.Id.Value);
+                goal.Id.Value, task.Id.Value, observation);
 
             string Git(params string[] args)
             {
@@ -135,13 +145,34 @@ internal static class BrokerDeliveryTestFixture
         }
         catch
         {
-            SharedTestSupport.RemoveTempDirectory(root);
+            Cleanup(root, observation);
             throw;
         }
+
+        T Observe<T>(BrokerDeliveryFixtureObservation.Phase phase, Func<T> action) =>
+            observation is null ? action() : observation.Measure(phase, action);
+    }
+
+    private static void Cleanup(string root, BrokerDeliveryFixtureObservation? observation)
+    {
+        if (observation is null)
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+            return;
+        }
+        observation.Measure(BrokerDeliveryFixtureObservation.Phase.Cleanup, () =>
+        {
+            // Keep the cleanup helper's real elapsed clock, delay operation and retry defaults.
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            SharedTestSupport.RemoveTempDirectory(root, () => stopwatch.Elapsed,
+                delay => observation.Measure(BrokerDeliveryFixtureObservation.Phase.CleanupRetryWait,
+                    () => Thread.Sleep(delay)));
+        });
     }
 
     internal sealed record DeliveryFixture(string Root, string WorkingDirectory, string ContextDirectory,
-        AgentRole Role, string Prompt, WorkerContextPackageReceipt Receipt, string GoalId, string TaskId) : IDisposable
+        AgentRole Role, string Prompt, WorkerContextPackageReceipt Receipt, string GoalId, string TaskId,
+        BrokerDeliveryFixtureObservation? Observation = null) : IDisposable
     {
         public string ReadDelivered(string name)
         {
@@ -284,6 +315,6 @@ internal static class BrokerDeliveryTestFixture
             }
         }
 
-        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
+        public void Dispose() => Cleanup(Root, Observation);
     }
 }
