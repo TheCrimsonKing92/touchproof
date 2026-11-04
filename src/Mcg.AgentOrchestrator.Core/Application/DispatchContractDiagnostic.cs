@@ -5,6 +5,29 @@ public static class DispatchContractDiagnostic
     public static bool TryExtract(string? standardError, string rule, out string diagnostic)
     {
         diagnostic = string.Empty;
+        if (rule is DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing or DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)
+        {
+            // The host appends its explanation immediately after its failure marker(s).
+            // The selected classification may come from an earlier, different build marker.
+            // Detail belongs to the final build marker regardless of that selected rule.
+            // Earlier worker text, even with matching prefixes/markers, is not host detail.
+            // These observations add failure detail only; they are never verdict inputs.
+            var buildLines = (standardError ?? string.Empty)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var markerIndex = Array.FindLastIndex(buildLines, line =>
+                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed), StringComparison.Ordinal) ||
+                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing), StringComparison.Ordinal));
+            if (markerIndex < 0)
+                return false;
+
+            var applicability = buildLines.Skip(markerIndex + 1)
+                .SkipWhile(line => line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed) ||
+                    line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing))
+                .TakeWhile(line => line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildApplicability, StringComparison.Ordinal))
+                .Take(9).Select(DispatchEvidenceSummaries.TruncateEvidence).ToArray();
+            diagnostic = string.Join(" | ", applicability);
+            return applicability.Length > 0;
+        }
         if (string.Equals(rule, DispatchFailureDiagnosticMarker.PlannerOutputContractRejected, StringComparison.Ordinal))
         {
             return TryExtractPlannerRejection(standardError, out diagnostic);

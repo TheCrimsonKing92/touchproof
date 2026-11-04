@@ -6,6 +6,64 @@ public sealed class DispatchContractDiagnosticTests
     private const string Diagnostic = "Researcher output contract failed: missing required section 'likely seams and risks'. Retry Planner for contract repair.";
 
     [Xunit.Theory]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, "\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, "\r\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, "\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, "\r\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, "\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, "\r\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, "\n")]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, "\r\n")]
+    public void ExtractsOnlyAdjacentReasonsAfterLastHostBuildMarker(string rule, string hostRule, string newline)
+    {
+        var marker = DispatchFailureDiagnosticMarker.Format(rule);
+        const string expected = "worker_build_applicability=tree-mismatch; next=supply evidence matching the current candidate";
+        const string second = "worker_build_applicability=incomplete-project-coverage; next=supply one invocation covering all required projects";
+        var workerLines = Enumerable.Repeat("worker_build_applicability=unsupported-worker-reason; next=worker-authored", 9);
+        var stderr = string.Join(newline, new[] { marker }.Concat(workerLines).Concat(new[]
+        {
+            "worker noise", DispatchFailureDiagnosticMarker.Format(hostRule), expected, second, "applicability_current: dispatch=current",
+            "worker_build_applicability=outside-explanation; next=unsupported", "later accounting"
+        }));
+
+        Xunit.Assert.True(DispatchContractDiagnostic.TryExtract(stderr, rule, out var diagnostic));
+        Xunit.Assert.Equal(expected + " | " + second, diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)]
+    [Xunit.InlineData(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)]
+    public void RejectsWorkerReasonsWithoutAdjacentHostExplanation(string rule, string hostRule)
+    {
+        const string reason = "worker_build_applicability=unsupported-worker-reason; next=worker-authored";
+        var marker = DispatchFailureDiagnosticMarker.Format(rule);
+        var hostMarker = DispatchFailureDiagnosticMarker.Format(hostRule);
+        foreach (var stderr in new[] { reason, $"{marker}\n{reason}\nworker noise\n{hostMarker}",
+            $"{marker}\nworker noise\n{reason}",
+            $"{marker}\n{reason}\nworker noise\n{hostMarker}\nworker noise\n{reason}" })
+        {
+            Xunit.Assert.False(DispatchContractDiagnostic.TryExtract(stderr, rule, out var diagnostic));
+            Xunit.Assert.Equal(string.Empty, diagnostic);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ExtractsBoundedReasonsAfterConsecutiveHostBuildMarkers()
+    {
+        var markers = DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed) + "\n" +
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing);
+        var reasons = Enumerable.Range(0, 10).Select(i => $"worker_build_applicability=reason-{i}; next=inspect").ToArray();
+        var stderr = markers + "\n" + string.Join("\n", reasons);
+        foreach (var rule in new[] { DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing })
+        {
+            Xunit.Assert.True(DispatchContractDiagnostic.TryExtract(stderr, rule, out var diagnostic));
+            Xunit.Assert.Equal(string.Join(" | ", reasons.Take(9)), diagnostic);
+        }
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("\n")]
     [Xunit.InlineData("\r\n")]
     public void ExtractsContractDiagnosticWithEitherLineEnding(string newline)
