@@ -9,6 +9,25 @@ internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<
 
 internal static class AcceptanceTestClassSourceScanner
 {
+    // Strict inventory callers cannot interpret missing or malformed candidate input as no tests.
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanProject(string worktreePath, string project)
+    {
+        var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
+        var document = System.Xml.Linq.XDocument.Load(projectPath);
+        if (document.Root?.Name.LocalName != "Project")
+            throw new InvalidDataException($"Invalid test project '{project}'.");
+        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
+        if (files.Length == 0) throw new InvalidDataException($"No test sources in '{project}'.");
+        foreach (var file in files)
+        {
+            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file).GetRoot();
+            if (syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
+                throw new InvalidDataException($"Cannot parse test source '{file}'.");
+        }
+        var classes = Scan(worktreePath, files);
+        return classes.Count > 0 ? classes : throw new InvalidDataException($"No runnable test classes in '{project}'.");
+    }
+
     // Preserve Scan's membership contract; diagnostic callers can request only declaring files.
     internal static IReadOnlyList<AcceptanceTestClassSource> ScanSources(string worktreePath,
         bool includeAncestorSources = true)

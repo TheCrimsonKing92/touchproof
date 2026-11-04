@@ -554,7 +554,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one driver property wires StalledEvidenceWaitAttention; reconciliation stays in its own type.
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
-            new SourceClassCeiling("ConductorDriver", 14351, 70),
+            new SourceClassCeiling("ConductorDriver", 14350, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
