@@ -843,7 +843,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken,
             failureAttributionBudget,
             changedFiles,
-            soloFailure.Capture).ConfigureAwait(false);
+            soloFailure).ConfigureAwait(false);
         for (var index = 0; index < attributedChecks.Count; index++)
         {
             checks[index] = attributedChecks[index];
@@ -946,8 +946,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null,
         IReadOnlyList<string>? changedFiles = null,
-        Action<IReadOnlyList<AcceptanceCheckResult>, FocusedEvidenceArmRunResult,
-            IReadOnlyList<SoloAcceptanceCheckBinding>>? captureSoloEvidence = null)
+        SoloAcceptanceFailureCapture? soloFailure = null)
     {
         invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
             MaxFailureAttributionFocusedEvidenceIdentities);
@@ -1022,6 +1021,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return results;
         }
 
+        soloFailure?.MarkAttributionPrepared();
+
         var focusedChecks = prepared
             .SelectMany(item => item.SelectionPlan.Checks)
             .GroupBy(check => check.Name, StringComparer.Ordinal)
@@ -1087,7 +1088,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId, stableSlotIndex, stableSlotLease, changedFiles, invocationBudget,
             cancellationToken).ConfigureAwait(false);
 
-        captureSoloEvidence?.Invoke(results, baseline, prepared.SelectMany(item =>
+        soloFailure?.Capture(results, baseline, prepared.SelectMany(item =>
             item.IdentitySelection.Selected.Select(identity => new SoloAcceptanceCheckBinding(item.Check.Name,
                 identity, item.SelectionPlan.CheckNamesBySelector[AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity)]))).ToArray());
         return results;

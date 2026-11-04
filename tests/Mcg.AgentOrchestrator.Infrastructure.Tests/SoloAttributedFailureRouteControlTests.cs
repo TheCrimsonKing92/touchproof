@@ -8,6 +8,39 @@ using static AttributedFailureDeveloperRouteTests;
 public sealed class SoloAttributedFailureRouteControlTests
 {
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task BuildFailure_WithoutTestIdentities_RetriesCriterion()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(buildFails: true);
+        var summary = fixture.Summary;
+        Assert.False(summary.RequiresSoloFailureReceipt);
+        Assert.Null(summary.SoloFailureReceipt);
+        Assert.NotEmpty(summary.RequiredUnmetCriteria);
+        Assert.All(summary.RequiredUnmetCriteria, check =>
+            Assert.Empty(check.FailingTestIdentities ?? []));
+        Assert.Contains(summary.RequiredUnmetCriteria, check =>
+            check.OutputTail?.Contains("error CS1002", StringComparison.Ordinal) == true);
+
+        var driver = fixture.Driver();
+        driver.BeginTick(fixture.Kernel, 1);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(fixture.Goal, 0, [],
+            fixture.Context.CandidateSha, fixture.Context.MainSha);
+        var result = driver.CompleteParallelLandingAcceptance(candidate,
+            ConductorAutonomyPolicy.Permissive, summary, out var leaseHeld);
+
+        Assert.False(leaseHeld);
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.NotEqual("solo-acceptance-correction", executed.Decision?.Stage);
+        var task = fixture.Goal.Tasks.Single();
+        Assert.Equal(AgentRole.Developer, task.RequiredRole);
+        Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, task.PendingRetryCause);
+        Assert.Single(fixture.Goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRetried));
+        Assert.Equal(1, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.Empty(MarkerRetries(fixture.Goal));
+        Assert.Empty(fixture.Starts);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task ThrowingBaseline_ReloadAndRestart_HoldsWithoutRetry()
     {

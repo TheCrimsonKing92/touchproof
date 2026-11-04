@@ -70,7 +70,10 @@ internal static class SoloAcceptanceFailureEvidenceWriter
 /// <summary>Owns attempt-scoped evidence capture and its binding to the acceptance result.</summary>
 internal sealed class SoloAcceptanceFailureCapture(AcceptanceAttemptIdentity identity)
 {
+    private bool _attributionPrepared;
     internal SoloAcceptanceFailureReceipt? Receipt { get; private set; }
+
+    internal void MarkAttributionPrepared() => _attributionPrepared = true;
 
     internal void Capture(IReadOnlyList<AcceptanceCheckResult> checks,
         FocusedEvidenceArmRunResult baseline, IReadOnlyList<SoloAcceptanceCheckBinding> bindings) =>
@@ -80,8 +83,8 @@ internal sealed class SoloAcceptanceFailureCapture(AcceptanceAttemptIdentity ide
     {
         AttemptId = identity.AttemptId,
         SoloFailureReceipt = Receipt,
-        // Entering solo attribution owns the evidence obligation even if preparation
-        // or baseline execution returned before the capture callback could run.
-        RequiresSoloFailureReceipt = true
+        // A prepared test attribution owns the obligation even if baseline execution
+        // fails before capture. Checks without test evidence retain their normal route.
+        RequiresSoloFailureReceipt = _attributionPrepared || Receipt is not null
     };
 }

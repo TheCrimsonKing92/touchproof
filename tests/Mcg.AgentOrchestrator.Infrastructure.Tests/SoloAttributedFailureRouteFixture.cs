@@ -62,8 +62,9 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Goal = CompletedGoal(Kernel, committed: committed);
     }
 
-    internal async Task Produce(bool baselineThrows = false)
+    internal async Task Produce(bool baselineThrows = false, bool buildFails = false)
     {
+        var failedBuilds = 0;
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
         {
             BuildStorageRootForTests = new(Path.Combine(Root, "dotnet")),
@@ -73,6 +74,12 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }, (args, directory, _) =>
         {
             var results = Array.IndexOf(args, "--results-directory");
+            if (buildFails && args.Contains("build"))
+            {
+                failedBuilds++;
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1,
+                    "SoloTests.cs(1,1): error CS1002: ; expected\nBuild FAILED."));
+            }
             if (results < 0) return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             var filename = Array.IndexOf(args, "--report-trx-filename");
             Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
@@ -91,21 +98,31 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             options: new(RunId: "solo-attempt", ResultsPrefix: Path.Combine(Root, "results"), IntegrationBranch: "main"));
         var verification = await verifier.RunOwnedAsync(Repo, Goal.Id, ["README.md"], null, null, owner);
         Assert.False(verification.Passed);
-        if (baselineThrows) Assert.Null(verification.SoloFailureReceipt);
+        if (buildFails)
+        {
+            Assert.True(failedBuilds > 0, "The real verifier must execute the failing build command.");
+            Assert.Equal(0, BaselineRuns);
+            Assert.Equal(0, CandidateRuns);
+            Assert.Null(verification.SoloFailureReceipt);
+        }
         else
         {
-            Assert.NotNull(verification.SoloFailureReceipt);
-            Assert.Null(verification.SoloFailureReceipt.CaptureError);
+            if (baselineThrows) Assert.Null(verification.SoloFailureReceipt);
+            else
+            {
+                Assert.NotNull(verification.SoloFailureReceipt);
+                Assert.Null(verification.SoloFailureReceipt.CaptureError);
+            }
+            Assert.True(BaselineRuns > 0, "The real baseline attribution execution must have run.");
+            Assert.True(CandidateRuns > 0);
         }
-        Assert.True(BaselineRuns > 0, "The real baseline attribution execution must have run.");
-        Assert.True(CandidateRuns > 0);
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
         Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
             attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed : AcceptanceTestFailureOrigin.Introduced,
                 attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
             Context.CandidateSha, Context.MainSha, verification.TestResultPaths,
-            failed.Select(check => new AcceptanceCheckAttribution(check.Name,
+            buildFails ? null : failed.Select(check => new AcceptanceCheckAttribution(check.Name,
                 baselineThrows ? AcceptanceFailureOrigin.Unattributed : AcceptanceFailureOrigin.Introduced,
                 baselineThrows ? "fixture baseline execution failed" : "fixture authoritative baseline is green")).ToArray(), null);
     }
