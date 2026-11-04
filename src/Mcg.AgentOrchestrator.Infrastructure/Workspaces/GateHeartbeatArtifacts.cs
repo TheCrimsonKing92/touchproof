@@ -35,7 +35,7 @@ public sealed record AcceptanceGateProgress(
     {
         "shard-complete" => (LoadContext is null ? "" : " " + GateLoadContextProbe.FormatProgressTokens(LoadContext))
             + $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
-        "remote-shard-complete" or "check-complete" => $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
+        "remote-shard-complete" or "check-complete" or "attribution-complete" => $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
         "lane-slowdown" => GateLaneSlowdownDiff.FormatProgressSuffix(Slowdown, CurrentTarget),
         _ => string.Empty
     } + (string.IsNullOrEmpty(Executor) ? string.Empty : $" executor={Executor}") + ProvenanceTokens;
