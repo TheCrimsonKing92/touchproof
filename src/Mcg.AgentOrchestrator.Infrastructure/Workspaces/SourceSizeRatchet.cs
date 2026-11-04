@@ -340,7 +340,10 @@ internal static class SourceSizeRatchet
             // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
             // Goal 60609951: stable provider-capability code and ready-blocked reason routing (+9 lines).
             // Goal 387027bb enforces hold and note preparation at the shared prompt boundary (+1 integration line).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2567),
+            // Goal 554f7db9: current candidate selector findings are captured once during Tester/Reviewer
+            // preparation and delivered through this shared context boundary; keep that dispatch binding
+            // beside the existing task-package preparation until the planned preflight extraction.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2577),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -648,7 +651,7 @@ internal static class SourceSizeRatchet
             // Goal 843fc2d0: one-line kernel recording seam for TaskGraphRepair status transitions.
             // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9281, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9270, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

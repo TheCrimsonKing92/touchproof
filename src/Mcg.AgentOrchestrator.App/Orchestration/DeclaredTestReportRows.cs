@@ -9,7 +9,7 @@ internal static class DeclaredTestReportRows
     internal sealed record Row(string Identity, string Name, IReadOnlyList<string> Suite,
         string Outcome, string Path);
 
-    internal sealed record Report(bool Applies, IReadOnlyList<Row> Rows);
+    internal sealed record Report(bool Applies, IReadOnlyList<Row> Rows, string? UnavailableReason = null);
 
     internal static bool IsDeclaredCheck(GoalAcceptanceVerifier.AcceptanceManifestCheck check) =>
         check.Name == DeclaredProjectDiscoveryAdapter.TestCheckName &&
@@ -51,7 +51,7 @@ internal static class DeclaredTestReportRows
         catch (Exception)
         {
             // Never expose a readable subset of an incomplete source.
-            return new(declared, []);
+            return new(declared, [], "unreadable or malformed declared identity report");
         }
     }
 }
