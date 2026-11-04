@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: unique variable names, pipes, real child processes and filesystem roots. No ambient writes.
@@ -54,6 +56,8 @@ public sealed class JunitCommandEnvironmentIsolationTests
             cleanup.Cancel();
             await Drain(firstRun);
             if (secondRun is not null) await Drain(secondRun);
+            await firstGate.WaitForExit();
+            await secondGate.WaitForExit();
         }
     }
 
@@ -88,7 +92,12 @@ public sealed class JunitCommandEnvironmentIsolationTests
             }
             Assert.Equal(before, Environment.GetEnvironmentVariable(variable));
         }
-        finally { lifetime.Cancel(); await Drain(run); }
+        finally
+        {
+            lifetime.Cancel();
+            await Drain(run);
+            await gate.WaitForExit();
+        }
     }
 
     private static async Task Drain(Task task)
@@ -103,6 +112,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
         private readonly NamedPipeServerStream _pipe;
         private readonly Task _connected;
         private StreamWriter? _writer;
+        private Process? _child;
         internal ChildGate()
         {
             _pipe = new(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -114,12 +124,25 @@ public sealed class JunitCommandEnvironmentIsolationTests
             {
                 await _connected.WaitAsync(TimeSpan.FromSeconds(120));
                 using var reader = new StreamReader(_pipe, leaveOpen: true);
-                Assert.NotNull(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(120)));
+                var ready = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(120));
+                Assert.NotNull(ready);
+                using var observation = JsonDocument.Parse(ready);
+                // The fixture is blocked on this pipe until release/cancellation. Pin its OS
+                // handle now, so teardown observes this child rather than a later reuse of its PID.
+                _child = Process.GetProcessById(observation.RootElement.GetProperty("processId").GetInt32());
+                _ = _child.SafeHandle;
                 _writer = new StreamWriter(_pipe, leaveOpen: true) { AutoFlush = true };
             }
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
-        public void Dispose() { _writer?.Dispose(); _pipe.Dispose(); }
+        internal async Task WaitForExit()
+        {
+            if (_child is null) return; // Ready never completed; no child handle was acquired.
+            try { await _child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(120)); }
+            catch (TimeoutException) { throw new TimeoutException("Fixture child did not exit before directory cleanup."); }
+            Assert.True(_child.HasExited);
+        }
+        public void Dispose() { _child?.Dispose(); _writer?.Dispose(); _pipe.Dispose(); }
     }
 }

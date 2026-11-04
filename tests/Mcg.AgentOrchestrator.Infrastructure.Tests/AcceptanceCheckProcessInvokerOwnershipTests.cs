@@ -13,11 +13,15 @@ public sealed class AcceptanceCheckProcessInvokerOwnershipTests
             "src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces");
         var verifier = File.ReadAllText(Path.Combine(directory, "AcceptanceProcessRunner.cs"));
         var invoker = File.ReadAllText(Path.Combine(directory, "AcceptanceCheckProcessInvoker.cs"));
+        var request = File.ReadAllText(Path.Combine(directory, "AcceptanceProcessRequest.cs"));
 
         Assert.DoesNotContain(declaration, verifier, StringComparison.Ordinal);
         Assert.Contains(declaration, invoker, StringComparison.Ordinal);
         Assert.Contains("internal static class AcceptanceCheckProcessInvoker", invoker, StringComparison.Ordinal);
-        Assert.Contains("internal sealed record AcceptanceProcessRequest", invoker, StringComparison.Ordinal);
+        const string requestDeclaration = "internal sealed record AcceptanceProcessRequest";
+        Assert.DoesNotContain(requestDeclaration, verifier, StringComparison.Ordinal);
+        Assert.DoesNotContain(requestDeclaration, invoker, StringComparison.Ordinal);
+        Assert.Contains(requestDeclaration, request, StringComparison.Ordinal);
         Assert.False(Regex.IsMatch(invoker, @"\bpartial\b"));
     }
 

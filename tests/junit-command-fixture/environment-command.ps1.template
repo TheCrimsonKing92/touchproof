@@ -2,7 +2,7 @@ param([Parameter(ValueFromRemainingArguments=$true)][string[]]$InputArguments)
 $ErrorActionPreference = 'Stop'
 $config = Get-Content -LiteralPath ($PSCommandPath + '.json') -Raw | ConvertFrom-Json
 $value = [Environment]::GetEnvironmentVariable($config.variable)
-$observed = @{ value = $value; mode = $config.mode } | ConvertTo-Json -Compress
+$observed = @{ value = $value; mode = $config.mode; processId = $PID } | ConvertTo-Json -Compress
 [IO.File]::WriteAllText($config.observation, $observed)
 if ($config.pipe) {
     $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $config.pipe, [IO.Pipes.PipeDirection]::InOut)
