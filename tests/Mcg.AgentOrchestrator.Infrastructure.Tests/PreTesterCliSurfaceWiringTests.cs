@@ -77,11 +77,14 @@ public sealed class PreTesterCliSurfaceWiringTests
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ResumedAttemptKeepsRecordedMembershipIdentityAndSingleLaunch(bool originallyCli)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ResumedAttemptKeepsRecordedMembershipIdentityAndSingleLaunch(bool originallyCli, bool unresolvedDeclaration)
     {
-        using var scenario = new Scenario();
+        using var scenario = new Scenario("deferred - DeclaredCoreTests" +
+            (unresolvedDeclaration ? ", MissingDeclaredTests" : ""));
         if (!originallyCli) scenario.Paths = ["src/Other.cs"];
         var launches = 0;
         var coordinator = scenario.Background(() => launches++);
@@ -90,6 +93,7 @@ public sealed class PreTesterCliSurfaceWiringTests
         var original = scenario.Latest();
         Assert.Equal("started", original.Outcome);
         Assert.Equal(originallyCli ? new[] { CoreSelection, Cli(Golden), Cli(Writer) } : [CoreSelection], original.Selections);
+        Assert.Equal(unresolvedDeclaration ? new[] { "MissingDeclaredTests" } : [], original.NotRun);
         var attempt = Assert.Single(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
         scenario.Paths = [ChangedPath];
         scenario.DeclareCli("NewlyDiscoveredTests");
@@ -110,6 +114,32 @@ public sealed class PreTesterCliSurfaceWiringTests
         Assert.Equal(1, launches);
         Assert.Empty(scenario.Roles);
         Assert.Empty(scenario.Requests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RecordedCliMembershipDoesNotMaskNotRunDrift(bool unresolvedDeclaration)
+    {
+        using var scenario = new Scenario("deferred - DeclaredCoreTests" +
+            (unresolvedDeclaration ? ", MissingDeclaredTests" : ""));
+        var original = new PreTesterEvidenceEntry("started", CandidateSha, "recorded-cli-receipt",
+            [CoreSelection, Cli(Golden), Cli(Writer)], unresolvedDeclaration ? [] : ["UnexpectedTests"], null, []);
+        scenario.Kernel.RecordFindingEvidenceRequest(scenario.Goal.Id, scenario.Tester.Id,
+            PreTesterEvidenceIndexLines.FormatMarker(original));
+        var driver = scenario.Driver(scenario.Green);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Equal("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        Assert.Equal("started", scenario.Latest().Outcome);
+        Assert.Equal(original.Selections, scenario.Latest().Selections);
+        Assert.Equal(original.NotRun, scenario.Latest().NotRun);
+        Assert.Equal(original.ReceiptId, scenario.Latest().ReceiptId);
+        Assert.Empty(scenario.Requests);
+        Assert.Empty(scenario.Roles);
+        Assert.Equal(0, scenario.GateRuns);
     }
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]

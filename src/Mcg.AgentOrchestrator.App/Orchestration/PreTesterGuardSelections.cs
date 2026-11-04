@@ -71,7 +71,6 @@ internal sealed class PreTesterGuardSelections
         {
             // CLI discovery belongs to attempt creation. Recorded obligations survive later inventory edits.
             selected.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.Selections));
-            notRun = prior.NotRun.ToList();
         }
         return new(RetainStartedSelections(selected,
             prior?.Outcome == "started" ? prior.Selections : null, format), notRun);
