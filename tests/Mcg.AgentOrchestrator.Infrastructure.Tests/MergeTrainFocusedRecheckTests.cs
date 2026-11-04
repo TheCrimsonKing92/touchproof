@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each scenario owns its repository, SQLite stores and fake runners.
-public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTests
+public sealed class MergeTrainFocusedRecheckTests(ITestOutputHelper output) : AcceptanceCohortWorkflowTests
 {
     internal const string FailingTest = "Ns.CulpritTests.Fails";
     internal static readonly string[] DependencyClasses = ["Ns.DependentOneTests", "Ns.DependentTwoTests"];
@@ -21,7 +21,7 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
     [InlineData(true)]
     public void OwnedRed_CompleteRecheck_LandsRemainderWithoutSecondGate(bool gateOnly)
     {
-        WithTrain("green", gateOnly, train =>
+        ObservedTrain("green", gateOnly, train =>
         {
             var call = Assert.Single(train.Calls);
             Assert.Equal(ExpectedSelection, call.Selection.Identities);
@@ -94,7 +94,7 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
     public void IneligibleRecheck_RunsSecondFullGateWithReason(
         string mode, string reason, int focusedCalls, int selectionCount)
     {
-        WithTrain(mode, true, train =>
+        ObservedTrain(mode, true, train =>
         {
             Assert.Equal(train.Goals.Select(goal => goal.Id), train.Red.Identity.Members.Select(member => member.GoalId));
             Assert.Equal(2, train.FullGateCount());
@@ -132,15 +132,26 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
             $"culprit={train.Goals[2].Id.Value[..8]}", Assert.Single(events).Detail);
     }
 
-    internal static void WithTrain(string mode, bool gateOnly, Action<Scenario> assert)
+    private void ObservedTrain(string mode, bool gateOnly, Action<Scenario> assert)
     {
-        var prepared = MergeTrainRecheckFixtureTemplate.Copy(mode);
+        using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        WithTrain(mode, gateOnly, assert, new(mode, output.WriteLine, probes: () => launches.Count));
+    }
+
+    internal static void WithTrain(string mode, bool gateOnly, Action<Scenario> assert,
+        MergeTrainFixtureObservation? observer = null) =>
+        MergeTrainFixtureObservation.Occurrence(observer, () => WithTrainCore(mode, gateOnly, assert, observer));
+
+    private static void WithTrainCore(string mode, bool gateOnly, Action<Scenario> assert,
+        MergeTrainFixtureObservation? observer)
+    {
+        var prepared = MergeTrainRecheckFixtureTemplate.Copy(mode, observer);
         var repo = prepared.Repo;
-        var cleanup = CreateIsolatedCleanupContext(repo);
-        try
+        var cleanup = MergeTrainFixtureObservation.Run(observer, "cleanup-context", () => CreateIsolatedCleanupContext(repo));
+        MergeTrainFixtureObservation.Lifecycle(observer, () =>
         {
-            var kernel = new AgentOrchestratorKernel();
-            var goals = Enumerable.Range(0, 3).Select(index =>
+            var kernel = MergeTrainFixtureObservation.Run(observer, "kernel", () => new AgentOrchestratorKernel());
+            var goals = MergeTrainFixtureObservation.Run(observer, "scenario", () => Enumerable.Range(0, 3).Select(index =>
             {
                 var goal = kernel.CreateGoal(prepared.History.Members[index].GoalId,
                     $"Focused recheck member {index}", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
@@ -152,71 +163,80 @@ public sealed class MergeTrainFocusedRecheckTests : AcceptanceCohortWorkflowTest
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
                 return goal;
-            }).ToArray();
-            var failing = mode == "unattributed" ? "Ns.UnownedTests.Fails" : FailingTest;
-            var redTrx = WriteTrx(repo, "red.trx", [(failing, "Failed"), ("Ns.UnaffectedTests.Passes", "Passed")]);
-            var checks = new List<AcceptanceCheckResult>
+            }).ToArray());
+            var receipts = MergeTrainFixtureObservation.Run(observer, "receipts", () =>
             {
-                new("train", false, 1, "confirmed failure", TestResultPaths: [redTrx])
-            };
-            var redPaths = new List<string> { redTrx };
-            if (mode is "unexplained-command" or "unexplained-test")
-            {
-                var checkPaths = mode == "unexplained-test" ?
-                    new[] { WritePassingTrx(repo, "unexplained.trx") } : Array.Empty<string>();
-                checks.Add(new("unexplained", false, 1, "failure without fatal TRX rows", TestResultPaths: checkPaths));
-                redPaths.AddRange(checkPaths);
-            }
-            var red = new AcceptanceVerificationResult(false, false, 1, "confirmed failure",
-                Checks: checks, TestResultPaths: redPaths);
-            var green = new AcceptanceVerificationResult(true, false, 0, null,
-                Checks: [new("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "full-green.trx")]);
-            var verifier = new SequenceAcceptanceVerifier([red, green]);
-            var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+                var failing = mode == "unattributed" ? "Ns.UnownedTests.Fails" : FailingTest;
+                var redTrx = WriteTrx(repo, "red.trx", [(failing, "Failed"), ("Ns.UnaffectedTests.Passes", "Passed")]);
+                var checks = new List<AcceptanceCheckResult>
+                {
+                    new("train", false, 1, "confirmed failure", TestResultPaths: [redTrx])
+                };
+                var redPaths = new List<string> { redTrx };
+                if (mode is "unexplained-command" or "unexplained-test")
+                {
+                    var checkPaths = mode == "unexplained-test" ?
+                        new[] { WritePassingTrx(repo, "unexplained.trx") } : Array.Empty<string>();
+                    checks.Add(new("unexplained", false, 1, "failure without fatal TRX rows", TestResultPaths: checkPaths));
+                    redPaths.AddRange(checkPaths);
+                }
+                var red = new AcceptanceVerificationResult(false, false, 1, "confirmed failure",
+                    Checks: checks, TestResultPaths: redPaths);
+                var green = new AcceptanceVerificationResult(true, false, 0, null,
+                    Checks: [new("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "full-green.trx")]);
+                return (red, green);
+            });
+            var verifier = new SequenceAcceptanceVerifier([receipts.red, receipts.green]);
+            var driver = MergeTrainFixtureObservation.Run(observer, "driver", () =>
+                new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
+                    AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks));
             var calls = new List<Invocation>();
             var dependencyCalls = new List<IReadOnlyList<string>>();
             string? trainCommit = null;
-            driver.MergeTrainReproductionRunner = (_, _, _, _) => null;
-            driver.MergeTrainRecheckDependencySelector = (_, paths) =>
+            MergeTrainFixtureObservation.Run(observer, "runner-setup", () =>
             {
-                dependencyCalls.Add(paths.ToArray());
-                return new(mode != "abandoned", mode == "bounds" ?
-                    Enumerable.Range(0, 97).Select(index => $"Ns.Dependent{index}Tests").ToArray() : DependencyClasses);
-            };
-            driver.MergeTrainRecheckRunner = (path, identity, selection, _, _) =>
-            {
-                trainCommit = RunGitOutput(path, "rev-parse", "HEAD").Trim();
-                var tree = RunGitOutput(path, "rev-parse", "HEAD^{tree}").Trim();
-                var changes = RunGitOutput(path, "diff", "--name-only", identity.ObservedMainRevision, "HEAD")
-                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal).ToArray();
-                calls.Add(new(identity, selection, changes, tree, File.Exists(Path.Combine(path, Paths[2]))));
-                var names = selection.Identities.Select(name => name == FailingTest ? name : name + ".Passes");
-                if (mode == "missing-coverage") names = names.Take(2);
-                var trx = WriteTrx(repo, "focused.trx", names.Select((name, index) =>
-                    (name, mode == "failed" && index == 0 ? "Failed" : "Passed")).ToArray());
-                if (mode == "malformed") File.WriteAllText(trx, "not xml");
-                return new("fixture-recheck", identity.ObservedMainRevision,
-                    new(ConductorCohortFocusedPassKind.Executed, mode == "failed" ? [FailingTest] : [],
-                        mode == "failed" ? ["focused"] : [], selection.Identities.Count,
-                        mode != "failed", [trx], tree), mode == "not-run" ? 1 : 0);
-            };
-            var selection = new ConductorMergeTrainSelection(goals.Select(goal =>
+                driver.MergeTrainReproductionRunner = (_, _, _, _) => null;
+                driver.MergeTrainRecheckDependencySelector = (_, paths) =>
+                {
+                    dependencyCalls.Add(paths.ToArray());
+                    return new(mode != "abandoned", mode == "bounds" ?
+                        Enumerable.Range(0, 97).Select(index => $"Ns.Dependent{index}Tests").ToArray() : DependencyClasses);
+                };
+                driver.MergeTrainRecheckRunner = (path, identity, selection, _, _) =>
+                {
+                    trainCommit = RunGitOutput(path, "rev-parse", "HEAD").Trim();
+                    var tree = RunGitOutput(path, "rev-parse", "HEAD^{tree}").Trim();
+                    var changes = RunGitOutput(path, "diff", "--name-only", identity.ObservedMainRevision, "HEAD")
+                        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal).ToArray();
+                    calls.Add(new(identity, selection, changes, tree, File.Exists(Path.Combine(path, Paths[2]))));
+                    var names = selection.Identities.Select(name => name == FailingTest ? name : name + ".Passes");
+                    if (mode == "missing-coverage") names = names.Take(2);
+                    var trx = WriteTrx(repo, "focused.trx", names.Select((name, index) =>
+                        (name, mode == "failed" && index == 0 ? "Failed" : "Passed")).ToArray());
+                    if (mode == "malformed") File.WriteAllText(trx, "not xml");
+                    return new("fixture-recheck", identity.ObservedMainRevision,
+                        new(ConductorCohortFocusedPassKind.Executed, mode == "failed" ? [FailingTest] : [],
+                            mode == "failed" ? ["focused"] : [], selection.Identities.Count,
+                            mode != "failed", [trx], tree), mode == "not-run" ? 1 : 0);
+                };
+            });
+            var selection = MergeTrainFixtureObservation.Run(observer, "projection", () => new ConductorMergeTrainSelection(goals.Select(goal =>
             {
                 var projection = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive);
                 Assert.True(projection is GateReadyCandidateProjectionResult.Ready,
                     $"Expected Ready projection for {goal.Id.Value[..8]}, but got {projection}.");
                 return Assert.IsType<GateReadyCandidateProjectionResult.Ready>(projection).Projection;
-            }).ToArray());
-            var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: gateOnly);
+            }).ToArray()));
+            var result = MergeTrainFixtureObservation.Run(observer, "workflow", () =>
+                driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: gateOnly));
             var store = new MergeTrainAcceptanceStore(Path.Combine(repo, ".orchestrator/merge-train-acceptance.db"));
             var failed = Assert.Single(store.ReadReceiptsSince(DateTimeOffset.MinValue)
                 .Where(receipt => receipt.Outcome == MergeTrainGateOutcome.Failed));
-            assert(new(repo, kernel, goals, driver, selection, result, store, failed, () => verifier.RunCount,
-                calls, dependencyCalls, trainCommit, prepared.History));
-            AssertNoMergeTrainWorkspaces(repo);
-        }
-        finally { DeleteDirectory(repo); }
+            MergeTrainFixtureObservation.Run(observer, "body", () =>
+                assert(new(repo, kernel, goals, driver, selection, result, store, failed, () => verifier.RunCount,
+                    calls, dependencyCalls, trainCommit, prepared.History)));
+            MergeTrainFixtureObservation.Run(observer, "workspace-validation", () => AssertNoMergeTrainWorkspaces(repo));
+        }, () => DeleteDirectory(repo));
     }
 
     internal static string WriteTrx(string repo, string name, (string Name, string Outcome)[] tests)
