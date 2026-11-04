@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Owns gate progress wire formatting and required event writes, independently of dispatch policy.
+// Owns gate progress wire formatting and event writes, independently of dispatch policy.
 internal static class GateProgressConductEvents
 {
     internal static void Append(
@@ -46,6 +46,20 @@ internal static class GateProgressConductEvents
                     $"Required cohort gate progress event could not be appended for goal {goalId}.");
             }
         }
+    }
+
+    internal static void AppendCohortAttributionStart(
+        ConductEventLogWriter writer,
+        AcceptanceCohortIdentity identity,
+        IReadOnlyList<AcceptanceCohortMemberBinding> bindings)
+    {
+        var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
+        ConductorGateProgressLog.TryAppend(
+            writer,
+            goalId: null,
+            $"ATTRIBUTION_START cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} " +
+            $"members={members} scope=attribution",
+            eventKind: "cohort-attribution");
     }
 
     internal static string Format(AcceptanceGateProgress progress) =>

@@ -33,20 +33,6 @@ internal sealed partial class ConductorDriver
             GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),
             ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull, IntegrationBranch: _integrationBranch, AttributionLaneScope: scope);
 
-    private static void AppendCohortAttributionStartEvent(
-        ConductEventLogWriter writer,
-        AcceptanceCohortIdentity identity,
-        IReadOnlyList<AcceptanceCohortMemberBinding> bindings)
-    {
-        var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
-        TryAppendGateProgressEvent(
-            writer,
-            goalId: null,
-            $"ATTRIBUTION_START cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} " +
-            $"members={members} scope=attribution",
-            eventKind: "cohort-attribution");
-    }
-
     internal AcceptanceRunExecutionOptions CreateMergeTrainGateExecutionOptions(
         MergeTrainIdentity identity,
         IReadOnlyList<MergeTrainMemberBinding> members,

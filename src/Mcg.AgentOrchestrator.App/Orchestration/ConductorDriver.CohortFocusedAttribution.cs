@@ -14,7 +14,7 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<AcceptanceCheckResult> cohortFailedChecks, ConductEventLogWriter writer,
         CancellationToken cancellationToken, CohortAttributionProgressIdentity? progressIdentity = null)
     {
-        AppendCohortAttributionStartEvent(writer, identity, bindings);
+        GateProgressConductEvents.AppendCohortAttributionStart(writer, identity, bindings);
         if (cohortFailingTests.Count == 0)
             return ConductorCohortAttributionSkip.Record(store, identity, pairFingerprint,
                 cohortFailingTests, cohortFailedChecks.Count, writer);
