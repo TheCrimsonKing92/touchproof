@@ -126,12 +126,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
                 Assert.Equal(2, receipt.GetProperty("slowdown_ratio").GetDouble());
                 Assert.Equal(identities.Order(StringComparer.Ordinal), row.GetProperty("grown").EnumerateArray()
                     .Select(test => test.GetProperty("test").GetString()).Order(StringComparer.Ordinal));
-                var detail = ShardCompleteLoadFieldsTests.WriteDetail(Assert.Single(emitted));
+                var slowdown = Assert.Single(emitted);
+                Assert.False(string.IsNullOrWhiteSpace(slowdown.ExecutionId));
+                var detail = ShardCompleteLoadFieldsTests.WriteDetail(slowdown);
                 Assert.Contains(lane, detail);
                 Assert.Contains("ratio=2.00", detail);
                 Assert.Contains("median_wall_ms=60000", detail);
                 Assert.All(identities, test => Assert.Contains(test, detail));
-                Assert.True(detail.Length <= 400, detail);
+                var executionSuffix = $" execution={slowdown.ExecutionId}";
+                Assert.EndsWith(executionSuffix, detail);
+                // Required execution identity is separate from the bounded diagnostic payload.
+                Assert.True(detail.Length - executionSuffix.Length <= 400, detail);
             }
             else
             {

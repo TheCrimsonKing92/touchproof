@@ -5,6 +5,69 @@ using static BrokerDeliveryFixtureObservation;
 // Parallel-safe: all clocks, sinks and observation state are owned by each invocation; no I/O.
 public sealed class BrokerDeliveryFixtureObservationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RepositoryPreparation_SeparatesInitializationWaitAndCopy(bool initialize)
+    {
+        var clock = new FakeClock();
+        var lines = new List<string>();
+        var launches = 0;
+        var observation = new BrokerDeliveryFixtureObservation(lines.Add, "repository", clock: clock,
+            openGitWindow: () =>
+            {
+                var before = launches;
+                return () => launches - before;
+            });
+        Execute(observation, () =>
+        {
+            observation.Measure(Phase.Repository, () =>
+            {
+                observation.SetRepositoryVariant("dotnet=True;go=False;node=True;python=none");
+                observation.Measure(Phase.RepositoryTemplateWait, () => clock.Advance(3));
+                if (initialize)
+                    observation.Measure(Phase.RepositoryTemplateInitialization, () =>
+                    {
+                        clock.Advance(4);
+                        launches += 4;
+                    });
+                observation.Measure(Phase.RepositoryCopy, () => clock.Advance(5));
+                clock.Advance(2); // Post-copy dirty edit stays inside repository elapsed.
+            });
+            return 1;
+        }, _ => { }, _ => observation.Measure(Phase.Cleanup, () => clock.Advance(7)));
+
+        using var json = ReadSingle(lines);
+        var summary = json.RootElement;
+        Assert.Equal(initialize ? 21 : 17, summary.GetProperty("elapsed").GetDouble());
+        Assert.Equal(0, summary.GetProperty("unaccounted").GetDouble());
+        Assert.Equal(initialize ? 14 : 10, Stage(summary, "repository").GetProperty("elapsed").GetDouble());
+        Assert.Equal(initialize ? 4 : 0, Stage(summary, "repository").GetProperty("gitLaunches").GetInt32());
+        Assert.Equal(6, summary.GetProperty("stages").GetArrayLength());
+        // Context lifecycle is independent of whether this case constructed the repository template.
+        Assert.Equal("cold", summary.GetProperty("lifecycle").GetString());
+        var preparation = summary.GetProperty("repositoryPreparation");
+        Assert.Equal("dotnet=True;go=False;node=True;python=none", preparation.GetProperty("variant").GetString());
+        var initialization = preparation.GetProperty("initialization");
+        Assert.Equal(initialize ? "completed" : "not-entered", initialization.GetProperty("status").GetString());
+        if (initialize)
+            Assert.Equal(4, initialization.GetProperty("gitLaunches").GetInt32());
+        else
+            Assert.Equal(JsonValueKind.Null, initialization.GetProperty("gitLaunches").ValueKind);
+        var wait = preparation.GetProperty("wait");
+        Assert.Equal("observed-wait", wait.GetProperty("kind").GetString());
+        Assert.Equal(3, wait.GetProperty("elapsed").GetDouble());
+        var copy = preparation.GetProperty("copy");
+        Assert.Equal("elapsed", copy.GetProperty("kind").GetString());
+        Assert.Equal(5, copy.GetProperty("elapsed").GetDouble());
+        Assert.Equal(0, copy.GetProperty("gitLaunches").GetInt32());
+        foreach (var stage in new[] { wait, copy })
+        {
+            Assert.Equal("repository", stage.GetProperty("parent").GetString());
+            Assert.False(stage.GetProperty("additive").GetBoolean());
+        }
+    }
+
     [Fact]
     public void NestedStagesAndWaits_ExcludeOverlapAndExposeGaps()
     {

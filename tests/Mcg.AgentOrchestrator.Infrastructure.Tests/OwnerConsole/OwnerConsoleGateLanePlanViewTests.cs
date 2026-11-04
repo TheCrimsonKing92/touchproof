@@ -43,14 +43,13 @@ public sealed class OwnerConsoleGateLanePlanViewTests : IDisposable
     }
 
     [Theory]
-    [InlineData("missing-event")]
     [InlineData("missing-file")]
     [InlineData("malformed")]
     [InlineData("wrong-attempt")]
     [InlineData("unsupported")]
     [InlineData("stale-event")]
     [InlineData("duplicate")]
-    public void UnavailablePlanPreservesLegacyRowsAndLabelsTheList(string fault)
+    public void UnavailablePlanPreservesObservedRowsButCannotSupplyScheduleOrEta(string fault)
     {
         WritePlan(fault == "wrong-attempt" ? NextAttempt : Attempt,
             fault == "unsupported" ? "future" : AcceptanceGateLanePlan.CurrentSchemaVersion,
@@ -59,27 +58,30 @@ public sealed class OwnerConsoleGateLanePlanViewTests : IDisposable
         if (fault == "malformed") File.WriteAllText(Artifact, "{");
         var events = new List<OwnerConductEvent>();
         if (fault != "missing-event") events.Add(PlanEvent());
+        if (fault == "stale-event") events.Add(Progress("execution-admitted", "", attempt: NextAttempt));
         events.Add(Progress("shard-complete", "Console", "passed", fault == "stale-event" ? NextAttempt : Attempt));
         WriteEvents(events.ToArray());
         var gate = Load();
-        var legacy = OwnerConsoleGateProgress.Build(Now, events, _manifest, []) with { Capacity = gate.Capacity };
         Assert.False(gate.LanePlanAvailable);
-        Assert.Equal(legacy.Lanes, gate.Lanes);
-        Assert.Equal(legacy.RemainingSeconds, gate.RemainingSeconds);
-        Assert.Equal(legacy.TotalCount, gate.TotalCount);
-        var expected = OwnerConsoleGateLayout.Lines(legacy, 180, false).ToArray();
-        expected[2] += "  (lane plan unavailable)";
-        Assert.Equal(expected, OwnerConsoleGateLayout.Lines(gate, 180, false));
+        Assert.False(gate.ScheduleKnown);
+        Assert.False(gate.HasEta);
+        Assert.Equal("Console", Assert.Single(gate.Lanes).Name);
+        Assert.Equal(OwnerConsoleGateLaneState.Done, gate.Lanes[0].State);
+        Assert.Equal(0, gate.TotalCount);
+        Assert.Equal(0, gate.RemainingSeconds);
+        Assert.DoesNotContain(gate.Lanes, row => row.State == OwnerConsoleGateLaneState.Queued);
+        Assert.Contains(OwnerConsoleGateLayout.Lines(gate, 180, false), line => line.Contains("ETA unknown", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void EveryLaneSkippedIsCompleteAndPlanOnlyNamesDoNotCreateRows()
+    public void EmptyScheduledSetIsKnownZeroAndAllPlanSkipReasonsRemainVisible()
     {
         File.WriteAllText(Artifact, new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, Attempt, [],
             [new("Console", "known-empty-candidate"), new("Build", "known-empty-candidate"), new("Unrelated", "known-empty-candidate")]).ToJson());
         WriteEvents(PlanEvent());
         var gate = Load();
-        Assert.Equal(2, gate.Lanes.Count);
+        Assert.Equal(3, gate.Lanes.Count);
+        Assert.True(gate.ScheduleKnown);
         Assert.Equal(0, gate.TotalCount);
         Assert.Equal(0, gate.RemainingSeconds);
         Assert.Equal(1, gate.Fraction);
@@ -104,10 +106,10 @@ public sealed class OwnerConsoleGateLanePlanViewTests : IDisposable
         File.WriteAllText(Artifact, new AcceptanceGateLanePlan(schema, attempt, duplicate ? ["Build"] : ["Console"],
             [new("Build", "no-build-system-change")]).ToJson());
     private OwnerConductEvent PlanEvent() => new(Now.AddSeconds(-30), "gate-progress", "a9983773",
-        $"phase=lane-plan target=plan heartbeat={JsonSerializer.Serialize(Artifact)}");
+        $"phase=lane-plan outer_attempt=lane-plan-view target=plan heartbeat={JsonSerializer.Serialize(Artifact)}");
     private OwnerConductEvent Progress(string phase, string lane, string outcome = "unknown", string attempt = Attempt) =>
         new(Now.AddSeconds(-10), "gate-progress", "a9983773",
-            $"phase={phase} target={lane} outcome={outcome} heartbeat={attempt}.gate-heartbeat.json");
+            $"phase={phase} outer_attempt=lane-plan-view target={lane} outcome={outcome} heartbeat={attempt}.gate-heartbeat.json");
     private void WriteEvents(params OwnerConductEvent[] events) => File.WriteAllLines(Log, events.Select(item => JsonSerializer.Serialize(new
     { timestamp = item.Timestamp, eventKind = item.EventKind, goalId = item.GoalId, detail = item.Detail })));
     private OwnerConsoleGateProgress Load() => Assert.IsType<OwnerConsoleGateProgress>(new OwnerConsoleGateProgressLoader(

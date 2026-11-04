@@ -7,6 +7,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: fake commands, unique temporary workspaces, and local progress sinks.
 public sealed class AcceptanceGateLaneProgressTests : GoalAcceptanceVerifierTestBase
 {
+    [Theory]
+    [InlineData("passed", "passed")]
+    [InlineData("failed", "failed")]
+    [InlineData(null, "unknown")]
+    public void AttributionCompletion_PreservesOutcomeInConductEvent(string? outcome, string expected)
+    {
+        var at = DateTimeOffset.UnixEpoch;
+        var progress = new AcceptanceGateProgress(
+            GoalId: new string('1', 32), Phase: "attribution-complete", CurrentTarget: "partition",
+            SlotIndex: null, ProcessId: null, ChildProcessId: null,
+            StartedAt: at, LastObservedAt: at, LastProgressAt: at, Elapsed: TimeSpan.Zero,
+            OutputBytes: 0, HeartbeatPath: "partition-heartbeat.json", Outcome: outcome,
+            EvidenceKind: "member-reproduction", ReproductionMemberId: new string('1', 32),
+            ExecutionId: "partition-execution");
+
+        Assert.Equal($" outcome={expected} failed=0" + progress.ProvenanceTokens, progress.ShardOutcomeTokens);
+        Assert.Equal(
+            $"PHASE_PROGRESS goal=11111111 phase=attribution-complete elapsed_ms=0 target=partition " +
+            $"child_pid=unknown output_bytes=0 heartbeat=partition-heartbeat.json outcome={expected} failed=0 " +
+            $"evidence_kind=member-reproduction reproduction_member={new string('1', 32)} execution=partition-execution",
+            GateProgressConductEvents.Format(progress));
+    }
+
     [Fact]
     public void PassedCheck_ReportsSettledVerdictFields()
     {
