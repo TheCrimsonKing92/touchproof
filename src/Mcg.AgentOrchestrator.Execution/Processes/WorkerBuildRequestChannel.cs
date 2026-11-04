@@ -43,7 +43,10 @@ public interface IWorkerBuildInvocationOperations
 }
 
 public sealed record WorkerBuildConsumption(bool MissingEvidence, bool CompilerFailed, string Diagnostic,
-    WorkerBuildEvidenceGap Gap = WorkerBuildEvidenceGap.Unclassified);
+    WorkerBuildEvidenceGap Gap = WorkerBuildEvidenceGap.Unclassified)
+{
+    internal WorkerBuildApplicabilityExplanation? Applicability { get; init; }
+}
 
 // The file locates a dispatch-scoped endpoint. Only an OS-verified peer in the owned job is admitted.
 internal sealed class WorkerBuildRequestChannel : IDisposable

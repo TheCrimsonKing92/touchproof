@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class WorkerBuildInvocationOperations(string statePath, string executionDirectory,
     DotnetBuildStorageRoot? storageRoot = null,
     Func<WorkerBuildProcess, bool>? isHostAlive = null,
+    Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? digestGitRunner = null,
     string? projectHomeDirectory = null, string integrationBranch = "main") : IWorkerBuildInvocationOperations
 {
     internal const string OperationName = "dispatch:worker-build";
@@ -103,11 +104,22 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         if (rejection is not null) return rejection;
         var required = WorkerBuildEvidenceRequirement.FindRequiredProjects(dispatch.WorkingDirectory, task.RequiredRole, changedPaths, dirtyPaths);
         if (required.Count == 0 && invocations.Length == 0) return new(false, false, "worker_build_host=not-required");
+        WorkerBuildApplicabilityExplanation? explanation = null;
+        WorkerBuildConsumption Explain(WorkerBuildConsumption result) => result with { Applicability = explanation };
         WorkerBuildProjectScope.Result scope;
         try { scope = WorkerBuildProjectScope.ResolveForDispatch(dispatch.WorkingDirectory, required, goalId, taskId, dispatch); }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { return Rejected("scope-invalid", ex.Message); }
-        if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason, out var failure))
-            return new(true, false, "worker_build_host=candidate-unavailable; " + WorktreeTreeDigestFailure.WithDetail(reason, failure));
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, null, null, task.WorkerBuildInvocations);
+            return Explain(Rejected("scope-invalid", "project scope comparison evidence is unavailable"));
+        }
+        if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason, out var failure, digestGitRunner))
+        {
+            explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, null, scope, task.WorkerBuildInvocations);
+            return Explain(new(true, false, "worker_build_host=candidate-unavailable; " + WorktreeTreeDigestFailure.WithDetail(reason, failure)));
+        }
+        explanation = WorkerBuildApplicabilityExplanation.Capture(reference.DispatchId, digest, scope, task.WorkerBuildInvocations,
+            (recorded, candidate) => WorkerBuildApplicabilityExplanation.CompareRecordedTrees(dispatch.WorkingDirectory, recorded, candidate));
         var applicable = task.WorkerBuildInvocations.Where(i => i.DispatchId == reference.DispatchId &&
             i.TreeDigest == digest && i.Projects.Intersect(scope.Projects, StringComparer.OrdinalIgnoreCase).Count() == scope.Projects.Count)
             .OrderByDescending(i => i.Deadline).FirstOrDefault();
@@ -124,27 +136,27 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
                 callerProcess.StartedAt != process.StartedAt ||
                 process.ProcessIdentityStartedAt is not { } started ||
                 string.IsNullOrWhiteSpace(process.ProcessIdentityImagePath))
-                return Rejected("origin-invalid", "current dispatch/host identity is required");
+                return Explain(Rejected("origin-invalid", "current dispatch/host identity is required"));
             var host = new WorkerBuildProcess(process.ProcessId, started, process.ProcessIdentityImagePath);
             try
             {
                 RequireOrigin(current, reference, host, requireRunning: false);
                 RequireOrigin(kernel, reference, host, requireRunning: false);
             }
-            catch (UnauthorizedAccessException ex) { return Rejected("origin-invalid", ex.Message); }
+            catch (UnauthorizedAccessException ex) { return Explain(Rejected("origin-invalid", ex.Message)); }
             if (task.WorkerBuildInvocations.Any(i => i.DispatchId == reference.DispatchId &&
                     (!i.IsTerminal || !i.CustodyReleased)))
-                return new(true, false, "worker_build_host=reconciliation-pending; existing invocation retains custody");
+                return Explain(new(true, false, "worker_build_host=reconciliation-pending; existing invocation retains custody"));
             if ((isHostAlive ?? IsExactProcessAlive)(host))
-                return Rejected("origin-invalid", "worker host has not exited");
+                return Explain(Rejected("origin-invalid", "worker host has not exited"));
             rejection = ValidateCompletionEnrollment(reference, dispatch, process);
-            if (rejection is not null) return rejection;
-            return new(true, false, "worker_build_host=missing-current-candidate-outcome; transport_cause=unknown",
-                WorkerBuildEvidenceGap.MissingApplicableInvocation);
+            if (rejection is not null) return Explain(rejection);
+            return Explain(new(true, false, "worker_build_host=missing-current-candidate-outcome; transport_cause=unknown",
+                WorkerBuildEvidenceGap.MissingApplicableInvocation));
         }
         RequireOrigin(current, reference, applicable.Host, requireRunning: false);
         if (!applicable.IsTerminal || !applicable.CustodyReleased)
-            return new(true, false, $"worker_build_invocation={applicable.Id}; phase={applicable.Phase}; reconciliation=pending");
+            return Explain(new(true, false, $"worker_build_invocation={applicable.Id}; phase={applicable.Phase}; reconciliation=pending"));
         WorkerBuildInvocation? consumed = null;
         var admission = new TaskIntentAdmissionReference(applicable.AdmissionStorePath, applicable.GoalId,
             applicable.TaskId, applicable.AdmissionVersion, applicable.DispatchAt);
@@ -168,9 +180,9 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         }).GetAwaiter().GetResult());
         if (consumed is null) throw new InvalidOperationException("Worker build consumption did not execute.");
         Synchronize(kernel, goalId, taskId, Load(goalId.Value).GetTask(goalId, taskId).WorkerBuildInvocations);
-        return new(consumed.Outcome != WorkerBuildOutcome.Success && consumed.Outcome != WorkerBuildOutcome.CompilerFailure,
+        return Explain(new(consumed.Outcome != WorkerBuildOutcome.Success && consumed.Outcome != WorkerBuildOutcome.CompilerFailure,
             consumed.Outcome == WorkerBuildOutcome.CompilerFailure,
-            $"worker_build_invocation={consumed.Id}; phase={consumed.Phase}; outcome={consumed.Outcome}; consumed={consumed.Consumed}");
+            $"worker_build_invocation={consumed.Id}; phase={consumed.Phase}; outcome={consumed.Outcome}; consumed={consumed.Consumed}"));
     }
 
     private static WorkerBuildConsumption Rejected(string reason, string detail) =>

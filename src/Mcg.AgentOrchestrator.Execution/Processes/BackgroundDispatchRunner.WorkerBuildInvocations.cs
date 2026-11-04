@@ -17,7 +17,8 @@ public sealed partial class BackgroundDispatchRunner
                 new(true, false, "worker_build_host=unavailable; enrolled dispatch cannot use legacy worker receipts"), workerOutput);
         }
         var receipt = WorkerBuildInvocations.Consume(kernel, goalId, taskId, changedPaths, dirtyPaths);
-        var host = new OrchestratorBuildEvidenceResolution(receipt.MissingEvidence, receipt.CompilerFailed, receipt.Diagnostic);
+        var host = new OrchestratorBuildEvidenceResolution(receipt.MissingEvidence, receipt.CompilerFailed, receipt.Diagnostic)
+            { Applicability = receipt.Applicability };
         if (receipt.Gap == WorkerBuildEvidenceGap.Rejected)
         {
             orchestratorFailureReason ??= "worker-build-authority-rejected";
@@ -48,7 +49,7 @@ public sealed partial class BackgroundDispatchRunner
         if (build.Pending || build.BuildFailed ||
             !build.FailsRound && build.Operation is { Phase: CompletionBuildEvidencePhase.Success } operation &&
             operation.DispatchAt == task.LastDispatch?.DispatchedAt)
-            return build with { Diagnostic = AppendDiagnostic(build.Diagnostic, diagnostic) };
+            return build with { Diagnostic = AppendDiagnostic(build.Diagnostic, diagnostic), Applicability = receipt.Applicability };
 
         // A receipt alone cannot certify a protocol-1 round, nor can another dispatch's operation.
         return host with { Diagnostic = AppendDiagnostic(AppendDiagnostic(host.Diagnostic, build.Diagnostic), diagnostic) };
