@@ -75,12 +75,16 @@ internal static partial class OperatorInbox
             var key = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, $"landing-escalation:{goal.Id.Value}:{row.Body}");
             if (row.CorrelationKey != key) continue;
             // Publish the remaining demand before retiring the stale occurrence. Never discard another
-            // wait or blocker, and never resurrect a replacement that has already been handled.
+            // wait or blocker. An active compound occurrence needs a current remainder even when an
+            // earlier remainder was handled; replaying a terminal split must not resurrect it again.
             if (remainingReason is not null)
             {
                 var remainingKey = BuildId(goal.Id, OperatorInboxKind.LandingEscalation,
                     $"landing-escalation:{goal.Id.Value}:{remainingReason}");
-                if (!rows.Any(item => item.CorrelationKey == remainingKey))
+                var remainingOccurrences = rows.Where(item => item.CorrelationKey == remainingKey);
+                if (active.Length == 1
+                    ? !remainingOccurrences.Any(item => !CollaborationItemLifecycle.IsTerminal(item.Status))
+                    : !remainingOccurrences.Any())
                     store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, row.Subject, remainingReason, remainingKey)
                         .GetAwaiter().GetResult();
             }
@@ -100,7 +104,8 @@ internal static partial class OperatorInbox
                 !resolvedReasons.TryGetValue(item.Reason, out var remainingReason)) continue;
             items[index] = item with { ResolvedAtUtc = DateTimeOffset.UtcNow, ResolvedBy = "developer-build-report",
                 ResolutionReason = resolution };
-            if (remainingReason is not null && !items.Any(other => other.GoalId == goal.Id.Value && other.Reason == remainingReason))
+            if (remainingReason is not null && !items.Any(other => other.GoalId == goal.Id.Value &&
+                    other.Reason == remainingReason && other.ResolvedAtUtc is null))
                 items.Add(item with { Reason = remainingReason, EscalatedAt = DateTimeOffset.UtcNow });
             changed = true;
         }

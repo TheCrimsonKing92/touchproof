@@ -227,6 +227,80 @@ public sealed class LandingBuildReportAttentionTests
         Assert.Equal(JsonSerializer.Serialize(after), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompoundReason_TerminalRemainderHistoryPreservesCurrentDemand(bool activeRemainder)
+    {
+        using var repo = new ConductorOnlyCandidateRangeTests.Repository();
+        var records = BoundRecords(repo);
+        records.Close();
+        Assert.True(records.Wait.IsCompleted);
+        var unresolved = new HumanInputRequest(new("11111111" + new string('1', 24)), records.Goal.Id, null,
+            "Independent unanswered approval", DateTimeOffset.UnixEpoch, HumanWaitKind.OperatorApproval);
+        var requests = records.Kernel.HumanInputRequests.Append(unresolved).ToArray();
+        var workspace = OrchestratorWorkspace.ForDirectory(repo.Root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var acceptance = $"acceptance passed at {repo.Head[..8]}";
+        var remaining = $"{acceptance}; 1 pending human wait(s) (OperatorApproval 11111111)";
+        var compound = $"{acceptance}; 2 pending human wait(s) (OperatorApproval 11111111; ProspectiveAcceptanceEvidence {records.Wait.Id.Value[..8]})";
+        OperatorInbox.RecordLandingEscalation(workspace, records.Goal, remaining, "conductor:Verified", collaborationStore: store);
+        var earlier = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
+        Assert.True(store.TryResolveAsync(earlier.CorrelationKey!, "earlier occurrence handled").GetAwaiter().GetResult());
+        Assert.Equal(OperatorInbox.LandingEscalationResolution.Resolved, OperatorInbox.ResolveLandingEscalationOccurrence(
+            workspace, records.Goal, "earlier occurrence handled", DateTimeOffset.UnixEpoch, resolvedAtUtc: DateTimeOffset.UnixEpoch));
+        var history = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
+        Assert.True(CollaborationItemLifecycle.IsTerminal(history.Status));
+        var persistedHistory = Assert.Single(ReadEscalations(workspace));
+        Assert.False(IsOpen(persistedHistory));
+        if (activeRemainder)
+            OperatorInbox.RecordLandingEscalation(workspace, records.Goal, remaining, "conductor:Verified", collaborationStore: store);
+        var current = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()
+            .SingleOrDefault(row => !CollaborationItemLifecycle.IsTerminal(row.Status));
+        Assert.Equal(activeRemainder, current is not null);
+        OperatorInbox.RecordLandingEscalation(workspace, records.Goal, compound, "conductor:Verified", collaborationStore: store);
+        var original = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult().Where(row => row.Body == compound));
+        Assert.False(CollaborationItemLifecycle.IsTerminal(original.Status));
+        Assert.Equal(compound, Assert.Single(ReadEscalations(workspace).Where(IsOpen)).GetProperty("reason").GetString());
+        var hold = new GoalLandingBlocker("landing/mutation-boundary", "Train still in flight", "train:other",
+            DateTimeOffset.UnixEpoch, "conductor", "next-tick");
+        records.Goal.ObserveLandingBlocker(hold);
+
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
+
+        var rows = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
+        var replacement = Assert.Single(rows.Where(row => !CollaborationItemLifecycle.IsTerminal(row.Status)));
+        Assert.Equal(remaining, replacement.Body);
+        Assert.Equal(earlier.CorrelationKey, replacement.CorrelationKey);
+        Assert.NotEqual(earlier.Id, replacement.Id);
+        if (current is not null) Assert.Equal(current.Id, replacement.Id);
+        Assert.Equal(CollaborationItemStatus.Resolved, rows.Single(row => row.Id == original.Id).Status);
+        Assert.Equal(JsonSerializer.Serialize(history), JsonSerializer.Serialize(rows.Single(row => row.Id == history.Id)));
+        var persisted = ReadEscalations(workspace);
+        Assert.Equal(3, persisted.Length);
+        Assert.Equal(remaining, Assert.Single(persisted.Where(IsOpen)).GetProperty("reason").GetString());
+        Assert.Equal(persistedHistory.GetRawText(), Assert.Single(persisted.Where(item =>
+            !IsOpen(item) && item.GetProperty("reason").GetString() == remaining)).GetRawText());
+        Assert.False(unresolved.IsCompleted);
+        Assert.Equal(hold, records.Goal.LandingBlocker);
+        var persistedBefore = File.ReadAllText(EscalationPath(workspace));
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
+        Assert.Equal(JsonSerializer.Serialize(rows), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
+        Assert.Equal(persistedBefore, File.ReadAllText(EscalationPath(workspace)));
+
+        // Once the current remainder is handled, replaying the terminal compound must not reopen it.
+        Assert.True(store.TryResolveAsync(replacement.CorrelationKey!, "current occurrence handled").GetAwaiter().GetResult());
+        Assert.Equal(OperatorInbox.LandingEscalationResolution.Resolved, OperatorInbox.ResolveLandingEscalationOccurrence(
+            workspace, records.Goal, "current occurrence handled", DateTimeOffset.UnixEpoch, resolvedAtUtc: DateTimeOffset.UnixEpoch));
+        var handledRows = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
+        var handledFile = File.ReadAllText(EscalationPath(workspace));
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
+        Assert.Empty(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult().Where(row => !CollaborationItemLifecycle.IsTerminal(row.Status)));
+        Assert.Empty(ReadEscalations(workspace).Where(IsOpen));
+        Assert.Equal(JsonSerializer.Serialize(handledRows), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
+        Assert.Equal(handledFile, File.ReadAllText(EscalationPath(workspace)));
+    }
+
     private static string EscalationPath(OrchestratorWorkspace workspace) =>
         Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
 
