@@ -54,7 +54,8 @@ public sealed record CriterionEvidenceObligation(
     CriterionObservationScope? ObservationScope = null,
     GoalPromotionFact? Publication = null,
     CriterionPostLandingObservation? Observation = null,
-    string? ObservationActor = null)
+    string? ObservationActor = null,
+    IReadOnlyList<PlannerCriterionEvidenceSource>? PlannerSources = null)
 {
     [JsonIgnore]
     public int CriterionNumber => CriterionIndex + 1;

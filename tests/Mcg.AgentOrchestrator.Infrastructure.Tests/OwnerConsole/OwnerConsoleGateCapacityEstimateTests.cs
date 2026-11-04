@@ -1,10 +1,12 @@
 // Parallel-safe: each load owns a unique temporary directory and uses an injected clock.
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OwnerConsoleGateCapacityEstimateTests
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 16, 1, 0, 0, TimeSpan.Zero);
+    private const string Execution = "776a132e-gate-20261016010000000-0123456789abcdef0123456789abcdef";
 
     [Fact]
     public void NoBreakdownEventUsesConfiguredCapacity()
@@ -12,7 +14,7 @@ public sealed class OwnerConsoleGateCapacityEstimateTests
         var gate = Load(5, 5);
 
         Assert.Equal(5, gate.Capacity!.LocalBudget);
-        Assert.All(gate.Lanes, lane => Assert.Equal(OwnerConsoleGateLaneState.Queued, lane.State));
+        Assert.All(gate.Lanes, lane => Assert.Equal(OwnerConsoleGateLaneState.Planned, lane.State));
         Assert.Equal(120, gate.RemainingSeconds);
     }
 
@@ -70,16 +72,22 @@ public sealed class OwnerConsoleGateCapacityEstimateTests
         {
             var log = Path.Combine(directory, "conduct-events.log");
             var manifest = Path.Combine(directory, "acceptance-manifest.json");
-            File.WriteAllLines(log, events.Append(Event(-60, "acceptance-cohort",
-                "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb")));
+            var scheduled = Enumerable.Range(0, 10).Select(index => ((char)('A' + index)).ToString()).ToArray();
+            var plan = Path.Combine(directory, Execution + AcceptanceGateLanePlan.ArtifactSuffix);
+            File.WriteAllText(plan, new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion,
+                Execution, scheduled, []).ToJson());
+            File.WriteAllLines(log, events.Concat([
+                Event(-60, "acceptance-cohort", $"ACCEPTANCE_COHORT_ENTRY execution={Execution} members=776a132e,eade84cb"),
+                Event(-60, "gate-progress", $"phase=lane-plan execution={Execution} members=776a132e,eade84cb heartbeat={JsonSerializer.Serialize(plan)}")
+            ]));
             File.WriteAllText(manifest, JsonSerializer.Serialize(new
             {
                 engine = new
                 {
                     maxConcurrentShards,
-                    infrastructureTestLanes = Enumerable.Range(0, 10).Select(index => new
+                    infrastructureTestLanes = scheduled.Select(name => new
                     {
-                        name = ((char)('A' + index)).ToString(), estimatedSerialSeconds = 60
+                        name, estimatedSerialSeconds = 60
                     }).ToArray()
                 }
             }));
@@ -89,7 +97,13 @@ public sealed class OwnerConsoleGateCapacityEstimateTests
 
             var gate = Assert.IsType<OwnerConsoleGateProgress>(loader.Load(new Dictionary<string, string>()));
             Assert.True(gate.Live);
+            Assert.True(gate.LanePlanAvailable);
+            Assert.True(gate.HasEta);
+            Assert.Equal(Execution, gate.ExecutionId);
             Assert.Equal(10, gate.Lanes.Count);
+            Assert.Equal(10, gate.TotalCount);
+            Assert.Equal(scheduled, gate.Lanes.Select(lane => lane.Name));
+            Assert.All(gate.Lanes, lane => Assert.True(lane.IsScheduled));
             Assert.All(gate.Lanes, lane => Assert.Equal(60d, lane.MedianSeconds));
             return gate;
         }
@@ -102,7 +116,7 @@ public sealed class OwnerConsoleGateCapacityEstimateTests
         (concurrency.Length == 0 ? "" : ";shard_concurrency_effective=" + concurrency), "99999999");
 
     private static string Running(string lane) => Event(0, "gate-progress",
-        $"PHASE_PROGRESS goal=776a132e members=776a132e,eade84cb phase=verification-check target=\"infrastructure tests: {lane}\" elapsed_ms=0");
+        $"PHASE_PROGRESS goal=776a132e execution={Execution} members=776a132e,eade84cb phase=verification-check target=\"infrastructure tests: {lane}\" elapsed_ms=0");
 
     private static string Event(int age, string kind, string detail, string goal = "776a132e") =>
         JsonSerializer.Serialize(new { timestamp = Now.AddSeconds(age), eventKind = kind, goalId = goal, detail });

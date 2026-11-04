@@ -22,13 +22,25 @@ internal static class MergeTrainGateReceiptExecution
             options);
         var verification = AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
-            () => verifier.RunOwnedAsync(
-                workspacePath,
-                goalId: members[0].GoalId,
-                changedFiles,
-                stableSlotLease.Environment.BuildPermitIndex,
-                stableSlotLease,
-                executionOwner).GetAwaiter().GetResult());
+            () =>
+            {
+                // Explicit admission is the only observation that may restore an
+                // ejected participant. Repeated progress and outer rosters cannot.
+                try
+                {
+                    ((IAcceptanceRunExecutionContext)executionOwner).ReportProgress(new AcceptanceGateProgress(members[0].GoalId.Value,
+                        "execution-admitted", "", null, null, null, utcNow(), utcNow(), utcNow(),
+                        TimeSpan.Zero, 0, ""));
+                }
+                catch (Exception) { /* Observational only. */ }
+                return verifier.RunOwnedAsync(
+                    workspacePath,
+                    goalId: members[0].GoalId,
+                    changedFiles,
+                    stableSlotLease.Environment.BuildPermitIndex,
+                    stableSlotLease,
+                    executionOwner).GetAwaiter().GetResult();
+            });
         clock.Stop();
         var resultPaths = AcceptanceCohortVerificationClassifier.NormalizeCohortTestResultPaths(verification.TestResultPaths);
         var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(

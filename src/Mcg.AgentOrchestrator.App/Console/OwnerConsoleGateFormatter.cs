@@ -5,6 +5,8 @@ internal static class OwnerConsoleGateFormatter
     internal static string Remaining(int seconds) => seconds is > 0 and < 60 ? "~<1m" : $"~{(int)Math.Ceiling(seconds / 60d)}m";
     internal static string ProgressLine(OwnerConsoleGateProgress gate)
     {
+        if (!gate.ScheduleKnown) return "scheduled total unknown; ETA unknown (lane plan unavailable)";
+        if (!gate.HasEta) return "ETA unknown";
         var fraction = Math.Clamp(gate.Fraction, 0, 1);
         var cells = (int)Math.Floor(fraction * 10);
         return $"[{new string('#', cells)}{new string('-', 10 - cells)}] estimate {(int)Math.Floor(fraction * 100)}%  {Remaining(gate.RemainingSeconds)} left";
@@ -12,12 +14,21 @@ internal static class OwnerConsoleGateFormatter
 
     internal static string StatusSegment(OwnerConsoleGateProgress gate)
     {
-        if (!gate.Live) return "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
+        if (!gate.Live) return gate.Participation is { } participation ? "gate: " + participation + Identity(gate) :
+            "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
         var members = string.Join("+", gate.Members.Take(3).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
         if (gate.Members.Count > 3) members += "+" + (gate.Members.Count - 3);
         var count = OwnerConsoleGateCount.Of(gate);
-        return $"gate: {gate.Kind} {members} {count.Done}/{count.Total} {(gate.Failing ? "FAILING" : Remaining(gate.RemainingSeconds))}";
+        return $"gate: {gate.Kind} {members} {CountText(gate)} {(gate.Failing ? "FAILING" : gate.HasEta ? Remaining(gate.RemainingSeconds) : "ETA unknown")}" + Identity(gate);
     }
+
+    internal static string CountText(OwnerConsoleGateProgress gate)
+    {
+        var count = OwnerConsoleGateCount.Of(gate);
+        return gate.ScheduleKnown ? $"{count.Done}/{count.Total}" : "schedule unknown";
+    }
+
+    internal static string Identity(OwnerConsoleGateProgress gate) => gate.ExecutionId is null ? "" : " [" + gate.ExecutionId + "]";
 
     internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate) => OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.DefaultWidth, false);
 
@@ -36,7 +47,7 @@ internal static class OwnerConsoleGateFormatter
     internal static char Marker(OwnerConsoleGateLane lane) => lane.State switch
     {
         OwnerConsoleGateLaneState.Running => '>', OwnerConsoleGateLaneState.Queued => '.',
-        OwnerConsoleGateLaneState.Skipped => '-',
+        OwnerConsoleGateLaneState.Skipped => '-', OwnerConsoleGateLaneState.Planned => '?',
         OwnerConsoleGateLaneState.Cached => '=', OwnerConsoleGateLaneState.Done => lane.Outcome switch
         { "passed" => '+', "failed" => 'x', _ => '*' },
         _ => throw new ArgumentOutOfRangeException(nameof(lane))

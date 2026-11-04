@@ -24,15 +24,21 @@ internal static class OwnerConsoleGateLayout
             var failed = ordinary.Where(Failed).ToArray();
             var running = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running).ToArray();
             var queued = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Queued).ToArray();
+            var planned = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Planned).ToArray();
+            var unknownAuxiliary = ordinary.Where(row => Kind(row) != RowKind.Lane &&
+                row.State == OwnerConsoleGateLaneState.Done && row.Outcome is not ("passed" or "failed")).ToArray();
             var baseline = gate.Lanes.Where(row => Kind(row) == RowKind.Baseline).ToArray();
             var passed = ordinary.Where(Passed).ToArray();
-            var printed = failed.Concat(running).Concat(queued).Concat(skipped)
+            var printed = failed.Concat(running).Concat(queued).Concat(planned).Concat(skipped)
+                .Concat(unknownAuxiliary)
                 .Concat(expanded ? baseline.Concat(passed) : []).ToArray();
             var columns = new Columns(printed, width);
             var header = $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m";
             if (gate.Failing)
                 lines.AddRange(Wrap(header + " | " + OwnerConsoleGateConfirmation.Header(failed.Where(row => !row.IsAttribution).ToArray()), width));
             else lines.Add(header);
+            if (gate.ExecutionId is not null) lines.Add("Execution: " + gate.ExecutionId);
+            if (gate.OuterAttemptId is not null) lines.Add("Outer attempt: " + gate.OuterAttemptId);
             var memberStart = lines.Count;
             lines.AddRange(OwnerConsoleGateMemberLines.Lines(gate.Members));
             if (fields is not null) for (var i = 0; i < gate.Members.Count; i++)
@@ -44,7 +50,9 @@ internal static class OwnerConsoleGateLayout
             Section("FAILED", failed, failureNames: true);
             Section("RUNNING (longest pole first)", running, sort: true);
             Section("QUEUED", queued);
+            Section("PLANNED (unobserved)", planned);
             Section("SKIPPED", skipped);
+            Section("AUXILIARY (outcome unknown)", unknownAuxiliary);
             var toggle = expanded ? "(Enter to collapse)" : "(Enter to expand)";
             if (baseline.Length > 0)
             {
@@ -114,7 +122,7 @@ internal static class OwnerConsoleGateLayout
 
     private static RowKind Kind(OwnerConsoleGateLane row) => row.IsAttribution ? RowKind.Confirming :
         row.Name.EndsWith(" [trusted main baseline]", StringComparison.Ordinal) ? RowKind.Baseline :
-        row.IsManifestLane ? RowKind.Lane : RowKind.Check;
+        (row.IsScheduled ?? row.IsManifestLane) ? RowKind.Lane : RowKind.Check;
     private static bool Failed(OwnerConsoleGateLane row) => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed";
     private static bool Passed(OwnerConsoleGateLane row) => row.State == OwnerConsoleGateLaneState.Cached ||
         row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed";
@@ -160,7 +168,7 @@ internal static class OwnerConsoleGateLayout
         internal string Row(OwnerConsoleGateLane row) =>
             $" {OwnerConsoleGateFormatter.Marker(row)} {Fit(Ascii(Name(row)), _name).PadRight(_name)}  {Elapsed(row).PadLeft(_elapsed)} / {Median(row).PadRight(_median)}  {Ascii(row.Location).PadRight(_location)}  {Outcome(row).PadRight(_outcome)}".TrimEnd();
         private static string Name(OwnerConsoleGateLane row) => row.IsAttribution ? OwnerConsoleGateFormatter.AttributionName(row) : row.Name;
-        private static string Elapsed(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Queued or OwnerConsoleGateLaneState.Skipped ? "-" : ((int)row.Elapsed.TotalSeconds).ToString(CultureInfo.InvariantCulture) + "s";
+        private static string Elapsed(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Planned or OwnerConsoleGateLaneState.Queued or OwnerConsoleGateLaneState.Skipped ? "-" : ((int)row.Elapsed.TotalSeconds).ToString(CultureInfo.InvariantCulture) + "s";
         private static string Median(OwnerConsoleGateLane row) => row.MedianSeconds is { } seconds ? seconds.ToString("0.#", CultureInfo.InvariantCulture) + "s" : "?";
         private static string Outcome(OwnerConsoleGateLane row) => row.State switch
         {
@@ -168,6 +176,7 @@ internal static class OwnerConsoleGateLayout
                 (row.QuietSeconds is > 300 ? $" quiet {(int)(row.QuietSeconds.Value / 60)}m" : ""),
             OwnerConsoleGateLaneState.Done => row.Outcome is "passed" or "failed" ? row.Outcome : "done",
             OwnerConsoleGateLaneState.Cached => "cached", OwnerConsoleGateLaneState.Queued => "",
+            OwnerConsoleGateLaneState.Planned => "planned / unobserved",
             OwnerConsoleGateLaneState.Skipped => "skipped: " + row.SkipReason,
             _ => throw new ArgumentOutOfRangeException(nameof(row))
         };

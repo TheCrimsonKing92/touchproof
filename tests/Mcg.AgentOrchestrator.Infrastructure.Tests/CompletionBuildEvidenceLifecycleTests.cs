@@ -102,18 +102,17 @@ public sealed class CompletionBuildEvidenceLifecycleTests
     }
 
     [Fact]
-    public void Protocol1ReceiptAloneCannotCertifyInfrastructureRound()
+    public void Protocol1LegacyReceiptStillRequiresHostCompletionBuild()
     {
         var fixture = InfrastructureFixture();
         fixture.WriteReceipt(["src/Feature/Feature.csproj"]);
 
         InfrastructureRunner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
 
-        Assert.Equal(0, fixture.Launches);
-        Assert.Null(fixture.Task.CompletionBuildEvidence);
-        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
-        Assert.Contains(DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
-            fixture.Task.LastVerification!.StandardError);
+        Assert.Equal(1, fixture.Launches);
+        Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
+        Assert.Null(fixture.Task.LastVerification);
+        Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
     }
 
     [Theory]

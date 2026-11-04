@@ -414,7 +414,8 @@ internal static partial class TerminalGoalSweep
         string? orchestratorDirectory = null,
         MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null,
         CohortAcceptanceStore? cohortAcceptanceStore = null,
-        bool reclaimGoalRoots = false)
+        bool reclaimGoalRoots = false,
+        BackgroundDispatchRunner? dispatchRunner = null)
     {
         gitRunner ??= DefaultGitRunner;
         var gitRunnerIdentity = gitRunner;
@@ -437,7 +438,7 @@ internal static partial class TerminalGoalSweep
         cohortAcceptanceStore ??= new CohortAcceptanceStore(
             Path.Combine(orchestratorDirectory, "cohort-acceptance.db"));
         var reconciliationStatePath = Path.Combine(orchestratorDirectory, "state.db");
-        var dispatchRunner = new BackgroundDispatchRunner(completionBuildEvidence:
+        dispatchRunner ??= new BackgroundDispatchRunner(completionBuildEvidence:
             new CompletionBuildEvidenceCoordinator(reconciliationStatePath, executionDirectory))
         {
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(reconciliationStatePath, executionDirectory),

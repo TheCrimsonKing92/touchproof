@@ -1510,7 +1510,7 @@ public sealed partial class BackgroundDispatchRunner
                     kernel, goalId, taskId, request, processRecord with
                     { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }), goal.Id);
             var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
-                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, decisionStandardOutput + Environment.NewLine + decisionStandardError, reconcileBuild, ref orchestratorFailureReason) : reconcileBuild();
+                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, decisionStandardOutput + Environment.NewLine + decisionStandardError, completeNonBlockedWorkerResult, reconcileBuild, ref orchestratorFailureReason) : reconcileBuild();
             if (buildEvidence.Pending)
                 return new DispatchRefreshOutcome(
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,

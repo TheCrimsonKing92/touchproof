@@ -105,6 +105,7 @@ public sealed class ShardCompleteLoadFieldsTests
                 TimeSpan.FromMilliseconds(elapsedMs), options.ProgressSink!);
             var lines = File.ReadAllLines(workspace.ConductEventsLogPath);
             Assert.Equal(3, lines.Length);
+            var identitySuffix = $" train_identity={identity.Value} participant_ids={string.Join(',', members.Select(member => member.GoalId.Value))}";
             Assert.All(lines, line =>
             {
                 var detail = Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress.ParseEvent(line)!.Detail;
@@ -113,7 +114,9 @@ public sealed class ShardCompleteLoadFieldsTests
                 Assert.Contains("ratio=2.00 median_wall_ms=240000", detail);
                 Assert.Contains("grown=1 top=+1", detail);
                 Assert.Contains("scope=merge-train", detail);
-                Assert.True(detail.Length <= 400, $"{detail.Length}: {detail}");
+                Assert.EndsWith(identitySuffix, detail);
+                // Full train and participant identities must not consume the diagnostic payload budget.
+                Assert.True(detail.Length - identitySuffix.Length <= 400, $"{detail.Length}: {detail}");
             });
         }
         finally { Directory.Delete(directory, recursive: true); }

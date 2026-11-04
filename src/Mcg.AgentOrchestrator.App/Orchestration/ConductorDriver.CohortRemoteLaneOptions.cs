@@ -9,8 +9,9 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
-        string? projectHomeDirectory = null, IReadOnlyList<MemberDeclaredTestRemoval>? memberTestRemovals = null) => new(
-            ProgressSink: progress => AppendCohortGateProgressEvents(writer, identity, bindings, progress),
+        string? projectHomeDirectory = null, IReadOnlyList<MemberDeclaredTestRemoval>? memberTestRemovals = null,
+        string? outerAttemptId = null) => new(
+            ProgressSink: progress => AppendCohortGateProgressEvents(writer, identity, bindings, progress, outerAttemptId),
             RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, bindings.Count == 1 ? bindings[0].GoalId.Value[..8] : null, detail),
             OwnerProtectedCohortMembers: bindings.Select(binding =>
                 new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray(),

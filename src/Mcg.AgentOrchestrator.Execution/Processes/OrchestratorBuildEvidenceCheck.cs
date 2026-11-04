@@ -51,6 +51,19 @@ internal sealed record OrchestratorBuildEvidenceResolution(
 
 public static class OrchestratorBuildEvidenceCheck
 {
+    internal const string BusyChannelClaim = "worker_build_channel_busy";
+    internal const string UnverifiedBusyChannel = "worker_build_channel_evidence=unverified-busy-claim";
+
+    // Aggregate worker output can request an evidence hold, never establish child provenance
+    // or authorize a build. Keep the actual invocation verdict ahead of this diagnostic.
+    internal static OrchestratorBuildEvidenceResolution RetainUnverifiedBusyClaim(
+        OrchestratorBuildEvidenceResolution resolution, string workerOutput) =>
+        resolution.MissingEvidence && !resolution.BuildFailed &&
+        workerOutput.Contains(BusyChannelClaim, StringComparison.Ordinal)
+            ? resolution with { Diagnostic = resolution.Diagnostic + Environment.NewLine + UnverifiedBusyChannel +
+                "; authoritative host-captured generated-client terminal result bound to dispatch, channel and completion is required; no busy recovery authorized" }
+            : resolution;
+
     internal const string ScriptRelativePath = "scripts/Invoke-WorkerBuildCheck.ps1";
     // Published by the App's OrchestratorHome accessor before command dispatch.
     internal const string HomeEnvironmentVariable = "MCG_ORCHESTRATOR_HOME";
