@@ -111,7 +111,12 @@ public sealed class OwnerConsoleOwnerAttentionTests
         Assert.Contains(reason, retried);
         Assert.Contains($"retried automatically at {time.AddSeconds(-2).ToLocalTime():HH:mm:ss}", retried);
         Assert.Contains("Owner action: No.", retried);
-        Assert.Equal(1, retried.Split("11111111", StringSplitOptions.None).Length - 1);
+        // The narrative names the goal once; Diagnostics separately preserves its exact identity.
+        var retriedSections = retried.Split("\n\nDiagnostics\n", StringSplitOptions.None);
+        Assert.Equal(2, retriedSections.Length);
+        Assert.Equal(1, retriedSections[0].Split("11111111", StringSplitOptions.None).Length - 1);
+        Assert.Equal("Goal ID: 11111111", Assert.Single(retriedSections[1].Split('\n'),
+            line => line.StartsWith("Goal ID: ", StringComparison.Ordinal)));
 
         scene.View.ActivityPane.SelectedItem = Array.FindIndex(items.ToArray(), item => item.OwnerQuestionId == "q2");
         await scene.View.HandleKeyAsync(Key.Enter);
