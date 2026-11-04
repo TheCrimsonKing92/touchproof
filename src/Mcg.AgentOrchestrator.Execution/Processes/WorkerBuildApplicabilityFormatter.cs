@@ -37,7 +37,7 @@ internal static class WorkerBuildApplicabilityFormatter
 
     private static string Known(bool? value) => value is null ? "unknown" : value.Value ? "true" : "false";
     private static string Identity(string? value) => value is { Length: > 0 and <= 128 } &&
-        value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or ':') ? value : "unknown";
+        value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or ':') ? Observation(value) : "unknown";
     private static string Digest(string? value) => WorkerBuildApplicabilityExplanation.IsTreeDigest(value) ? value! : "unknown";
     private static bool RelativePath(string value) => value.Length is > 0 and <= 240 &&
         !Path.IsPathRooted(value) && !value.Contains(':') && !value.Contains('\\') &&
@@ -54,12 +54,20 @@ internal static class WorkerBuildApplicabilityFormatter
         {
             if (entries.Count == ListLimit) break;
             if (!RelativePath(entry)) continue;
-            if (used + entry.Length > 512) break;
-            entries.Add(entry);
-            used += entry.Length;
+            var encoded = Observation(entry);
+            if (used + encoded.Length > 512) break;
+            entries.Add(encoded);
+            used += encoded.Length;
         }
         return $"[{string.Join(',', entries)}]; omitted={values.Count - entries.Count}; truncated={(values.Count > entries.Count ? "true" : "false")}";
     }
+
+    // Lossless URI escaping keeps observations inert to recovery's substring parsers.
+    // Escape underscores too (URI normally preserves them), retaining readable path separators.
+    // Compare original values above this presentation boundary; decode only for display.
+    private static string Observation(string value) => Uri.EscapeDataString(value)
+        .Replace("_", "%5F", StringComparison.Ordinal)
+        .Replace("%2F", "/", StringComparison.Ordinal);
 
     internal static string Name(WorkerBuildApplicabilityReason reason) => reason switch
     {

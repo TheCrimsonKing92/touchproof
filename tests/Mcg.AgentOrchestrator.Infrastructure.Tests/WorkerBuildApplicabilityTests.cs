@@ -238,6 +238,58 @@ public sealed class WorkerBuildApplicabilityTests
         Assert.False(Assert.Single(fixture.Task.WorkerBuildInvocations).Consumed);
     }
 
+    [Theory]
+    [InlineData("src/worker_build_channel_busy/Feature.csproj")]
+    [InlineData("src/outcome=CapacityBeforeStart/Feature.csproj")]
+    [InlineData("src/Timed out waiting for build lease execution lock/Feature.csproj")]
+    [InlineData("src/worker%5Fbuild%5Fchannel%5Fbusy/Feature.csproj")]
+    public void Format_ObservationPaths_CannotSupplyRecoverySignals(string path)
+    {
+        var fixture = new WorkerBuildApplicabilityFixture();
+        var explanation = WorkerBuildApplicabilityExplanation.Capture(fixture.DispatchId,
+            fixture.Digest(), fixture.Scope(), [fixture.Invocation("worker_build_channel_busy")]);
+        var comparison = Assert.Single(explanation.Invocations) with
+        {
+            Projects = [path], MissingProjects = [path], ChangedPaths = [path]
+        };
+        explanation = explanation with { RequiredProjects = [path], Invocations = [comparison] };
+
+        var diagnostic = WorkerBuildApplicabilityFormatter.Format(explanation);
+
+        Assert.Equal(path, Assert.Single(explanation.RequiredProjects!));
+        Assert.Equal(path, Assert.Single(comparison.Projects));
+        Assert.Equal(path, Assert.Single(comparison.MissingProjects!));
+        Assert.Equal(path, Assert.Single(comparison.ChangedPaths!));
+        // Rendering is reversible, including literal percent escapes, and never a control input.
+        Assert.Equal(4, Uri.UnescapeDataString(diagnostic).Split(path).Length - 1);
+        Assert.Contains("id=worker%5Fbuild%5Fchannel%5Fbusy;", diagnostic);
+        Assert.DoesNotContain(OrchestratorBuildEvidenceCheck.BusyChannelClaim, diagnostic);
+        Assert.Equal(WorkerBuildNoBuildCause.None, WorkerBuildCheckRecoveryText.NoBuildCause(diagnostic));
+        Assert.Equal(WorkerBuildNoBuildCause.SlotCapacity, WorkerBuildCheckRecoveryText.NoBuildCause(
+            diagnostic + "\n" + WorkerBuildCheckRecoveryText.SlotCapacityOutcome));
+        Assert.Equal(WorkerBuildNoBuildCause.LockTimeout, WorkerBuildCheckRecoveryText.NoBuildCause(
+            diagnostic + "\n" + WorkerBuildCheckRecoveryText.BuildSlotLockTimeout));
+        Assert.True(diagnostic.Length <= WorkerBuildApplicabilityFormatter.RenderLimit);
+    }
+
+    [Fact]
+    public void Format_EscapedPaths_EnforcesRenderedListBudget()
+    {
+        var projects = Enumerable.Range(0, 3)
+            .Select(i => $"src/{new string('_', 70)}/{i}.csproj").ToArray();
+        var explanation = new WorkerBuildApplicabilityExplanation("dispatch", null, null,
+            projects, [], [], 0);
+
+        var diagnostic = WorkerBuildApplicabilityFormatter.Format(explanation);
+
+        Assert.Contains("omitted=1; truncated=true", diagnostic);
+        Assert.Contains(projects[0], Uri.UnescapeDataString(diagnostic));
+        Assert.Contains(projects[1], Uri.UnescapeDataString(diagnostic));
+        Assert.DoesNotContain(projects[2], Uri.UnescapeDataString(diagnostic));
+        Assert.Equal(3, explanation.RequiredProjects!.Count);
+        Assert.True(diagnostic.Length <= WorkerBuildApplicabilityFormatter.RenderLimit);
+    }
+
     [Fact]
     public void CompareRecordedTrees_ImmutableObjects_ReportsOnlySupportedPaths()
     {

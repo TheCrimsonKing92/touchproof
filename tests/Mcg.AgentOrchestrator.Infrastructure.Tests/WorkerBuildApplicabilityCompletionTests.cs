@@ -1,9 +1,84 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: isolated repositories/SQLite, production consumer, injected child lifecycle.
 public sealed class WorkerBuildApplicabilityCompletionTests
 {
+    [Theory]
+    [InlineData(false, "worker_build_channel_busy")]
+    [InlineData(true, "worker_build_channel_busy")]
+    [InlineData(false, "outcome=CapacityBeforeStart")]
+    [InlineData(true, "outcome=CapacityBeforeStart")]
+    public void Refresh_ObservationPaths_CannotChangeRecoveryDecision(bool changedPath, string marker)
+    {
+        var fixture = new WorkerBuildApplicabilityFixture();
+        var path = $"src/{marker}/Feature.{(changedPath ? "cs" : "csproj")}";
+        string Tree()
+        {
+            Assert.True(GitCli.RunForRepository(fixture.Root, "add", "-A").Succeeded);
+            var result = GitCli.RunForRepository(fixture.Root, "write-tree");
+            Assert.True(result.Succeeded, result.Error);
+            return WorktreeTreeDigest.Algorithm + ":" + result.Output.Trim();
+        }
+        string? recorded = null;
+        if (changedPath)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(fixture.Root, path))!);
+            File.WriteAllText(Path.Combine(fixture.Root, path), "class Before { }");
+            recorded = Tree();
+            File.WriteAllText(Path.Combine(fixture.Root, path), "class After { }");
+            Tree();
+        }
+        var older = fixture.Task.LastDispatch! with
+            { DispatchedAt = fixture.Task.LastDispatch!.DispatchedAt.AddHours(-1) };
+        var invocation = fixture.Invocation("00000001", digest: recorded,
+            projects: changedPath ? null : [path]) with
+        {
+            DispatchAt = older.DispatchedAt,
+            DispatchId = BackgroundDispatchRunner.BuildDispatchId(fixture.Build.GoalId,
+                fixture.Build.TaskId, older with { ProviderSessionId = null })
+        };
+        fixture.Mutate(task => task with { DispatchHistory = task.DispatchHistory!.Prepend(
+            task.LastDispatch! with { DispatchedAt = older.DispatchedAt }).ToArray() });
+        fixture.SetInvocations(invocation);
+        var receipt = fixture.Consume();
+        Assert.Equal(WorkerBuildEvidenceGap.MissingApplicableInvocation, receipt.Gap);
+        var comparison = Assert.Single(receipt.Applicability!.Invocations);
+        Assert.False(comparison.DispatchMatches);
+        Assert.Contains(path, changedPath ? comparison.ChangedPaths! : comparison.Projects);
+
+        var outcome = fixture.Runner().RefreshLatestProcessWithOutcome(fixture.Build.Kernel,
+            fixture.Build.GoalId, fixture.Build.TaskId);
+        fixture.Save();
+        fixture.Build.Reload();
+        var verification = Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
+        var diagnostic = verification.StandardError + "\n" + verification.StandardOutput;
+        Assert.Contains(WorkerBuildApplicabilityFormatter.Format(receipt.Applicability), diagnostic);
+        Assert.Contains(path, Uri.UnescapeDataString(outcome.DiagnosticPayload!.StandardError));
+        Assert.DoesNotContain(path, diagnostic);
+        Assert.Equal(WorkerBuildNoBuildCause.None, WorkerBuildCheckRecoveryText.NoBuildCause(diagnostic));
+        Assert.Equal("worker-build-evidence-missing", TaskOutcomeClassifier.TryExtractRule(
+            DispatchFailureClassifier.Classify(fixture.Task, verification).ClassifierReceipt));
+        var identity = new FailedGoalRecoveryIdentity(fixture.Build.GoalId, fixture.Build.TaskId, null, "fixture");
+        Assert.Null(WorkerBuildEvidenceRecoveryHold.Decide(fixture.Build.Goal, GoalLifecycleState.Failed, identity));
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Equal(1, verification.ExitCode);
+        Assert.Equal(0, verification.ObservedRootExitCode);
+        Assert.False(Assert.Single(fixture.Task.WorkerBuildInvocations).Consumed);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.Equal(0, fixture.Build.Launches);
+        Assert.Equal(0, fixture.Task.WorkerBuildCheckRecoveryCount);
+
+        // A real control claim still takes the existing hold branch with the same task state.
+        fixture.Mutate(task => task with { LastVerification = task.LastVerification! with
+            { StandardError = task.LastVerification.StandardError + "\n" + OrchestratorBuildEvidenceCheck.BusyChannelClaim } });
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(WorkerBuildEvidenceRecoveryHold.Decide(
+            fixture.Build.Goal, GoalLifecycleState.Failed, identity));
+        Assert.Equal("build-channel-evidence-unverified", held.Decision!.DiscriminatingEvidence);
+    }
+
     [Theory]
     [InlineData(false, "worker-build-evidence-missing", "no-invocation-recorded")]
     [InlineData(true, "worker-build-check-failed", "terminal-non-success")]
