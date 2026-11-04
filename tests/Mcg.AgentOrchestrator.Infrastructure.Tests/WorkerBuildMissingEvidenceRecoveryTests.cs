@@ -349,7 +349,14 @@ public sealed class WorkerBuildMissingEvidenceRecoveryTests
         var process = fixture.Task.LastProcess;
         const string suffix = ".out.log";
         Assert.EndsWith(suffix, process.StandardOutputPath);
-        var enrollment = Operations(fixture).Prepare(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        // The completed snapshot already enrolled protocol 1. Reconstruct its retained
+        // launch contract without trying to enroll again after process launch.
+        var dispatch = fixture.Task.LastDispatch!;
+        Assert.Equal(1, dispatch.WorkerBuildProtocolVersion);
+        var enrollment = new WorkerBuildHostReference(fixture.StatePath, fixture.Root,
+            fixture.GoalId.Value, fixture.TaskId.Value, dispatch.DispatchedAt,
+            BackgroundDispatchRunner.BuildDispatchId(fixture.GoalId, fixture.TaskId,
+                dispatch with { ProviderSessionId = null }), StorageRoot: fixture.Storage.RootPath);
         DispatchProcessHost.WriteParameters(process.StandardOutputPath[..^suffix.Length] + ".dispatch.json",
             new(fixture.Task.LastDispatch!.Command, worktree, process.StandardOutputPath,
                 process.StandardErrorPath, process.ExitCodePath, null, true, WorkerBuildHost: enrollment));

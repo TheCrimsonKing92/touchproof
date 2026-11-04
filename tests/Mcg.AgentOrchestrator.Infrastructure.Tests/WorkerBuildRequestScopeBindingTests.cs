@@ -71,8 +71,10 @@ public sealed class WorkerBuildRequestScopeBindingTests
         var result = fixture.Consume();
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
-        Assert.Equal("worker_build_host=missing-current-candidate-outcome; transport_cause=unknown", result.Diagnostic);
-        Assert.Equal(WorkerBuildEvidenceGap.MissingApplicableInvocation, result.Gap);
+        // This fixture's host is the live test runner. Inapplicable evidence must
+        // be refused without authorizing the post-exit completion build.
+        Assert.StartsWith("worker_build_host=origin-invalid; worker host has not exited", result.Diagnostic);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
     }
 
@@ -89,8 +91,8 @@ public sealed class WorkerBuildRequestScopeBindingTests
             [WorkerBuildRequestFixture.OtherSource], []);
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
-        Assert.Equal("worker_build_host=missing-current-candidate-outcome; transport_cause=unknown", result.Diagnostic);
-        Assert.Equal(WorkerBuildEvidenceGap.MissingApplicableInvocation, result.Gap);
+        Assert.StartsWith("worker_build_host=origin-invalid; worker host has not exited", result.Diagnostic);
+        Assert.Equal(WorkerBuildEvidenceGap.Rejected, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
     }
 
