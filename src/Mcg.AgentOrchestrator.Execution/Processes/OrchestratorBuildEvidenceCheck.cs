@@ -18,12 +18,15 @@ internal sealed record OrchestratorBuildEvidenceResolution(
     string Diagnostic,
     CompletionBuildEvidenceOperation? Operation = null)
 {
+    internal WorkerBuildApplicabilityExplanation? Applicability { get; init; }
     public bool Pending => Operation?.IsPending == true;
     public bool FailsRound => MissingEvidence || BuildFailed;
 
     public string AppendDiagnostic(string? standardError)
     {
         var combined = Append(standardError, Diagnostic);
+        if (Applicability is not null)
+            combined = Append(combined, WorkerBuildApplicabilityFormatter.Format(Applicability));
         if (BuildFailed)
         {
             combined = Append(

@@ -5,6 +5,16 @@ public static class DispatchContractDiagnostic
     public static bool TryExtract(string? standardError, string rule, out string diagnostic)
     {
         diagnostic = string.Empty;
+        if (rule is DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing or DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)
+        {
+            // These host-appended observations add failure detail only; they are never verdict inputs.
+            var applicability = (standardError ?? string.Empty)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line => line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildApplicability, StringComparison.Ordinal))
+                .Take(9).Select(DispatchEvidenceSummaries.TruncateEvidence).ToArray();
+            diagnostic = string.Join(" | ", applicability);
+            return applicability.Length > 0;
+        }
         if (string.Equals(rule, DispatchFailureDiagnosticMarker.PlannerOutputContractRejected, StringComparison.Ordinal))
         {
             return TryExtractPlannerRejection(standardError, out diagnostic);
