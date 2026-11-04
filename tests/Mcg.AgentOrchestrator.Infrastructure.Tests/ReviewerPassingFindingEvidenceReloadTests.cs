@@ -99,10 +99,17 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
         fixture.Reload();
         Assert.False(fixture.Decide(out _));
         Assert.Equal(1, fixture.ReviewDispatches);
+        Assert.True(fixture.Reviewer.LastVerification!.Succeeded);
+        // Reattachment records passing verification. Resume through the normal retry
+        // transition before starting the still-unconsumed review; keep its history.
+        fixture.Kernel.RetryTask(fixture.Goal.Id, fixture.Reviewer.Id,
+            "Resume evidence review after receipt reattachment without a completed model review.",
+            retryRoundKind: RetryRoundKind.Mechanical, retryCause: RetryCause.CriterionEvidenceOwnerMismatch);
         fixture.Report([finding], completed: false);
         Assert.False(fixture.Decide(out _));
         Assert.Equal(2, fixture.ReviewDispatches);
         Assert.Single(fixture.Executions);
+        Assert.DoesNotContain(fixture.Retries, item => item.Task == fixture.Developer.Id);
     }
 
     [Fact]
