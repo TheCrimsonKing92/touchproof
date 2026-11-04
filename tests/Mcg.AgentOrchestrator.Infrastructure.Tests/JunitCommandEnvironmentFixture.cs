@@ -51,12 +51,13 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         return destination;
     }
 
-    internal async Task<AcceptanceCheckResult> RunAsync(CancellationToken token = default, Check? check = null)
+    internal async Task<AcceptanceCheckResult> RunAsync(CancellationToken token = default, Check? check = null,
+        AcceptanceGateEngineSettings? settings = null)
     {
         await using var owner = new AcceptanceAttemptExecutionOwner(
             new("environment-" + Guid.NewGuid().ToString("N"), "goal", Root, "tree", "main", "commit",
                 Path.Combine(Root, ".orchestrator", "acceptance-gate-attempts", "environment", "attempt-current"), null, Environment.ProcessId, null),
-            new AcceptanceGateEngineSettings(), token);
+            settings ?? new AcceptanceGateEngineSettings(), token);
         return (await Verifier.RunInvocationForOwnerTestsAsync(owner, owner.CreateInvocation(Check.Name), check ?? Check, Root, token)).Result;
     }
 

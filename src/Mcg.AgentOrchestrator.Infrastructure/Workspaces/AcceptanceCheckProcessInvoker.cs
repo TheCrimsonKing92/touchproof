@@ -274,7 +274,7 @@ internal static class AcceptanceCheckProcessInvoker
                 AcceptanceCaptureDrain.EmitCaptureLimitReached(
                     heartbeatContext,
                     attemptResultsPrefix,
-                    capture.Path,
+                    request.SuppressDiagnosticCaptures ? null : capture.Path,
                     engineSettings.OutputCaptureLimitBytes);
             }
 

@@ -242,14 +242,16 @@ internal static class GoalAcceptanceVerifierCaptureCustody
     internal static void EmitCaptureLimitReached(
         string? goalId,
         string? attemptPrefix,
-        string path,
+        string? path,
         long capBytes,
         TextWriter writer)
     {
+        // A suppressed reference must not reappear through the capture-filename run fallback.
         var runId = Path.GetFileName(
-            attemptPrefix ?? Path.GetFileNameWithoutExtension(path));
+            attemptPrefix ?? (path is null ? null : Path.GetFileNameWithoutExtension(path))) ?? "unknown";
+        var captureReference = path is null ? "" : $" path={GoalAcceptanceVerifier.QuoteProgressToken(path)}";
         writer.WriteLine(
-            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={GoalAcceptanceVerifier.FormatNullableToken(goalId, 8)} run={GoalAcceptanceVerifier.QuoteProgressToken(runId)} path={GoalAcceptanceVerifier.QuoteProgressToken(path)} cap_bytes={capBytes}");
+            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={GoalAcceptanceVerifier.FormatNullableToken(goalId, 8)} run={GoalAcceptanceVerifier.QuoteProgressToken(runId)}{captureReference} cap_bytes={capBytes}");
         writer.Flush();
     }
 

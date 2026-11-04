@@ -8,6 +8,49 @@ public sealed class JunitCommandEnvironmentDiagnosticTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task CaptureLimit_PreservesEventAndCapWithCheckLocalReferenceSuppression(bool optIn)
+    {
+        const long capBytes = 4096;
+        using var fixture = new JunitCommandEnvironmentFixture("FIXTURE_" + Guid.NewGuid().ToString("N"), optIn,
+            exitCode: 9, diagnostic: string.Concat(Enumerable.Repeat(JunitCommandEnvironmentFixture.Literal, 1024)));
+        var output = await AsyncLocalConsoleRouter.Out.CaptureLocalAsync(async () =>
+        {
+            var result = await fixture.RunAsync(settings: new AcceptanceGateEngineSettings
+                { OutputCaptureLimitBytes = capBytes });
+            Assert.False(result.Passed);
+            Assert.Contains(result.CrosswalkDiagnostics!, diagnostic => diagnostic.Category == CrosswalkDiagnosticCategory.NonzeroExit);
+        });
+
+        Assert.Equal(optIn ? JunitCommandEnvironmentFixture.Literal : null,
+            JunitCommandEnvironmentFixture.ObservedValue(fixture.CommandObservation));
+        var events = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("ACCEPTANCE_CAPTURE_LIMIT_REACHED ", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(events); // Prove the capped publication path ran before checking suppression.
+        Assert.All(events, line =>
+        {
+            Assert.Contains("cap_bytes=4096", line);
+            Assert.Contains("run=attempt-current", line);
+            if (optIn) Assert.DoesNotContain(" path=", line);
+            else Assert.Contains(" path=", line); // Ordinary commands retain their capture references.
+        });
+        Assert.DoesNotContain(JunitCommandEnvironmentFixture.Literal, output);
+    }
+
+    [Theory]
+    [InlineData(null, "unknown")]
+    [InlineData("run-42", "run-42")]
+    public void SuppressedCaptureLimit_HasNoCaptureFilenameRunFallback(string? attempt, string expectedRun)
+    {
+        using var writer = new StringWriter();
+        GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached("0123456789abcdef", attempt,
+            path: null, capBytes: 4096, writer: writer);
+        var line = writer.ToString().Trim();
+        Assert.Equal($"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal=01234567 run={expectedRun} cap_bytes=4096", line);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CommandAndParserFailures_SuppressExcerptsAndCaptureReferences(bool parserFailure)
     {
         var literal = JunitCommandEnvironmentFixture.Literal;
