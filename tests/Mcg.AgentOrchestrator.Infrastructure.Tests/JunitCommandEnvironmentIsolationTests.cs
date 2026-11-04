@@ -113,6 +113,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
         private readonly Task _connected;
         private StreamWriter? _writer;
         private Process? _child;
+        private Process? _launcher;
         internal ChildGate()
         {
             _pipe = new(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -131,6 +132,17 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 // handle now, so teardown observes this child rather than a later reuse of its PID.
                 _child = Process.GetProcessById(observation.RootElement.GetProperty("processId").GetInt32());
                 _ = _child.SafeHandle;
+                if (OperatingSystem.IsWindows())
+                {
+                    // cmd.exe owns the command working directory independently of pwsh. Pin it
+                    // while pwsh is gated: cancellation requests termination but does not await
+                    // the launcher's exit, and waiting for pwsh alone cannot release both handles.
+                    var parent = WindowsNativeProcessInspection.ReadParentProcessId(_child.Id);
+                    Assert.Equal(ProcessInspectionStatus.Available, parent.Status);
+                    _launcher = Process.GetProcessById(Assert.IsType<int>(parent.ParentProcessId));
+                    _ = _launcher.SafeHandle;
+                    Assert.Equal("cmd", _launcher.ProcessName, ignoreCase: true);
+                }
                 _writer = new StreamWriter(_pipe, leaveOpen: true) { AutoFlush = true };
             }
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
@@ -138,11 +150,16 @@ public sealed class JunitCommandEnvironmentIsolationTests
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
         internal async Task WaitForExit()
         {
-            if (_child is null) return; // Ready never completed; no child handle was acquired.
-            try { await _child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(120)); }
-            catch (TimeoutException) { throw new TimeoutException("Fixture child did not exit before directory cleanup."); }
-            Assert.True(_child.HasExited);
+            await WaitForExit(_child, "Fixture child");
+            await WaitForExit(_launcher, "Fixture command launcher");
         }
-        public void Dispose() { _child?.Dispose(); _writer?.Dispose(); _pipe.Dispose(); }
+        private static async Task WaitForExit(Process? process, string eventName)
+        {
+            if (process is null) return; // Ready never acquired this process's handle.
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(120)); }
+            catch (TimeoutException) { throw new TimeoutException($"{eventName} did not exit before directory cleanup."); }
+            Assert.True(process.HasExited);
+        }
+        public void Dispose() { _launcher?.Dispose(); _child?.Dispose(); _writer?.Dispose(); _pipe.Dispose(); }
     }
 }
