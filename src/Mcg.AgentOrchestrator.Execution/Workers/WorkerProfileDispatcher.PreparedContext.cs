@@ -14,8 +14,9 @@ public static partial class WorkerProfileDispatcher
         string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
         var dispatch = task.LastDispatch ?? throw new InvalidOperationException("Context restoration requires a recorded dispatch.");
-        if (dispatch.ContextPackageReceipt is not { } receipt) return;
-        if (File.Exists(dispatch.PromptPath) && receipt.Sections
+        // Untyped reservations have no section hashes to establish completeness.
+        // Regenerate their normal prerequisites without replacing the recorded attempt.
+        if (dispatch.ContextPackageReceipt is { } receipt && File.Exists(dispatch.PromptPath) && receipt.Sections
             .Where(section => section.MandatoryRelativePath is not null)
             .All(section =>
             {

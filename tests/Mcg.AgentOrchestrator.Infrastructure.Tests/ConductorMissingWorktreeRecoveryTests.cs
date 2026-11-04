@@ -165,6 +165,83 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         f.AssertRestored();
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UntypedReservation_RestoresContextAndHandoffWithoutReplacingAttempt(bool stale)
+    {
+        using var f = new MissingFixture();
+        Assert.True(f.Recover().Succeeded);
+        var workspace = OrchestratorWorkspace.ForDirectory(f.Repo, f.Repo);
+        var task = f.Goal.Tasks.Single();
+        var prior = f.Kernel.AddTask(f.Goal.Id, AgentRole.Planner, "Plan the fixture change",
+            AgentCatalog.Default().Agents, beforeRole: AgentRole.Developer);
+        f.Kernel.ReportTaskProgress(f.Goal.Id, prior.Id, WorkTaskStatus.Completed, "Fixture plan complete.");
+        f.Kernel.RecordTaskVerification(f.Goal.Id, prior.Id, new TaskVerificationRecord(
+            "fixture plan", f.Path, 0, "Preserve the unique goal commit.", string.Empty, DateTimeOffset.UtcNow));
+        Assert.Equal(WorkTaskStatus.Completed, prior.Status);
+        var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+        WorkerProfileDispatcher.PrepareTask(f.Kernel, f.Goal, task,
+            new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory}"),
+            workspace.PromptDirectory, f.Path, DateTimeOffset.UtcNow,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSubscriptionModelAlias,
+            paidRoute: PaidRouteClassification.Paid, sandboxOptions: sandbox, integrationBranch: f.MainBranch);
+        var original = task.LastDispatch!;
+        Assert.Null(original.ContextPackageReceipt); // Exercise the legacy alias, not the typed route.
+        var contextDirectory = Path.Combine(f.Path, ".orchestrator-context", f.Goal.Id.Value);
+        var handoffPath = Path.Combine(f.Path, ".orchestrator-handoff.md");
+        var expectedHandoff = File.ReadAllText(handoffPath);
+        Assert.True(File.Exists(Path.Combine(contextDirectory, "current-task.md")));
+        var fingerprint = Assert.IsType<RetryContextFingerprint>(original.RetryContextFingerprint);
+        var at = original.DispatchedAt;
+        f.Kernel.ApplyPreparedRetryAdmission(f.Goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, original.PaidRoute, RetryCause.NewSourceFinding, at, at,
+            reservationOwnerId: "fixture-untyped-reservation", reservationLeaseExpiresAt: DateTimeOffset.UnixEpoch));
+        var reservation = Assert.Single(task.RetryAdmissionHistory);
+        var operations = new GoalDispatchOperations();
+        Assert.False(operations.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        DeleteDirectory(f.Path);
+        if (!stale) RunGit(f.Repo, "worktree", "remove", "--force", f.Path);
+        Assert.False(Directory.Exists(contextDirectory));
+        Assert.False(File.Exists(handoffPath));
+        var reachedStart = false;
+        var driver = Driver(f, f.Coordinator(), goal =>
+        {
+            f.AssertRestored();
+            Assert.False(operations.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+            var stop = Assert.Throws<InvalidOperationException>(() => operations.StartDispatches(
+                f.Kernel, workspace, goal, runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: sandbox));
+            Assert.Contains("process start is disabled", stop.Message, StringComparison.OrdinalIgnoreCase);
+            // The real start path restored both inputs before reaching its disabled process boundary.
+            Assert.True(Directory.Exists(contextDirectory));
+            Assert.Contains(task.Description, File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")));
+            Assert.Contains(f.Goal.Objective, File.ReadAllText(Path.Combine(contextDirectory, "objective.md")));
+            Assert.Equal(expectedHandoff, File.ReadAllText(handoffPath));
+            Assert.Contains(f.Goal.Objective, File.ReadAllText(original.PromptPath!));
+            reachedStart = true;
+            return DispatchStartOutcome.Started();
+        }, _ => throw new InvalidOperationException("recorded dispatch must retain its integration identity"));
+
+        driver.AdvanceOnce(f.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(reachedStart);
+        Assert.Same(original, task.LastDispatch);
+        Assert.Same(original, Assert.Single(task.DispatchHistory));
+        Assert.Null(task.LastDispatch!.ContextPackageReceipt);
+        Assert.Equal(at, task.LastDispatch.DispatchedAt);
+        Assert.Equal(fingerprint, task.LastDispatch.RetryContextFingerprint);
+        Assert.Contains(task.RetryAdmissionHistory, receipt => receipt == reservation);
+        Assert.Contains(task.RetryAdmissionHistory, receipt => receipt.Decision == RetryAdmissionDecision.ResumedReservation);
+        Assert.All(task.RetryAdmissionHistory, receipt =>
+        {
+            Assert.Equal(at, receipt.LinkedDispatchAt);
+            Assert.Equal(fingerprint, receipt.Fingerprint);
+        });
+        Assert.Null(task.LastProcess);
+        f.AssertRestored();
+    }
+
     [Xunit.Fact]
     public void PreparationFailureCannotStartWorker()
     {

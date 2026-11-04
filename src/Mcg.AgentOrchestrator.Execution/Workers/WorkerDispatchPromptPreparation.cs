@@ -44,9 +44,10 @@ internal static class WorkerDispatchPromptPreparation
         TaskDispatchRecord retainedDispatch, WorkerContextPackageReceipt? contextPackageReceipt,
         WorkerDispatchPreparation preparation)
     {
-        if (contextPackageReceipt is null)
+        if (contextPackageReceipt is null && retainedDispatch.ContextPackageReceipt is not null)
             throw new InvalidOperationException("Prepared context restoration requires a typed context package.");
-        kernel.RecordDispatchContextPackageReceipt(goal.Id, task.Id, retainedDispatch.DispatchedAt, contextPackageReceipt);
+        if (contextPackageReceipt is not null)
+            kernel.RecordDispatchContextPackageReceipt(goal.Id, task.Id, retainedDispatch.DispatchedAt, contextPackageReceipt);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 }
