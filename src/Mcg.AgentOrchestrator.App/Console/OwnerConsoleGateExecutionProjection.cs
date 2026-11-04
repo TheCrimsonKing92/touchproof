@@ -134,7 +134,8 @@ internal sealed partial record OwnerConsoleGateProgress
             {
                 gate.Live = true;
                 gate.Participation = null;
-                foreach (var previous in gates.Values.Where(previous => previous != gate && previous.OuterAttemptId == gate.OuterAttemptId))
+                foreach (var previous in gates.Values.Where(previous => previous != gate &&
+                    gate.OuterAttemptId is not null && previous.OuterAttemptId == gate.OuterAttemptId))
                 {
                     previous.Live = false;
                     previous.Participation = "historical execution";

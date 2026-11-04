@@ -310,7 +310,7 @@ internal sealed partial class ConductorDriver
                 throw new InvalidOperationException("Grouped cohort gate identity changed before child execution.");
             var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
-                CancellationToken.None, null);
+                CancellationToken.None, null, outerAttemptId: attempt.AttemptId);
             return receipt is null ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
         }
         else if (attempt.Kind == "train")

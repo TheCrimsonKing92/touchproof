@@ -394,7 +394,8 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
         string pairFingerprint,
         CancellationToken cancellationToken,
-        Action? onGateAdmitted)
+        Action? onGateAdmitted,
+        string? outerAttemptId = null)
     {
         var verifier = _cohortAcceptanceVerifier
             ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
@@ -405,7 +406,8 @@ internal sealed partial class ConductorDriver
         var gateProgressEventWriter = new ConductEventLogWriter(
             workspace.ConductEventsLogPath);
         var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings,
-            workspace.ProjectHomeDirectoryOrNull, CohortMemberTestRemovalSelection.FromBatch(_cohortKernel?.Goals ?? [], bindings));
+            workspace.ProjectHomeDirectoryOrNull, CohortMemberTestRemovalSelection.FromBatch(_cohortKernel?.Goals ?? [], bindings),
+            outerAttemptId: outerAttemptId);
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;

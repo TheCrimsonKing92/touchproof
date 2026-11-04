@@ -96,8 +96,9 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
-        AcceptanceGateProgress progress) =>
-        GateProgressConductEvents.AppendCohort(writer, identity, bindings, progress);
+        AcceptanceGateProgress progress,
+        string? outerAttemptId = null) =>
+        GateProgressConductEvents.AppendCohort(writer, identity, bindings, progress, outerAttemptId);
 
     private static string FormatGateProgressConductEvent(AcceptanceGateProgress progress) =>
         GateProgressConductEvents.Format(progress);

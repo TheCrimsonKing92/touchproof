@@ -327,6 +327,49 @@ public sealed class OwnerConsoleGateExecutionReplayTests
     }
 
     [Theory]
+    [InlineData(null, null, true)]
+    [InlineData("independent-owner", "readmitted-owner", true)]
+    [InlineData("shared-owner", "shared-owner", false)]
+    public void ReadmissionClosesOnlyExecutionsWithAKnownSharedOwner(
+        string? previousOwner, string? readmittedOwner, bool previousStaysLive)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        OwnerConductEvent Event(int age, string execution, string phase, string member, string? owner) =>
+            new(Now.AddSeconds(age), "gate-progress", member,
+                $"PHASE_PROGRESS execution={execution} phase={phase} members={member}" +
+                (owner is null ? "" : $" outer_attempt={owner}"));
+        var events = new List<OwnerConductEvent>
+        {
+            Event(-50, Original, "execution-admitted", Survivor, previousOwner),
+            new(Now.AddSeconds(-40), "acceptance-cohort", Ejected,
+                $"ACCEPTANCE_COHORT goal={Ejected} result=held reason=\"ejected from train {OriginalTrain} reason=RedNewestMember surviving-receipt=pending\""),
+            Event(-30, Current, "verification-check", Ejected, readmittedOwner)
+        };
+        var unresolved = fixture.Build(events);
+        Assert.False(unresolved.ForExecution(Current)!.Live);
+        Assert.Equal("participation unresolved after ejection", unresolved.ForExecution(Current)!.Participation);
+        events.Add(Event(-20, Current, "execution-admitted", Ejected, readmittedOwner));
+
+        var replay = fixture.Build(events);
+        Assert.Equal(2, replay.Executions!.Count(gate => gate.ExecutionId is not null));
+        var previous = replay.ForExecution(Original)!;
+        Assert.Equal(previousStaysLive, previous.Live);
+        Assert.Equal(previousOwner, previous.OuterAttemptId);
+        if (previousStaysLive)
+        {
+            Assert.Null(previous.Participation);
+            Assert.Equal(Original, replay.ForMember(Survivor)!.ExecutionId);
+            Assert.True(replay.ForMember(Survivor)!.Live);
+        }
+        else Assert.Equal("historical execution", previous.Participation);
+        var readmitted = replay.ForMember(Ejected)!;
+        Assert.True(readmitted.Live);
+        Assert.Equal(Current, readmitted.ExecutionId);
+        Assert.Equal(readmittedOwner, readmitted.OuterAttemptId);
+        Assert.NotNull(readmitted.AdmittedAt);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void OnlyExplicitAdmissionRestoresAnEjectedParticipation(bool admission)

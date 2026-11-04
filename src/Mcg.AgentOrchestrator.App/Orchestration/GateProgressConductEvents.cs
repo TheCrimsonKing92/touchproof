@@ -25,7 +25,8 @@ internal static class GateProgressConductEvents
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
-        AcceptanceGateProgress progress)
+        AcceptanceGateProgress progress,
+        string? outerAttemptId = null)
     {
         var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
         foreach (var member in bindings)
@@ -37,7 +38,8 @@ internal static class GateProgressConductEvents
                 $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
                 $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
                 $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}" + progress.ShardOutcomeTokens +
-                (progress.ExecutionId is null ? "" : $" execution={FormatConductToken(progress.ExecutionId)}");
+                (progress.ExecutionId is null ? "" : $" execution={FormatConductToken(progress.ExecutionId)}") +
+                (outerAttemptId is null ? "" : $" outer_attempt={FormatConductToken(outerAttemptId)}");
             if (!writer.AppendRequired("gate-progress", goalId, detail))
             {
                 throw new IOException(
