@@ -220,9 +220,10 @@ public sealed class OwnerConductorLifecycleAndMainHealthNarrationTests
         string prefix, string title, string phrase, string why, string next, string act)
     {
         var expected = new OwnerConsoleActivityItem(source.Timestamp, source.EventKind, "outcome",
-            prefix, source.Detail, title, phrase, why, next, act, Subject: why);
+            prefix, source.Detail, title, phrase, why, next, act, Subject: why, GoalId: source.GoalId);
         // Compare every scalar field, including fields that should remain null.
-        Assert.Equal(expected, actual with { Spans = null, GoalPrefixes = null });
+        Assert.Equal(expected, actual with { Spans = null, GoalPrefixes = null, Evidence = null });
+        Assert.Same(source, Assert.Single(actual.Evidence!));
     }
 
     private static void AssertSpans(OwnerConsoleActivityItem line, OwnerConsoleTitleSpan[] titles)

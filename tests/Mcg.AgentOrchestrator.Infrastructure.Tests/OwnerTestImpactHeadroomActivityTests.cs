@@ -39,8 +39,10 @@ public sealed class OwnerTestImpactHeadroomActivityTests
         Assert.Equal(expected.Count, actual.Count);
         for (var index = 0; index < expected.Count; index++)
         {
-            // Narration creates fresh title lists; compare their values, not record list identity.
-            Assert.Equal(expected[index] with { Spans = null }, actual[index] with { Spans = null });
+            // Narration creates fresh title and evidence lists; compare collection contents separately.
+            Assert.Equal(expected[index] with { Spans = null, Evidence = null },
+                actual[index] with { Spans = null, Evidence = null });
+            Assert.Equal(expected[index].Evidence!.ToArray(), actual[index].Evidence!.ToArray());
             Assert.Equal(expected[index].Spans?.OutcomeStart, actual[index].Spans?.OutcomeStart);
             Assert.Equal(expected[index].Spans?.OutcomeLength, actual[index].Spans?.OutcomeLength);
             Assert.Equal(expected[index].Spans?.Titles.ToArray(), actual[index].Spans?.Titles.ToArray());

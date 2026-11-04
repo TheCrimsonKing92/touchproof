@@ -50,8 +50,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             if (resolution is not null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await dialogs.ShowStructuredAsync("What this means", OwnerQuestionResolutionText.Build(resolution, clock.LocalTimeZone),
-                    new(OwnerQuestionResolutionText.Fields(resolution)));
+                var resolvedDetail = OwnerActivityDetailPresentation.Resolved(item, resolution, clock.LocalTimeZone);
+                await dialogs.ShowStructuredAsync("What this means", resolvedDetail.Text, resolvedDetail.Structured);
                 return;
             }
         }
@@ -63,7 +63,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         }, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         var explanation = OwnerActivityNarrator.ExplainWithFields(item, live);
-        await dialogs.ShowStructuredAsync("What this means", explanation.Text, new(explanation.Fields));
+        await dialogs.ShowStructuredAsync("What this means", explanation.Text, explanation.Structured);
     }
     internal int SelectedIndex => Model is null ? -1 :
         Array.FindIndex(Model.Decisions.ToArray(), item => item.Id == SelectedDecisionId);

@@ -33,7 +33,7 @@ public sealed class OwnerActivityGoalListExplainTests
             Assert.Equal(Titles[i], row.Substring(spans[i].Start, spans[i].Length));
 
         var text = OwnerActivityNarrator.Explain(item);
-        var lines = text.Split('\n');
+        var lines = text.Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(count + 4, lines.Length);
         Assert.Equal("What happened: " + time + lead + count + " goals" + suffix, lines[0]);
         Assert.Equal(Ids.Take(count), item.GoalPrefixes);
@@ -42,9 +42,9 @@ public sealed class OwnerActivityGoalListExplainTests
             Assert.Equal("  " + Ids[i] + " " + Titles[i], lines[i + 1]);
             Assert.Equal(1, text.Split(Titles[i], StringSplitOptions.None).Length - 1);
         }
-        Assert.Equal("Why: " + item.Why, lines[count + 1]);
-        Assert.Equal("What happens next: " + item.Next, lines[count + 2]);
-        Assert.Equal("Do you need to act: No. No owner question is listed in DECISIONS for this event.", lines[count + 3]);
+        Assert.Equal("Reason: " + item.Why, lines[count + 1]);
+        Assert.Equal("Next step: " + item.Next, lines[count + 2]);
+        Assert.Equal("Owner action: No. No owner question is listed in DECISIONS for this event.", lines[count + 3]);
     }
 
     [Fact]
@@ -74,12 +74,12 @@ public sealed class OwnerActivityGoalListExplainTests
             : [new(At, "loop-relaunch", Ids[0], "LOOP_RELAUNCH_SCHEDULED tick=7")];
         if (kind == "main") events = [.. events, new(At.AddSeconds(1), "canary-gate", null, "CANARY_GATE result=failed tests=Check.Main")];
         var item = OwnerActivityNarrator.Narrate(events, _ => Titles[0])[0];
-        var lines = OwnerActivityNarrator.Explain(item).Split('\n');
+        var lines = OwnerActivityNarrator.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(4, lines.Length);
         Assert.Null(item.GoalPrefixes);
         Assert.Equal("What happened: " + OwnerActivityNarrator.Line(item), lines[0]);
         if (kind == "landing") Assert.Contains("Landed: " + Titles[0] + " (11111111)", lines[0]);
-        Assert.Equal("Why: " + item.Why, lines[1]);
+        Assert.Equal("Reason: " + item.Why, lines[1]);
         Assert.DoesNotContain('\n', item.Why);
     }
 
@@ -91,8 +91,8 @@ public sealed class OwnerActivityGoalListExplainTests
             new(At, "goal-escalation", Ids[0], "ESCALATED reason=Resolve the spec clarification before dispatching planner work"),
             new(answeredAt, "goal-lifecycle", Ids[0], "HumanInputReceived resolution-verb=answer resolution-actor=author")], _ => Titles[0]);
         var item = Assert.Single(items, value => value.Kind == "goal-escalation");
-        var lines = OwnerActivityNarrator.Explain(item).Split('\n');
-        Assert.Equal($"Do you need to act: No. Resolved at {answeredAt.ToLocalTime():HH:mm:ss} by the Author.", lines[^1]);
+        var lines = OwnerActivityNarrator.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
+        Assert.Equal($"Owner action: No. Resolved at {answeredAt.ToLocalTime():HH:mm:ss} by the Author.", lines[^1]);
         Assert.Contains($"resolved at {answeredAt.ToLocalTime():HH:mm:ss} by the Author", lines[^2]);
     }
 
@@ -104,8 +104,8 @@ public sealed class OwnerActivityGoalListExplainTests
             attention: [new(question, At)]));
         var decision = new OwnerConsoleDecision("q1", 1, Ids[0], Ids[0], OwnerQuestionKind.HumanInput,
             "Continue?", "Continue?", null, null, null);
-        var lines = OwnerActivityNarrator.Explain(item, [decision]).Split('\n');
-        Assert.Equal("Do you need to act: Yes. Open DECISIONS row [1] 11111111 HumanInput: Continue?", lines[^1]);
+        var lines = OwnerActivityNarrator.Explain(item, [decision]).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
+        Assert.Equal("Owner action: Yes. Open DECISIONS row [1] 11111111 HumanInput: Continue?", lines[^1]);
     }
 
     private static OwnerConsoleActivityItem MultiGoal(string kind)
