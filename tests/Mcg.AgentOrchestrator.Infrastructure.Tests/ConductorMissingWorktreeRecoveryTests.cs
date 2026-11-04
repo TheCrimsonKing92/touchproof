@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -79,6 +80,88 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         Assert.Equal(!recordedDispatch, integrationObservedRecovery);
         Assert.Null(coordinator.ReadFact(f.Goal));
         Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RecordedReservation_RestoresDeletedContextWithoutReplacingAttempt(bool stale)
+    {
+        using var f = new MissingFixture();
+        Assert.True(f.Recover().Succeeded);
+        var workspace = OrchestratorWorkspace.ForDirectory(f.Repo, f.Repo);
+        var task = f.Goal.Tasks.Single();
+        var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+        WorkerProfileDispatcher.PrepareTask(f.Kernel, f.Goal, task,
+            new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory}"),
+            workspace.PromptDirectory, f.Path, DateTimeOffset.UtcNow,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSubscriptionModelAlias,
+            paidRoute: PaidRouteClassification.Paid, sandboxOptions: sandbox, integrationBranch: f.MainBranch);
+        var original = task.LastDispatch!;
+        var fingerprint = Assert.IsType<RetryContextFingerprint>(original.RetryContextFingerprint);
+        var at = original.DispatchedAt;
+        f.Kernel.ApplyPreparedRetryAdmission(f.Goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, original.PaidRoute, RetryCause.NewSourceFinding, at, at,
+            reservationOwnerId: "fixture-reservation", reservationLeaseExpiresAt: DateTimeOffset.UnixEpoch));
+        var reservation = Assert.Single(task.RetryAdmissionHistory);
+        var operations = new GoalDispatchOperations();
+        Assert.False(operations.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        var mandatory = original.ContextPackageReceipt!.Sections
+            .Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile).ToArray();
+        Assert.NotEmpty(mandatory);
+        Assert.All(mandatory, section => Assert.True(File.Exists(Path.Combine(f.Path, section.MandatoryRelativePath!))));
+        DeleteDirectory(f.Path);
+        if (!stale) RunGit(f.Repo, "worktree", "remove", "--force", f.Path);
+        Assert.All(mandatory, section => Assert.False(File.Exists(Path.Combine(f.Path, section.MandatoryRelativePath!))));
+        var reachedStart = false;
+        var driver = Driver(f, f.Coordinator(), goal =>
+        {
+            f.AssertRestored();
+            Assert.False(operations.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+            // The real recorded-start path must restore artifacts itself. Stop at the
+            // controlled process boundary; never launch a subscription CLI in this fixture.
+            var stop = Assert.Throws<InvalidOperationException>(() => operations.StartDispatches(
+                f.Kernel, workspace, goal, runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: sandbox));
+            Assert.Contains("process start is disabled", stop.Message, StringComparison.OrdinalIgnoreCase);
+            reachedStart = true;
+            return DispatchStartOutcome.Started();
+        }, _ => throw new InvalidOperationException("recorded dispatch must retain its integration identity"));
+
+        driver.AdvanceOnce(f.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(reachedStart);
+        var restored = task.LastDispatch!;
+        Assert.Single(task.DispatchHistory);
+        Assert.Equal(at, restored.DispatchedAt);
+        Assert.Equal(original.Command, restored.Command);
+        Assert.Equal(original.PromptPath, restored.PromptPath);
+        Assert.Equal(original.RetryContextFingerprint, restored.RetryContextFingerprint);
+        Assert.Equal(original.AssignedAgentId, restored.AssignedAgentId);
+        Assert.Equal(original.ConductorRoutingRevision, restored.ConductorRoutingRevision);
+        Assert.Contains(task.RetryAdmissionHistory, receipt => receipt == reservation);
+        Assert.Contains(task.RetryAdmissionHistory, receipt => receipt.Decision == RetryAdmissionDecision.ResumedReservation);
+        Assert.All(task.RetryAdmissionHistory, receipt =>
+        {
+            Assert.Equal(at, receipt.LinkedDispatchAt);
+            Assert.Equal(fingerprint, receipt.Fingerprint);
+        });
+        var restoredSections = restored.ContextPackageReceipt!.Sections
+            .Where(section => section.MandatoryRelativePath is not null).ToArray();
+        Assert.NotEmpty(restoredSections);
+        Assert.All(restoredSections, section => Assert.Equal(section.ContentHash,
+            WorkerContextArtifact.Hash(File.ReadAllBytes(Path.Combine(f.Path, section.MandatoryRelativePath!)))));
+        var descriptors = restoredSections.Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile)
+            .Select(section => new MandatoryContextFileDescriptor(section.LogicalIdentity, section.MandatoryRelativePath!,
+                section.ContentHash, section.ContractVersion, task.RequiredRole, section.RoleVisibility)).ToArray();
+        Assert.NotEmpty(descriptors);
+        using var leases = DispatchProcessHost.AcquireMandatoryContextFileLeases(new(
+            restored.Command, f.Path, "unused.out", "unused.err", "unused.exit", null,
+            DisableSharedCompilation: true, MandatoryContextFiles: descriptors));
+        var prompt = File.ReadAllText(restored.PromptPath!);
+        Assert.All(descriptors, descriptor => Assert.Contains(descriptor.Sha256, prompt));
+        Assert.Null(task.LastProcess);
+        f.AssertRestored();
     }
 
     [Xunit.Fact]

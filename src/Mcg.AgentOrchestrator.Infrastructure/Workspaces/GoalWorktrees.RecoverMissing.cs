@@ -176,6 +176,12 @@ public static partial class GoalWorktrees
         if (symbolic.Output.Trim() != $"refs/heads/{branch}" || ReadRecoveryRevision(path, "HEAD^{commit}") != tip ||
             ReadRecoveryRevision(repo, $"refs/heads/{branch}^{{commit}}") != tip)
             throw new InvalidOperationException("recovered branch or HEAD differs from preserved branch tip");
+        // Valid metadata alone also describes a failed checkout. Observe both index and
+        // working tree before reuse, without refreshing, resetting or repairing either.
+        var status = GitCli.Run(path, "status", "--porcelain=v1", "--untracked-files=no");
+        RequireRecoveryGit(status, "tracked checkout status");
+        if (!string.IsNullOrWhiteSpace(status.Output))
+            throw new InvalidOperationException("existing directory has incomplete or dirty tracked checkout state");
     }
 
     private static string ReadRecoveryRevision(string repo, string revision)

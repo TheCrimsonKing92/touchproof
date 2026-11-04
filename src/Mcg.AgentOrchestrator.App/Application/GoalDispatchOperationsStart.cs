@@ -382,6 +382,13 @@ internal sealed partial class GoalDispatchOperations
                     "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
                 continue;
             }
+            // Durable admission may hydrate the original reservation. Restore its deleted
+            // inputs only after that hydration, retaining the exact attempt being started.
+            var home = _resolveHome(workspace);
+            WorkerProfileDispatcher.RestorePreparedContextIfMissing(kernel, kernel.GetGoal(goal.Id), task, workspace.IntegrationBranch,
+                sandboxOptions, ResolveOrchestratorSkillDirectory(home), WorkerTargetHomeFactory.For(home, workspace),
+                CreateCitedPriorEvidenceResolver(workspace), CreateDeferredEvidenceResolver(workspace),
+                workspace.BacklogStorePath, CreateSelectorDiagnosticResolver(kernel, workspace));
             var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);

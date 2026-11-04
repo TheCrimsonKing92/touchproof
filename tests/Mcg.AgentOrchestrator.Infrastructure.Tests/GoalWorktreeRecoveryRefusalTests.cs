@@ -191,6 +191,53 @@ public sealed class GoalWorktreeRecoveryRefusalTests : GoalWorktreeRecoveryTestB
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
+    public void FailedAddWithValidMetadata_RefusesIncompleteCheckoutOnRestart(bool stale)
+    {
+        using var f = new MissingFixture(stale: stale);
+        var hooks = Path.Combine(f.Repo, "recovery-hooks");
+        Directory.CreateDirectory(hooks);
+        var hook = Path.Combine(hooks, "post-checkout");
+        File.WriteAllText(hook, """
+            #!/bin/sh
+            git rev-parse HEAD > add-reached.txt
+            printf '%s' 'preserve partial work' > interrupted.txt
+            rm unique-goal.txt
+            exit 1
+
+            """.Replace("\r\n", "\n"));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        RunGit(f.Repo, "config", "core.hooksPath", hooks.Replace('\\', '/'));
+
+        var failure = Assert.Throws<InvalidOperationException>(() => GoalWorktrees.PrepareForDispatch(
+            f.Repo, f.Goal.Id, allowInitialCreation: false, () => null, f.Receipts.Add));
+        Assert.Contains("worktree add failed: exit=1", failure.Message);
+        Assert.False(Assert.Single(f.Receipts).Succeeded);
+        Assert.True(File.Exists(Path.Combine(f.Path, ".git")));
+        Assert.Equal(f.Tip, RunGitOutput(f.Path, "rev-parse", "HEAD").Trim());
+        Assert.Equal(f.Branch, RunGitOutput(f.Path, "branch", "--show-current").Trim());
+        Assert.False(File.Exists(Path.Combine(f.Path, "unique-goal.txt")));
+        Assert.Equal("D unique-goal.txt", RunGitOutput(f.Path, "status", "--porcelain=v1", "--untracked-files=no"));
+        Assert.Equal(f.Tip, File.ReadAllText(Path.Combine(f.Path, "add-reached.txt")).Trim());
+        RunGit(f.Repo, "config", "--unset", "core.hooksPath");
+        var registrations = GoalWorktreeRegistrationListing.RunGit(f.Repo).Output;
+        var restartReceipts = new List<GoalWorktreeRecoveryResult>();
+
+        var restart = Assert.Throws<InvalidOperationException>(() => GoalWorktrees.PrepareForDispatch(
+            f.Repo, f.Goal.Id, allowInitialCreation: false, () => null, restartReceipts.Add));
+
+        Assert.Contains("incomplete or dirty tracked checkout", restart.Message);
+        Assert.False(Assert.Single(restartReceipts).Succeeded);
+        Assert.Equal("preserve partial work", File.ReadAllText(Path.Combine(f.Path, "interrupted.txt")));
+        Assert.False(File.Exists(Path.Combine(f.Path, "unique-goal.txt")));
+        Assert.True(File.Exists(Path.Combine(f.Path, ".git")));
+        Assert.Equal(registrations, GoalWorktreeRegistrationListing.RunGit(f.Repo).Output);
+        f.AssertTip();
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
     public void FailedAddPreservesPartialStateAndNextAttemptRefusesIt(bool stale)
     {
         using var f = new MissingFixture(stale: stale);
