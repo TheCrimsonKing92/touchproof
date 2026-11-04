@@ -19,6 +19,10 @@ public sealed record AcceptanceVerificationResult(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AttemptId { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]
+    public IReadOnlyList<AcceptanceLaneWaitOccurrence>? LaneWaits { get; init; }
+
     // A passed check that executed nothing is an empty-allowed lane (the balanced residual
     // complement); its zero-row receipt is not evidence and would fail TRX coherence.
     internal static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>

@@ -45,6 +45,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> RemoteLaneHistory { get; init; }
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
     internal RemoteLaneOccupancyHeartbeat? Occupancy { get; set; }
+    internal AcceptanceLaneWaitCollector? WaitCollector { get; init; }
+    private readonly Dictionary<string, AcceptanceLaneWaitCollector.Occurrence> _waits = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
@@ -292,8 +294,10 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             identity.MainSha, identity.ManifestIdentity);
 
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
-        TimeSpan timeout, TimeSpan deadline, CancellationToken cancellationToken)
+        TimeSpan timeout, TimeSpan deadline, CancellationToken cancellationToken,
+        AcceptanceLaneWaitCollector.Occurrence? wait = null)
     {
+        if (wait is not null) lock (_gate) _waits[check.Name] = wait;
         var occupancy = Occupancy;
         var request = CreateRequest(check, entry.Id);
         RemoteLaneAdmissionRecord admission;
@@ -337,6 +341,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         RemoteLaneRunnerLogCaptureTiming? captureTiming = null;
         try
         {
+            wait?.Execute();
             var submission = await _executor.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             handle = submission.Handle;
             steps = submission.Steps ?? [];
@@ -544,6 +549,11 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         IReadOnlyList<RemoteExecutorOccupancyEntry>? occupancy = null, RemoteLaneAdmissionRecord? admission = null)
     {
         var usage = RemoteLaneResourceUsage.TryRead(attempt?.LastStatus);
+        var phases = attempt is null ? null : RemoteLanePhaseTimings.Compute(
+            attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches);
+        AcceptanceLaneWaitCollector.Occurrence? wait;
+        lock (_gate) _waits.TryGetValue(request.Lane, out wait);
+        if (result is null || BindingMismatch(request, result) is null) wait?.RemotePhases(phases);
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
             request.AttemptId, request.Lane, code,
             code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
@@ -555,8 +565,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt, Occupancy: occupancy,
             RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
             RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
-            Phases: attempt is null ? null : RemoteLanePhaseTimings.Compute(
-                attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches),
+            Phases: phases,
             TestHostBudget: request.TestHostBudget, Admission: admission));
         try
         {

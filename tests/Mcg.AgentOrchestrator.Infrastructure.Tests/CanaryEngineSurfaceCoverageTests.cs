@@ -78,6 +78,7 @@ public class CanaryEngineSurfaceCoverageTests
     [InlineData("AcceptanceCmdCommandLineLimit")]
     [InlineData("CommandLineTooLongException")]
     [InlineData("AcceptanceLaneMembership")]
+    [InlineData("AcceptanceLaneStallPolicy")]
     [InlineData("AcceptanceTestClassSourceScanner")]
     public void Indirect_acceptance_helpers_trigger_canary(string helper)
     {
