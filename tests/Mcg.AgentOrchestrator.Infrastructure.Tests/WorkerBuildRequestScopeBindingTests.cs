@@ -71,7 +71,8 @@ public sealed class WorkerBuildRequestScopeBindingTests
         var result = fixture.Consume();
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
-        Assert.Equal("worker_build_host=missing-current-candidate-outcome", result.Diagnostic);
+        Assert.Equal("worker_build_host=missing-current-candidate-outcome; transport_cause=unknown", result.Diagnostic);
+        Assert.Equal(WorkerBuildEvidenceGap.MissingApplicableInvocation, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
     }
 
@@ -88,7 +89,8 @@ public sealed class WorkerBuildRequestScopeBindingTests
             [WorkerBuildRequestFixture.OtherSource], []);
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
-        Assert.Equal("worker_build_host=missing-current-candidate-outcome", result.Diagnostic);
+        Assert.Equal("worker_build_host=missing-current-candidate-outcome; transport_cause=unknown", result.Diagnostic);
+        Assert.Equal(WorkerBuildEvidenceGap.MissingApplicableInvocation, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
     }
 
@@ -181,7 +183,8 @@ public sealed class WorkerBuildRequestScopeBindingTests
         var result = fixture.Consume();
 
         Assert.True(result.MissingEvidence, result.Diagnostic);
-        Assert.Equal("worker_build_host=missing-current-candidate-outcome", result.Diagnostic);
+        Assert.Equal("worker_build_host=origin-invalid; current dispatch/host identity is required", result.Diagnostic);
+        Assert.Equal(WorkerBuildEvidenceGap.Unclassified, result.Gap);
         WorkerBuildRequestScopeSupport.AssertUnconsumed(fixture, original);
         Assert.Equal(2, WorkerBuildRequestScopeSupport.Load(fixture).GetTask(fixture.GoalId, fixture.TaskId).DispatchHistory.Count);
     }
