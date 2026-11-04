@@ -43,6 +43,69 @@ public sealed class ReviewerPassingFindingEvidenceTests
     }
 
     [Theory]
+    [InlineData(FindingCategory.Correctness)]
+    [InlineData(FindingCategory.TestEvidence)]
+    public void ConsumedEvidence_NewSourceBlocker_PreservesNormalReviewRoute(FindingCategory category)
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var evidenceFinding = ReviewerPassingFindingEvidenceFixture.CliFinding() with { Category = category };
+        fixture.Report([evidenceFinding]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        var receipt = Assert.Single(fixture.Receipts);
+        Assert.True(receipt.Passed);
+        var sourceFinding = ReviewerPassingFindingEvidenceFixture.CaptureFinding() with { EvidenceRequest = null };
+
+        fixture.Report([evidenceFinding, sourceFinding]);
+        Assert.False(fixture.Decide(out _));
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(2, fixture.ReviewDispatches);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(2, fixture.Retries.Count);
+        var retry = fixture.Retries[1];
+        Assert.Equal(fixture.Developer.Id, retry.Task);
+        Assert.StartsWith("auto-review-retry round ", retry.Feedback);
+        Assert.Contains(evidenceFinding.StableId, retry.Feedback);
+        Assert.Contains(evidenceFinding.Location.ToString(), retry.Feedback);
+        Assert.Contains(sourceFinding.StableId, retry.Feedback);
+        Assert.Contains(sourceFinding.Description, retry.Feedback);
+        Assert.DoesNotContain("REVIEWER_PASSING_EVIDENCE_CORRECTION", retry.Feedback);
+        var findings = fixture.Reviewer.VerificationHistory.Last(record => record.MergedReviewFindings is { Count: > 0 })
+            .MergedReviewFindings!;
+        Assert.Equal(2, findings.Count);
+        Assert.All(findings, finding => Assert.Equal(ReviewFindingState.Open, finding.State));
+    }
+
+    [Fact]
+    public void ConsumedEvidence_LegacyOwnership_PreservesTesterReviewRoute()
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with { Category = FindingCategory.TestEvidence };
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        fixture.Report([finding with
+        {
+            Category = FindingCategory.Unspecified,
+            Description = "Tester must inspect the delivered test receipt; the remaining scenario is missing."
+        }]);
+        Assert.True(Mcg.AgentOrchestrator.App.Orchestration.ReviewerFindingEvidenceSuppressionRouting.Resolve(
+            fixture.Reviewer.LastVerification, fixture.Goal.EffectiveAcceptanceCriteriaCorrections,
+            fixture.Reviewer.LastVerification!.MergedReviewFindings!).DeferToReviewRetryRoute);
+        Assert.False(fixture.Decide(out _));
+
+        fixture.AdvanceToDecision();
+        var retry = fixture.Retries[1];
+        Assert.Equal(fixture.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester).Id, retry.Task);
+        Assert.StartsWith("auto-review-retry round ", retry.Feedback);
+        Assert.Contains(finding.StableId, retry.Feedback);
+        Assert.Equal(2, fixture.ReviewDispatches);
+        Assert.Equal(2, fixture.Retries.Count);
+        Assert.Single(fixture.Executions);
+    }
+
+    [Theory]
     [InlineData("I disagree with the passing receipt.")]
     [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs:34")]
     public void DeliveredGreen_NoRemainingChange_HoldsWithOpenFinding(string description)

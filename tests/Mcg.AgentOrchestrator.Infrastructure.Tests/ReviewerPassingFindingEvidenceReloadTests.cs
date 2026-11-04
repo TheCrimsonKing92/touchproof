@@ -228,6 +228,10 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
     {
         using var fixture = Delivered();
         fixture.Report([ReviewerPassingFindingEvidenceFixture.CliFinding()]);
+        // The identical selector must authorize correction before receipt qualification is broken.
+        Assert.True(Decide(fixture.Kernel, out var qualified));
+        Assert.Equal(fixture.Developer.Id, qualified.TargetTaskId);
+        Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", qualified.Evidence);
         var snapshot = fixture.Kernel.ExportSnapshot();
         // Mutate every retained copy, including the origin, so no valid receipt remains to select.
         var json = System.Text.Json.JsonSerializer.Serialize(snapshot);
@@ -250,10 +254,15 @@ public sealed class ReviewerPassingFindingEvidenceReloadTests
             Assert.Equal(replacement.ExecutionBasisIdentity, item.ExecutionBasisIdentity);
             Assert.Equal(replacement.Passed, item.Passed);
         });
-        Assert.False(Mcg.AgentOrchestrator.App.Orchestration.ReviewerPassingFindingEvidenceRouter.TryDecide(
-            kernel.GetGoal(fixture.Goal.Id), task, fixture.Developer, fixture.Candidate, request => request,
-            Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(
-                new Mcg.AgentOrchestrator.Infrastructure.AcceptanceGateEngineSettings()), new(1, 4), out _));
+        Assert.False(Decide(kernel, out _));
+
+        bool Decide(AgentOrchestratorKernel source, out FailedGoalFindingObservation observation) =>
+            Mcg.AgentOrchestrator.App.Orchestration.ReviewerPassingFindingEvidenceRouter.TryDecide(
+                source.GetGoal(fixture.Goal.Id), source.GetTask(fixture.Goal.Id, fixture.Reviewer.Id),
+                source.GetTask(fixture.Goal.Id, fixture.Developer.Id), fixture.Candidate,
+                ReviewerPassingFindingEvidenceFixture.NormalizeRequest,
+                Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(
+                    new Mcg.AgentOrchestrator.Infrastructure.AcceptanceGateEngineSettings()), new(1, 4), out observation);
     }
 
     private static ReviewerPassingFindingEvidenceFixture Delivered(FindingCategory category = FindingCategory.Correctness)

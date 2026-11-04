@@ -98,11 +98,14 @@ internal sealed class ReviewerPassingFindingEvidenceFixture : IDisposable
     internal bool Decide(out FailedGoalFindingObservation observation, ReviewRetryCapReceipt? cap = null,
         bool includeDeveloper = true) => ReviewerPassingFindingEvidenceRouter.TryDecide(
             Goal, Reviewer, includeDeveloper ? Developer : null, Candidate,
-            request => ConductorDriver.TryNormalizeFindingEvidenceRequest(request, new AcceptanceGateEngineSettings(),
-                (_, testClass) => [testClass], out var normalized, out _, out _, out _) ? normalized : null,
+            NormalizeRequest,
             ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(new AcceptanceGateEngineSettings()),
             cap ?? ReviewRetryCapReceipt.Create(Goal, ConductorAutonomyPolicy.Permissive.ReviewAutoRetryStopRound),
             out observation);
+
+    internal static FindingEvidenceRequest? NormalizeRequest(FindingEvidenceRequest request) =>
+        ConductorDriver.TryNormalizeFindingEvidenceRequest(request, new AcceptanceGateEngineSettings(),
+            (_, testClass) => [testClass], out var normalized, out _, out _, out _) ? normalized : null;
 
     private void RestartDriver() => _driver = MakeDriver(
         getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),

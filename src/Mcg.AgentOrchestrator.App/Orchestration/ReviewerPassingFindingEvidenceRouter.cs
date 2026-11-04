@@ -57,6 +57,11 @@ internal static class ReviewerPassingFindingEvidenceRouter
             !CandidateIdentity.AreSameCandidate(currentIdentity, reviewedIdentity)) return false;
         var findings = ReviewFindings.GetOpenBlockingFindings(
             task.LastVerification!.MergedReviewFindings ?? current.Findings, goal.EffectiveAcceptanceCriteriaCorrections);
+        // This collaborator only owns evidence-request episodes. Preserve normal routing for
+        // co-open blockers and legacy ownership, rather than omitting them from a correction/hold.
+        if (findings.Any(finding => finding.EvidenceRequest is null) ||
+            ReviewerFindingEvidenceSuppressionRouting.Resolve(task.LastVerification,
+                goal.EffectiveAcceptanceCriteriaCorrections, findings).DeferToReviewRetryRoute) return false;
         var episodes = new List<Episode>();
         var fresh = new List<(ReviewFinding Finding, IReadOnlyList<FindingEvidenceReceipt> Receipts)>();
         foreach (var finding in findings.Where(item => item.EvidenceRequest is not null))
