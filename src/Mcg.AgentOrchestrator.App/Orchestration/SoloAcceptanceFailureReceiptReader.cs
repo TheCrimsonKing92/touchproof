@@ -56,8 +56,6 @@ internal static class SoloAcceptanceFailureReceiptReader
                     attribution[0].Cause != AcceptanceFailureCause.NotClassified)
                     return Refuse("solo-authoritative-attribution-mismatch");
                 var rows = ReadRows(item, receipt.ResultsRoot);
-                if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key), identities))
-                    return Refuse("solo-failing-tests-mismatch");
                 foreach (var identity in identities)
                 {
                     var bindings = proof.Bindings.Where(binding => binding.CheckName == check.Name && binding.TestIdentity == identity).ToArray();
@@ -110,7 +108,7 @@ internal static class SoloAcceptanceFailureReceiptReader
                 new("solo", receipt.AttemptId, receipt.CandidateSha, feedback.Keys.ToArray(),
                     string.Join(Environment.NewLine, feedback.Select(row => $"reproduced {row.Key}: {row.Value}"))), "solo-evidence-validated");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or XmlException or
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or XmlException or
             ArgumentException or InvalidOperationException or NullReferenceException)
         {
             return Refuse("solo-evidence-invalid: " + ex.GetType().Name + ": " + ex.Message);
@@ -131,9 +129,10 @@ internal static class SoloAcceptanceFailureReceiptReader
             foreach (var row in ReadTrx(artifact, root))
                 if (!rows.TryAdd(row.Key, row.Value)) throw new InvalidDataException("solo-duplicate-test-row");
         if (rows.Count != check.Check.ExecutedTestCount ||
-            check.Check.DiscoveredTestCount is { } discovered && discovered != rows.Count ||
-            !SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key), check.Check.FailingTestIdentities ?? []))
+            check.Check.DiscoveredTestCount is { } discovered && discovered != rows.Count)
             throw new InvalidDataException("solo-incomplete-check-rows");
+        if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key), check.Check.FailingTestIdentities ?? []))
+            throw new InvalidDataException("solo-failing-tests-mismatch");
         return rows;
     }
 
