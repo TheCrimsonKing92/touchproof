@@ -117,8 +117,10 @@ internal sealed class GateProgressReportingVerifier(
             Elapsed: TimeSpan.Zero,
             OutputBytes: 0,
             HeartbeatPath: "fixture-heartbeat.json");
-        Progresses.Add(progress);
-        ((IAcceptanceRunExecutionContext)executionOwner).ReportProgress(progress);
+        var context = (IAcceptanceRunExecutionContext)executionOwner;
+        Assert.False(string.IsNullOrWhiteSpace(context.RunId));
+        Progresses.Add(progress with { ExecutionId = context.RunId });
+        context.ReportProgress(progress);
         EventsAfterProgress.Add(ReadEvents(logPath));
         return Task.FromResult(results[index]);
     }
