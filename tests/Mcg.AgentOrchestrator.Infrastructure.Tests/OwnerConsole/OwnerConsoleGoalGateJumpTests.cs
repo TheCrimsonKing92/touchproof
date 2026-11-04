@@ -90,23 +90,23 @@ public sealed class OwnerConsoleGoalGateJumpTests
         await Command(view, ":gate " + Id[..8]);
         Assert.Equal(jumped, view.GateView.Lines);
 
-        gate = OtherGate(); // The member left; fall back to the supplied primary gate.
+        gate = OtherGate(); // Missing member evidence must preserve the selected goal.
         view.Render(await Model(harness, gate));
         var fallback = view.GateView.Lines.ToArray();
-        Assert.Equal("11111111 Other", fallback[1]);
-        // A later gate for the same goal must not revive the old pin.
+        Assert.Contains(fallback, line => line.Contains("selected goal execution unresolved", StringComparison.Ordinal));
+        Assert.DoesNotContain(fallback, line => line.Contains("11111111 Other", StringComparison.Ordinal));
         view.Render(await Model(harness, gate with { OtherLiveGates = [member] }));
-        Assert.Equal("11111111 Other", view.GateView.Lines[1]);
+        Assert.Equal(jumped, view.GateView.Lines);
         view.Render(await Model(harness, gate));
         Assert.Equal(fallback, view.GateView.Lines);
         await view.HandleKeyAsync(new Key('q'));
         await view.HandleKeyAsync(new Key('g'));
         Assert.True(view.GateView.IsOpen);
-        Assert.Equal(fallback, view.GateView.Lines);
+        Assert.Equal("11111111 Other", view.GateView.Lines[1]);
         await view.HandleKeyAsync(new Key('q'));
         await Command(view, ":gate");
         Assert.True(view.GateView.IsOpen);
-        Assert.Equal(fallback, view.GateView.Lines);
+        Assert.Equal("11111111 Other", view.GateView.Lines[1]);
 
         view.Render(await Model(harness, OwnerConsoleGateProgress.Idle()));
         var idle = view.GateView.Lines.ToArray();

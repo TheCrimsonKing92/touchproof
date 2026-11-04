@@ -11,7 +11,7 @@ public sealed class OwnerConsoleGateRemainingEstimateTests
     {
         var gate = Build([300, 250, 200, 150, 100, 50], [Breakdown(-3600, "3")]);
 
-        Assert.All(gate.Lanes, lane => Assert.Equal(OwnerConsoleGateLaneState.Queued, lane.State));
+        Assert.All(gate.Lanes, lane => Assert.Equal(OwnerConsoleGateLaneState.Planned, lane.State));
         Assert.Equal(350, gate.RemainingSeconds);
     }
 
@@ -112,7 +112,7 @@ public sealed class OwnerConsoleGateRemainingEstimateTests
         var manifest = medians.Select((_, index) => new OwnerConsoleGateManifestLane(((char)('A' + index)).ToString(), 999)).ToArray();
         var history = manifest.Select((lane, index) => new OwnerConsoleGateDuration("infrastructure tests: " + lane.Name, medians[index], Now));
         var entry = Event(-60, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb");
-        var gate = OwnerConsoleGateProgress.Build(Now, observations.Append(entry), manifest, history);
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now, observations.Append(entry), manifest, history);
 
         Assert.True(gate.Live);
         Assert.Equal("cohort", gate.Kind);

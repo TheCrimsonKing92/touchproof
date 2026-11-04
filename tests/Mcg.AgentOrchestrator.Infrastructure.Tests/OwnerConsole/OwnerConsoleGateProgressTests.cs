@@ -24,7 +24,7 @@ public sealed class OwnerConsoleGateProgressTests
         history.Add(new("infrastructure tests: C", 99999, Now.AddDays(-1)));
         history.AddRange(Enumerable.Range(1, 10).Select(index => new OwnerConsoleGateDuration("infrastructure tests: C", 245 + index * 10, Now.AddMinutes(-index))));
 
-        var gate = OwnerConsoleGateProgress.Build(Now, events, Manifest, history, id => "Title " + id);
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest, history, id => "Title " + id);
 
         Assert.True(gate.Live);
         Assert.Equal("cohort", gate.Kind);
@@ -99,7 +99,7 @@ public sealed class OwnerConsoleGateProgressTests
     }
 
     [Fact]
-    public void GoalOnlyCohortDiagnosticsCanStillJoinAnExistingLiveGate()
+    public void GoalOnlyOuterDiagnosticsCannotReviveUnidentifiedExecution()
     {
         var gate = OwnerConsoleGateProgress.Build(Now,
         [
@@ -107,16 +107,16 @@ public sealed class OwnerConsoleGateProgressTests
             Event(-10, "acceptance-cohort", "ACCEPTANCE_COHORT tick=2 outcome=inflight goal=776a132e")
         ], Manifest, []);
 
-        Assert.True(gate.Live);
-        Assert.Equal("cohort", gate.Kind);
-        Assert.Equal(["776a132e", "eade84cb"], gate.Members.Select(member => member.Id));
-        Assert.Equal(Now.AddSeconds(-1000), gate.StartedAt);
+        Assert.False(gate.Live);
+        Assert.Equal("idle", gate.Kind);
+        Assert.Empty(gate.Members);
+        Assert.Null(gate.StartedAt);
     }
 
     [Fact]
     public void RunningProgressKeepsFractionalModeledRemainingBeforeDisplayTruncation()
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(-1, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
             Event(0, "gate-progress", Progress("verification-check", "A", 500))
@@ -137,7 +137,7 @@ public sealed class OwnerConsoleGateProgressTests
     public void GateWallTimeBeforeLaneStartEarnsEstimatedProgress(
         string entry, string kind, int members)
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(-60, "acceptance-cohort", entry),
             Event(-40, "gate-progress", "PHASE_PROGRESS goal=776a132e phase=verification-check target=A elapsed_ms=0")
@@ -148,7 +148,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.Equal(members, gate.Members.Count);
         Assert.Equal(TimeSpan.FromSeconds(60), gate.Elapsed);
         Assert.Equal(TimeSpan.FromSeconds(40), gate.Lanes[0].Elapsed);
-        Assert.Equal([OwnerConsoleGateLaneState.Running, OwnerConsoleGateLaneState.Queued],
+        Assert.Equal([OwnerConsoleGateLaneState.Running, OwnerConsoleGateLaneState.Planned],
             gate.Lanes.Select(lane => lane.State));
         Assert.Equal(160, gate.RemainingSeconds);
         Assert.Equal(3d / 11, gate.Fraction, 10);
@@ -157,7 +157,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.False(gate.Failing);
         Assert.Contains("0/2", OwnerConsoleGateFormatter.StatusSegment(gate));
         var lines = OwnerConsoleGateLayout.Lines(gate, 120, false);
-        Assert.Equal(" x 0 failed   > 1 running   + 0 passed   = 0 cached   . 1 queued", lines[1 + members]);
+        Assert.Equal(" x 0 failed   > 1 running   + 0 passed   = 0 cached   . 0 queued", lines[1 + members]);
         Assert.Equal("[##--------] estimate 27%  ~3m left", lines[2 + members]);
     }
 
@@ -170,7 +170,7 @@ public sealed class OwnerConsoleGateProgressTests
     public void UnfinishedEstimatesAreFiniteBoundedAndNeverDisplayCompletion(
         double modeledSeconds, int laneElapsedMs, int gateElapsedSeconds, double fraction, int remaining)
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(-gateElapsedSeconds, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
             Event(0, "gate-progress", Progress("verification-check", "A", laneElapsedMs))
@@ -185,7 +185,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.Equal(0, gate.DoneCount);
         Assert.Equal(1, gate.TotalCount);
         var percent = (int)Math.Floor(fraction * 100);
-        Assert.Contains($"estimate {percent}%", OwnerConsoleGateFormatter.ProgressLine(gate));
+        Assert.Contains(modeledSeconds > 0 ? $"estimate {percent}%" : "ETA unknown", OwnerConsoleGateFormatter.ProgressLine(gate));
         Assert.DoesNotContain("100%", OwnerConsoleGateFormatter.ProgressLine(gate));
     }
 
@@ -196,7 +196,7 @@ public sealed class OwnerConsoleGateProgressTests
     public void FinishedModeledWorkAtZeroElapsedPreservesCountsAndOutcomes(
         string phase, string outcome, bool failing)
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
             [Event(0, "gate-progress", Progress(phase, "A", 1000) + " outcome=" + outcome)],
             [new("A", 100)], []);
 
@@ -232,7 +232,7 @@ public sealed class OwnerConsoleGateProgressTests
     [Fact]
     public void FutureGateStartUsesNonnegativeElapsed()
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(1, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
             Event(2, "gate-progress", Progress("verification-check", "A", 0))
@@ -247,7 +247,7 @@ public sealed class OwnerConsoleGateProgressTests
     [Fact]
     public void MissingHistoryUsesManifestEstimateInFractionAndRemaining()
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
             [Event(-10, "gate-progress", "PHASE_PROGRESS goal=776a132e phase=shard-complete target=A elapsed_ms=1000 outcome=failed failed=2")],
             Manifest, [new("A", 100, Now)]);
         Assert.Equal(1d / 51, gate.Fraction, 10); // 10s gate elapsed, not the failed lane's 1s.
@@ -267,7 +267,7 @@ public sealed class OwnerConsoleGateProgressTests
         {
             Event(-500, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
             Event(-400, "gate-progress", Progress("verification-check", "A", 1000)),
-            Event(-300, "acceptance-cohort", "ACCEPTANCE_COHORT_RECONCILED_DEAD kind=cohort members=eade84cb000000000000000000000000+776a132e000000000000000000000000 attempt=1 identity=cohort:old"),
+            Event(-300, "acceptance-cohort", "ACCEPTANCE_COHORT_RECONCILED_DEAD kind=cohort members=eade84cb000000000000000000000000+776a132e000000000000000000000000 identity=cohort:old"),
             Event(-200, "gate-progress", Progress("verification-check", "A", 1000))
         }.Where(item => entryInTail || item.Timestamp >= Now.AddSeconds(-300)), Manifest, []);
         Assert.False(gate.Live);
@@ -288,7 +288,7 @@ public sealed class OwnerConsoleGateProgressTests
     [Fact]
     public void TrainUnknownLaneAndRerunRemainVisibleWithoutDistortingManifestCounts()
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(-90, "gate-progress", Progress("shard-complete", "A", 1000) + " outcome=passed train=abc scope=merge-train"),
             Event(-40, "gate-progress", Progress("verification-check", "A", 10000)),
@@ -322,10 +322,10 @@ public sealed class OwnerConsoleGateProgressTests
     {
         OwnerConductEvent Sample(int age, string bytes, string pid = "123") => Event(age, "gate-progress",
             Progress("verification-check", "A", 0) + $" child_pid={pid} output_bytes={bytes}");
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
             [Sample(-480, "100"), Sample(-420, "200"), Sample(-60, "200")], Manifest, []);
         Assert.Equal(420d, gate.Lanes[0].QuietSeconds);
-        var changed = OwnerConsoleGateProgress.Build(Now,
+        var changed = OwnerConsoleGatePlannedTestBuild.Build(Now,
             [Sample(-480, "100"), Sample(-420, "200"), Sample(-60, "200", "456")], Manifest, []);
         Assert.Equal(60d, changed.Lanes[0].QuietSeconds);
     }
@@ -333,7 +333,7 @@ public sealed class OwnerConsoleGateProgressTests
     [Fact]
     public void LocalRerunDoesNotInheritPriorRemoteExecutor()
     {
-        var gate = OwnerConsoleGateProgress.Build(Now,
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now,
         [
             Event(-100, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
             Event(-80, "remote-lane", "REMOTE_LANE executor=old-machine lane=A attempt=1 outcome=completed", null),
@@ -368,7 +368,9 @@ public sealed class OwnerConsoleGateProgressTests
             Assert.True(gate.Live);
             Assert.Equal("A title", gate.Members[0].Title);
             Assert.Equal(120d, Assert.Single(gate.Lanes).MedianSeconds);
-            Assert.Equal(90, gate.RemainingSeconds);
+            Assert.False(gate.ScheduleKnown);
+            Assert.False(gate.HasEta);
+            Assert.Equal(0, gate.RemainingSeconds);
             File.Delete(history);
             Assert.True(loader.Load(new Dictionary<string, string>())!.Lanes[0].IsEstimate);
             File.WriteAllText(manifest, "invalid");
