@@ -112,8 +112,7 @@ public sealed class LandingBuildReportAttentionTests
         var requests = records.Kernel.HumanInputRequests.ToList();
         if (change == "unknown-request") reason = reason.Replace(prefix, "00000000", StringComparison.Ordinal);
         if (change == "extra-text") reason += "; independent approval required";
-        if (change == "mixed-waits") reason = reason.Replace("1 pending", "2 pending", StringComparison.Ordinal)
-            .Replace(")", ", 00000000)", StringComparison.Ordinal);
+        if (change == "mixed-waits") reason = $"acceptance passed at {repo.Head[..8]}; 2 pending human wait(s) (ProspectiveAcceptanceEvidence {prefix}, 00000000)";
         if (change == "ambiguous-prefix") requests.Add(new HumanInputRequest(new(prefix + new string('0', 24)), records.Goal.Id, null,
             "Distinct same-prefix wait", DateTimeOffset.UnixEpoch));
         OperatorInbox.RecordLandingEscalation(workspace, records.Goal, reason, "conductor:Verified", collaborationStore: store);
@@ -126,6 +125,115 @@ public sealed class LandingBuildReportAttentionTests
         var before = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
         OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
         Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
+    }
+
+    [Theory]
+    [InlineData("blockers")]
+    [InlineData("verification")]
+    [InlineData("mixed-waits")]
+    [InlineData("mixed-kinds")]
+    [InlineData("combined")]
+    public void CompoundReason_AnsweredPortionRetiresAndRemainingDemandSurvives(string change)
+    {
+        using var repo = new ConductorOnlyCandidateRangeTests.Repository();
+        var records = BoundRecords(repo);
+        records.Close();
+        Assert.True(records.Wait.IsCompleted);
+        var prefix = records.Wait.Id.Value[..8];
+        var requests = records.Kernel.HumanInputRequests.ToList();
+        var workspace = OrchestratorWorkspace.ForDirectory(repo.Root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var acceptance = $"acceptance passed at {repo.Head[..8]}";
+        var verification = change is "verification" or "combined" ? "; landing held by 1 open verification(s)" : "";
+        var blockers = change is "blockers" or "combined" ? "; 1 blocker(s) (AcceptanceFailed)" : "";
+        var waitReferences = $"ProspectiveAcceptanceEvidence {prefix}";
+        var remainingWait = "";
+        HumanInputRequest? unresolved = null;
+        if (change is "mixed-waits" or "mixed-kinds" or "combined")
+        {
+            var kind = change == "mixed-kinds" ? HumanWaitKind.OperatorApproval : HumanWaitKind.ProspectiveAcceptanceEvidence;
+            unresolved = new HumanInputRequest(new("11111111" + new string('1', 24)), records.Goal.Id, null,
+                "Independent unanswered request", DateTimeOffset.UnixEpoch, kind);
+            requests.Add(unresolved);
+            remainingWait = $"; 1 pending human wait(s) ({kind} 11111111)";
+            waitReferences = kind == HumanWaitKind.OperatorApproval
+                ? $"OperatorApproval 11111111; {waitReferences}"
+                : $"{waitReferences}, 11111111";
+        }
+        var count = unresolved is null ? 1 : 2;
+        var reason = $"{acceptance}{verification}; {count} pending human wait(s) ({waitReferences}){blockers}";
+        var expected = acceptance + verification + remainingWait + blockers;
+        OperatorInbox.RecordLandingEscalation(workspace, records.Goal, reason, "conductor:Verified", collaborationStore: store);
+        var original = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
+        var unrelated = store.RaiseAsync(CollaborationItemType.Decision, records.Goal.Id.Value,
+            "Independent approval", reason, "independent-approval").GetAwaiter().GetResult();
+        var hold = new GoalLandingBlocker("landing/mutation-boundary", "Train still in flight", "train:other",
+            DateTimeOffset.UnixEpoch, "conductor", "next-tick");
+        records.Goal.ObserveLandingBlocker(hold);
+
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
+
+        var rows = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
+        Assert.Equal(CollaborationItemStatus.Resolved, rows.Single(row => row.Id == original.Id).Status);
+        var replacement = Assert.Single(rows.Where(row => row.Id != unrelated.Id && !CollaborationItemLifecycle.IsTerminal(row.Status)));
+        Assert.Equal(expected, replacement.Body);
+        Assert.DoesNotContain(prefix, replacement.Body);
+        Assert.NotEqual(original.CorrelationKey, replacement.CorrelationKey);
+        Assert.Equal(JsonSerializer.Serialize(unrelated), JsonSerializer.Serialize(rows.Single(row => row.Id == unrelated.Id)));
+        Assert.Equal(hold, records.Goal.LandingBlocker);
+        if (unresolved is not null) Assert.False(unresolved.IsCompleted);
+        var persisted = ReadEscalations(workspace);
+        Assert.Equal(expected, Assert.Single(persisted.Where(IsOpen)).GetProperty("reason").GetString());
+        Assert.Equal(reason, Assert.Single(persisted.Where(item => !IsOpen(item))).GetProperty("reason").GetString());
+        var persistedBefore = File.ReadAllText(EscalationPath(workspace));
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, requests, store);
+        Assert.Equal(JsonSerializer.Serialize(rows), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
+        Assert.Equal(persistedBefore, File.ReadAllText(EscalationPath(workspace)));
+    }
+
+    [Fact]
+    public void RecurringReason_ResolvesActiveOccurrenceAndPreservesTerminalHistory()
+    {
+        using var repo = new ConductorOnlyCandidateRangeTests.Repository();
+        var records = BoundRecords(repo);
+        var workspace = OrchestratorWorkspace.ForDirectory(repo.Root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var reason = $"acceptance passed at {repo.Head[..8]}; 1 pending human wait(s) (ProspectiveAcceptanceEvidence {records.Wait.Id.Value[..8]})";
+        OperatorInbox.RecordLandingEscalation(workspace, records.Goal, reason, "conductor:Verified", collaborationStore: store);
+        var first = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
+        Assert.True(store.TryResolveAsync(first.CorrelationKey!, "earlier occurrence handled").GetAwaiter().GetResult());
+        var history = Assert.Single(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult());
+        OperatorInbox.RecordLandingEscalation(workspace, records.Goal, reason, "conductor:Verified", collaborationStore: store);
+        var before = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
+        Assert.Equal(2, before.Count);
+        var active = Assert.Single(before.Where(row => !CollaborationItemLifecycle.IsTerminal(row.Status)));
+        Assert.NotEqual(first.Id, active.Id);
+        Assert.Equal(first.CorrelationKey, active.CorrelationKey);
+        Assert.Single(ReadEscalations(workspace).Where(IsOpen));
+        records.Close();
+        Assert.True(records.Wait.IsCompleted);
+
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, records.Kernel.HumanInputRequests.ToArray(), store);
+
+        var after = store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult();
+        Assert.Equal(2, after.Count);
+        Assert.Equal(JsonSerializer.Serialize(history), JsonSerializer.Serialize(after.Single(row => row.Id == history.Id)));
+        Assert.Equal(CollaborationItemStatus.Resolved, after.Single(row => row.Id == active.Id).Status);
+        Assert.Empty(ReadEscalations(workspace).Where(IsOpen));
+        Assert.Equal("developer-build-report", Assert.Single(ReadEscalations(workspace)).GetProperty("resolvedBy").GetString());
+        OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, records.Goal, records.Kernel.HumanInputRequests.ToArray(), store);
+        Assert.Equal(JsonSerializer.Serialize(after), JsonSerializer.Serialize(store.ListAsync(records.Goal.Id.Value).GetAwaiter().GetResult()));
+    }
+
+    private static string EscalationPath(OrchestratorWorkspace workspace) =>
+        Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+
+    private static bool IsOpen(JsonElement item) => item.GetProperty("resolvedAtUtc").ValueKind == JsonValueKind.Null;
+
+    private static JsonElement[] ReadEscalations(OrchestratorWorkspace workspace)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(EscalationPath(workspace)));
+        return document.RootElement.GetProperty("items").EnumerateArray().Select(item => item.Clone()).ToArray();
     }
 
     private static IEnumerable<(string Name, string Outcome)> Rows() => DeveloperBuildReportEvidenceClosureTests.Records.Classes
