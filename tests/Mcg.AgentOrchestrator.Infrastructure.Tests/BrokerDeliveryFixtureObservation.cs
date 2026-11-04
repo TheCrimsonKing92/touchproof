@@ -7,9 +7,11 @@ internal sealed class BrokerDeliveryFixtureObservation
 {
     internal const string Prefix = "BROKER_DELIVERY ";
     internal const int MaximumSummaryBytes = 4096;
-    internal enum Phase { Repository, Scenario, PrepareTask, Assertions, Cleanup, CleanupRetryWait, FixtureSlotWait }
+    internal enum Phase { Repository, Scenario, PrepareTask, Assertions, Cleanup, CleanupRetryWait, FixtureSlotWait,
+        RepositoryTemplateWait, RepositoryTemplateInitialization, RepositoryCopy }
     private static readonly string[] Names =
-        ["repository", "scenario", "prepare-task", "assertions", "cleanup", "cleanup-retry-wait", "fixture-slot-wait"];
+        ["repository", "scenario", "prepare-task", "assertions", "cleanup", "cleanup-retry-wait", "fixture-slot-wait",
+            "repository-template-wait", "repository-template-initialization", "repository-copy"];
 
     private readonly Action<string> sink;
     private readonly TimeProvider clock;
@@ -26,6 +28,9 @@ internal sealed class BrokerDeliveryFixtureObservation
     private bool observationFailed;
     private bool finished;
     private string setup = "not-entered";
+    private string? repositoryVariant;
+
+    internal void SetRepositoryVariant(string variant) => Guard(() => repositoryVariant = Bound(variant, 96));
 
     internal BrokerDeliveryFixtureObservation(Action<string> sink, string caseIdentity,
         string? contextIdentity = null, int useOrdinal = 1, TimeProvider? clock = null,
@@ -135,7 +140,14 @@ internal sealed class BrokerDeliveryFixtureObservation
                 elapsed, unaccounted = elapsed is null ? null : (double?)Math.Max(0, elapsed.Value - covered * 1000d / frequency),
                 observation = observationFailed ? "incomplete" : "observed", setup,
                 stages = Enumerable.Range(0, (int)Phase.CleanupRetryWait + 1).Select(Describe).ToArray(),
-                fixtureSlotWait = Describe((int)Phase.FixtureSlotWait)
+                fixtureSlotWait = Describe((int)Phase.FixtureSlotWait),
+                repositoryPreparation = new
+                {
+                    variant = repositoryVariant,
+                    initialization = Describe((int)Phase.RepositoryTemplateInitialization),
+                    wait = Describe((int)Phase.RepositoryTemplateWait),
+                    copy = Describe((int)Phase.RepositoryCopy)
+                }
             };
             var line = Prefix + format(summary);
             if (Encoding.UTF8.GetByteCount(line) > MaximumSummaryBytes)
@@ -147,13 +159,14 @@ internal sealed class BrokerDeliveryFixtureObservation
     private object Describe(int index)
     {
         var stage = stages[index];
+        var isWait = (Phase)index is Phase.CleanupRetryWait or Phase.FixtureSlotWait or Phase.RepositoryTemplateWait;
         return new
         {
-            stage = Names[index], status = stage?.Status ?? (index >= (int)Phase.CleanupRetryWait ? "not-observed" : "not-entered"),
+            stage = Names[index], status = stage?.Status ?? (isWait ? "not-observed" : "not-entered"),
             elapsed = stage?.Elapsed, entries = stage?.Entries ?? 0,
             parent = stage?.Parent is { } parent ? Names[(int)parent] : null,
             additive = stage is not null && stage.Parent is null && index != (int)Phase.FixtureSlotWait,
-            kind = index >= (int)Phase.CleanupRetryWait ? "observed-wait" : "elapsed",
+            kind = isWait ? "observed-wait" : "elapsed",
             gitLaunches = stage?.GitLaunches,
             gitStatus = stage?.GitLaunches is not null ? "observed" : "unavailable-no-exact-invocation-scope"
         };
