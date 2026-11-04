@@ -862,15 +862,8 @@ public sealed partial class AgentOrchestratorKernel
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.RecordCriterionRetryFeedback(feedback);
-        task.IncrementCriterionRetryCount();
-        goal.IncrementAutomaticAcceptanceRetryCount();
-        return goal.AutomaticAcceptanceRetryCount;
-    }
+    public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback) =>
+        AcceptanceRetryFeedbackRecorder.Record(GetGoal(goalId), taskId, feedback);
 
     public void RecordAcceptanceFailure(
         GoalId goalId,
@@ -878,7 +871,9 @@ public sealed partial class AgentOrchestratorKernel
         string? branchHeadSha = null,
         string? mainHeadSha = null,
         IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null,
-        string? baselineAttestation = null)
+        string? baselineAttestation = null,
+        string? attemptId = null,
+        SoloAcceptanceFailureReceipt? soloFailureReceipt = null)
     {
         var goal = GetGoal(goalId);
         goal.RecordAcceptanceFailure(
@@ -887,7 +882,7 @@ public sealed partial class AgentOrchestratorKernel
             branchHeadSha,
             mainHeadSha,
             checkAttributions,
-            baselineAttestation);
+            baselineAttestation, attemptId, soloFailureReceipt);
         RecordCarriedAcceptanceFindingGateOutcome(goalId, branchHeadSha, passed: false, source: "deterministic acceptance failure");
     }
 

@@ -2,12 +2,12 @@
 
 Criterion 3 is operator owned, required **before landing**. Automated execution and this visual receipt are still pending after Developer's build. Use the App DLL built from the candidate under review; record its full path, SHA-256, candidate revision and dirty-tree identity alongside the screenshots. Do not substitute the main runtime.
 
-The durable input is `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestData/Fixtures/activity-detail-dispatch-rejected.json`. It retains both operator-supplied records from goal `fd7ee5fb17d24753a4f5537278799fe6`, task `2bda31d51cf743dda91891b183641743`. The original screenshot is operator accessible at `C:/Users/miles/AppData/Local/Temp/codex-clipboard-2b9fb185-b3d6-4ef9-9c47-02ecd93f5a4b.png`. Its displayed 10:11:58 Central time is distinct from both persisted event timestamps; no missing observation metadata is reconstructed.
+The durable input is `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestData/Fixtures/activity-detail-dispatch-rejected.json`. It retains both operator-supplied records from goal `fd7ee5fb17d24753a4f5537278799fe6`, task `2bda31d51cf743dda91891b183641743`. The original screenshot was a local operator capture and is not kept in the repository. Its displayed 10:11:58 Central time is distinct from both persisted event timestamps; no missing observation metadata is reconstructed.
 
 In an interactive PowerShell terminal at the candidate worktree, set `$candidateAppDll` to the full prebuilt candidate `Mcg.AgentOrchestrator.App.dll` path from the build output/receipt. The replay preparer resolves that path and emits concrete repository/state paths and hashes. It creates a new temporary workspace and writes only an isolated conduct log; it does not read live stores or run workers.
 
 ```powershell
-$candidateAppDll = 'C:/Users/miles/AppData/LocalLow/mcg-dotnet-isolated/goals/ad2e1665/artifacts/bin/Mcg.AgentOrchestrator.App/debug/Mcg.AgentOrchestrator.App.dll'
+$candidateAppDll = "$env:USERPROFILE/AppData/LocalLow/mcg-dotnet-isolated/goals/<goal-prefix>/artifacts/bin/Mcg.AgentOrchestrator.App/debug/Mcg.AgentOrchestrator.App.dll"
 $replay = .\scripts\Invoke-RepoScript.ps1 scripts/Prepare-ActivityDetailReplay.ps1 -AppDll $candidateAppDll | ConvertFrom-Json
 $replay
 .\scripts\Invoke-RepoScript.ps1 scripts/Invoke-OrchestratorCommand.ps1 -AppDll $replay.AppDll -RepositoryRoot $replay.RepositoryRoot -ExpectedStateDirectory $replay.ExpectedStateDirectory -DisposableFixture console

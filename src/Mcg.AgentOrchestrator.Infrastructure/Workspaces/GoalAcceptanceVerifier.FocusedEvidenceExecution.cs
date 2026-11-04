@@ -360,7 +360,8 @@ internal static class FocusedEvidenceExecution
         CancellationToken cancellationToken,
         bool classifyMissingSelectionsAsAbsent = false,
         IAcceptanceRunExecutionContext? executionOwner = null,
-        bool partitionCandidateOnlySelections = false)
+        bool partitionCandidateOnlySelections = false,
+        string? retainedResultsRoot = null)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -433,11 +434,13 @@ internal static class FocusedEvidenceExecution
                     executionOwner: executionOwner).ConfigureAwait(false);
             }
 
-            return partitionCandidateOnlySelections
+            var combined = partitionCandidateOnlySelections
                 ? combineFindingBaselineArm(executedArm, sourcePlan.SourceClassificationChecks)
                 : AcceptanceFailureAttributionPlanner.CombineBaselineArm(
                     focusedChecks, executedArm, sourcePlan.SourceClassificationChecks,
                     ClassifyFocusedEvidenceArm);
+            return retainedResultsRoot is null ? combined :
+                SoloAcceptanceFailureEvidenceWriter.RetainBaseline(combined, retainedResultsRoot);
         }
         finally
         {
