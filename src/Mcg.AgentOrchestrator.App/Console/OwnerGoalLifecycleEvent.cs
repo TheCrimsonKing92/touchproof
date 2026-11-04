@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-// Only structural fields cross into presentation; free-form messages may contain JSON or commands.
+// Narrative tokens remain structural. Original messages travel independently as opaque evidence.
 internal static class OwnerGoalLifecycleEvent
 {
     internal static bool TryParse(string line, string goalId, out OwnerConductEvent? item)
@@ -44,7 +44,14 @@ internal static class OwnerGoalLifecycleEvent
                     if (target.Success) detail += " answer-target=" + target.Groups[1].Value;
                 }
             }
-            item = new(timestamp.GetDateTimeOffset(), "goal-lifecycle", goalId, detail);
+            var fields = new List<OwnerConsoleField>();
+            foreach (var name in new[] { "taskId", "role" })
+                if (root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                    fields.Add(new("recorded/" + name, "Recorded " + name, value.GetString()));
+            var original = root.TryGetProperty("message", out var raw) && raw.ValueKind == JsonValueKind.String
+                ? raw.GetString()! : "";
+            item = new(timestamp.GetDateTimeOffset(), "goal-lifecycle", goalId, detail,
+                OwnerActivityDetailEvidence.From(original, fields.ToArray()));
             return true;
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)

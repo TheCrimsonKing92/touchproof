@@ -54,7 +54,7 @@ public sealed class OwnerActivityNarratorTests
         var lines = OwnerActivityNarrator.Narrate([input], id => id == "22222222" ? "Export" : "Search");
         foreach (var line in lines)
             foreach (var forbidden in new[] { "none", "child result", "handoff", "cohort", "receipt", "canary", "tick", "eventKind" })
-                Assert.DoesNotContain(forbidden, OwnerActivityNarrator.Explain(line), StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(forbidden, OwnerActivityNarrator.Explain(line).Split("\n\nDiagnostics", StringSplitOptions.None)[0], StringComparison.OrdinalIgnoreCase);
         if (detail.Contains("ACTIVATION_ADOPTED") || kind == "canary-gate" && detail.Contains("result=passed")) Assert.Empty(lines);
     }
 

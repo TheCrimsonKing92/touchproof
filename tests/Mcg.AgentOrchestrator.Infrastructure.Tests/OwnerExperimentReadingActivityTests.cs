@@ -32,10 +32,17 @@ public sealed class OwnerExperimentReadingActivityTests
                 Assert.Contains($"experiment-decide {ExperimentPrefix}", text);
                 Assert.Contains("record the result", text);
             }
-            foreach (var text in new[] { item.Phrase, item.Why, item.Next, item.Act, OwnerActivityNarrator.Explain(item) })
+            var detail = OwnerActivityNarrator.ExplainWithFields(item);
+            var diagnosticsStart = detail.Text.IndexOf("\n\nDiagnostics\n", StringComparison.Ordinal);
+            Assert.True(diagnosticsStart >= 0, "Activity detail must separate narration from diagnostic evidence.");
+            // Internal tokens belong in exact evidence, outside the owner-facing narration.
+            foreach (var text in new[] { item.Phrase, item.Why, item.Next, item.Act, detail.Text[..diagnosticsStart] })
                 foreach (var forbidden in new[] { "EXPERIMENT_READING_DUE", "stopRuleMet", "guardrailBreached", ExperimentId,
                     "none", "child result", "handoff", "cohort", "receipt", "canary", "tick", "eventKind" })
                     Assert.DoesNotContain(forbidden, text, StringComparison.OrdinalIgnoreCase);
+            Assert.EndsWith("\n\nOriginal event\nSource: " + item.Detail, detail.Text);
+            Assert.Equal(item.Detail, Assert.Single(detail.Fields.Fields, field => field.Key == "event/0/original").Value);
+            Assert.Equal(item.Detail, Assert.Single(item.Evidence!).Detail);
         }
     }
 
