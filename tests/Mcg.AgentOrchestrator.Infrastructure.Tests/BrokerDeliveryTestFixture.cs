@@ -46,37 +46,13 @@ internal static class BrokerDeliveryTestFixture
             var head = string.Empty;
             Observe(BrokerDeliveryFixtureObservation.Phase.Repository, () =>
             {
-                Directory.CreateDirectory(workingDirectory);
-                Git("init", "--initial-branch=main");
-                File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
-                if (includeDotnetProject)
-                {
-                    // Node precedence is pinned against a root csproj; existing .NET/Go cases keep their layout.
-                    var projectDirectory = includePackageJson ? workingDirectory : Path.Combine(workingDirectory, "src", "Fixture");
-                    Directory.CreateDirectory(projectDirectory);
-                    File.WriteAllText(Path.Combine(projectDirectory, "Fixture.csproj"),
-                        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-                }
-                if (includeGoModule)
-                    File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
-                if (includePackageJson)
-                    File.WriteAllText(Path.Combine(workingDirectory, "package.json"),
-                        """{"name":"broker-fixture","private":true,"scripts":{"test":"node --test","build":"node build.js","lint":"eslint ."}}""");
                 if (pythonMarker is not null)
-                {
                     Assert.Contains(pythonMarker, new[] { "pyproject.toml", "requirements.txt" });
-                    File.WriteAllText(Path.Combine(workingDirectory, pythonMarker), pythonMarker == "pyproject.toml"
-                        ? "[project]\nname = \"broker-fixture\"\nversion = \"0.0.0\"\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"
-                        : "pytest\n");
-                }
-                if (!includeDotnetProject && !includeGoModule && !includePackageJson)
-                    File.WriteAllText(Path.Combine(workingDirectory, "README.md"),
-                        "# Broker fixture\nDiscover the project-standard build and test commands from the project CI configuration.\n");
+                var variant = new BrokerDeliveryRepositoryTemplate.Variant(
+                    includeDotnetProject, includeGoModule, includePackageJson, pythonMarker);
+                head = BrokerDeliveryRepositoryTemplate.Shared.CopyTo(workingDirectory, variant, observation);
                 Assert.Equal(includeGoModule ? Toolchain.Go : includePackageJson ? Toolchain.Node : includeDotnetProject ? Toolchain.Dotnet : pythonMarker is not null ? Toolchain.Python : Toolchain.Unknown,
                     TargetToolchainDetector.Detect(workingDirectory));
-                Git("add", ".");
-                Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
-                head = Git("rev-parse", "HEAD").Trim();
                 // A real dirty file makes the diff artifact distinguishable from a boilerplate file.
                 File.AppendAllText(Path.Combine(workingDirectory, "fixture.txt"), "\nchanged broker fixture");
                 return 0;
@@ -135,13 +111,6 @@ internal static class BrokerDeliveryTestFixture
                 Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value), role, prompt, receipt,
                 goal.Id.Value, task.Id.Value, observation);
 
-            string Git(params string[] args)
-            {
-                var result = GitCli.Run(workingDirectory, args);
-                Assert.True(result.Succeeded && !result.DrainTimedOut,
-                    $"git fixture failed: exit={result.ExitCode}; stderr={result.Error}");
-                return result.Output;
-            }
         }
         catch
         {
