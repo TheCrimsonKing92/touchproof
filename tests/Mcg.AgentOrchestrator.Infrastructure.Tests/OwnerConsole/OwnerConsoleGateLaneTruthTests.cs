@@ -59,7 +59,7 @@ public sealed class OwnerConsoleGateLaneTruthTests
     {
         var events = Fixture().Concat(new[]
         {
-            Event(-800, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=33333333,44444444"),
+            Progress(-800, "execution-admitted", "", 0, Heartbeat(Y, "admission"), attempt: Y),
             Progress(-790, "verification-check", "cli tests", 0, Heartbeat(Y, "cli-tests"), attempt: Y),
             Progress(-200, "remote-shard-complete", "infrastructure tests: C", 290000,
                 "build-slots/activity-1.heartbeat.json", " outcome=passed failed=0", Y)
@@ -84,7 +84,7 @@ public sealed class OwnerConsoleGateLaneTruthTests
     }
 
     [Fact]
-    public void LegacyReceipt_KeepsGoalAndStartTimeBinding()
+    public void LegacyReceiptCannotClaimExecutorForAnIdentifiedExecution()
     {
         var events = Fixture().Where(item => item.EventKind != "remote-lane").Concat(new[]
         {
@@ -92,17 +92,17 @@ public sealed class OwnerConsoleGateLaneTruthTests
             Event(-100, "remote-lane", "REMOTE_LANE executor=legacy-executor lane=\"infrastructure tests: C\" attempt=1"),
             Event(-90, "remote-lane", "REMOTE_LANE executor=other-goal lane=\"infrastructure tests: C\" attempt=1", "33333333")
         });
-        Assert.Equal("legacy-executor", Row(Build(events), "C").Location);
+        Assert.Equal("mcg-exec-2", Row(Build(events), "C").Location);
     }
 
     [Fact]
-    public void UnknownAttempt_IsRejectedUnlessGateHasNoAttemptEvidence()
+    public void UnknownAttemptCannotClaimAnIdentifiedOrUnidentifiedExecution()
     {
         var events = Fixture().Where(item => item.EventKind != "remote-lane").Append(
             Event(-100, "remote-lane", $"REMOTE_LANE executor=unbound-executor lane=\"infrastructure tests: C\" attempt={Y}"));
         Assert.Equal("mcg-exec-2", Row(Build(events), "C").Location);
         var withoutIds = events.Select(item => item with { Detail = item.Detail.Replace(X, "legacy", StringComparison.Ordinal) });
-        Assert.Equal("unbound-executor", Row(Build(withoutIds), "C").Location);
+        Assert.Equal("mcg-exec-2", Row(Build(withoutIds), "C").Location);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public sealed class OwnerConsoleGateLaneTruthTests
     [InlineData("reviewer mapped project evidence: ")]
     public void FailedAttribution_DoesNotMarkOtherwisePassedGateFailing(string prefix)
     {
-        var passed = Fixture().Where(item => item.Detail.Contains("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal) ||
+        var passed = Fixture().Where(item => item.Detail.Contains("phase=execution-admitted", StringComparison.Ordinal) ||
             item.Detail.Contains("phase=check-complete", StringComparison.Ordinal)).Select(item =>
                 item with { Detail = item.Detail.Replace("outcome=failed", "outcome=passed", StringComparison.Ordinal) }).ToArray();
         var gate = Build(passed);
@@ -141,7 +141,7 @@ public sealed class OwnerConsoleGateLaneTruthTests
     [Fact]
     public void FailedSettledCheck_MarksGateHeaderFailing()
     {
-        var events = Fixture().Where(item => item.Detail.Contains("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal) ||
+        var events = Fixture().Where(item => item.Detail.Contains("phase=execution-admitted", StringComparison.Ordinal) ||
             item.Detail.Contains("phase=check-complete", StringComparison.Ordinal));
         var gate = Build(events);
         Assert.Single(gate.Lanes.Where(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed"));
@@ -160,11 +160,11 @@ public sealed class OwnerConsoleGateLaneTruthTests
         string extra = "", string attempt = X)
     {
         var members = attempt == Y ? "33333333,44444444" : "11111111,22222222";
-        return Event(age, "gate-progress", $"PHASE_PROGRESS goal={attempt[..8]} phase={phase} elapsed_ms={elapsed} target=\"{target}\" child_pid=unknown output_bytes=0 heartbeat={heartbeat}{extra} train=merge-train-v2-653fcc0a member={attempt[..8]} members={members} scope=merge-train");
+        return Event(age, "gate-progress", $"PHASE_PROGRESS goal={attempt[..8]} phase={phase} elapsed_ms={elapsed} target=\"{target}\" child_pid=unknown output_bytes=0 heartbeat={heartbeat}{extra} train=merge-train-v2-653fcc0a member={attempt[..8]} members={members} scope=merge-train execution={attempt}");
     }
     private static OwnerConductEvent[] Fixture() =>
     [
-        Event(-900, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=11111111,22222222"),
+        Progress(-900, "execution-admitted", "", 0, Heartbeat(X, "admission")),
         Progress(-880, "verification-check", "cli tests", 0, Heartbeat(X, "cli-tests")),
         Progress(-700, "check-complete", "cli tests", 95000, Heartbeat(X, "cli-tests"), " outcome=passed failed=0"),
         Progress(-650, "check-complete", "core tests [trusted main baseline]", 30000, Heartbeat(X, "core-tests-trusted-main-baseline"), " outcome=failed failed=0"),

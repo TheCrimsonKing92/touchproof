@@ -27,14 +27,15 @@ public sealed record AcceptanceGateProgress(
     string? Executor = null,
     string? TreeRevision = null,
     string? EvidenceKind = null,
-    string? ReproductionMemberId = null)
+    string? ReproductionMemberId = null,
+    string? ExecutionId = null)
 {
     internal GateLaneSlowdownDiff.GateLaneSlowdownResult? Slowdown { get; init; }
     public string ShardOutcomeTokens => Phase switch
     {
         "shard-complete" => (LoadContext is null ? "" : " " + GateLoadContextProbe.FormatProgressTokens(LoadContext))
             + $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
-        "remote-shard-complete" or "check-complete" => $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
+        "remote-shard-complete" or "check-complete" or "attribution-complete" => $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
         "lane-slowdown" => GateLaneSlowdownDiff.FormatProgressSuffix(Slowdown, CurrentTarget),
         _ => string.Empty
     } + (string.IsNullOrEmpty(Executor) ? string.Empty : $" executor={Executor}") + ProvenanceTokens;

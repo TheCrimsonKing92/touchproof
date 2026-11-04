@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record CohortAttributionProgressIdentity(string? ParentExecutionId, string? OuterAttemptId);
+
     internal static string CohortGateRunIdentity(IEnumerable<string> memberGoalIds) =>
         string.Join(':', memberGoalIds.Order(StringComparer.Ordinal));
 
@@ -15,37 +17,28 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         AcceptanceCohortMemberBinding member,
-        AcceptanceAttributionLaneScope? scope) =>
+        AcceptanceAttributionLaneScope? scope,
+        CohortAttributionProgressIdentity? progressIdentity) =>
         new(ProgressSink: progress =>
         {
             var goalId = member.GoalId.Value[..8];
-            var detail = FormatGateProgressConductEvent(progress with { GoalId = member.GoalId.Value }) +
+            var detail = FormatGateProgressConductEvent(progress with { GoalId = member.GoalId.Value,
+                ReproductionMemberId = member.GoalId.Value, EvidenceKind = "member-reproduction" }) +
                 $" cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} member={goalId} " +
-                $"members={string.Join(',', identity.Members.Select(binding => binding.GoalId.Value[..8]))} scope=attribution";
+                $"members={goalId} scope=attribution" +
+                (progressIdentity?.ParentExecutionId is null ? "" : $" parent_execution={progressIdentity.ParentExecutionId}") +
+                (progressIdentity?.OuterAttemptId is null ? "" : $" outer_attempt={progressIdentity.OuterAttemptId}");
             TryAppendGateProgressEvent(writer, goalId, detail);
         }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
             GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),
             ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull, IntegrationBranch: _integrationBranch, AttributionLaneScope: scope);
 
-    private static void AppendCohortAttributionStartEvent(
-        ConductEventLogWriter writer,
-        AcceptanceCohortIdentity identity,
-        IReadOnlyList<AcceptanceCohortMemberBinding> bindings)
-    {
-        var members = string.Join(',', bindings.Select(member => member.GoalId.Value[..8]));
-        TryAppendGateProgressEvent(
-            writer,
-            goalId: null,
-            $"ATTRIBUTION_START cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} " +
-            $"members={members} scope=attribution",
-            eventKind: "cohort-attribution");
-    }
-
     internal AcceptanceRunExecutionOptions CreateMergeTrainGateExecutionOptions(
         MergeTrainIdentity identity,
         IReadOnlyList<MergeTrainMemberBinding> members,
         string trainKey,
-        IReadOnlyDictionary<GoalId, Goal> goalsById)
+        IReadOnlyDictionary<GoalId, Goal> goalsById,
+        string? outerAttemptId = null)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
         var logPath = workspace.ConductEventsLogPath;
@@ -61,7 +54,9 @@ internal sealed partial class ConductorDriver
                 {
                     var goalId = member.GoalId.Value[..8];
                     var detail = FormatGateProgressConductEvent(progress with { GoalId = member.GoalId.Value }) +
-                        $" train={trainId} member={goalId} members={memberIds} scope=merge-train";
+                        $" train={trainId} member={goalId} members={memberIds} scope=merge-train" +
+                        $" train_identity={identity.Value} participant_ids={string.Join(',', members.Select(binding => binding.GoalId.Value))}" +
+                        (outerAttemptId is null ? "" : $" outer_attempt={outerAttemptId}");
                     TryAppendGateProgressEvent(writer, goalId, detail);
                 }
             }
@@ -81,6 +76,22 @@ internal sealed partial class ConductorDriver
             MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers(members.Select(member =>
                 (member.GoalId, goalsById.TryGetValue(member.GoalId, out var goal) ? goal.Objective : null))), AttemptMemberGoalIds: members.Select(member => member.GoalId).ToArray());
     }
+
+    private void AppendTrainEjectionObservation(string outerAttemptId, MergeTrainIdentity identity,
+        GoalId goalId, MergeTrainEjectionReason reason)
+    {
+        try
+        {
+            TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace!.ConductEventsLogPath), goalId.Value[..8],
+                FormatTrainEjectionObservation(outerAttemptId, identity, goalId, reason));
+        }
+        catch (Exception) { /* Participation evidence cannot change a gate outcome. */ }
+    }
+
+    internal static string FormatTrainEjectionObservation(string outerAttemptId, MergeTrainIdentity identity,
+        GoalId goalId, MergeTrainEjectionReason reason) =>
+        $"PHASE_PROGRESS phase=member-ejected outer_attempt={outerAttemptId} train_identity={identity.Value} " +
+        $"goal={goalId.Value} reason={reason} scope=merge-train";
 
     private static void TryAppendGateProgressEvent(
         ConductEventLogWriter writer,

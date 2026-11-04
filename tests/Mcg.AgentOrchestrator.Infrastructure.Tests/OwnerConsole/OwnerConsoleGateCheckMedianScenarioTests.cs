@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-17T12:00:00Z");
+    private const string Execution = "776a132e-gate-20261017120000000-0123456789abcdef0123456789abcdef";
     private readonly string _root = Path.Combine(Path.GetTempPath(), "check-median-scenario-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -17,6 +18,9 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         var history = AcceptanceLaneDurationStore.ResolveStorePath(_root);
         Directory.CreateDirectory(Path.GetDirectoryName(history)!);
         File.WriteAllText(manifest, """{"engine":{"infrastructureTestLanes":[{"name":"A","estimatedSerialSeconds":300}]}}""");
+        var plan = Path.Combine(_root, Execution + AcceptanceGateLanePlan.ArtifactSuffix);
+        File.WriteAllText(plan, new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion,
+            Execution, ["A"], []).ToJson());
         File.WriteAllLines(history, new[] { 90, 100, 110 }.Select(seconds => JsonSerializer.Serialize(new
         {
             version = 1, laneName = "core tests", filterHash = "check",
@@ -24,6 +28,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         })));
         File.WriteAllLines(log,
         [
+            Progress("lane-plan", "plan", heartbeat: plan),
             Progress("verification-check", "infrastructure tests: A"),
             Progress("verification-check", "core tests")
         ]);
@@ -40,8 +45,9 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.Contains("/ 100s", OwnerConsoleGateFormatter.LaneLine(core));
         Assert.DoesNotContain("?", OwnerConsoleGateFormatter.LaneLine(core));
         Assert.Equal(0, running.Fraction); // Every event is at the injected gate start.
-        Assert.Equal(400, running.RemainingSeconds);
-        AssertManifestCounts(running);
+        // Core/CLI medians remain visible, but only scheduled A contributes to ETA.
+        Assert.Equal(300, running.RemainingSeconds);
+        AssertScheduledCounts(running);
 
         File.AppendAllLines(log, [Progress("check-complete", "core tests", 95000, " outcome=passed failed=0")]);
         var completed = Load(loader);
@@ -49,7 +55,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.Equal("passed", Row(completed, "core tests").Outcome);
         Assert.Equal(0, completed.Fraction); // Completion duration is not gate wall time.
         Assert.Equal(300, completed.RemainingSeconds);
-        AssertManifestCounts(completed);
+        AssertScheduledCounts(completed);
 
         File.AppendAllLines(log, [Progress("verification-check", "cli tests")]);
         var unknown = Load(loader);
@@ -57,7 +63,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.Contains("?", OwnerConsoleGateFormatter.LaneLine(Row(unknown, "cli tests")));
         Assert.Equal(0, unknown.Fraction); // Unknown checks do not advance the clock.
         Assert.Equal(300, unknown.RemainingSeconds);
-        AssertManifestCounts(unknown);
+        AssertScheduledCounts(unknown);
 
         var originalHistory = File.ReadAllText(history);
         using (AcceptanceLaneDurationStore.PushRecordingScope(_root))
@@ -86,8 +92,8 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.Contains("/ 30s", OwnerConsoleGateFormatter.LaneLine(cli));
         Assert.DoesNotContain("?", OwnerConsoleGateFormatter.LaneLine(cli));
         Assert.Equal(0, learned.Fraction); // Learning a duration model does not advance the clock.
-        Assert.Equal(330, learned.RemainingSeconds);
-        AssertManifestCounts(learned);
+        Assert.Equal(300, learned.RemainingSeconds);
+        AssertScheduledCounts(learned);
     }
 
     private static OwnerConsoleGateProgress Load(OwnerConsoleGateProgressLoader loader) =>
@@ -96,17 +102,22 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
     private static OwnerConsoleGateLane Row(OwnerConsoleGateProgress gate, string name) =>
         Assert.Single(gate.Lanes, row => row.Name == name);
 
-    private static void AssertManifestCounts(OwnerConsoleGateProgress gate)
+    private static void AssertScheduledCounts(OwnerConsoleGateProgress gate)
     {
+        Assert.True(gate.LanePlanAvailable);
+        Assert.True(gate.HasEta);
+        Assert.Equal(Execution, gate.ExecutionId);
+        Assert.Equal("A", Assert.Single(gate.Lanes, lane => lane.IsScheduled == true).Name);
+        Assert.All(gate.Lanes.Where(lane => lane.Name != "A"), lane => Assert.False(lane.IsScheduled));
         Assert.Equal(0, gate.DoneCount);
         Assert.Equal(1, gate.TotalCount);
     }
 
-    private static string Progress(string phase, string target, int elapsed = 0, string extra = "") =>
+    private static string Progress(string phase, string target, int elapsed = 0, string extra = "", string heartbeat = "x") =>
         JsonSerializer.Serialize(new
         {
             timestamp = Now, eventKind = "gate-progress", goalId = "776a132e",
-            detail = $"PHASE_PROGRESS goal=776a132e phase={phase} elapsed_ms={elapsed} target=\"{target}\" child_pid=unknown output_bytes=0 heartbeat=x{extra}"
+            detail = $"PHASE_PROGRESS goal=776a132e execution={Execution} phase={phase} elapsed_ms={elapsed} target=\"{target}\" child_pid=unknown output_bytes=0 heartbeat={JsonSerializer.Serialize(heartbeat)}{extra}"
         });
 
     public void Dispose()

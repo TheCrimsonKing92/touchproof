@@ -74,7 +74,7 @@ public sealed class OwnerConsoleGateOwnerScreenshotScenarioTests
         Assert.Equal("GATE train | elapsed 30m", lines[0]);
         Assert.Equal("  ca798e7c  First", lines[1]);
         Assert.Equal("  171a09ca  Second", lines[2]);
-        Assert.Equal(" x 0 failed   > 1 running   + 26 passed   = 0 cached   . 0 queued", lines[3]);
+        Assert.Equal(" x 0 failed   > 1 running   + 20 passed   = 0 cached   . 0 queued", lines[3]);
         Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(gate), lines[4]);
         Assert.Equal("RUNNING (longest pole first)", lines[5]);
         Assert.StartsWith(" > Remainder ", lines[6]);
@@ -119,7 +119,7 @@ public sealed class OwnerConsoleGateOwnerScreenshotScenarioTests
         foreach (var name in Checks.SelectMany(check => new[] { check, check + " [trusted main baseline]" }))
             events.Add(Event(-20, "gate-progress", $"PHASE_PROGRESS goal=ca798e7c phase=check-complete target=\"{name}\" elapsed_ms=30000 outcome=passed"));
         events.Add(Event(-60, "gate-progress", "PHASE_PROGRESS goal=ca798e7c phase=verification-check target=\"infrastructure tests: Remainder\" elapsed_ms=1031000 heartbeat=activity-0.heartbeat.json"));
-        return OwnerConsoleGateProgress.Build(Now, events, manifest, [], id => id == "ca798e7c" ? "First" : "Second");
+        return OwnerConsoleGatePlannedTestBuild.Build(Now, events, manifest, [], id => id == "ca798e7c" ? "First" : "Second");
     }
 
     private static OwnerConductEvent Event(int seconds, string kind, string detail) => OwnerConsoleGateProgress.ParseEvent(
