@@ -16,7 +16,8 @@ internal sealed record OwnerConsoleFieldSnapshot(string Identity, ImmutableArray
 
 // Maps source lines while the producer renders them, before wrapping/fitting.
 internal sealed record OwnerConsoleStructuredText(OwnerConsoleFieldSnapshot? Detail,
-    IReadOnlyDictionary<int, OwnerConsoleFieldSnapshot>? Rows = null)
+    IReadOnlyDictionary<int, OwnerConsoleFieldSnapshot>? Rows = null,
+    IReadOnlyDictionary<int, string>? FieldKeys = null, int ContinuationIndent = 0)
 {
     internal OwnerConsoleFieldSnapshot? At(int line) => Rows?.GetValueOrDefault(line) ?? Detail;
 }

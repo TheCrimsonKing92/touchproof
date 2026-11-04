@@ -84,6 +84,7 @@ internal static class OwnerActivityNarrator
                 Add(item, landing.Text,
                     "The work passed its checks and was added to main.", "The conductor will continue with the remaining work.",
                     spans: landing.Spans, goalPrefixes: goals.Length > 1 ? mostRecentLandingPrefixes : null);
+                result[^1] = result[^1] with { Evidence = train.ToArray() };
                 continue;
             }
             switch (item.EventKind)
@@ -162,12 +163,13 @@ internal static class OwnerActivityNarrator
         foreach (var entry in attention ?? [])
         {
             var question = Words(OwnerHoldReason.FirstLine(entry.Question.Text), "the recorded owner question");
-            var source = new OwnerConductEvent(entry.FirstSeen, "owner-question", entry.Question.GoalId, "");
+            var source = new OwnerConductEvent(entry.FirstSeen, "owner-question", entry.Question.GoalId, "",
+                OwnerActivityDetailEvidence.From(entry.Question.Text));
             Add(source, "Needs you: " + Prefix(entry.Question.GoalId) + " " + question,
                 question, "Work waits for your answer.");
             var resolution = OwnerActivityProgress.Resolution(entry, ordered);
             result[^1] = result[^1] with { Tag = "decision", Subject = question, OwnerQuestionId = entry.Question.ItemId,
-                Resolution = resolution };
+                Resolution = resolution, Question = entry.Question.Text };
             if (entry.ResolvedAt is { } resolvedAt)
             {
                 var resolvedTitle = FullName(entry.Question.GoalId);
@@ -191,7 +193,7 @@ internal static class OwnerActivityNarrator
         {
             result.Add(new(source.Timestamp, source.EventKind, "outcome", Prefix(source.GoalId), source.Detail,
                 FullName(source.GoalId), sentence, why, next, act, why, Resolution: OwnerActivityProgress.RetryAfter(source, ordered),
-                Spans: spans, GoalPrefixes: goalPrefixes));
+                Spans: spans, GoalPrefixes: goalPrefixes, GoalId: source.GoalId, Evidence: [source]));
         }
         void Stall(OwnerConductEvent source)
         {
@@ -264,12 +266,13 @@ internal static class OwnerActivityNarrator
     internal static string Explain(OwnerConsoleActivityItem item, IReadOnlyList<OwnerConsoleDecision>? decisions = null)
         => ExplainWithFields(item, decisions).Text;
 
-    internal static (string Text, OwnerConsoleFieldSnapshot Fields) ExplainWithFields(
+    internal static (string Text, OwnerConsoleFieldSnapshot Fields, OwnerConsoleStructuredText Structured) ExplainWithFields(
         OwnerConsoleActivityItem item, IReadOnlyList<OwnerConsoleDecision>? decisions = null)
     {
         // Match the exact item; another question on the same goal never makes this event actionable.
         var decision = item.OwnerQuestionId is null ? null : decisions?.FirstOrDefault(value =>
             value.Id == item.OwnerQuestionId && value.GoalPrefix.Equals(item.GoalPrefix, StringComparison.OrdinalIgnoreCase) &&
+            (item.GoalId is null || value.GoalId.Equals(item.GoalId, StringComparison.OrdinalIgnoreCase)) &&
             Words(OwnerHoldReason.FirstLine(value.FullText), "") == item.Subject);
         var resolution = decision is not null ? "still waiting on you" : item.Resolution is { } resolved ?
             resolved.AutomaticRetry ? $"retried automatically at {resolved.At.ToLocalTime():HH:mm:ss}" :
@@ -278,36 +281,12 @@ internal static class OwnerActivityNarrator
             item.OwnerQuestionId is not null ? "no longer listed in DECISIONS" : "no owner question is listed in DECISIONS for this event";
         var act = decision is not null ? $"Yes. Open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
             $"No. {char.ToUpperInvariant(resolution[0])}{resolution[1..]}.";
-        var happened = Line(item);
-        if (item.GoalTitle.Length > 0 && !happened.Contains(item.GoalTitle, StringComparison.Ordinal))
-            happened += " (" + item.GoalTitle + ")";
         var next = decision is not null ? "Work waits for your answer." : item.Resolution?.AutomaticRetry == true ?
             "The conductor resumed this work." : item.OwnerQuestionId is not null ?
             "This question no longer requires an owner answer." : item.Next;
-        var lines = new List<string>();
-        if (item.GoalPrefixes is { Count: >= 2 } prefixes && item.Spans?.Titles is { } titles && titles.Count == prefixes.Count)
-        {
-            var end = titles[^1].Start + titles[^1].Length + titles[^1].TrailingLength;
-            lines.Add($"What happened: {item.Timestamp.ToLocalTime():HH:mm:ss} " +
-                item.Phrase[..titles[0].Start] + $"{prefixes.Count} goals" + item.Phrase[end..]);
-            for (var i = 0; i < prefixes.Count; i++)
-                lines.Add("  " + prefixes[i] + " " + item.Phrase.Substring(titles[i].Start, titles[i].Length));
-        }
-        else lines.Add("What happened: " + happened);
         var why = item.Subject ?? item.Why;
         var nextStep = (decision is not null || item.Resolution is not null || item.OwnerQuestionId is not null ? resolution + ". " : "") + next;
-        lines.AddRange([
-            "Why: " + why,
-            "What happens next: " + nextStep,
-            "Do you need to act: " + act]);
-        var fields = item.Fields();
-        return (string.Join("\n", lines), fields with { Fields = [.. fields.Fields.Select(field => field.Key switch
-        {
-            "why" => field with { Value = why },
-            "next" => field with { Value = nextStep },
-            "act" => field with { Value = act },
-            _ => field
-        })] });
+        return OwnerActivityDetailPresentation.Build(item, why, nextStep, act);
     }
 
     internal static string? FailureReason(OwnerConductEvent item)

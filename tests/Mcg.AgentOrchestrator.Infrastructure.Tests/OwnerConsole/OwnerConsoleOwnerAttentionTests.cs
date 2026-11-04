@@ -41,7 +41,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
             var escalation = Assert.Single(scene.Controller.Model.Activity, item => item.Kind == "goal-escalation");
             Assert.Contains("22222222 question for the Author: Pick a lane?", escalation.Phrase);
             await scene.Controller.ShowActivityMeaningAsync(escalation);
-            Assert.Contains("Do you need to act: No.", scene.Dialogs.Messages[^1].Text);
+            Assert.Contains("Owner action: No.", scene.Dialogs.Messages[^1].Text);
 
             kernel.ClearGoalHold(new("33333333"));
             await scene.Render(events.Append(new(time.AddSeconds(1), "goal-lifecycle", "33333333", "HumanInputReceived")).ToArray());
@@ -82,7 +82,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
                 await scene.Controller.ShowActivityMeaningAsync(item);
                 var text = scene.Dialogs.Messages[^1].Text;
                 Assert.Contains("still waiting on you", text);
-                Assert.Contains("Do you need to act: Yes.", text);
+                Assert.Contains("Owner action: Yes.", text);
                 Assert.Contains($"DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}", text);
             }
         }
@@ -110,7 +110,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         Assert.Contains("Search", retried);
         Assert.Contains(reason, retried);
         Assert.Contains($"retried automatically at {time.AddSeconds(-2).ToLocalTime():HH:mm:ss}", retried);
-        Assert.Contains("Do you need to act: No.", retried);
+        Assert.Contains("Owner action: No.", retried);
         Assert.Equal(1, retried.Split("11111111", StringSplitOptions.None).Length - 1);
 
         scene.View.ActivityPane.SelectedItem = Array.FindIndex(items.ToArray(), item => item.OwnerQuestionId == "q2");
@@ -119,7 +119,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         Assert.Contains("Export", open);
         Assert.Contains("Ship the export?", open);
         Assert.Contains("still waiting on you", open);
-        Assert.Contains("Do you need to act: Yes.", open);
+        Assert.Contains("Owner action: Yes.", open);
         Assert.Contains("DECISIONS row [1] 22222222 HumanInput", open);
         Assert.DoesNotContain("22222222", open.Split('\n')[1]);
         Assert.DoesNotContain("22222222", open.Split('\n')[2]);
@@ -127,7 +127,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         // A stale screen cannot turn a closed item into a live decision at Enter time.
         scene.Harness.Questions.Items.Clear();
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.Contains("Do you need to act: No.", scene.Dialogs.Messages[^1].Text);
+        Assert.Contains("Owner action: No.", scene.Dialogs.Messages[^1].Text);
         Assert.DoesNotContain("still waiting", scene.Dialogs.Messages[^1].Text);
         await scene.Render([]);
         scene.View.ActivityPane.SelectedItem = Array.FindIndex(scene.Controller.Model!.Activity.ToArray(), item => item.Kind == "owner-question");
@@ -152,7 +152,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         await scene.Controller.ShowActivityMeaningAsync(question);
         var text = Assert.Single(scene.Dialogs.Messages).Text;
         Assert.Contains($"resolved at {time.ToLocalTime():HH:mm:ss} by the Author", text);
-        Assert.Contains("Do you need to act: No.", text);
+        Assert.Contains("Owner action: No.", text);
         Assert.DoesNotContain("Work waits for your answer", text);
     }
 
@@ -169,7 +169,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         scene.Harness.Questions.Items.Add(question with { ItemId = "new" });
         await scene.Render([]);
         await scene.Controller.ShowActivityMeaningAsync(old);
-        Assert.Contains("Do you need to act: No.", scene.Dialogs.Messages[^1].Text);
+        Assert.Contains("Owner action: No.", scene.Dialogs.Messages[^1].Text);
         Assert.DoesNotContain("still waiting", scene.Dialogs.Messages[^1].Text);
         Assert.Equal(2, scene.Controller.Model!.Activity.Count(item => item.Kind == "owner-question"));
         Assert.Single(scene.Controller.Model.Activity, item => item.Kind == "owner-question-resolved");
