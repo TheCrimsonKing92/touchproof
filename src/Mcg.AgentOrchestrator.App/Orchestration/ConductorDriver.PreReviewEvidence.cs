@@ -415,7 +415,7 @@ internal sealed partial class ConductorDriver
         PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
             goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
             evidence.Checks, failingTests, evidencePointer);
-        var buildDiagnostic = failingTests.Count == 0 ? FormatPreReviewBuildDiagnostic(evidence.Checks) : null;
+        var buildDiagnostic = failingTests.Count == 0 ? AcceptanceRetryOutputEvidence.FormatPreReviewBuildDiagnostic(evidence.Checks) : null;
         if (buildDiagnostic is not null &&
             currentReceipt is { Disposition: PreReviewEvidenceDisposition.Red, EvidenceTimeoutChecks: null or [] } previousRed &&
             previousRed.FailingTestIdentities.Count == 0 &&
