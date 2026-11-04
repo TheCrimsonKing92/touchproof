@@ -120,31 +120,56 @@ public sealed class AcceptanceLaneWaitObservationTests
     [Fact]
     public async Task CancelledSchedulerWait_DrainsOwner_LeavesExecutionUnobserved()
     {
-        var clock = new AcceptanceLaneWaitTestClock();
-        var collector = new AcceptanceLaneWaitCollector("attempt", clock);
         using var cancellation = new CancellationTokenSource();
+        var waitEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new AcceptanceLaneWaitTestClock(() =>
+        {
+            if (cancellation.IsCancellationRequested) waitEnded.TrySetResult();
+        });
+        var collector = new AcceptanceLaneWaitCollector("attempt", clock);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = new List<string>();
         var run = AcceptanceDotnetTestBatchScheduler.RunAsync<string, string>(
             AcceptanceDotnetTestBatchScheduler.Group(new[] { "owner", "pending" }, _ => false),
             1, Task.CompletedTask, () => true, () => false,
             (_, _, _) => throw new InvalidOperationException("Unexpected partition"),
-            async (check, token) => { calls.Add(check); await release.Task.WaitAsync(token); return (check, false); },
+            // Keep the owner's slot until the pending waiter has observed cancellation.
+            // Cancelling the owner's wait here could legitimately grant that slot first.
+            async (check, _) => { calls.Add(check); await release.Task; return (check, false); },
             cancellation.Token, check => collector.Begin(check));
-        Assert.Single(collector.Snapshot(), row => row.Lane == "pending");
-        clock.Advance(9);
-        cancellation.Cancel();
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-                await run.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+            Assert.Empty(Assert.Single(collector.Snapshot(), row => row.Lane == "pending").Measurements);
+            Assert.Equal(new[] { "owner" }, calls);
+            clock.Advance(9);
+            cancellation.Cancel();
+            try
+            {
+                await waitEnded.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException("Hang guard: pending scheduler wait did not observe cancellation.", exception);
+            }
+            // Snapshot takes the collector lock, so the clock signal's measurement is now published.
             var row = Assert.Single(collector.Snapshot(), row => row.Lane == "pending");
             var sample = Assert.Single(row.Measurements);
+            Assert.Equal("scheduler-slot", sample.Stage);
             Assert.Equal("cancelled", sample.Boundary);
             Assert.Equal(9, sample.Seconds);
             Assert.Equal(new[] { "owner" }, calls);
+            Assert.False(run.IsCompleted); // The held owner must still be drained.
+            release.SetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await run.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            cancellation.Cancel();
+            release.TrySetResult();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); }
+            catch (OperationCanceledException) when (run.IsCompleted) { }
+        }
     }
 
     private sealed class BrokenClock : TimeProvider
