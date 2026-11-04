@@ -16,25 +16,31 @@ public sealed class GoalWorktreeRecoveryOwnershipTests : GoalWorktreeRecoveryTes
         var task = f.Goal.Tasks.Single();
         var at = DateTimeOffset.UtcNow;
         var process = new TaskProcessRecord(12345, "fixture", f.Path, "out", "err", "exit", at, null, null);
-        if (owner == "dispatch")
-        {
+        if (owner is "dispatch" or "completion-build")
             f.Kernel.RecordTaskDispatch(f.Goal.Id, task.Id, new("codex-cli", "fixture", f.Path, at));
+        if (owner == "dispatch")
             f.Kernel.RecordTaskProcessStarted(f.Goal.Id, task.Id, process);
-        }
         if (owner == "completion-build")
+        {
             f.Kernel.RecordCompletionBuildEvidence(f.Goal.Id, task.Id, new("build", f.Goal.Id.Value, task.Id.Value, at, "dispatch", f.Path,
                 "tree", [], process, at.AddHours(1), CompletionBuildEvidencePhase.Pending, "state", f.Repo,
                 "result", 12345, at));
+            Assert.Null(task.LastProcess); // Only completion-build custody can refuse this case.
+            Assert.True(task.CompletionBuildEvidence!.IsPending);
+            Assert.False(task.CompletionBuildEvidence.CustodyReleased);
+        }
         if (owner == "inactive") f.Kernel.CancelGoal(f.Goal.Id, "fixture inactive");
         var before = GoalWorktreeRegistrationListing.RunGit(f.Repo).Output;
         var coordinator = f.Coordinator();
-        Assert.ThrowsAny<InvalidOperationException>(() => ConductorMissingWorktreeRecovery.Prepare(
+        var refusal = Assert.ThrowsAny<InvalidOperationException>(() => ConductorMissingWorktreeRecovery.Prepare(
             f.Repo, f.Goal, coordinator, () => f.Kernel.Goals.ToArray(), _ => owner switch
             {
                 "gate" => true,
                 "unreadable-gate" => throw new InvalidOperationException("gate records unreadable"),
                 _ => false
             }));
+        if (owner == "completion-build")
+            Assert.Contains("dispatch or completion-build owner holds workspace", refusal.Message);
         Assert.False(Directory.Exists(f.Path));
         Assert.Equal(before, GoalWorktreeRegistrationListing.RunGit(f.Repo).Output);
         f.AssertTip();

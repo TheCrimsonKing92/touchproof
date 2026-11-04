@@ -47,6 +47,7 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
             var recovery = Assert.Single(GoalOperationJournal.Read(f.Repo, goal.Id).Entries.Where(e =>
                 e.Operation == ConductorMissingWorktreeRecovery.Operation && e.Status == GoalOperationStatus.Completed));
             Assert.Contains(f.Tip, recovery.Detail);
+            Assert.True(File.Exists(Path.Combine(f.Path, "config", "acceptance-manifest.json")));
             Assert.True(GoalWorktrees.TryComputeCandidateIdentity(f.Path, f.MainBranch, out var candidate, out var failure), failure);
             Assert.NotNull(candidate);
             var dispatch = WorkerProfileDispatcher.PrepareTask(f.Kernel, goal, task,

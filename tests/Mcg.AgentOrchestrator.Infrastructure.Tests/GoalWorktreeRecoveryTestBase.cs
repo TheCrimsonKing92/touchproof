@@ -22,6 +22,21 @@ public abstract class GoalWorktreeRecoveryTestBase : GoalWorktreeTestBase
             Kernel.ActivateGoal(Goal.Id, AgentCatalog.Default().Agents);
             Kernel.RecordGoalRefinement(Goal.Id, new RefinedSpec(Goal.Objective, ["Preserve the existing branch"], VerificationClass.TestVerifiable, [], []));
             MainBranch = RunGitOutput(Repo, "branch", "--show-current").Trim();
+            // Normal candidate/context preparation needs a manifest restored from Git too.
+            var config = System.IO.Path.Combine(Repo, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(System.IO.Path.Combine(config, "acceptance-manifest.json"), """
+                {
+                  "version": 1,
+                  "engine": { "enforceStructuralCoverage": false },
+                  "checks": [
+                    { "name": "fixture check", "type": "command", "command": "dotnet", "arguments": ["--info"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """);
+            RunGit(Repo, "add", "config/acceptance-manifest.json");
+            RunGit(Repo, "commit", "-m", "Seed recovery acceptance manifest");
             Path = GoalWorktrees.Ensure(Repo, Goal.Id);
             if (uniqueCommit)
             {
