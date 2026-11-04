@@ -7,24 +7,30 @@ public sealed class WorkerBuildApplicabilityCompletionTests
     [Theory]
     [InlineData(false, "worker-build-evidence-missing", "no-invocation-recorded")]
     [InlineData(true, "worker-build-check-failed", "terminal-non-success")]
+    [InlineData(false, "worker-build-check-failed", "no-invocation-recorded")]
+    [InlineData(true, "worker-build-evidence-missing", "terminal-non-success")]
     public void Refresh_PrecedingWorkerMarkersCannotReplaceStoredHostFailureDetail(
-        bool compilerFailed, string rule, string expectedReason)
+        bool compilerFailed, string workerRule, string expectedReason)
     {
         var fixture = new WorkerBuildApplicabilityFixture();
         if (compilerFailed)
             fixture.SetInvocations(fixture.Invocation("00000001", WorkerBuildOutcome.CompilerFailure));
-        var workerText = DispatchFailureDiagnosticMarker.Format(rule) + "\n" + string.Join("\n",
+        var workerText = DispatchFailureDiagnosticMarker.Format(workerRule) + "\n" + string.Join("\n",
             Enumerable.Repeat("worker_build_applicability=unsupported-worker-reason; next=worker-authored", 9));
         File.WriteAllText(fixture.Task.LastProcess!.StandardErrorPath, workerText);
 
         var outcome = fixture.Runner().RefreshLatestProcessWithOutcome(fixture.Build.Kernel, fixture.Build.GoalId, fixture.Build.TaskId);
         var verification = Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
         Assert.Contains(workerText, outcome.DiagnosticPayload!.StandardError);
-        Assert.True(DispatchContractDiagnostic.TryExtract(verification.StandardError, rule, out var detail));
+        var hostRule = compilerFailed ? DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed
+            : DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing;
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format(hostRule), verification.StandardError);
+        Assert.True(DispatchContractDiagnostic.TryExtract(verification.StandardError, workerRule, out var detail));
         Assert.Contains("worker_build_applicability=" + expectedReason + "; next=", detail);
         Assert.DoesNotContain("unsupported-worker-reason", detail);
         var failure = DispatchFailureClassifier.Classify(fixture.Task, verification);
-        Assert.Equal(rule, TaskOutcomeClassifier.TryExtractRule(failure.ClassifierReceipt));
+        // Classification still follows the first marker; detail follows the final host marker.
+        Assert.Equal(workerRule, TaskOutcomeClassifier.TryExtractRule(failure.ClassifierReceipt));
         Assert.Contains(detail, failure.EvidenceSummary);
         Assert.DoesNotContain("unsupported-worker-reason", failure.EvidenceSummary);
         Assert.Equal(1, verification.ExitCode);

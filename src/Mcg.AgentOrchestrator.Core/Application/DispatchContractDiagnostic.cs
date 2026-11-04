@@ -8,12 +8,15 @@ public static class DispatchContractDiagnostic
         if (rule is DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing or DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)
         {
             // The host appends its explanation immediately after its failure marker(s).
+            // The selected classification may come from an earlier, different build marker.
+            // Detail belongs to the final build marker regardless of that selected rule.
             // Earlier worker text, even with matching prefixes/markers, is not host detail.
             // These observations add failure detail only; they are never verdict inputs.
             var buildLines = (standardError ?? string.Empty)
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var markerIndex = Array.FindLastIndex(buildLines, line =>
-                string.Equals(line, DispatchFailureDiagnosticMarker.Format(rule), StringComparison.Ordinal));
+                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed), StringComparison.Ordinal) ||
+                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing), StringComparison.Ordinal));
             if (markerIndex < 0)
                 return false;
 
