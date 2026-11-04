@@ -189,7 +189,8 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         GoalLifecycleState fromState,
-        out ConductorAdvanceResult result)
+        out ConductorAdvanceResult result,
+        GoalEvidenceOperationScope? workspaceOwnership = null)
     {
         result = default!;
         if (_integrateMainBeforeReadOnlyDispatch is null ||
@@ -204,15 +205,15 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal);
+        var operationStart = workspaceOwnership is null ? _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal) : null;
         using var operationScope = operationStart?.Scope;
-        using var lease = operationStart is null
+        using var lease = operationStart is null && workspaceOwnership is null
             ? _tryAcquireEvidenceMutationLease(goal, "conductor:developer-branch-integration")
             : null;
         var integrationExecution = DeveloperDispatchIntegrationExecutor.Execute(
             goal,
             operationStart,
-            lease,
+            lease ?? workspaceOwnership,
             g => _integrateMainBeforeReadOnlyDispatch(g, role),
             _recordPreDispatchIntegrationReceipt);
         switch (integrationExecution.RefusalKind)
