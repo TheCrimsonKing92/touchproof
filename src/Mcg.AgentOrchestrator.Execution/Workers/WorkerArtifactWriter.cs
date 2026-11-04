@@ -88,7 +88,12 @@ internal sealed partial class WorkerArtifactWriter
             Path.Combine(contextDirectory, "current-task.md"),
             BuildCurrentTaskForStack(task, workingDirectory, ProjectStackResolver.GuidanceStack(
                 ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome), preserveCompleteArtifacts,
-                task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null));
+                task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null) +
+            (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
+                preflightFindings?.Any(line => line.StartsWith("GATE_TEST_SELECTOR_DIAGNOSTIC", StringComparison.Ordinal)) == true
+                ? Environment.NewLine + "Selector naming diagnostic: read subscription-preflight.md in this context. " +
+                    "Findings are advisory; use existing findings/evidence-request and audited obligation-rebind routes."
+                : string.Empty));
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
         var durableResearch = ResolveLatestDurableResearch(goal.Tasks, task.Id);
         var durablePlan = durablePlannerPlans.Values.LastOrDefault(resolution => resolution.Succeeded);

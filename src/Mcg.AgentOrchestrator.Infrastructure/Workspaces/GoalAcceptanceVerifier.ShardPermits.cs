@@ -13,19 +13,27 @@ public sealed partial class GoalAcceptanceVerifier
             ? GateShardLaneClass.Evidence
             : GateShardLaneClass.Gate;
 
-    private async Task<CommandResult> RunLaneTestHostWithShardPermitAsync(
+    internal async Task<CommandResult> RunLaneTestHostWithShardPermitAsync(
         string[] arguments,
         string workingDirectory,
         TimeSpan timeout,
         GateHeartbeatContext heartbeatContext,
         CancellationToken cancellationToken,
-        bool isMtpLane = false)
+        bool isMtpLane = false,
+        AcceptanceLaneWaitCollector.Occurrence? observation = null)
     {
+        var wait = observation ?? _laneWait;
         if ((!_requiresTestTelemetryReceipt && _testOverrides.ShardPermitRootForTests is null) ||
             (_testOverrides.ShardPermitRootForTests is null &&
              !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_GATE_INVOCATION_ID"))) ||
             (!isMtpLane && !IsDotnetTestCommand(arguments)))
         {
+            if (isMtpLane || IsDotnetTestCommand(arguments))
+            {
+                wait?.Ready();
+                wait?.Admit();
+                wait?.Execute();
+            }
             return await RunWithGateHeartbeatAsync(
                 arguments, workingDirectory, timeout, heartbeatContext, cancellationToken).ConfigureAwait(false);
         }
@@ -41,6 +49,8 @@ public sealed partial class GoalAcceptanceVerifier
         var nextProgress = _timeProvider.GetUtcNow();
         var progressInterval = _testOverrides.ProgressInterval ?? TimeSpan.FromSeconds(30);
         GateShardPermit permit;
+        wait?.Ready();
+        wait?.Start("shard-permit");
         try
         {
             permit = await pool.AcquireAsync(ShardPermitLaneClass, outcome =>
@@ -66,15 +76,19 @@ public sealed partial class GoalAcceptanceVerifier
                     GateShardLanePriorityProgress.Format(ShardPermitLaneClass, outcome));
                 nextProgress = now + progressInterval;
             }, _testOverrides.ShardPermitPollInterval ?? TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            wait?.End("shard-permit", "permit-acquired");
+            wait?.Admit();
         }
         finally
         {
+            wait?.End("shard-permit", cancellationToken.IsCancellationRequested ? "cancelled" : "acquisition-ended");
             if (waiting)
                 AcceptanceGatePhaseAccountant.RecordCurrentShardPermitWait(_timeProvider.GetElapsedTime(started));
         }
         try
         {
             _testOverrides.OnShardPermitAcquiredForTests?.Invoke(heartbeatContext.CurrentTarget);
+            wait?.Execute();
             return await RunWithGateHeartbeatAsync(
                 arguments, workingDirectory, timeout, heartbeatContext, cancellationToken).ConfigureAwait(false);
         }

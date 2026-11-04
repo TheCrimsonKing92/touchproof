@@ -628,7 +628,10 @@ public sealed class LauncherScriptTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Equal("launcher goal placeholder --pipeline five-role", File.ReadAllText(sandbox.InvocationPath).Trim());
+        var cacheRoot = Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "operator-run-cache");
+        var cacheArgument = cacheRoot.Contains(' ') ? $"\"{cacheRoot}\"" : cacheRoot;
+        Assert.Equal($"launcher --runtime-cache-root {cacheArgument} goal placeholder --pipeline five-role",
+            File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_refreshes_git_head_marker_after_stale_rebuild")]
@@ -1704,7 +1707,7 @@ public sealed class LauncherScriptTests
 
         Assert.True(script.Contains("$launcher = Join-Path $repoRoot \"mcg-orchestrator.cmd\"", StringComparison.Ordinal), script);
         Assert.True(script.Contains("if ([string]::IsNullOrWhiteSpace($AppDll))", StringComparison.Ordinal), script);
-        Assert.True(script.Contains("& $launcher @Arguments", StringComparison.Ordinal), script);
+        Assert.True(script.Contains("& $launcher --runtime-cache-root $cacheRoot @Arguments", StringComparison.Ordinal), script);
         Assert.True(script.Contains("[System.IO.Path]::GetFullPath($AppDll)", StringComparison.Ordinal), script);
         Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
     }

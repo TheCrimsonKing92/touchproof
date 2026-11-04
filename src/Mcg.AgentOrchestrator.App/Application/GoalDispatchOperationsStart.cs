@@ -104,7 +104,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
         // Validate recovery authority before admission can hydrate a whole durable snapshot.

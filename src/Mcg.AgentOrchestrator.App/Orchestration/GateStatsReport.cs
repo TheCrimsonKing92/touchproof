@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateStatsReport
 {
+    internal static GateStatsWaitsReport.Report Waits(string directory, int last, int top) =>
+        GateStatsWaitsReport.Read(directory, last, top);
     internal sealed record LaneRow(string Lane, int Gates, double MedianSeconds, double P90Seconds, double MaxSeconds);
     internal sealed record ClassRow(string Class, int Gates, double TotalSeconds, double MedianSeconds);
     internal sealed record CompareRow(string Lane, int BeforeGates, double? BeforeMedian, double? BeforeP90,

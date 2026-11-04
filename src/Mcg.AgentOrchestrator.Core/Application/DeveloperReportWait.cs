@@ -15,6 +15,8 @@ public static class DeveloperReportWait
             !string.Equals(owner, "worker", StringComparison.OrdinalIgnoreCase))
             return false;
 
+        if (DeveloperBuildReportEvidence.IsBuildReportRequest(request))
+            return DeveloperBuildReportEvidence.Projects(goal, request).Length > 0;
         return ReportCriterionLookup.Find(goal, request.PlannerIdentity) is { } criterion &&
             DeveloperReportEvidence.FindRequiredField(criterion) is not null;
     }

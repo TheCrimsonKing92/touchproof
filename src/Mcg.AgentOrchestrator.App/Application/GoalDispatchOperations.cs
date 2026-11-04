@@ -123,7 +123,7 @@ internal sealed partial class GoalDispatchOperations
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }
@@ -461,7 +461,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
         return batch;
@@ -507,7 +507,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath);
+            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }
@@ -520,6 +520,11 @@ internal sealed partial class GoalDispatchOperations
         var reader = OwnedChildAttemptCoordinatorFactory.CreateFocusedEvidence(workspace, DotnetBuildStorageLayout.CaptureStorageRoot());
         return reader.CaptureDeferredEvidenceContext;
     }
+
+    private static Func<Goal, string?, IReadOnlyList<string>> CreateSelectorDiagnosticResolver(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace) => (goal, candidate) =>
+        GateTestSelectorDiagnosticPreparation.Build(goal, candidate, workspace.ResolveExecutionDirectory(goal.Id),
+            workspace.OrchestratorDirectory, kernel.HumanInputRequests, workspace.ProjectHomeDirectoryOrNull);
 
     private static string ResolveOrchestratorSkillDirectory(OrchestratorHome home) =>
         Path.Combine(home.InstallRootDirectory, ".agents", "skills");
