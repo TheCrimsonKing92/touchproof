@@ -71,7 +71,9 @@ internal static class AttributedFailureDeveloperRoute
         if (failure is null) return AttributedFailureRouteDecision.Decline("no-attributed-failure");
         var tests = failure.FailingTests.Select(test => test.Trim()).Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray();
-        if (tests.Length == 0 || tests.Any(test => !AttributedCohortFailureDetail.IsRepresentableTestName(test)))
+        if (tests.Length == 0 || tests.Any(test => failure.Source == "solo"
+                ? test.Length == 0 || test.Any(char.IsControl)
+                : !AttributedCohortFailureDetail.IsRepresentableTestName(test)))
             return AttributedFailureRouteDecision.Decline("unrepresentable-failing-tests");
         if (string.IsNullOrWhiteSpace(currentCandidate) ||
             !string.Equals(failure.CandidateSha, currentCandidate, StringComparison.Ordinal))

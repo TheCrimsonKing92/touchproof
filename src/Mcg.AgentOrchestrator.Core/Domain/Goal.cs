@@ -1168,7 +1168,9 @@ public sealed class Goal
         string? branchHeadSha = null,
         string? mainHeadSha = null,
         IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null,
-        string? baselineAttestation = null)
+        string? baselineAttestation = null,
+        string? attemptId = null,
+        SoloAcceptanceFailureReceipt? soloFailureReceipt = null)
     {
         var checks = failedChecks
             .Select(item => item.Trim())
@@ -1183,7 +1185,8 @@ public sealed class Goal
                 NormalizeSha(branchHeadSha),
                 NormalizeSha(mainHeadSha),
                 checkAttributions,
-                string.IsNullOrWhiteSpace(baselineAttestation) ? null : baselineAttestation.Trim());
+                string.IsNullOrWhiteSpace(baselineAttestation) ? null : baselineAttestation.Trim(),
+                AttemptId: attemptId, SoloFailureReceipt: soloFailureReceipt);
         _acceptanceFailureDeferredForRetry = false;
     }
 
@@ -1460,7 +1463,8 @@ public sealed class Goal
                     RetainedAcceptanceFailure.BranchHeadSha,
                     RetainedAcceptanceFailure.MainHeadSha,
                     RetainedAcceptanceFailure.CheckAttributions?.ToList(),
-                    RetainedAcceptanceFailure.BaselineAttestation, RetainedAcceptanceFailure.AttributionPending),
+                    RetainedAcceptanceFailure.BaselineAttestation, RetainedAcceptanceFailure.AttributionPending,
+                    RetainedAcceptanceFailure.AttemptId, RetainedAcceptanceFailure.SoloFailureReceipt),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -1594,7 +1598,7 @@ public sealed class Goal
                 failure.BranchHeadSha,
                 failure.MainHeadSha,
                 failure.CheckAttributions,
-                failure.BaselineAttestation);
+                failure.BaselineAttestation, failure.AttemptId, failure.SoloFailureReceipt);
             if (failure.AttributionPending is { } pending)
                 goal._retainedAcceptanceFailure = goal._retainedAcceptanceFailure! with { AttributionPending = pending };
             var acceptanceFailureDeferredForRetry = snapshot.AcceptanceFailureDeferredForRetry ??
@@ -1828,7 +1832,9 @@ public sealed record AcceptanceFailureSummary(
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
     string? BaselineAttestation = null,
-    AcceptanceAttributionPending? AttributionPending = null)
+    AcceptanceAttributionPending? AttributionPending = null,
+    string? AttemptId = null,
+    SoloAcceptanceFailureReceipt? SoloFailureReceipt = null)
 {
     public bool IsEnvironmentalApparatus =>
         FailedChecks.Count > 0 &&
