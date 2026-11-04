@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class PreTesterGuardSelections
 {
     private readonly DeveloperDeferredTestSelection _changedFileGuards;
+    private readonly IReadOnlyList<FindingEvidenceSelection> _guardSelections;
     private readonly IReadOnlyList<FindingEvidenceSelection> _cliSelections;
     internal IReadOnlyList<FindingEvidenceSelection> Selections { get; }
     internal IReadOnlyList<string> NotRun => _changedFileGuards.NotRun;
@@ -15,7 +16,8 @@ internal sealed class PreTesterGuardSelections
         IReadOnlyList<FindingEvidenceSelection> selections, IReadOnlyList<FindingEvidenceSelection> cliSelections)
     {
         _changedFileGuards = changedFileGuards;
-        Selections = selections;
+        _guardSelections = selections;
+        Selections = selections.Concat(cliSelections).ToArray();
         _cliSelections = cliSelections;
     }
 
@@ -40,7 +42,7 @@ internal sealed class PreTesterGuardSelections
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
         return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
             .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
-            .Concat(changedFileGuards.Selections).Concat(cli.Selections).ToArray(), cli.Selections);
+            .Concat(changedFileGuards.Selections).ToArray(), cli.Selections);
     }
 
     internal static string ReadMainRevision(string worktreePath, OrchestratorWorkspace? workspace)
@@ -63,14 +65,20 @@ internal sealed class PreTesterGuardSelections
     {
         var selected = declaration.Selections.ToList();
         var notRun = declaration.NotRun.ToList();
-        var normalizedGuards = NormalizeWithNotRun(settings);
+        var normalizedGuards = DeveloperDeferredTestSelectionNormalization.Normalize(new(_guardSelections, NotRun), settings);
         notRun.AddRange(normalizedGuards.NotRun.Where(name => prior?.Outcome != "started" ||
             prior.NotRun.Contains(name, StringComparer.Ordinal)));
         selected.AddRange(normalizedGuards.Selections);
+        var normalizedCli = DeveloperDeferredTestSelectionNormalization.Normalize(new(_cliSelections, []), settings);
+        selected.AddRange(normalizedCli.Selections);
+        // Retain project identity for rejected CLI obligations, so resume need not rediscover their origin.
+        notRun.AddRange(normalizedCli.NotRun.Select(name => format(
+            new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(PreTesterCliSurfaceSelections.Project), name))));
         if (prior?.Outcome == "started")
         {
             // CLI discovery belongs to attempt creation. Recorded obligations survive later inventory edits.
             selected.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.Selections));
+            notRun.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.NotRun).Select(format));
         }
         return new(RetainStartedSelections(selected,
             prior?.Outcome == "started" ? prior.Selections : null, format), notRun);

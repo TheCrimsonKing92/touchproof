@@ -116,6 +116,53 @@ public sealed class PreTesterCliSurfaceWiringTests
         Assert.Empty(scenario.Requests);
     }
 
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResumedAttemptPreservesRejectedCliObligationsAndRequest(bool unresolvedDeclaration)
+    {
+        using var scenario = new Scenario("deferred - DeclaredCoreTests" +
+            (unresolvedDeclaration ? ", MissingDeclaredTests" : ""));
+        var oversized = new[] { "First", "Second" }.Select(prefix =>
+            prefix + new string('X', GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength)).ToArray();
+        for (var index = 0; index < oversized.Length; index++)
+            scenario.DeclareCli(oversized[index], fileName: "Oversized" + index + ".cs");
+        var launches = 0;
+        var coordinator = scenario.Background(() => launches++);
+        var driver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run"), coordinator);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        var original = scenario.Latest();
+        Assert.Equal("started", original.Outcome);
+        Assert.Equal([CoreSelection, Cli(Golden), Cli(Writer)], original.Selections);
+        Assert.Equal(oversized.Length + (unresolvedDeclaration ? 1 : 0), original.NotRun.Count);
+        var attempt = Assert.Single(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
+        Assert.Equal(1, launches);
+        scenario.DeclareCli("NewlyDiscoveredTests");
+        File.Delete(scenario.CliProjectPath); // Resume must use the recorded rejected obligations, too.
+        var resumedDriver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run"),
+            scenario.Background(() => launches++));
+
+        var held = resumedDriver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(held.Outcome);
+        Assert.Equal(original.Selections, scenario.Latest().Selections);
+        Assert.Equal(original.NotRun, scenario.Latest().NotRun);
+        Assert.Equal((unresolvedDeclaration ? new[] { "MissingDeclaredTests" } : [])
+            .Concat(oversized.Select(Cli)), scenario.Latest().NotRun);
+        Assert.Equal(original.ReceiptId, scenario.Latest().ReceiptId);
+        Assert.Equal("started", scenario.Latest().Outcome);
+        var resumed = Assert.Single(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
+        Assert.Equal(attempt.AttemptId, resumed.AttemptId);
+        Assert.Equal(attempt.FocusedEvidenceReceiptId, resumed.FocusedEvidenceReceiptId);
+        Assert.Equal(1, launches);
+        Assert.Empty(scenario.Roles);
+        Assert.Empty(scenario.Requests);
+        Assert.Equal(0, scenario.GateRuns);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -290,11 +337,11 @@ public sealed class PreTesterCliSurfaceWiringTests
             File.WriteAllText(Path.Combine(Path.GetDirectoryName(CliDirectory)!, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project><ItemGroup><Compile Remove=\"Cli/**/*.cs\" /></ItemGroup></Project>");
         }
-        public void DeclareCli(string name, string methods = "[Fact] public void Output() {}")
+        public void DeclareCli(string name, string methods = "[Fact] public void Output() {}", string? fileName = null)
         {
             Directory.CreateDirectory(CliDirectory);
             File.WriteAllText(CliProjectPath, "<Project />");
-            File.WriteAllText(Path.Combine(CliDirectory, name + ".cs"), "public class " + name + " { " + methods + " }");
+            File.WriteAllText(Path.Combine(CliDirectory, fileName ?? name + ".cs"), "public class " + name + " { " + methods + " }");
         }
         public PreTesterEvidenceEntry Latest() => Assert.IsType<PreTesterEvidenceEntry>(
             PreTesterEvidenceIndexLines.Latest(Goal, Tester.Id, CandidateSha));
