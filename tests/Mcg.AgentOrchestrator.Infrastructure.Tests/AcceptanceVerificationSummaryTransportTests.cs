@@ -6,6 +6,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: pure controlled results; no provider, process or shared store.
 public sealed class AcceptanceVerificationSummaryTransportTests
 {
+    [Fact]
+    public void SoloReceiptSurvivesNativeConversionNormalizationAndSerialization()
+    {
+        var receipt = new SoloAcceptanceFailureReceipt(1, "goal", "attempt", "candidate", "tree", "main", "baseline",
+            "root", new("proof.json", "digest"));
+        var native = new AcceptanceVerificationResult(false, false, 1, "failure")
+            { AttemptId = "attempt", SoloFailureReceipt = receipt };
+        var summary = AcceptanceVerificationSummary.FromVerification(native, [], ["solo tests"], "candidate", "main",
+            ["candidate.trx"], [new("solo tests", AcceptanceFailureOrigin.Introduced, "baseline proof")], null);
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(summary);
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(normalized))!;
+        Assert.Equal(receipt, restored.SoloFailureReceipt);
+        Assert.Equal("attempt", restored.AttemptId);
+        Assert.Single(restored.RequiredUnmetCriteria);
+        Assert.Equal(new[] { "solo tests" }, restored.FailedChecks);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

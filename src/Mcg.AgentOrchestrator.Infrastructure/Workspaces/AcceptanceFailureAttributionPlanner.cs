@@ -234,7 +234,9 @@ internal static class AcceptanceFailureAttributionPlanner
                     ? AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline
                     : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
                 ExecutedTestCount: absent ? 0 : null,
-                TestProjectPath: candidateCheck.Project));
+                TestProjectPath: candidateCheck.Project,
+                BaselineSourceAbsence: absent && candidateCheck.FocusedEvidenceTokens.Count == 1
+                    ? new(baselineSha, candidateCheck.FocusedEvidenceTokens[0].Value) : null));
         }
 
         return new BaselineSourceSelectionPlan(executable, classified);

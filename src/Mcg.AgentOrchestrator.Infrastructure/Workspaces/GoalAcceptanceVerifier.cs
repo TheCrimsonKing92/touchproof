@@ -45,7 +45,10 @@ public sealed partial record AcceptanceCheckResult(
     int? ChildProcessId = null,
     DateTimeOffset? ChildProcessStartedAt = null,
     IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null,
+    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null);
+
+public sealed record AcceptanceBaselineSourceAbsence(string BaselineSha, string Selector);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -829,6 +832,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             failureAttributionRequests[index] = (check, manifestCheck);
         }
 
+        SoloAcceptanceFailureReceipt? soloFailureReceipt = null;
         var attributedChecks = await AttachTestFailureAttributionsBatchAsync(
             failureAttributionRequests,
             engineSettings,
@@ -838,7 +842,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease,
             cancellationToken,
             failureAttributionBudget,
-            changedFiles).ConfigureAwait(false);
+            changedFiles,
+            (results, baseline, bindings) => soloFailureReceipt = SoloAcceptanceFailureEvidenceWriter.Capture(
+                executionOwner.Identity, baseline.Sha, results, baseline, bindings)).ConfigureAwait(false);
         for (var index = 0; index < attributedChecks.Count; index++)
         {
             checks[index] = attributedChecks[index];
@@ -862,6 +868,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TestResultPaths: testResultPaths)
         {
             AttemptId = executionOwner.Identity.AttemptId,
+            SoloFailureReceipt = soloFailureReceipt,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
@@ -941,7 +948,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
         AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null,
-        IReadOnlyList<string>? changedFiles = null)
+        IReadOnlyList<string>? changedFiles = null,
+        Action<IReadOnlyList<AcceptanceCheckResult>, FocusedEvidenceArmRunResult,
+            IReadOnlyList<SoloAcceptanceCheckBinding>>? captureSoloEvidence = null)
     {
         invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
             MaxFailureAttributionFocusedEvidenceIdentities);
@@ -1081,6 +1090,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId, stableSlotIndex, stableSlotLease, changedFiles, invocationBudget,
             cancellationToken).ConfigureAwait(false);
 
+        captureSoloEvidence?.Invoke(results, baseline, prepared.SelectMany(item =>
+            item.IdentitySelection.Selected.Select(identity => new SoloAcceptanceCheckBinding(item.Check.Name,
+                identity, item.SelectionPlan.CheckNamesBySelector[AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity)]))).ToArray());
         return results;
 
         static AcceptanceCheckResult Unattributed(
@@ -1195,7 +1207,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             SelectBaselineFocusedChecks, CombineFindingBaselineArm, _storageRoot,
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
-            partitionCandidateOnlySelections);
+            partitionCandidateOnlySelections,
+            classifyMissingSelectionsAsAbsent && _executionContext is not null
+                ? Path.Combine(_executionContext.ResultsPrefix, "solo-baseline") : null);
     }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(

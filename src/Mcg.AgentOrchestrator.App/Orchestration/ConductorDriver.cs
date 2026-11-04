@@ -1348,6 +1348,8 @@ internal sealed partial class ConductorDriver
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
+        if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
+            return HoldSoloAcceptanceFailure(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
         try
         {
             _resolveParkedWaitEscalations(goal, state);
@@ -1371,6 +1373,9 @@ internal sealed partial class ConductorDriver
             return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
 
         if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
+        if (state == GoalLifecycleState.AcceptanceFailed &&
+            (goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null || goal.LatestAcceptanceFailure?.AttemptId is not null))
+            return RouteSoloAcceptanceFailure(goal, goalPrefix, policy);
         return state switch
         {
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),

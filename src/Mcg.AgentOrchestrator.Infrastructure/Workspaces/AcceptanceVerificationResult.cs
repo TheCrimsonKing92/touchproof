@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -18,6 +19,9 @@ public sealed record AcceptanceVerificationResult(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AttemptId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SoloAcceptanceFailureReceipt? SoloFailureReceipt { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]

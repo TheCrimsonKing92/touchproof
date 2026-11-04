@@ -74,6 +74,15 @@ internal sealed partial class ConductorDriver
             return CreateApparatusCompletionHold(goal, goalPrefix, policy, acceptance, branchHeadSha, mainHeadSha);
         }
 
+        if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null ||
+            acceptance.AttemptId is not null && acceptance.CheckAttributions is { Count: > 0 }))
+        {
+            // A solo test finding must use the evidence route, never the generic
+            // criterion feedback retry (which cannot establish attribution).
+            RecordSoloAcceptanceFailure(goal, acceptance);
+            return HoldSoloAcceptanceFailure(goal, goalPrefix, policy, "solo-evidence-awaiting-consumption");
+        }
+
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
         {
             var failedChecks = acceptance.FailedChecks ?? [];
