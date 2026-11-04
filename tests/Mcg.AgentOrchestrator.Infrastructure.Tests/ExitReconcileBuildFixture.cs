@@ -19,6 +19,9 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
     private readonly WorkerBuildOutcome _expectedBuildOutcome;
     internal TaskSpec Task => Kernel.GetTask(Build.GoalId, Build.TaskId);
     internal Goal Goal => Kernel.GetGoal(Build.GoalId);
+    internal int CompletionLaunches;
+    private bool _completionLive = true;
+    private string CompletionReceiptPath => Path.Combine(Build.Root, "completion-receipt.json");
 
     internal ExitReconcileBuildFixture(bool compilerFailure = false, bool extraProject = false)
     {
@@ -199,12 +202,64 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
     internal void Save() => new SqliteOrchestratorStateRepository(Build.StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
     internal void Reload() => Kernel = Build.Operations.Load(Build.GoalId.Value);
 
-    internal int TerminalSweep(OrchestratorWorkspace? authority = null)
+    internal int TerminalSweep(OrchestratorWorkspace? authority = null, BackgroundDispatchRunner? runner = null)
     {
         authority ??= Workspace;
         var result = TerminalGoalSweep.Run(Kernel, authority.ExecutionDirectory, "main", onlyGoalId: Build.GoalId,
-            orchestratorDirectory: authority.OrchestratorDirectory);
+            orchestratorDirectory: authority.OrchestratorDirectory, dispatchRunner: runner);
         return result.Goals.SelectMany(goal => goal.Repairs).Count(repair => repair.Kind == "dispatch-exit-reconciled");
+    }
+
+    internal BackgroundDispatchRunner ControlledCompletionRunner() => new(
+        completionBuildEvidence: new CompletionBuildEvidenceCoordinator(Build.StatePath, Workspace.ExecutionDirectory,
+            launch: operation =>
+            {
+                CompletionLaunches++;
+                return new(42, operation.WorkerProcess.StartedAt, "controlled-completion-host", () =>
+                {
+                    var stored = Build.Operations.Load(Build.GoalId.Value).GetTask(Build.GoalId, Build.TaskId).CompletionBuildEvidence;
+                    Assert.Equal(operation.Id, stored!.Id);
+                    Assert.Equal(CompletionBuildEvidencePhase.Pending, stored.Phase);
+                }, () => _completionLive = false);
+            },
+            probe: _ => _completionLive ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
+            stop: _ => _completionLive = false,
+            begin: (goal, child, id) => new GoalEvidenceOperationCoordinator(
+                new ReconcileSweepRemediationStore(Build.StatePath), Workspace.ExecutionDirectory,
+                TimeSpan.FromMinutes(10), () => DateTimeOffset.UtcNow, () => child.Pid, () => id,
+                () => child.StartedAt, new ControlledPidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName),
+            storageRoot: Build.Storage),
+        resolveWorkerBuildReceiptPath: _ => CompletionReceiptPath)
+        { WorkerBuildInvocations = Build.Operations };
+
+    internal void ReleaseCompletion()
+    {
+        var operation = Task.CompletionBuildEvidence!;
+        Assert.Equal(CompletionBuildEvidencePhase.Pending, operation.Phase);
+        Directory.CreateDirectory(Path.GetDirectoryName(operation.ResultPath)!);
+        File.WriteAllText(operation.ResultPath, JsonSerializer.Serialize(operation with
+        { Phase = CompletionBuildEvidencePhase.Success, BuildExitCode = 0, Diagnostic = "controlled host terminal result" }));
+        var scope = WorkerBuildProjectScope.ResolveForDispatch(Build.RepositoryRoot, [], Build.GoalId, Build.TaskId, Task.LastDispatch!);
+        var projectResults = operation.Projects.Select((project, index) =>
+        {
+            var logPath = Path.Combine(Build.Root, $"completion-project-{index}.log");
+            File.WriteAllText(logPath, "controlled host compiler success");
+            return new { project, exitCode = 0, logPath };
+        }).ToArray();
+        File.WriteAllText(CompletionReceiptPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1, treeDigest = operation.TreeDigest, digestAlgorithm = WorktreeTreeDigest.Algorithm,
+            buildOutcome = "success", generatedAtUtc = DateTimeOffset.UtcNow.ToString("O"),
+            worktreeRoot = operation.WorktreeRoot, configuration = "Debug", projects = operation.Projects,
+            scopeMetadataDigest = scope.MetadataDigest, projectResults
+        }));
+        _completionLive = false; // Explicit terminal signal, not elapsed-time pacing.
+    }
+
+    private sealed class ControlledPidProbe : IConductLockPidProbe
+    {
+        public bool IsRunning(int pid) => true;
+        public bool IsSameProcess(int pid, DateTimeOffset expectedStartedAt) => true;
     }
 
     internal int BatchRecovery(OrchestratorWorkspace? authority = null)

@@ -16,6 +16,13 @@ public sealed partial class AgentOrchestratorKernel
         _clock = clock ?? new SystemClock();
     }
 
+    private PlannerAcceptanceOwnershipProjection PlannerOwnership =>
+        new(_humanInputRequestLock, _clock, HumanInputRequests, (g, t, k, m) => Append(g, t, k, m));
+
+    internal string? ProjectAcceptedPlannerOwnership(Goal goal, TaskSpec task,
+        HumanInputDirectiveParseResult batch, int? briefVersion, DateTimeOffset recordedAt) =>
+        PlannerOwnership.Project(goal, task, batch, briefVersion, recordedAt);
+
     public void SetEventWriter(IGoalLifecycleEventWriter writer)
     {
         _eventWriter = writer ?? NullGoalLifecycleEventWriter.Instance;

@@ -66,6 +66,11 @@ internal sealed class PlannerEvidenceRecorder(
                     .SelectMany(directive => directive.TestNames ?? []), goal, task, declaredGateCheckSource);
             if (selectorDiagnostic is not null) return selectorDiagnostic;
 
+            // Requests are not authority. Validate the entire ownership delta now,
+            // but publish it only after the host accepts this Planner round.
+            var ownershipDiagnostic = PlanOwnership(goal, task, batch, dispatchBriefVersion, clock.UtcNow, out _);
+            if (ownershipDiagnostic is not null) return ownershipDiagnostic;
+
             foreach (var (directive, identity) in items)
             {
                 if (directive.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
@@ -90,5 +95,36 @@ internal sealed class PlannerEvidenceRecorder(
             blocksActiveWork = kernel.GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id);
         }
         return null;
+    }
+
+    internal static string? PlanOwnership(Goal goal, TaskSpec task, HumanInputDirectiveParseResult batch,
+        int? briefVersion, DateTimeOffset recordedAt, out IReadOnlyList<CriterionEvidenceObligation> changes)
+    {
+        changes = [];
+        if (batch.IsMalformed) return batch.Diagnostic;
+        if (task.RequiredRole != AgentRole.Planner || !goal.Tasks.Contains(task))
+            return "Planner ownership requires the goal's requesting Planner task.";
+        // Legacy/unbound requests retain their request semantics, never exemption authority.
+        if (briefVersion is null) return null;
+        if (briefVersion != goal.AuthoritativeBrief.Version)
+            return "Planner ownership belongs to an obsolete brief.";
+        var sources = new List<PlannerCriterionEvidenceSource>();
+        foreach (var directive in batch.Directives)
+        {
+            if (directive.PlannerEvidence is not { } payload || payload.CriterionIndex <= 0 ||
+                string.IsNullOrWhiteSpace(payload.EvidenceKey) || string.IsNullOrWhiteSpace(payload.Needed) ||
+                string.IsNullOrWhiteSpace(payload.Reason) || goal.RefinedSpec is not { } spec ||
+                payload.CriterionIndex > spec.AcceptanceCriteria.Count)
+                return "Planner ownership requires a valid structured directive within the authoritative criteria.";
+            if (!GateTestObligation.IsAcceptanceGateOwner(payload.Owner)) continue;
+            if (payload.Availability != "post-implementation" || payload.Store is not null || payload.StoreReference is not null ||
+                directive.Kind != HumanWaitKind.ProspectiveAcceptanceEvidence ||
+                !GateTestObligation.IsAcceptanceGateOwner(directive.EvidenceOwner) ||
+                (payload.Selectors is not null && (payload.Selectors.Count == 0 || payload.Selectors.Any(string.IsNullOrWhiteSpace))) ||
+                !(payload.Selectors ?? []).SequenceEqual(directive.TestNames ?? [], StringComparer.Ordinal))
+                return "Planner ownership requires a schema-valid post-implementation acceptance-gate directive.";
+            sources.Add(new(new(goal.Id.Value, task.Id.Value, briefVersion.Value, payload.CriterionIndex, payload.EvidenceKey), payload));
+        }
+        return goal.PlanPlannerAcceptanceOwnership(sources, recordedAt, out changes);
     }
 }

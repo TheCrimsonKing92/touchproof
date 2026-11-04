@@ -50,7 +50,15 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 OtherLiveGates = gate.OtherLiveGates?.Select(other => other with
                 {
                     Lanes = OwnerConsoleGateReproduction.Attach(other with { Lanes = LoadLanes(other.Lanes) }, reproductions)
-                }).ToArray()
+                }).ToArray(),
+                MemberViews = gate.MemberViews?.ToDictionary(pair => pair.Key, pair => Enrich(pair.Value)),
+                Executions = gate.Executions?.Select(Enrich).ToArray()
+            };
+
+            OwnerConsoleGateProgress Enrich(OwnerConsoleGateProgress snapshot) => snapshot with
+            {
+                Capacity = capacity,
+                Lanes = OwnerConsoleGateReproduction.Attach(snapshot with { Lanes = LoadLanes(snapshot.Lanes) }, reproductions)
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or

@@ -113,20 +113,20 @@ public sealed class OwnerConsoleGateLaneResolverTests
             Progress(-4, "verification-check", "PQ")
         ];
 
-        var board = OwnerConsoleGateProgress.Build(Now, events, Manifest(), history);
+        var board = OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest(), history);
 
         Assert.Collection(board.Lanes,
             row => AssertRow(row, "Remainder", OwnerConsoleGateLaneState.Done, 45, false, true, "local", 45),
-            row => AssertRow(row, "Remainder balance A", OwnerConsoleGateLaneState.Queued, 20, true, true, "local", 0),
+            row => AssertRow(row, "Remainder balance A", OwnerConsoleGateLaneState.Planned, 20, true, true, "", 0),
             row => AssertRow(row, "Process spawning", OwnerConsoleGateLaneState.Done, 30, false, true, "local", 30),
             row => AssertRow(row, "Process spawning host-bound", OwnerConsoleGateLaneState.Cached, 40, true, true, "local", 0),
-            row => AssertRow(row, "P", OwnerConsoleGateLaneState.Queued, 50, true, true, "local", 0),
-            row => AssertRow(row, "P: q", OwnerConsoleGateLaneState.Queued, 60, true, true, "local", 0),
+            row => AssertRow(row, "P", OwnerConsoleGateLaneState.Planned, 50, true, true, "", 0),
+            row => AssertRow(row, "P: q", OwnerConsoleGateLaneState.Planned, 60, true, true, "", 0),
             row => AssertRow(row, "core tests", OwnerConsoleGateLaneState.Running, 25, false, false, "local slot 2", 5),
             row => AssertRow(row, "PQ", OwnerConsoleGateLaneState.Running, null, true, false, "local", 4));
-        // Serial remaining: 20 + 50 + 60 + (25 - 5) = 150; fraction = 100 / 250.
-        Assert.Equal(0.4, board.Fraction);
-        Assert.Equal(150, board.RemainingSeconds);
+        // Serial remaining: 20 + 50 + 60 = 130; auxiliary checks do not enter scheduled ETA.
+        Assert.Equal(100d / 230, board.Fraction, 10);
+        Assert.Equal(130, board.RemainingSeconds);
         Assert.Equal(3, board.DoneCount);
         Assert.Equal(6, board.TotalCount);
     }
@@ -138,8 +138,8 @@ public sealed class OwnerConsoleGateLaneResolverTests
             Progress(-5, "check-complete", "X: shard")];
         OwnerConsoleGateDuration[] history = [new("X: shard", 12, Now)];
 
-        var first = OwnerConsoleGateProgress.Build(Now, events, [new("X", 100)], history);
-        var second = OwnerConsoleGateProgress.Build(Now, events, [new("Y", 200)], history);
+        var first = OwnerConsoleGatePlannedTestBuild.Build(Now, events, [new("X", 100)], history);
+        var second = OwnerConsoleGatePlannedTestBuild.Build(Now, events, [new("Y", 200)], history);
 
         var firstRow = Assert.Single(first.Lanes);
         Assert.Equal("X", firstRow.Name);

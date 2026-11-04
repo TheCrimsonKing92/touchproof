@@ -363,6 +363,12 @@ public sealed partial class AgentOrchestratorKernel
                     specLines.Add($"- {criterion}");
             }
             var acceptanceGateOwnedCriteria = refinedSpec.AcceptanceGateOwnedAcceptanceCriteria
+                .Concat(goal.CriterionEvidenceObligations.Where(item =>
+                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion?.Version &&
+                    item.Owner == CriterionEvidenceOwner.Acceptance && item.PlannerSources is { Count: > 0 } &&
+                    goal.HasCurrentPlannerExecutionAuthority(item))
+                    .Select(item => item.Criterion))
+                .Distinct(StringComparer.Ordinal)
                 .Where(criterion => !refinedSpec.OperatorOwnedAcceptanceCriteria.Contains(
                     criterion,
                     StringComparer.OrdinalIgnoreCase))
@@ -373,6 +379,8 @@ public sealed partial class AgentOrchestratorKernel
                 specLines.Add("ACCEPTANCE-GATE-OWNED criteria (the acceptance gate, not the worker, produces this evidence):");
                 foreach (var criterion in acceptanceGateOwnedCriteria)
                     specLines.Add($"- {criterion}");
+                if (goal.CriterionEvidenceObligations.Any(item => item.PlannerSources is { Count: > 0 }))
+                    specLines.Add("Only execution evidence is deferred. Reviewer must independently pass source, safety and preserved-behavior review, including compound criteria; any source defect remains blocking.");
             }
             if (refinedSpec.Decisions.Count > 0)
             {

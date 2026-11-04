@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 public sealed class MergeTrainGateProgressEventTests : AcceptanceCohortWorkflowTests
 {
@@ -46,7 +47,8 @@ public sealed class MergeTrainGateProgressEventTests : AcceptanceCohortWorkflowT
                 cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectTrainSelection(driver, goals);
 
-            var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive);
+            const string outer = "progress-test-grouped-attempt";
+            var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, outerAttemptId: outer);
 
             var receipt = Assert.IsType<MergeTrainReceipt>(result.Receipt);
             var duringAttempt = Assert.Single(verifier.EventsAfterProgress);
@@ -61,6 +63,35 @@ public sealed class MergeTrainGateProgressEventTests : AcceptanceCohortWorkflowT
                     record.Detail.Contains($"member={goalId}", StringComparison.Ordinal) &&
                     record.Detail.Contains($"members={orderedMembers}", StringComparison.Ordinal));
             }
+            Assert.Contains(duringAttempt, record => record.Detail.Contains("phase=execution-admitted", StringComparison.Ordinal));
+            Assert.All(duringAttempt.Where(record => record.EventKind == "gate-progress"), record =>
+            {
+                Assert.Contains("outer_attempt=" + outer, record.Detail);
+                Assert.Contains("train_identity=" + receipt.Identity.Value, record.Detail);
+                Assert.Contains(" execution=", record.Detail);
+            });
+            var replay = OwnerConsoleGateProgress.Build(duringAttempt.Max(record => record.Timestamp),
+                duringAttempt.Select(record => new OwnerConductEvent(record.Timestamp, record.EventKind, record.GoalId, record.Detail)), [], []);
+            Assert.Empty(replay.OtherLiveGates!); // Repeated per-member events are idempotent.
+            foreach (var member in receipt.Identity.Members)
+            {
+                var projection = Assert.IsType<OwnerConsoleGateProgress>(replay.ForMember(member.GoalId.Value));
+                Assert.Equal(outer, projection.OuterAttemptId);
+                Assert.Equal(receipt.Identity.Value, projection.TrainIdentity);
+                Assert.NotNull(projection.ExecutionId);
+                Assert.Equal(receipt.Identity.Members.Select(binding => binding.GoalId.Value), projection.Members.Select(binding => binding.Id));
+            }
+            var dropped = receipt.Identity.Members[^1].GoalId;
+            var at = duringAttempt.Max(record => record.Timestamp).AddSeconds(1);
+            var ejectionReplay = duringAttempt.Select(record => new OwnerConductEvent(record.Timestamp, record.EventKind, record.GoalId, record.Detail))
+                .Append(new(at, "gate-progress", dropped.Value,
+                    ConductorDriver.FormatTrainEjectionObservation(outer, receipt.Identity, dropped, MergeTrainEjectionReason.RedNewestMember)))
+                .Append(new(at.AddSeconds(1), "acceptance-cohort", dropped.Value,
+                    $"ACCEPTANCE_COHORT_INFLIGHT attempt={outer} members={orderedMembers} outcome=inflight"));
+            var afterEjection = OwnerConsoleGateProgress.Build(at.AddSeconds(1), ejectionReplay, [], []).ForMember(dropped.Value)!;
+            Assert.False(afterEjection.Live);
+            Assert.Equal("ejected / awaiting survivor", afterEjection.Participation);
+            Assert.Equal(receipt.Identity.Value, afterEjection.TrainIdentity);
         }
         finally
         {

@@ -6,14 +6,14 @@ internal static class OwnerGoalDetailGateLine
     {
         var members = gate.Members.Count;
         var text = $"{gate.Kind}, {members} {(members == 1 ? "member" : "members")}";
-        if (gate.TotalCount == 0) text += $", running {(int)gate.Elapsed.TotalMinutes}m";
+        if (!gate.Live && gate.Participation is not null) text += ", " + gate.Participation;
+        else if (!gate.ScheduleKnown) text += ", schedule unknown, ETA unknown";
         else
         {
-            var failed = gate.Lanes.Count(lane => !lane.IsAttribution &&
-                lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
-            var estimate = gate.Failing ? "failing" : OwnerConsoleGateFormatter.Remaining(gate.RemainingSeconds) + " left";
-            text += $", {gate.DoneCount}/{gate.TotalCount} lanes, {failed} failed, {estimate}";
+            var count = OwnerConsoleGateCount.Of(gate);
+            var estimate = gate.Failing ? "failing" : gate.HasEta ? OwnerConsoleGateFormatter.Remaining(gate.RemainingSeconds) + " left" : "ETA unknown";
+            text += $", {OwnerConsoleGateFormatter.CountText(gate)} lanes, {count.Failed} failed, {estimate}";
         }
-        return text + " (g opens the gate view)";
+        return text + OwnerConsoleGateFormatter.Identity(gate) + " (g opens the gate view)";
     }
 }
