@@ -31,8 +31,10 @@ internal static class GateTestSelectorDiagnosticPreparation
                     .Select(check => check.Project!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var rows = new List<ProspectiveEvidenceTrxRows.Row>();
                 string? unavailable = projects.Length == 0 ? "no scoped CSharp declaration projects" : null;
+                unavailable ??= UntrackedDeclarationInputs(worktree, projects);
                 foreach (var project in projects)
                 {
+                    if (unavailable is not null) break;
                     var declarations = reader.ReadProject(Path.GetDirectoryName(project) ?? ".");
                     if (declarations.Outcome is TestClassDeclarationOutcome.Unavailable or TestClassDeclarationOutcome.Unreadable)
                         unavailable = $"{project}: {declarations.Outcome}";
@@ -41,11 +43,16 @@ internal static class GateTestSelectorDiagnosticPreparation
                 }
                 var afterHead = GitCli.Run(worktree, "rev-parse", "HEAD");
                 var afterStatus = GitCli.Run(worktree, "status", "--porcelain", "--untracked-files=no");
-                if (afterHead.ExitCode != 0 || afterStatus.ExitCode != 0 || afterHead.Output != head.Output ||
-                    !string.IsNullOrWhiteSpace(afterStatus.Output)) unavailable = "candidate changed during declaration read";
+                var changed = afterHead.ExitCode != 0 || afterStatus.ExitCode != 0 || afterHead.Output != head.Output ||
+                    !string.IsNullOrWhiteSpace(afterStatus.Output);
+                if (changed) unavailable = "candidate changed during declaration read";
+                unavailable ??= UntrackedDeclarationInputs(worktree, projects);
                 // Class declarations cannot establish absence of a method or a non-CSharp identity.
                 evidence.Add(new(string.Join(", ", projects), "declared CSharp classes (class granularity only)",
-                    candidate, goal.AuthoritativeBrief.Version, unavailable, rows, [],
+                    candidate, goal.AuthoritativeBrief.Version, unavailable, rows, [], Complete: false));
+                // Command declarations remain usable without CSharp projects or readable CSharp sources.
+                evidence.Add(new(manifestPath, "declared manifest commands", candidate, goal.AuthoritativeBrief.Version,
+                    changed ? "candidate changed during declaration read" : null, [], [],
                     new(checks, new Dictionary<string, bool>(), false), Complete: false));
             }
             else evidence.Add(new(manifestPath, "declarations", candidate, goal.AuthoritativeBrief.Version,
@@ -79,12 +86,28 @@ internal static class GateTestSelectorDiagnosticPreparation
             return new(source.Id + ": " + string.Join(", ", source.Paths), "executed receipt", candidate, source.BriefVersion,
                 declared.UnavailableReason ?? ((declared.Applies ? declared.Rows.Count == 0 : rows.Length == 0)
                     ? "missing/empty applicable identity report" : null),
-                declared.Applies ? [] : rows, declared.Rows, source.Checks);
+                declared.Applies ? [] : rows, declared.Rows, source.Checks, EvaluatorSourceId: source.Id);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or JsonException or InvalidOperationException or ArgumentException or NotSupportedException)
         {
             return new(source.Id, "executed receipt", candidate, source.BriefVersion, "unreadable identity report: " + ex.GetType().Name, [], []);
         }
+    }
+
+    private static string? UntrackedDeclarationInputs(string worktree, IReadOnlyList<string> projects)
+    {
+        if (projects.Count == 0) return null;
+        // Include ignored inputs too: the filesystem reader observes them just like untracked files.
+        // Match its generated-directory exclusions without introducing another filesystem traversal.
+        var paths = projects.Select(project => (Path.GetDirectoryName(project) ?? ".").Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var result = GitCli.Run(worktree, ["ls-files", "--others", "-z", "--", .. paths,
+            ":(exclude,glob)**/bin/**", ":(exclude,glob)**/obj/**",
+            ":(exclude,glob)**/artifacts/**", ":(exclude,glob)**/.scratch/**"]);
+        if (result.ExitCode != 0) return "candidate declaration tracking unavailable";
+        return result.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Any(path =>
+            path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+            ? "untracked candidate declaration inputs" : null;
     }
 
     private static GateTestSelectorDiagnostic.Report? ReadReport(Goal goal, string? candidate)
@@ -103,9 +126,12 @@ internal static class GateTestSelectorDiagnosticPreparation
             ? EffectiveAcceptanceCriteriaVersion.IsCapturedHashCurrent(spec, goal.EffectiveAcceptanceCriteriaCorrections,
                 verification.AcceptanceCriteriaVersionHash)
             : verification.AcceptanceCriteriaVersionHash == EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal);
+        var dispatch = SubscriptionLimitEvidence.FindDispatchForVerification(selected.Task, verification);
+        current &= dispatch?.BriefVersion == goal.AuthoritativeBrief.Version;
         WorkerResultBlockers.TryFindTests(verification, out var tests);
         return new($"Developer task={selected.Task.Id.Value}; completed={verification.CompletedAt:O}; commit={commit}; " +
-            $"criteria_hash={verification.AcceptanceCriteriaVersionHash ?? "unknown"}", commit, current,
+            $"criteria_hash={verification.AcceptanceCriteriaVersionHash ?? "unknown"}; dispatch_brief={dispatch?.BriefVersion.ToString() ?? "unknown"}; " +
+            $"current_brief={goal.AuthoritativeBrief.Version}", commit, current,
             DeclaredTestEvidenceSelectors.FromDeveloperReport(tests));
     }
 }

@@ -151,6 +151,34 @@ public sealed class GateTestSelectorDiagnosticTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Project_LegacyRebind_RequiresItsOwnCurrentEvaluatorSource(bool stale)
+    {
+        using var f = new ProspectiveEvidenceGateFixture();
+        var kernel = GateTestObligationIntakeTests.Seed(f.Kernel, f.Goal, ["OldTests"]);
+        var goal = kernel.GetGoal(f.Goal.Id);
+        var answer = kernel.RecordAnsweredOperatorHumanInput(goal.Id, "Bind the class", "OldTests becomes NewTests");
+        var attempt = f.WriteAttempt([("NewTests.Check", "Passed")]);
+        var evaluated = GateTestObligationEvaluator.Evaluate(goal, f.OrchestratorDirectory, f.CandidateSha,
+            answeredRequests: kernel.HumanInputRequests);
+        var gate = Assert.Single(evaluated);
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Satisfied, gate.Outcome);
+        Assert.Equal(answer.Id.Value, Assert.Single(gate.AnswerRebinds!).RequestId);
+        var receipt = GateTestSelectorDiagnosticPreparation.ReadReceipt(new(attempt.Id, DateTimeOffset.UtcNow,
+            [attempt.TrxPath], stale ? goal.AuthoritativeBrief.Version - 1 : goal.AuthoritativeBrief.Version),
+            f.OrchestratorDirectory, f.CandidateSha);
+        Assert.Equal(gate.SourceId, receipt.EvaluatorSourceId);
+        var unrelated = Evidence(goal, f.CandidateSha, "OtherTests.Check") with { Complete = false };
+        var entry = Assert.Single(GateTestSelectorDiagnostic.Project(goal, f.CandidateSha,
+            [unrelated, receipt], null, kernel.HumanInputRequests, evaluated));
+        Assert.Equal(stale ? GateTestSelectorDiagnostic.Resolution.Unknown : GateTestSelectorDiagnostic.Resolution.Resolved,
+            entry.Status);
+        Assert.Equal(stale ? "OldTests" : "NewTests", entry.EffectiveSelector);
+        Assert.Equal(new[] { "OldTests" }, entry.OriginalSelectors);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void StaleReportCannotSupplySuggestions(bool staleCandidate)

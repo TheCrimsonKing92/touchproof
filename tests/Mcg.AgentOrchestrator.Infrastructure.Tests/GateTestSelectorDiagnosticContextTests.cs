@@ -97,6 +97,87 @@ public sealed class GateTestSelectorDiagnosticContextTests
         Assert.Contains("\"Status\":\"Unknown\"", changed);
     }
 
+    [Fact]
+    public void Build_CommandOnlyManifest_ResolvesDeclaredCommandWithoutExecution()
+    {
+        using var f = new Fixture(AgentRole.Tester, "npx eslint .", commandOnly: true);
+        var entry = BuildEntry(f);
+        Assert.Equal(GateTestSelectorDiagnostic.Resolution.Resolved, entry.Status);
+        Assert.Contains(entry.Evidence, text => text.Contains("declared manifest commands") && text.Contains("available/current"));
+        Assert.DoesNotContain(entry.Evidence, text => text.Contains("executed receipt"));
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Pending,
+            Assert.Single(GateTestObligationEvaluator.Evaluate(f.Goal, f.OrchestratorDirectory, f.Candidate)).Outcome);
+    }
+
+    [Fact]
+    public void Build_RevisedBriefWithUnchangedCriteria_ExcludesOldReportAssertions()
+    {
+        using var f = new Fixture(AgentRole.Tester);
+        var before = BuildEntry(f);
+        Assert.Contains(InvalidEvidence, before.DeveloperAssertions);
+        var hash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(f.Goal);
+        f.Kernel.ReviseGoalBrief(f.Goal.Id, "Revised diagnostic instructions with the same criteria");
+        Assert.Equal(2, f.Goal.AuthoritativeBrief.Version);
+        Assert.Equal(hash, EffectiveAcceptanceCriteriaVersion.ComputeForGoal(f.Goal));
+        var kernel = GateTestObligationIntakeTests.Seed(f.Kernel, f.Goal, [Prediction]);
+        var entry = BuildEntry(f, kernel.GetGoal(f.Goal.Id));
+        Assert.Empty(entry.DeveloperAssertions);
+        Assert.Empty(entry.Suggestions);
+        Assert.Contains("dispatch_brief=1; current_brief=2", entry.DeveloperReportSource);
+    }
+
+    [Fact]
+    public void Build_StaleEvaluatorReceiptAndUnrelatedCurrentDeclaration_RemainsUnknown()
+    {
+        using var f = new Fixture(AgentRole.Tester, csharpDeclarations: true);
+        f.WriteReceipt(1, Prediction + ".Check");
+        f.Kernel.ReviseGoalBrief(f.Goal.Id, "Revised diagnostic brief");
+        var kernel = GateTestObligationIntakeTests.Seed(f.Kernel, f.Goal, [Prediction]);
+        var goal = kernel.GetGoal(f.Goal.Id);
+        var evaluated = Assert.Single(GateTestObligationEvaluator.Evaluate(goal, f.OrchestratorDirectory, f.Candidate));
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Satisfied, evaluated.Outcome);
+        Assert.NotNull(evaluated.SourceId);
+        var entry = BuildEntry(f, goal);
+        Assert.Contains(entry.Evidence, text => text.Contains("declared CSharp classes") && text.Contains("available/current"));
+        Assert.Contains(entry.Evidence, text => text.Contains("executed receipt") && text.Contains("stale or unavailable brief binding"));
+        Assert.Equal(GateTestSelectorDiagnostic.Resolution.Unknown, entry.Status);
+        Assert.DoesNotContain(entry.Evidence, text => text.StartsWith("existing evaluator source="));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Build_UntrackedQualifyingDeclaration_CannotResolveCommittedCandidate(bool ignored)
+    {
+        using var f = new Fixture(AgentRole.Tester, csharpDeclarations: true);
+        var before = BuildEntry(f);
+        Assert.Equal(GateTestSelectorDiagnostic.Resolution.Unknown, before.Status);
+        Assert.Contains(before.Evidence, text => text.Contains("declared CSharp classes") && text.Contains("available/current"));
+        if (ignored) File.WriteAllText(Path.Combine(f.Root, ".git", "info", "exclude"), "tests/UntrackedTests.cs\n");
+        File.WriteAllText(Path.Combine(f.Root, "tests", "UntrackedTests.cs"),
+            $"public class {Prediction} {{ [Fact] public void Check() {{ }} }}");
+        if (ignored) Assert.Equal(0, GitCli.Run(f.Root, "check-ignore", "--quiet", "tests/UntrackedTests.cs").ExitCode);
+        Assert.Equal(f.Candidate, GitCli.Run(f.Root, "rev-parse", "HEAD").Output.Trim());
+        Assert.Empty(GitCli.Run(f.Root, "status", "--porcelain", "--untracked-files=no").Output.Trim());
+        var entry = BuildEntry(f);
+        Assert.Equal(GateTestSelectorDiagnostic.Resolution.Unknown, entry.Status);
+        Assert.Contains(entry.Evidence, text => text.Contains("untracked candidate declaration inputs"));
+        Assert.DoesNotContain(Prediction, entry.Suggestions);
+        File.Delete(Path.Combine(f.Root, "tests", "UntrackedTests.cs"));
+        // A declaration committed in the fixture does resolve through the same production boundary.
+        Assert.Equal(GateTestSelectorDiagnostic.Resolution.Resolved, BuildEntry(f, selector: "OtherTests").Status);
+    }
+
+    private static GateTestSelectorDiagnostic.Entry BuildEntry(Fixture f, Goal? goal = null, string? selector = null)
+    {
+        goal ??= f.Goal;
+        if (selector is not null)
+            goal = GateTestObligationIntakeTests.Seed(f.Kernel, goal, [selector]).GetGoal(goal.Id);
+        var lines = GateTestSelectorDiagnosticPreparation.Build(goal, f.Candidate, f.Root, f.OrchestratorDirectory, []);
+        Assert.Equal(2, lines.Count);
+        return JsonSerializer.Deserialize<GateTestSelectorDiagnostic.Entry>(lines[1][(GateTestSelectorDiagnostic.Marker.Length + 1)..])!;
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-selector-context", Guid.NewGuid().ToString("N"));
@@ -106,12 +187,27 @@ public sealed class GateTestSelectorDiagnosticContextTests
         internal TaskSpec Task { get; }
         internal string Candidate { get; }
 
-        internal Fixture(AgentRole role)
+        internal Fixture(AgentRole role, string selector = Prediction, bool commandOnly = false, bool csharpDeclarations = false)
         {
             Directory.CreateDirectory(Root);
             Assert.Equal(0, GitCli.Run(Root, "init", "--initial-branch=main").ExitCode);
             File.WriteAllText(Path.Combine(Root, "fixture.txt"), "diagnostic context");
-            Assert.Equal(0, GitCli.Run(Root, "add", "fixture.txt").ExitCode);
+            File.WriteAllText(Path.Combine(Root, ".gitignore"), ".orchestrator/\n.orchestrator-context/\nprompts/\n");
+            if (commandOnly || csharpDeclarations)
+            {
+                Directory.CreateDirectory(Path.Combine(Root, "config"));
+                File.WriteAllText(Path.Combine(Root, "config", "acceptance-manifest.json"), commandOnly
+                    ? """{"checks":[{"name":"lint","type":"command","command":"npx","arguments":["eslint","."]}]}"""
+                    : """{"checks":[{"name":"tests","type":"dotnet-test","project":"tests/Fixture.csproj"}]}""");
+            }
+            if (csharpDeclarations)
+            {
+                Directory.CreateDirectory(Path.Combine(Root, "tests"));
+                File.WriteAllText(Path.Combine(Root, "tests", "Fixture.csproj"), "<Project />");
+                File.WriteAllText(Path.Combine(Root, "tests", "OtherTests.cs"),
+                    "public class OtherTests { [Fact] public void Check() { } }");
+            }
+            Assert.Equal(0, GitCli.Run(Root, "add", ".").ExitCode);
             Assert.Equal(0, GitCli.Run(Root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                 "commit", "--quiet", "-m", "fixture").ExitCode);
             Candidate = GitCli.Run(Root, "rev-parse", "HEAD").Output.Trim();
@@ -120,24 +216,33 @@ public sealed class GateTestSelectorDiagnosticContextTests
             var target = new TaskSpec(TaskId.New(), "Inspect candidate evidence", role);
             var goal = kernel.CreateGoal("Surface predicted selector mismatch", [developer, target]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var dispatchedAt = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(goal.Id, developer.Id,
+                new TaskDispatchRecord("fixture", "implement", Root, dispatchedAt, BaseCommit: Candidate));
             kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord("fixture", Root, 0,
                 $"WORKER_RESULT:\nfiles: none\ncommands: inspect\ntests: deferred - {InvalidEvidence}, {Attribution}\n" +
-                $"commit: {Candidate}\nblockers: none\nassigned_scope_complete: true\nmodel_fit: adequate\nskills: none\nconfidence: high\nEND_WORKER_RESULT", "", DateTimeOffset.UtcNow));
+                $"commit: {Candidate}\nblockers: none\nassigned_scope_complete: true\nmodel_fit: adequate\nskills: none\nconfidence: high\nEND_WORKER_RESULT", "", DateTimeOffset.UtcNow,
+                DispatchStartedAt: dispatchedAt));
             Assert.Equal(WorkTaskStatus.Completed, developer.Status);
-            Kernel = GateTestObligationIntakeTests.Seed(kernel, goal, [Prediction]);
+            Kernel = GateTestObligationIntakeTests.Seed(kernel, goal, [selector]);
             Goal = Kernel.GetGoal(goal.Id);
             Task = Goal.Tasks.Single(task => task.RequiredRole == role);
+            if (!commandOnly && !csharpDeclarations) WriteReceipt(Goal.AuthoritativeBrief.Version, InvalidEvidence, Attribution);
+        }
+
+        internal void WriteReceipt(int briefVersion, params string[] identities)
+        {
             var directory = Path.Combine(OrchestratorDirectory, "acceptance-gate-attempts", Goal.Id.Value);
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "identities.trx"),
-                $"<TestRun><Results><UnitTestResult testName=\"{InvalidEvidence}\" outcome=\"Passed\"/>" +
-                $"<UnitTestResult testName=\"{Attribution}\" outcome=\"Passed\"/></Results></TestRun>");
+                "<TestRun><Results>" + string.Concat(identities.Select(identity =>
+                    $"<UnitTestResult testName=\"{identity}\" outcome=\"Passed\"/>")) + "</Results></TestRun>");
             File.WriteAllText(Path.Combine(directory, "fixture.attempt.json"), JsonSerializer.Serialize(new
             {
                 attemptId = "fixture", goalId = Goal.Id.Value, branchHeadSha = Candidate,
                 kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
                 outcome = ConductorParallelAcceptanceAttemptOutcome.Passed, completedAt = DateTimeOffset.UtcNow,
-                briefVersion = Goal.AuthoritativeBrief.Version, testResultPaths = new[] { "identities.trx" }
+                briefVersion, testResultPaths = new[] { "identities.trx" }
             }));
         }
 

@@ -13,7 +13,8 @@ internal static class GateTestSelectorDiagnostic
     internal sealed record Evidence(string Source, string Kind, string? Candidate, int? BriefVersion,
         string? UnavailableReason, IReadOnlyList<ProspectiveEvidenceTrxRows.Row> Rows,
         IReadOnlyList<DeclaredTestReportRows.Row> DeclaredRows,
-        ProspectiveEvidenceGateResolver.GateCheckOutcomes? Checks = null, bool Complete = true);
+        ProspectiveEvidenceGateResolver.GateCheckOutcomes? Checks = null, bool Complete = true,
+        string? EvaluatorSourceId = null);
     internal sealed record Report(string Source, string? Candidate, bool CurrentBrief,
         IReadOnlyList<string> Assertions);
     internal sealed record Entry(string ObligationId, int? CriterionIndex, string? PlannerIdentity,
@@ -64,10 +65,12 @@ internal static class GateTestSelectorDiagnostic
                         GateCheckSelectorMatcher.Matches(selector, check)) == true);
                 // Preserve the evaluator's authorized legacy rebind/rename semantics, including provenance.
                 var gate = evaluated?.FirstOrDefault(result => result.Obligation.Id == obligation.Id);
-                if (gate is { Outcome: GateTestObligationEvaluator.Outcome.Satisfied } && current.Count > 0)
+                var currentGate = gate is { Outcome: GateTestObligationEvaluator.Outcome.Satisfied, SourceId: not null } &&
+                    current.Any(source => source.EvaluatorSourceId == gate.SourceId);
+                if (currentGate)
                 {
                     matched = true;
-                    descriptions.Add($"existing evaluator source={gate.SourceId}; {gate.AnswerRebindProvenance}; {gate.RenameProvenance}");
+                    descriptions.Add($"existing evaluator source={gate!.SourceId}; {gate.AnswerRebindProvenance}; {gate.RenameProvenance}");
                 }
                 var status = matched ? Resolution.Resolved : current.Any(source => source.Complete)
                     ? Resolution.Unresolved : Resolution.Unknown;
@@ -82,7 +85,7 @@ internal static class GateTestSelectorDiagnostic
                     identities.Concat(assertions.Select(name =>
                         new DeclaredTestReportRows.Row(name, name, [], "NotExecuted", "Developer assertion"))).ToArray(), 5);
                 var total = identities.Select(row => row.Identity).Concat(assertions).Distinct(StringComparer.Ordinal).Count();
-                var effectiveSelector = gate is { Outcome: GateTestObligationEvaluator.Outcome.Satisfied, AnswerRebinds.Count: > 0 }
+                var effectiveSelector = currentGate && gate is { AnswerRebinds.Count: > 0 }
                     ? string.Join('.', selector.Split('.').Select(segment =>
                         gate.AnswerRebinds.FirstOrDefault(rebind => rebind.OldClass == segment)?.NewClass ?? segment))
                     : selector;
