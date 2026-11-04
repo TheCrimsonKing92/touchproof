@@ -121,6 +121,11 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             await AssertAppliedOnce(seed);
             Assert.Equal(competingObjective, (await seed.Repository.LoadGoalAsync(seed.GoalId, TestContext.Current.CancellationToken))!.Objective);
             Assert.False(File.Exists(LockPath(seed)));
+
+            Assert.IsType<OperatorIntentOfflineOutcome.NothingPending>(
+                await OperatorIntentGoalApplication.ApplyOffline(
+                    seed.Workspace, seed.Repository, new OperatorIntentCoordinator(seed.Store), seed.Attempts, seed.GoalId));
+            await AssertAppliedOnce(seed);
         }
         finally
         {
@@ -131,7 +136,9 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
     private static async Task AssertAppliedOnce(Seed seed)
     {
         Assert.Equal(OperatorIntentStatus.Applied, (await seed.Store.GetAsync(seed.Intent.Id))!.Status);
-        var stored = (await seed.Repository.LoadGoalAsync(seed.GoalId))!;
+        // Raw snapshots compact authoritative text; inspect the hydrated receipt after reload.
+        var restored = await seed.Repository.LoadGoalsAsync([seed.GoalId]);
+        var stored = restored.GetGoal(seed.GoalId);
         var marker = Assert.Single(stored.Timeline, item => item.OperatorIntentApplied?.IntentId == seed.Intent.Id);
         Assert.Equal("applied", marker.OperatorIntentApplied!.Outcome);
         var task = Assert.Single(stored.Tasks);
@@ -139,10 +146,18 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
         Assert.Equal(payload.Status, task.Status);
         if (payload.CompletionVerification is { } request)
         {
+            Assert.Single(stored.Timeline, item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskCompleted);
             var receipt = Assert.Single(task.VerificationHistory!);
             Assert.Equal(request.Note, receipt.AuthoritativeStandardOutput);
             Assert.Equal("manual-verification passed", receipt.Command);
             Assert.Equal(VerificationEvidenceSource.Manual, receipt.EvidenceSource);
+            Assert.Equal(request.WorkingDirectory, receipt.WorkingDirectory);
+            Assert.Equal(seed.Intent.CreatedAt, receipt.CompletedAt);
+            Assert.True(receipt.Succeeded);
+            Assert.Equal(seed.Intent.Actor, marker.OperatorIntentApplied.Actor);
+            Assert.Equal(seed.Intent.ActorKind, marker.OperatorIntentApplied.ActorKind);
+            Assert.Equal(seed.Intent.Channel, marker.OperatorIntentApplied.Channel);
+            Assert.Equal(seed.Intent.AuthenticationAssurance, marker.OperatorIntentApplied.AuthenticationAssurance);
         }
     }
 

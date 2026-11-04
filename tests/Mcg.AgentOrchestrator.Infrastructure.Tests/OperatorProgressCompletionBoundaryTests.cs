@@ -107,6 +107,8 @@ public sealed class OperatorProgressCompletionBoundaryTests
             CriterionEvidenceOwner.Acceptance, "operator", "acceptance:full-gate",
             expectedCandidateSha: new string('a', 40));
         var obligationBefore = JsonSerializer.Serialize(obligation);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Equal(obligation, Assert.Single(fixture.Goal.LandingPrerequisiteObligations));
         var decisions = CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory);
         const string manifest = "config/acceptance-manifest.json";
         Directory.CreateDirectory(Path.Combine(fixture.Root, "config"));
@@ -127,7 +129,15 @@ public sealed class OperatorProgressCompletionBoundaryTests
         Assert.False(ProtectedGate().OwnerApprovalSatisfied);
         Assert.False(OwnerProtectedConfigurationPolicy.HasOwnerPolicyApprovalForTests(
             decisions, fixture.GoalId, new string('a', 40)));
-        Assert.NotEqual(GoalStatus.Verified, fixture.Goal.Status);
+        // Verified makes the task ready for acceptance; the pending criterion still blocks completion.
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        Assert.Equal(obligation, Assert.Single(fixture.Goal.LandingPrerequisiteObligations));
+        var refusal = Assert.Throws<InvalidOperationException>(() =>
+            fixture.Kernel.CompleteGoal(fixture.GoalId, "Operator attested the task."));
+        Assert.Equal(
+            $"Goal '{fixture.GoalId}' cannot complete while criterion evidence obligations remain outstanding: {obligation.DisplayLabel}:Acceptance:Pending.",
+            refusal.Message);
+        Assert.Empty(fixture.Goal.EffectiveAcceptanceCriteriaCorrections);
         Assert.NotEqual(GoalStatus.Completed, fixture.Goal.Status);
         Assert.Null(fixture.Task.LastExecution);
     }
