@@ -832,7 +832,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             failureAttributionRequests[index] = (check, manifestCheck);
         }
 
-        SoloAcceptanceFailureReceipt? soloFailureReceipt = null;
+        var soloFailure = new SoloAcceptanceFailureCapture(executionOwner.Identity);
         var attributedChecks = await AttachTestFailureAttributionsBatchAsync(
             failureAttributionRequests,
             engineSettings,
@@ -843,8 +843,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken,
             failureAttributionBudget,
             changedFiles,
-            (results, baseline, bindings) => soloFailureReceipt = SoloAcceptanceFailureEvidenceWriter.Capture(
-                executionOwner.Identity, baseline.Sha, results, baseline, bindings)).ConfigureAwait(false);
+            soloFailure.Capture).ConfigureAwait(false);
         for (var index = 0; index < attributedChecks.Count; index++)
         {
             checks[index] = attributedChecks[index];
@@ -868,7 +867,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TestResultPaths: testResultPaths)
         {
             AttemptId = executionOwner.Identity.AttemptId,
-            SoloFailureReceipt = soloFailureReceipt,
+            SoloFailureReceipt = soloFailure.Receipt,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
@@ -988,7 +987,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 !manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(manifestCheck.Project))
             {
-                results[index] = Unattributed(
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     check,
                     identities,
                     "acceptance check has no exact dotnet-test project mapping");
@@ -1001,7 +1000,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (selectors.Any(selector => selector.Length == 0 ||
                     !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
             {
-                results[index] = Unattributed(
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     check,
                     identities,
                     "failing test identity cannot be represented by an exact focused selector");
@@ -1012,7 +1011,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
             if (!selectionPlan.Succeeded)
             {
-                results[index] = Unattributed(check, identities, selectionPlan.FailureEvidence!);
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(check, identities, selectionPlan.FailureEvidence!);
                 continue;
             }
 
@@ -1064,7 +1063,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var item in prepared)
             {
-                results[item.Index] = Unattributed(
+                results[item.Index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     item.Check,
                     item.IdentitySelection.All,
                     $"focused baseline execution failed: {ex.GetType().Name}");
@@ -1094,19 +1093,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             item.IdentitySelection.Selected.Select(identity => new SoloAcceptanceCheckBinding(item.Check.Name,
                 identity, item.SelectionPlan.CheckNamesBySelector[AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity)]))).ToArray());
         return results;
-
-        static AcceptanceCheckResult Unattributed(
-            AcceptanceCheckResult check,
-            IReadOnlyList<string> identities,
-            string evidence) => check with
-        {
-            FailingTestAttributions = identities
-                .Select(identity => new AcceptanceTestFailureAttribution(
-                    identity,
-                    AcceptanceTestFailureOrigin.Unattributed,
-                    evidence))
-                .ToArray()
-        };
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check) =>

@@ -862,15 +862,8 @@ public sealed partial class AgentOrchestratorKernel
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        task.RecordCriterionRetryFeedback(feedback);
-        task.IncrementCriterionRetryCount();
-        goal.IncrementAutomaticAcceptanceRetryCount();
-        return goal.AutomaticAcceptanceRetryCount;
-    }
+    public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback) =>
+        AcceptanceRetryFeedbackRecorder.Record(GetGoal(goalId), taskId, feedback);
 
     public void RecordAcceptanceFailure(
         GoalId goalId,

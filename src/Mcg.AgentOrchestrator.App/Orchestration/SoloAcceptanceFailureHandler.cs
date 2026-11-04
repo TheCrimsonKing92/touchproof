@@ -4,14 +4,26 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed partial class ConductorDriver
+/// <summary>Owns solo failure retention, evidence admission, retry accounting and inspectable holds.</summary>
+internal sealed class SoloAcceptanceFailureHandler(
+    Func<AgentOrchestratorKernel?> kernelReader,
+    Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?> recordFailure,
+    Func<DateTimeOffset> utcNow,
+    Func<Goal, SoloAcceptanceConsumptionContext?> readContext,
+    Func<GoalId, TaskId, IReadOnlyList<string>, int> recordRetryFeedback,
+    Func<Goal, string, ConductorAutonomyPolicy, AttributedFailureRouteDecision, ConductorAdvanceResult> routeFailure,
+    Action<Goal, GoalLifecycleState, string> recordEscalation)
 {
-    internal Func<Goal, SoloAcceptanceConsumptionContext?>? SoloAcceptanceContextReader { get; set; }
+    internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
+    {
+        Record(goal, acceptance);
+        return Hold(goal, prefix, policy, "solo-evidence-awaiting-consumption");
+    }
 
-    private void RecordSoloAcceptanceFailure(Goal goal, AcceptanceVerificationSummary acceptance)
+    private void Record(Goal goal, AcceptanceVerificationSummary acceptance)
     {
         var checks = acceptance.FailedChecks ?? acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
-        var kernel = _cohortKernel ?? _conductorTickKernel;
+        var kernel = kernelReader();
         if (kernel is not null)
         {
             kernel.RecordAcceptanceFailure(goal.Id, checks, acceptance.BranchHeadSha, acceptance.MainHeadSha,
@@ -20,32 +32,31 @@ internal sealed partial class ConductorDriver
         }
         else
         {
-            _recordAcceptanceFailure(goal, checks, acceptance.BranchHeadSha, acceptance.MainHeadSha,
+            recordFailure(goal, checks, acceptance.BranchHeadSha, acceptance.MainHeadSha,
                 acceptance.CheckAttributions, acceptance.BaselineAttestation);
-            goal.RecordAcceptanceFailure(checks, _utcNow(), acceptance.BranchHeadSha, acceptance.MainHeadSha,
+            goal.RecordAcceptanceFailure(checks, utcNow(), acceptance.BranchHeadSha, acceptance.MainHeadSha,
                 acceptance.CheckAttributions, acceptance.BaselineAttestation, acceptance.AttemptId, acceptance.SoloFailureReceipt);
         }
     }
 
-    private ConductorAdvanceResult RouteSoloAcceptanceFailure(Goal goal, string prefix, ConductorAutonomyPolicy policy)
+    internal ConductorAdvanceResult Route(Goal goal, string prefix, ConductorAutonomyPolicy policy)
     {
-        var current = SoloAcceptanceContextReader is { } reader ? reader(goal) : ReadSoloAcceptanceContext(goal);
+        var current = readContext(goal);
         var evidence = SoloAcceptanceFailureReceiptReader.Read(goal, current);
         var route = AttributedFailureDeveloperRoute.Decide(goal, evidence.Failure, current?.CandidateSha);
         if (!route.IsRoute)
-            return HoldSoloAcceptanceFailure(goal, prefix, policy, evidence.Failure is null ? evidence.Reason : route.DeclineReason!);
+            return Hold(goal, prefix, policy, evidence.Failure is null ? evidence.Reason : route.DeclineReason!);
         if (goal.AutomaticAcceptanceRetryCount >= policy.MaxCriterionRetries)
-            return HoldSoloAcceptanceFailure(goal, prefix, policy, "solo-acceptance-retry-cap");
+            return Hold(goal, prefix, policy, "solo-acceptance-retry-cap");
         // The existing accounting and route marker are included in the dispatch
         // checkpoint before any worker starts. Replay never charges another retry.
-        _recordCriterionRetryFeedback(goal.Id, route.DeveloperTaskId!, [route.Feedback!]);
-        return RouteAttributedFailure(goal, prefix, policy, route);
+        recordRetryFeedback(goal.Id, route.DeveloperTaskId!, [route.Feedback!]);
+        return routeFailure(goal, prefix, policy, route);
     }
 
-    private SoloAcceptanceConsumptionContext? ReadSoloAcceptanceContext(Goal goal)
+    internal static SoloAcceptanceConsumptionContext? ReadContext(Goal goal, string? executionDirectory, GateReadyCandidateRevisionPair? revisions)
     {
-        var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
-        var revisions = ReadCurrentCohortAttributionRevisions(goal);
+        var path = executionDirectory is null ? null : GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         if (path is null || revisions is null) return null;
         string? Read(params string[] args)
         {
@@ -57,14 +68,14 @@ internal sealed partial class ConductorDriver
         return tree is null || baseline is null ? null : new(revisions.BranchRevision, revisions.MainRevision, tree, baseline);
     }
 
-    private ConductorAdvanceResult HoldSoloAcceptanceFailure(Goal goal, string prefix, ConductorAutonomyPolicy policy, string reason)
+    internal ConductorAdvanceResult Hold(Goal goal, string prefix, ConductorAutonomyPolicy policy, string reason)
     {
         var failure = goal.LatestAcceptanceFailure ?? goal.RetainedAcceptanceFailure;
         var receipt = failure?.SoloFailureReceipt;
         var detail = $"Solo acceptance correction held: {reason}; attempt={failure?.AttemptId ?? "absent"}; " +
             $"evidence={receipt?.Evidence?.Path ?? "absent"}; sha256={receipt?.Evidence?.Sha256 ?? "absent"}";
-        RecordEscalation(goal, GoalLifecycleState.AcceptanceFailed, detail);
-        return MakeResult(goal.Id.Value, prefix, policy,
+        recordEscalation(goal, GoalLifecycleState.AcceptanceFailed, detail);
+        return new(goal.Id.Value, prefix, policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.AcceptanceFailed, detail));
     }
 }

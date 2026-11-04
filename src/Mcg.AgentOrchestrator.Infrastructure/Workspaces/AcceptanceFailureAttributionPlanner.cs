@@ -22,6 +22,19 @@ internal sealed class CandidateFailureRerunner(
 
 internal static class AcceptanceFailureAttributionPlanner
 {
+    internal static AcceptanceCheckResult Unattributed(
+        AcceptanceCheckResult check,
+        IReadOnlyList<string> identities,
+        string evidence) => check with
+    {
+        FailingTestAttributions = identities
+            .Select(identity => new AcceptanceTestFailureAttribution(
+                identity,
+                AcceptanceTestFailureOrigin.Unattributed,
+                evidence))
+            .ToArray()
+    };
+
     internal const int MaxCandidateRerunIdentities = 10;
 
     internal sealed record CandidateSelectionPlan(

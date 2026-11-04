@@ -66,3 +66,13 @@ internal static class SoloAcceptanceFailureEvidenceWriter
 
     internal static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
+
+/// <summary>Owns the attempt-scoped capture callback and its completed receipt.</summary>
+internal sealed class SoloAcceptanceFailureCapture(AcceptanceAttemptIdentity identity)
+{
+    internal SoloAcceptanceFailureReceipt? Receipt { get; private set; }
+
+    internal void Capture(IReadOnlyList<AcceptanceCheckResult> checks,
+        FocusedEvidenceArmRunResult baseline, IReadOnlyList<SoloAcceptanceCheckBinding> bindings) =>
+        Receipt = SoloAcceptanceFailureEvidenceWriter.Capture(identity, baseline.Sha, checks, baseline, bindings);
+}

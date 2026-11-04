@@ -11,20 +11,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record PreReviewEvidenceContext(
-    string? CandidateSha,
-    IReadOnlyList<string> SelectedFocusedTests,
-    string? FocusedRequest,
-    string MappingReason,
-    bool NoApplicableTests,
-    bool MappingNeedsInput,
-    IReadOnlyList<string>? SourceCleanupPaths = null,
-    RepositoryTestImpactDegradation? TestImpactDegradation = null,
-    RepositoryTestImpactHeadroom? TestImpactHeadroom = null)
-{
-    public bool RequiresSourceCleanup => SourceCleanupPaths is { Count: > 0 };
-}
-
 internal sealed record WorkerAdmissionSnapshot(
     int ConfiguredWorkerCap,
     int AdmissionCapacity,
@@ -63,9 +49,6 @@ internal sealed partial class ConductorDriver
     private const string ReviewContractRepairRetryMessagePrefix = "review-finding contract-repair:";
     private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
         [FindingEvidenceRetryMessagePrefix, ReviewContractRepairRetryMessagePrefix];
-    private static readonly Regex AcceptanceRetryEvidencePattern = new(
-        @"error CS\d+|error MSB\d+|\[FAIL\]",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
@@ -1325,6 +1308,13 @@ internal sealed partial class ConductorDriver
         return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
     }
 
+    internal Func<Goal, SoloAcceptanceConsumptionContext?>? SoloAcceptanceContextReader { get; set; }
+    private SoloAcceptanceFailureHandler SoloAcceptanceFailure => new(
+        () => _cohortKernel ?? _conductorTickKernel, _recordAcceptanceFailure, _utcNow,
+        goal => SoloAcceptanceContextReader is { } reader ? reader(goal) :
+            SoloAcceptanceFailureHandler.ReadContext(goal, _executionDirectory, ReadCurrentCohortAttributionRevisions(goal)),
+        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation);
+
     internal EnvironmentContractGate? EnvironmentGate { get; set; }
 
     public ConductorAdvanceResult AdvanceOnce(
@@ -1349,7 +1339,7 @@ internal sealed partial class ConductorDriver
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
         if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
-            return HoldSoloAcceptanceFailure(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
+            return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
         try
         {
             _resolveParkedWaitEscalations(goal, state);
@@ -1375,7 +1365,7 @@ internal sealed partial class ConductorDriver
         if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
         if (state == GoalLifecycleState.AcceptanceFailed &&
             (goal.LatestAcceptanceFailure?.SoloFailureReceipt is not null || goal.LatestAcceptanceFailure?.AttemptId is not null))
-            return RouteSoloAcceptanceFailure(goal, goalPrefix, policy);
+            return SoloAcceptanceFailure.Route(goal, goalPrefix, policy);
         return state switch
         {
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),
