@@ -306,38 +306,19 @@ internal sealed partial class ConductorDriver
             ProjectJournalFacts(GoalOperationJournal.ReadActive(dir, goalId));
         void RefreshJournal(GoalId goalId) =>
             journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
-        var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
-        var goalEvidenceOperationCoordinator = new GoalEvidenceOperationCoordinator(
-            evidenceMutationLeaseStore,
-            dir,
-            EvidenceMutationLeaseDuration,
-            pidProbe: new ConductLockPidProbe());
-        _tryBeginDeveloperIntegrationEvidenceOperation = goal =>
-            goalEvidenceOperationCoordinator.TryBegin(goal, "conductor:developer-branch-integration");
-        _tryRecoverTerminalDeveloperIntegrationLease = goal =>
-            goalEvidenceOperationCoordinator.TryRecoverTerminal(goal);
-        _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
-            goal.Id.Value,
-            EvidenceMutationLeaseDuration);
-        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
-        {
-            _tryRecoverTerminalDeveloperIntegrationLease(goal);
-            var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
-            return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
-                goal.Id.Value,
-                owner,
-                EvidenceMutationLeaseDuration);
-        }
-        _tryAcquireEvidenceMutationLease = AcquireEvidenceMutationLease;
-        var hasRecoveryGateOwner = GoalLiveAcceptancePredicate.ForWorkspace(workspace, requireWorkspaceSettlement: true);
-        _prepareMissingWorkspace = goal => ConductorMissingWorktreeRecovery.Prepare(
-            dir, goal, goalEvidenceOperationCoordinator, () => kernel.Goals.ToArray(), hasRecoveryGateOwner,
-            _cohortCleanupHooks, path =>
+        var workspacePreparation = new ConductorWorkspacePreparation(
+            workspace, EvidenceMutationLeaseDuration, () => kernel.Goals.ToArray(), _cohortCleanupHooks,
+            (goal, path) =>
             {
                 worktreeSnapshot[goal.Id] = path;
                 RefreshJournal(goal.Id);
             });
+        _tryBeginDeveloperIntegrationEvidenceOperation = workspacePreparation.BeginDeveloperIntegration;
+        _tryRecoverTerminalDeveloperIntegrationLease = workspacePreparation.Coordinator.TryRecoverTerminal;
+        _getEvidenceMutationLease = workspacePreparation.ReadLease;
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _tryAcquireEvidenceMutationLease = workspacePreparation.AcquireMutationLease;
+        _prepareMissingWorkspace = workspacePreparation.PrepareMissing;
         void RecordMissingBranchRetirement(Goal goal, string detail)
         {
             GoalOperationJournal.RecordTerminalDisposition(
@@ -378,27 +359,11 @@ internal sealed partial class ConductorDriver
                 return state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified;
             });
 
-        _createWorkspace = goal =>
-        {
-            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:workspace-create")
-                ?? throw new EvidenceMutationLeaseUnavailableException(
-                    $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation=conductor:workspace-create reason=concurrent-acceptance-or-replacement");
-            GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
-            var hasWorkspaceHistory = goal.Tasks.Any(task => task.LastDispatch is not null) ||
-                GoalOperationJournal.ReadStrict(dir, goal.Id).Entries.Any(entry => entry.Status == GoalOperationStatus.Completed &&
-                    entry.Operation is "conductor:workspace-create" or ConductorMissingWorktreeRecovery.Operation);
-            var path = GoalWorktrees.PrepareForDispatch(dir, goal.Id, allowInitialCreation: !hasWorkspaceHistory,
-                () => ConductorMissingWorktreeRecovery.OwnerRefusal(goal.Id, kernel.Goals.ToArray(), hasRecoveryGateOwner),
-                receipt => ConductorMissingWorktreeRecovery.RecordReceipt(dir, goal, receipt), _cohortCleanupHooks);
-            GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
-            worktreeSnapshot[goal.Id] = path;
-            RefreshJournal(goal.Id);
-            return path;
-        };
+        _createWorkspace = workspacePreparation.Create;
 
         DispatchStartOutcome DispatchAndStart(Goal goal, ConductorAutonomyPolicy policy, GoalEvidenceOperationScope? workspaceOwnership)
         {
-            using var evidenceMutationLease = workspaceOwnership is null ? AcquireEvidenceMutationLease(goal, "conductor:dispatch") : null;
+            using var evidenceMutationLease = workspaceOwnership is null ? _tryAcquireEvidenceMutationLease(goal, "conductor:dispatch") : null;
             if (evidenceMutationLease is null && workspaceOwnership is null)
             {
                 return DispatchStartOutcome.Deferred(
@@ -471,7 +436,7 @@ internal sealed partial class ConductorDriver
 
         DispatchStartOutcome StartRecordedDispatches(Goal goal, ConductorAutonomyPolicy policy, GoalEvidenceOperationScope? workspaceOwnership)
         {
-            using var evidenceMutationLease = workspaceOwnership is null ? AcquireEvidenceMutationLease(goal, "conductor:dispatch-start") : null;
+            using var evidenceMutationLease = workspaceOwnership is null ? _tryAcquireEvidenceMutationLease(goal, "conductor:dispatch-start") : null;
             if (evidenceMutationLease is null && workspaceOwnership is null)
             {
                 return DispatchStartOutcome.Deferred(
