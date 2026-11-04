@@ -18,6 +18,7 @@ internal sealed record OrchestratorBuildEvidenceResolution(
     string Diagnostic,
     CompletionBuildEvidenceOperation? Operation = null)
 {
+    internal WorkerBuildApplicabilityExplanation? Applicability { get; init; }
     public bool Pending => Operation?.IsPending == true;
     public bool FailsRound => MissingEvidence || BuildFailed;
 
@@ -37,6 +38,11 @@ internal sealed record OrchestratorBuildEvidenceResolution(
                 combined,
                 DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
         }
+
+        // Keep this block adjacent to the final host marker so failure-detail extraction
+        // cannot mistake preceding worker-authored reasons for the host explanation.
+        if (Applicability is not null)
+            combined = Append(combined, WorkerBuildApplicabilityFormatter.Format(Applicability));
 
         return combined;
     }
