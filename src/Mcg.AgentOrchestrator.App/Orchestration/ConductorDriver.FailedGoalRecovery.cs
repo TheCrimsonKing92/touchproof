@@ -65,10 +65,8 @@ internal sealed partial class ConductorDriver
                 facts = facts.WithVerifyingFindingObservation(verifyingFindingObservation);
             decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         }
-        if (TryHoldCompletionBuildEvidence(goal, goalPrefix, policy, state, decision, pendingNotes) is { } completionHold)
-            return completionHold;
-        if (TryHoldUnverifiedWorkerBuildChannel(goal, goalPrefix, policy, state, decision, pendingNotes) is { } channelHold)
-            return channelHold;
+        if (TryHoldWorkerBuildEvidence(goal, goalPrefix, policy, state, decision, pendingNotes) is { } buildHold)
+            return buildHold;
         if (decision.Action is (FailedGoalRecoveryAction.CriterionRetry or FailedGoalRecoveryAction.Escalate) &&
             TryRecoverFailedWorkerBuildCheck(goal, goalPrefix, policy, state, decision, pendingNotes) is { } buildRecovery)
             return buildRecovery;
@@ -280,7 +278,7 @@ internal sealed partial class ConductorDriver
             goal.AutomaticAcceptanceRetryCount,
             policy.MaxCriterionRetries,
             maxTransientAttempts,
-            BuildFailedGoalRecoveryContextVersion(goal, state),
+            FailedGoalRecoveryContextVersion.Build(goal, state),
             taskFacts,
             BuildTerminalEscalationReason(goal, state),
             transientAttemptsPerCycle: policy.MaxEmptyOutputDispatchRetries,
@@ -317,32 +315,6 @@ internal sealed partial class ConductorDriver
 
     internal static string BuildFailedGoalAttemptIdentity(TaskSpec task) =>
         FailedGoalFindingObservation.BuildAttemptIdentity(task);
-
-    private static string BuildFailedGoalRecoveryContextVersion(Goal goal, GoalLifecycleState state)
-    {
-        var taskState = string.Join(
-            ";",
-            goal.Tasks.Select(task => string.Join(
-                ":",
-                task.Id.Value,
-                task.Status,
-                task.EmptyOutputRetryCount,
-                task.CriterionRetryCount,
-                BuildFailedGoalAttemptIdentity(task),
-                task.LastVerification?.CompletedAt.UtcTicks.ToString() ?? "none")));
-        var lastEvent = goal.Timeline.LastOrDefault();
-        return string.Join(
-            "|",
-            goal.Id.Value,
-            goal.Status,
-            state,
-            goal.AuthoritativeBrief.Version,
-            goal.AutomaticAcceptanceRetryCount,
-            goal.Timeline.Count,
-            lastEvent?.Kind.ToString() ?? "none",
-            lastEvent?.OccurredAt.UtcTicks.ToString() ?? "none",
-            taskState);
-    }
 
     private static string ShortTaskId(TaskId taskId) => taskId.Value[..Math.Min(8, taskId.Value.Length)];
 

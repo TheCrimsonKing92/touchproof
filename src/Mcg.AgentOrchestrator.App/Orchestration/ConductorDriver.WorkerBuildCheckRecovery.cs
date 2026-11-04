@@ -16,59 +16,17 @@ internal sealed partial class ConductorDriver
     internal void UseWorkerBuildCapacityReader(Func<WorkerBuildCapacitySnapshot> reader) =>
         _workerBuildCapacityReader = reader;
 
-    private ConductorAdvanceResult? TryHoldCompletionBuildEvidence(
+    private ConductorAdvanceResult? TryHoldWorkerBuildEvidence(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
         FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)
     {
-        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Status == WorkTaskStatus.Failed &&
-            candidate.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
-            candidate.LastVerification is { } verification &&
-            (verification.OrchestratorFailureReason == "completion-build-coordinator-unavailable" ||
-             DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(TaskOutcomeClassifier.TryExtractRule(
-                 DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt)) &&
-             candidate.CompletionBuildEvidence is { IsPending: false, Phase: not CompletionBuildEvidencePhase.CompilerFailure } &&
-             BackgroundDispatchRunner.HasCurrentCompletionBuildWorker(candidate)));
-        if (task is null) return null;
+        var hold = WorkerBuildEvidenceRecoveryHold.Decide(goal, state, decision.Identity);
+        if (hold is null) return null;
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason) {
-                Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
-        var operationState = task.CompletionBuildEvidence is { } build
-            ? $"operation={build.Id}; outcome={build.Phase}; automatic attempt exhausted"
-            : "existing completion-build coordinator unavailable";
-        var reason = $"Completion build evidence hold: task={task.Id.Value}; {operationState}. " +
-            "Candidate edits are retained; genuine successful current build evidence with exact project coverage is required. " +
-            "An operator decision is required before further build execution; no paid coding retry is authorized solely for missing evidence.";
-        return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, reason) {
-            Decision = FailedGoalRecoveryDecisionRecords.CompletionBuildEvidenceHeld(decision.Identity, reason) });
-    }
-
-    private ConductorAdvanceResult? TryHoldUnverifiedWorkerBuildChannel(
-        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
-        FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)
-    {
-        var task = goal.Tasks.FirstOrDefault(candidate =>
-            candidate.Status == WorkTaskStatus.Failed &&
-            candidate.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
-            candidate.LastVerification is { } verification &&
-            DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(TaskOutcomeClassifier.TryExtractRule(
-                DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt)) &&
-            (verification.StandardOutput + Environment.NewLine + verification.StandardError)
-                .Contains(OrchestratorBuildEvidenceCheck.BusyChannelClaim, StringComparison.Ordinal) &&
-            !candidate.WorkerBuildInvocations.Any(invocation => invocation.DispatchAt == candidate.LastDispatch?.DispatchedAt) &&
-            !(candidate.CompletionBuildEvidence is { } operation && operation.DispatchAt == candidate.LastDispatch?.DispatchedAt));
-        if (task is null) return null;
-        ApplyPendingFailedGoalNotes(goal, pendingNotes);
-        if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason) {
-                Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
-        var reason = $"Worker build channel evidence hold: task={task.Id.Value}; dispatch={task.LastDispatch?.DispatchedAt:O}; " +
-            "busy exhaustion is unverified; build evidence remains missing and candidate edits are retained. " +
-            "Provide a trusted host-captured generated-client terminal result bound to this dispatch, channel and completion, " +
-            "or an operator decision authorizing same-candidate build evidence through the existing completion workflow. " +
-            "No automatic build or paid Developer correction is authorized by this claim.";
-        return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, reason) {
-            Decision = FailedGoalRecoveryDecisionRecords.BuildChannelEvidenceHeld(decision.Identity, reason) });
+            hold = new ConductorAdvanceOutcome.Held(state, staleReason) {
+                Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) };
+        return MakeResult(goal.Id.Value, goalPrefix, policy, hold);
     }
 
     private ConductorAdvanceResult? TryRecoverFailedWorkerBuildCheck(
