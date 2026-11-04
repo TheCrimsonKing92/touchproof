@@ -15,7 +15,7 @@ internal static class CliGateStatsQueryCommand
     {
         if (args.Count < 2) throw Usage();
         var form = args[1].ToLowerInvariant();
-        if (form is not ("lanes" or "classes" or "compare" or "flakes" or "waits")) throw Usage();
+        if (form is not ("lanes" or "classes" or "compare" or "flakes" or "waits" or "failures")) throw Usage();
         var flags = new Dictionary<string, string>(StringComparer.Ordinal);
         var json = false;
         for (var i = 2; i < args.Count; i++)
@@ -28,9 +28,10 @@ internal static class CliGateStatsQueryCommand
             if (!allowed || ++i >= args.Count || args[i].StartsWith("--", StringComparison.Ordinal) ||
                 !flags.TryAdd(flag, args[i]) || string.IsNullOrWhiteSpace(args[i])) throw Usage();
         }
-        var last = Positive(flags, "--last", form == "flakes" ? 20 : 10);
+        var last = Positive(flags, "--last", form is "flakes" or "failures" ? 20 : 10);
         object report;
         if (form == "lanes") report = GateStatsReport.Lanes(workspace.OrchestratorDirectory, last);
+        else if (form == "failures") report = GateFailureClassificationReport.Read(workspace.OrchestratorDirectory, last);
         else if (form == "waits") report = GateStatsReport.Waits(workspace.OrchestratorDirectory, last,
             Positive(flags, "--top", 20));
         else if (form == "classes") report = GateStatsReport.Classes(workspace.OrchestratorDirectory, last,
@@ -46,9 +47,22 @@ internal static class CliGateStatsQueryCommand
         }
         // The same serialized values back both presentations, preserving numeric precision.
         var serialized = JsonSerializer.Serialize(report, report.GetType(), new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        { PropertyNamingPolicy = form == "flakes" ? JsonNamingPolicy.CamelCase : JsonNamingPolicy.SnakeCaseLower });
+        { PropertyNamingPolicy = form is "flakes" or "failures" ? JsonNamingPolicy.CamelCase : JsonNamingPolicy.SnakeCaseLower });
         if (json) { Console.WriteLine(serialized); return; }
         using var document = JsonDocument.Parse(serialized);
+        if (form == "failures")
+        {
+            Console.WriteLine($"form=failures\tattempts={document.RootElement.GetProperty("attempts").GetInt32()}");
+            foreach (var name in new[] { "rows", "causeCounts", "recurringTests" })
+                foreach (var row in document.RootElement.GetProperty(name).EnumerateArray())
+                    Console.WriteLine(string.Join('\t', row.EnumerateObject().Select(property =>
+                        $"{property.Name}={Cell(property.Value.ValueKind == JsonValueKind.Null ? "-" : property.Value.ToString())}")));
+            foreach (var name in new[] { "readProblems", "excluded" })
+                foreach (var problem in document.RootElement.GetProperty(name).EnumerateArray())
+                    Console.WriteLine($"{name}={Cell(problem.GetString()!)}");
+            Console.WriteLine($"skipped={document.RootElement.GetProperty("skipped").GetInt32()}");
+            return;
+        }
         if (form == "flakes")
         {
             Console.WriteLine(string.Join('\t', document.RootElement.EnumerateObject()
