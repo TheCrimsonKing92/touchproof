@@ -1766,15 +1766,8 @@ internal static partial class CliPersistentStateRunner
         var attribution = ResolveOperatorIntentAttribution(args, submissionSource);
         object payload = preparedCommand.Command switch
         {
-            OperatorIntentVerbs.Progress => new ProgressOperatorIntentPayload(
-                preparedCommand.ProgressStatus
-                    ?? throw new InvalidOperationException("Prepared progress command is missing a status."),
-                preparedCommand.Text
-                    ?? throw new InvalidOperationException("Prepared progress command is missing text."),
-                CompletionVerification: attribution.ActorKind == OperatorActorKind.Human &&
-                    preparedCommand.ProgressStatus == WorkTaskStatus.Completed
-                    ? new ManualVerificationRequest(true, preparedCommand.Text!, workspace.RootDirectory)
-                    : null),
+            OperatorIntentVerbs.Progress => CliProgressOperatorIntentPayloadFactory.Create(
+                preparedCommand, attribution.ActorKind, workspace.RootDirectory),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
             OperatorIntentVerbs.VerifyManual => preparedCommand.ManualVerification is { } manual
                 ? new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
