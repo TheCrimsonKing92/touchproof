@@ -1910,7 +1910,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         for (var index = 0; index < checks.Count; index++)
         {
             var check = checks[index];
-            var key = SemanticExecutionKey(check);
+            var key = EffectiveAcceptanceManifestIdentity.SemanticExecutionKey(check);
             if (!TryGetInfrastructurePartitionId(check, out var partitionId, out _) ||
                 !keys.TryGetValue(key, out var retained))
             {
@@ -1931,31 +1931,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new SemanticExecutionDeduplicationPlan(unique, receipts);
     }
 
-    private static string SemanticExecutionKey(AcceptanceManifestCheck check) =>
-        JsonSerializer.Serialize(new
-        {
-            check.Name,
-            check.Type,
-            check.Command,
-            EnvironmentFingerprint = JunitCommandEnvironmentInputs.Fingerprint(check),
-            Project = NormalizePath(check.Project),
-            check.Arguments,
-            check.Pattern,
-            FilePath = NormalizePath(check.FilePath),
-            check.TimeoutMinutes,
-            check.Advisory,
-            check.Runner,
-            check.EstimatedSerialSeconds,
-            ExclusiveResourceKeys = check.ExclusiveResourceKeys
-                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
-            check.IsFocusedEvidenceSelection,
-            check.FocusedEvidenceTokens,
-            check.FocusedEvidenceSelections
-        });
-
     internal static string SemanticExecutionKeyForTests(AcceptanceManifestCheck check) =>
-        SemanticExecutionKey(check);
+        EffectiveAcceptanceManifestIdentity.SemanticExecutionKey(check);
 
     private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(
         AcceptanceManifestCheck check,
@@ -4157,7 +4134,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    internal sealed partial class AcceptanceManifestCheck
+    internal sealed partial class AcceptanceManifestCheck : IJsonOnDeserialized
     {
         public static AcceptanceManifestCheck DefaultDotnetTest { get; } = new()
         {
@@ -4171,6 +4148,20 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? Project { get; init; }
         public IReadOnlyList<string> Arguments { get; init; } = [];
         public IReadOnlyList<string> Reports { get; init; } = [];
+        private readonly IReadOnlyDictionary<string, string>? _environment;
+
+        [JsonConverter(typeof(JunitCommandEnvironmentConverter))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyDictionary<string, string>? Environment
+        {
+            get => _environment;
+            init => _environment = JunitCommandEnvironmentInputs.Snapshot(value);
+        }
+
+        void IJsonOnDeserialized.OnDeserialized() => ValidateEnvironment();
+
+        internal void ValidateEnvironment() => JunitCommandEnvironmentInputs.ValidateCheck(this);
+
         public string? Pattern { get; init; }
         public string? FilePath { get; init; }
         public int? TimeoutMinutes { get; init; }

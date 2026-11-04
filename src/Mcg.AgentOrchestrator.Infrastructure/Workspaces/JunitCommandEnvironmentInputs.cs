@@ -6,30 +6,6 @@ using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
-{
-    internal sealed partial class AcceptanceManifestCheck : IJsonOnDeserialized
-    {
-        private readonly IReadOnlyDictionary<string, string>? _environment;
-
-        [JsonConverter(typeof(JunitCommandEnvironmentConverter))]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public IReadOnlyDictionary<string, string>? Environment
-        {
-            get => _environment;
-            init => _environment = JunitCommandEnvironmentInputs.Snapshot(value);
-        }
-
-        void IJsonOnDeserialized.OnDeserialized() => ValidateEnvironment();
-
-        internal void ValidateEnvironment()
-        {
-            if (Environment is not null && !Type.Equals("junit-command", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("The environment field is supported only on junit-command checks.");
-        }
-    }
-}
-
 // An immutable input to one declared command, never a process-wide environment or a probe contract.
 internal sealed class JunitCommandEnvironmentInputs
 {
@@ -41,6 +17,12 @@ internal sealed class JunitCommandEnvironmentInputs
             pair => (string?)pair.Value, NameComparer));
 
     internal IReadOnlyDictionary<string, string?> Overrides { get; }
+
+    internal static void ValidateCheck(GoalAcceptanceVerifier.AcceptanceManifestCheck check)
+    {
+        if (check.Environment is not null && !check.Type.Equals("junit-command", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The environment field is supported only on junit-command checks.");
+    }
 
     internal static JunitCommandEnvironmentInputs? FromCheck(GoalAcceptanceVerifier.AcceptanceManifestCheck check)
     {
