@@ -21,6 +21,7 @@ public sealed class GateTestSelectorDiagnosticContextTests
         var before = GateTestObligationEvaluator.Evaluate(f.Goal, f.OrchestratorDirectory, f.Candidate);
         var selectedBefore = f.Task.PreReviewEvidenceReceipt;
         var calls = 0;
+        IReadOnlyList<string> diagnostic = [];
         var prepared = WorkerProfileDispatcher.PrepareTask(f.Kernel, f.Goal, f.Task,
             new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"), Path.Combine(f.Root, "prompts"), f.Root, DateTimeOffset.UtcNow,
             providerName: typed ? "OpenAI" : null, modelName: typed ? AgentCatalog.OpenAiSolSubscriptionModelAlias : null,
@@ -30,11 +31,14 @@ public sealed class GateTestSelectorDiagnosticContextTests
             {
                 calls++;
                 Assert.Equal(f.Candidate, candidate);
-                return GateTestSelectorDiagnosticPreparation.Build(goal, candidate, f.Root, f.OrchestratorDirectory, f.Kernel.HumanInputRequests);
+                diagnostic = GateTestSelectorDiagnosticPreparation.Build(goal, candidate, f.Root, f.OrchestratorDirectory, f.Kernel.HumanInputRequests);
+                return diagnostic;
             });
         Assert.Equal(1, calls);
         Assert.Equal(WorkTaskStatus.Running, f.Task.Status);
         var prompt = File.ReadAllText(prepared.PromptPath);
+        Assert.NotEmpty(diagnostic);
+        Assert.All(diagnostic, finding => Assert.Contains(finding, prompt));
         Assert.Contains(GateTestSelectorDiagnostic.Marker, prompt);
         Assert.Contains(Prediction, prompt);
         Assert.Contains(InvalidEvidence, prompt);
@@ -42,6 +46,7 @@ public sealed class GateTestSelectorDiagnosticContextTests
         Assert.Contains("advisory identity projection", prompt);
         if (typed)
         {
+            Assert.Contains("subscription-preflight.md", prompt);
             Assert.Contains(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections,
                 section => section.LogicalIdentity == "context/subscription-preflight.md" &&
                     section.DeliveryMode == ContextDeliveryMode.InlineFull);
@@ -53,7 +58,6 @@ public sealed class GateTestSelectorDiagnosticContextTests
         Assert.Contains(Attribution, findings);
         Assert.Contains("\"Status\":\"Unresolved\"", findings);
         Assert.Contains("Selector naming diagnostic", File.ReadAllText(Path.Combine(contextRoot, "current-task.md")));
-        Assert.Contains("subscription-preflight.md", prompt);
         Assert.Equal(new[] { Prediction }, Assert.Single(f.Goal.GateTestObligations).Selectors);
         Assert.Equal(before.Select(item => item.Outcome),
             GateTestObligationEvaluator.Evaluate(f.Goal, f.OrchestratorDirectory, f.Candidate).Select(item => item.Outcome));
