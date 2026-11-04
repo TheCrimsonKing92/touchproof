@@ -27,6 +27,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     private readonly bool _lowIntegrity;
     private readonly bool _compilerFailure;
     private readonly CompilerMode _compilerMode;
+    private readonly IReadOnlyList<string> _fakeCompilerProjects;
     private SafeFileHandle? _workerGroupObserver;
     internal WorkerBuildRequestChannel? Channel;
     internal OwnedProcessGroup.SuspendedProcessStart? Worker;
@@ -39,11 +40,12 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
         bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false,
         CompilerMode compilerMode = CompilerMode.Real, Action<string>? seedRepository = null,
-        string? projectHomeDirectory = null)
+        string? projectHomeDirectory = null, IReadOnlyList<string>? fakeCompilerProjects = null)
     {
         _lowIntegrity = lowIntegrity;
         _compilerFailure = compilerFailure;
         _compilerMode = compilerMode;
+        _fakeCompilerProjects = fakeCompilerProjects ?? [Project];
         RepositoryRoot = Path.Combine(Root, "repository");
         try
         {
@@ -150,7 +152,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     private ProcessStartInfo FakeCompilerStartInfo(string project, ProcessStartInfo compiler)
     {
-        Assert.Equal(Project, project);
+        Assert.Contains(project, _fakeCompilerProjects);
         var info = new ProcessStartInfo(WorkerShell.Executable)
         {
             UseShellExecute = false,
@@ -201,6 +203,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         Channel.Dispose();
         Channel = null;
         var invocations = Operations.Load(GoalId.Value).GetTask(GoalId, TaskId).WorkerBuildInvocations;
+        Assert.True(invocations.Count > 0, DescribeHostBuildDiagnostics());
         var invocation = command is null ? Assert.Single(invocations) : invocations[^1];
         if (assertAdapterExit) Assert.Equal(Responses[^1].ExitCode, Worker.TryReadOwnedExitCode());
         AssertCompilerImages(invocation);

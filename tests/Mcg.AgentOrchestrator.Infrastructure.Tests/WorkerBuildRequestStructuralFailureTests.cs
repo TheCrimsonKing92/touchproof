@@ -12,10 +12,15 @@ public sealed class WorkerBuildRequestStructuralFailureTests
     public async Task DefaultHostEvaluatorIncludesUncommittedLaneDeclarations(bool untracked)
     {
         const string relative = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Collision.cs";
+        const string testProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixture.csproj";
         const string name = "WorkerBuildRequestCandidateCollisionTests";
         using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake,
+            fakeCompilerProjects: [WorkerBuildRequestFixture.Project, testProject],
             seedRepository: root =>
             {
+                // Scope admission requires an owner for every changed compiled source.
+                Write(root, testProject,
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
                 Write(root, "config/acceptance-manifest.json", """
                     { "version": 1, "engine": {
                       "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],
@@ -32,6 +37,7 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         var invocation = await fixture.RunHelper(); // Exercise the production project-home/baseline binding.
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
         Assert.Equal(0, invocation.CompilerExitCode);
+        Assert.Equal(new[] { WorkerBuildRequestFixture.Project, testProject }, invocation.Projects);
         Assert.Equal(WorkerBuildStructuralStatus.Violation, invocation.StructuralCheck!.Status);
         Assert.Contains("[lane-substring-collision]", invocation.StructuralCheck.Diagnostic);
         Assert.Contains(name, invocation.StructuralCheck.Diagnostic);

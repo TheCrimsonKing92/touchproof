@@ -8,7 +8,7 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
     DotnetBuildStorageRoot? storageRoot = null,
     Func<WorkerBuildProcess, bool>? isHostAlive = null,
     Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? digestGitRunner = null,
-    string? projectHomeDirectory = null, string integrationBranch = "main") : IWorkerBuildInvocationOperations
+    string? projectHomeDirectory = null, string integrationBranch = TrunkBranchName.Default) : IWorkerBuildInvocationOperations
 {
     internal const string OperationName = "dispatch:worker-build";
     private readonly SqliteOrchestratorStateRepository _repository = new(statePath);
