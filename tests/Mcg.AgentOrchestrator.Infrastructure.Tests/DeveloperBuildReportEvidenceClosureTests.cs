@@ -78,6 +78,13 @@ public sealed class DeveloperBuildReportEvidenceClosureTests
     public void InsufficientStoredEvidence_RetainsWaitWithSpecificReason(string change, string reason)
     {
         var fixture = new Records(change: change);
+        if (change == "non-authoritative-report")
+        {
+            Assert.Null(fixture.Developer.LastVerification!.AuthoritativeStandardOutput);
+            Assert.Contains($"invocation {fixture.Invocation.Id}", fixture.Developer.LastVerification.StandardOutput);
+            Assert.NotEmpty(fixture.Developer.VerificationHistory);
+            Assert.All(fixture.Developer.VerificationHistory, item => Assert.Null(item.AuthoritativeStandardOutput));
+        }
         var result = fixture.Close(name => change is "unrelated-gate" || change == "missing-class" && name == Records.Classes[0]
             ? null : "attempt gate-1");
 
@@ -85,7 +92,12 @@ public sealed class DeveloperBuildReportEvidenceClosureTests
         Assert.False(fixture.Wait.IsCompleted);
         Assert.Null(fixture.Wait.Answer);
         Assert.Empty(fixture.Wait.AnswerHistory);
-        Assert.Same(fixture.Wait, Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id)));
+        Assert.Same(fixture.Wait, Assert.Single(fixture.Kernel.HumanInputRequests));
+        Assert.Equal(change != "stale-wait", fixture.Wait.IsCurrentForBrief(fixture.Goal.AuthoritativeBrief.Version));
+        if (change == "stale-wait")
+            Assert.Empty(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id));
+        else
+            Assert.Same(fixture.Wait, Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id)));
         Assert.Contains(fixture.Goal.Timeline, item => item.Message.Contains("reason=" + reason, StringComparison.Ordinal));
         Assert.DoesNotContain(fixture.Goal.Timeline, item => item.Kind == ProgressKind.HumanInputReceived);
     }
@@ -228,6 +240,17 @@ public sealed class DeveloperBuildReportEvidenceClosureTests
                 { DispatchAttemptAt = change == "stale-report" ? started.AddSeconds(-1) : null,
                   AuthoritativeStandardOutput = change == "non-authoritative-report" ? null : output,
                   AuthoritativeStandardOutputUnavailableReason = change == "non-authoritative-report" ? "unreadable" : null } };
+            // Same-round restoration merges LastVerification with its retained history.
+            // Make authority unavailable in both copies while preserving the report preview.
+            if (change == "non-authoritative-report")
+                storedTask = storedTask with
+                {
+                    VerificationHistory = storedTask.VerificationHistory!.Select(item => item with
+                    {
+                        AuthoritativeStandardOutput = null,
+                        AuthoritativeStandardOutputUnavailableReason = "unreadable"
+                    }).ToArray()
+                };
             Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
             {
                 Goals = [storedGoal with { Tasks = storedGoal.Tasks.Select(task => task.Id == developer.Id.Value ? storedTask : task).ToArray() }],
