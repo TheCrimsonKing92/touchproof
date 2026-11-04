@@ -2290,6 +2290,42 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         var obligationMerge = GoalSnapshotObligationMerge.Merge(
             baseline.CriterionEvidenceObligations, stored.CriterionEvidenceObligations, current.CriterionEvidenceObligations);
+        var plannerProjectionChanged = (current.CriterionEvidenceObligations ?? []).Any(item =>
+            item.PlannerSources is { Count: > 0 } && !string.Equals(
+                JsonSerializer.Serialize(item.PlannerSources),
+                JsonSerializer.Serialize(baseline.CriterionEvidenceObligations?.SingleOrDefault(before => before.Id == item.Id)?.PlannerSources),
+                StringComparison.Ordinal)) ||
+            // Replaying existing ownership can repair only Reviewer attestation, with
+            // no provenance delta. That task transition belongs to the same atomic
+            // projection and must respect terminal, brief and Planner-round authority.
+            ((current.CriterionEvidenceObligations ?? []).Any(item => item.PlannerSources is { Count: > 0 }) &&
+             current.Tasks.Any(task => task.RequiredRole == AgentRole.Reviewer && task.Status == WorkTaskStatus.Completed &&
+                 baseline.Tasks.Any(before => before.Id == task.Id && before.Status == WorkTaskStatus.Failed)));
+        if (plannerProjectionChanged && ConductLoopGoalStatus.IsTerminal((stored.ParkedLifecycleStatus ?? stored.Status).ToString()))
+        {
+            merged = stored;
+            reason = "Planner ownership projection cannot change a stored terminal goal; rejected the complete reconciliation delta.";
+            return false;
+        }
+        if (plannerProjectionChanged &&
+            (!string.Equals(JsonSerializer.Serialize(baseline.BriefVersions), JsonSerializer.Serialize(stored.BriefVersions), StringComparison.Ordinal) ||
+             !string.Equals(JsonSerializer.Serialize(baseline.RefinedSpecVersions), JsonSerializer.Serialize(stored.RefinedSpecVersions), StringComparison.Ordinal) ||
+             baseline.Tasks.Where(task => task.RequiredRole == AgentRole.Planner).Any(task =>
+                 !string.Equals(JsonSerializer.Serialize(task), JsonSerializer.Serialize(stored.Tasks.SingleOrDefault(saved => saved.Id == task.Id)), StringComparison.Ordinal))))
+        {
+            merged = stored;
+            reason = "Planner ownership projection has changed stored brief, criteria or Planner round; reload and revalidate the complete goal.";
+            return false;
+        }
+        if (obligationMerge.ConflictIds.Any(id => (current.CriterionEvidenceObligations ?? [])
+                .Concat(stored.CriterionEvidenceObligations ?? [])
+                .Any(item => item.Id == id && item.PlannerSources is { Count: > 0 })))
+        {
+            merged = stored;
+            reason = "Planner ownership projection conflicts with stored criterion authority; reload and revalidate the complete goal: " +
+                string.Join(",", obligationMerge.ConflictIds);
+            return false;
+        }
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),

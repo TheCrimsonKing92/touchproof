@@ -611,9 +611,14 @@ public sealed partial class AgentOrchestratorKernel
     public bool NormalizeGoalLifecycleState(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        if (IsReopenProtectedGoalStatus(goal.Status))
+        if (IsReopenProtectedGoalStatus(goal.Status) ||
+            IsTerminalGoalStatus(goal.LifecycleStatus) && PlannerOwnership.HasRecordedExecutionRequests(goal))
             return false;
-        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow);
+        var ownershipReconciled = PlannerOwnership.Reconcile(goal, (ownerGoal, reviewer) =>
+            !TryFailWorkerResultBlocker(ownerGoal.Id, reviewer, reviewer.LastVerification!, enforceFailureEvidenceRule: true) &&
+            TryCompleteTaskWithPassingVerification(ownerGoal, reviewer,
+                "Reconciled passing source review after accepted Planner execution ownership projection; full acceptance evidence remains pending."));
+        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow) || ownershipReconciled;
 
         if (reconciled)
         {

@@ -542,6 +542,75 @@ public sealed class Goal
         }
     }
 
+    internal string? PlanPlannerAcceptanceOwnership(
+        IReadOnlyList<PlannerCriterionEvidenceSource> sources, DateTimeOffset recordedAt,
+        out IReadOnlyList<CriterionEvidenceObligation> changes)
+    {
+        changes = [];
+        if (sources.Count == 0) return null;
+        if (AuthoritativeRefinedSpecVersion is not { } version) return "Planner ownership requires current refined criteria.";
+        var planned = new Dictionary<string, CriterionEvidenceObligation>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var identity = source.Identity;
+            var index = identity.CriterionIndex - 1;
+            if (identity.GoalId != Id.Value || identity.BriefVersion != AuthoritativeBrief.Version ||
+                !_tasks.Any(task => task.Id.Value == identity.RequestingTaskId && task.RequiredRole == AgentRole.Planner) ||
+                index < 0 || index >= version.Spec.AcceptanceCriteria.Count ||
+                identity.CriterionIndex != source.Directive.CriterionIndex || identity.EvidenceKey != source.Directive.EvidenceKey)
+                return "Planner ownership has invalid goal, task, brief or criterion provenance.";
+            var id = CriterionEvidenceObligation.BuildId(version.Version, index);
+            var matches = _criterionEvidenceObligations.Where(item => item.CriterionVersion == version.Version &&
+                item.CriterionIndex == index).ToArray();
+            if (matches.Length > 1 || matches.Any(item => item.Owner != CriterionEvidenceOwner.Acceptance ||
+                    item.Phase != CriterionEvidencePhase.PreLanding ||
+                    item.RequiredScope != CriterionEvidenceScopes.FullAcceptanceGate || !IsValidCriterionEvidenceObligation(item)))
+                return $"Planner ownership conflict: criterion {index + 1} (v{version.Version}); existing authority=" +
+                    string.Join("; ", matches.Select(item => $"{item.Owner}/{item.Phase}/{item.RequiredScope}; {item.Provenance}")) +
+                    $"; incoming acceptance-gate directive={identity.StableId} task={identity.RequestingTaskId} key={identity.EvidenceKey}. Plan correction or explicit operator resolution required.";
+            var existing = planned.GetValueOrDefault(id) ?? matches.SingleOrDefault() ??
+                new CriterionEvidenceObligation(id, index, version.Version, version.Spec.AcceptanceCriteria[index].Trim(),
+                    CriterionEvidenceOwner.Acceptance, CriterionEvidenceState.Pending, CriterionEvidenceScopes.FullAcceptanceGate,
+                    $"accepted Planner directive {identity.StableId}", recordedAt);
+            var prior = (existing.PlannerSources ?? []).SingleOrDefault(item => item.Identity == identity);
+            if (prior is not null)
+            {
+                if (!prior.Directive.SemanticallyEquals(source.Directive))
+                    return $"Conflicting accepted Planner directive {identity.StableId}; plan correction required.";
+                continue;
+            }
+            var establishesOwnership = matches.Length == 0 ||
+                matches[0].PlannerSources?.Any(item => item.EstablishesOwnership) == true;
+            planned[id] = existing with { PlannerSources = [.. existing.PlannerSources ?? [],
+                source with { EstablishesOwnership = establishesOwnership }] };
+        }
+        changes = planned.Values.ToArray();
+        return null;
+    }
+
+    internal void ApplyPlannerAcceptanceOwnership(IReadOnlyList<CriterionEvidenceObligation> changes)
+    {
+        foreach (var obligation in changes)
+        {
+            var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligation.Id);
+            if (index < 0) _criterionEvidenceObligations.Add(obligation);
+            else _criterionEvidenceObligations[index] = obligation;
+        }
+    }
+
+    internal bool HasCurrentPlannerExecutionAuthority(CriterionEvidenceObligation obligation) =>
+        obligation.PlannerSources is not { } sources || !sources.Any(item => item.EstablishesOwnership) ||
+        sources.Any(item => item.EstablishesOwnership && item.Identity.GoalId == Id.Value &&
+            item.Identity.BriefVersion == AuthoritativeBrief.Version &&
+            item.Identity.CriterionIndex == obligation.CriterionNumber &&
+            item.Directive.CriterionIndex == item.Identity.CriterionIndex &&
+            item.Directive.EvidenceKey == item.Identity.EvidenceKey &&
+            item.Directive.Availability == "post-implementation" && GateTestObligation.IsAcceptanceGateOwner(item.Directive.Owner) &&
+            _tasks.Any(task => task.Id.Value == item.Identity.RequestingTaskId &&
+                PlannerEvidenceCompletion.TryGetCurrentAcceptedBatch(this, task, out var batch, out _, out _) &&
+                batch is { IsMalformed: false } && batch.Directives.Any(directive =>
+                    item.Directive.SemanticallyEquals(directive.PlannerEvidence))));
+
     internal CriterionEvidenceObligation MapCriterionEvidenceOwner(
         int criterionIndex,
         int criterionVersion,
@@ -609,7 +678,20 @@ public sealed class Goal
             string.Equals(existing.RequiredScope, mapped.RequiredScope, StringComparison.Ordinal) &&
             string.Equals(existing.ExpectedCandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(existing.FindingStableId, mapped.FindingStableId, StringComparison.Ordinal))
-            return existing;
+        {
+            if (existing.PlannerSources?.Any(source => source.EstablishesOwnership) != true)
+                return existing;
+            // A matching explicit mapping establishes independent authority. Keep
+            // Planner provenance as history and preserve every evidence receipt.
+            mapped = existing with
+            {
+                Provenance = mapped.Provenance,
+                RecordedAt = mapped.RecordedAt,
+                PlannerSources = existing.PlannerSources.Select(source => source with { EstablishesOwnership = false }).ToArray()
+            };
+            _criterionEvidenceObligations[existingIndex] = mapped;
+            return mapped;
+        }
 
         if (existing.State == CriterionEvidenceState.Satisfied &&
             string.Equals(existing.CandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase))

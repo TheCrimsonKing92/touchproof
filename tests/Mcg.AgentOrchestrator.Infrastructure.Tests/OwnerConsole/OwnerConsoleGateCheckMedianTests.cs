@@ -44,11 +44,11 @@ public sealed class OwnerConsoleGateCheckMedianTests
     }
 
     [Theory]
-    [InlineData(false, false, false, 0, 400, 0)]
-    [InlineData(true, false, false, 0, 400, 0)]
+    [InlineData(false, false, false, 0, 300, 0)]
+    [InlineData(true, false, false, 0, 300, 0)]
     [InlineData(true, true, false, 0, 300, 0)]
     [InlineData(true, true, true, 1, 0, 1)]
-    public void FractionAndRemainingCountHistoryButCountsStayManifestOnly(
+    public void AuxiliaryCheckHistoryDoesNotInflateScheduledRemaining(
         bool unknownCheck, bool coreDone, bool manifestDone, double fraction, int remaining, int doneCount)
     {
         var events = new List<OwnerConductEvent>
@@ -73,12 +73,12 @@ public sealed class OwnerConsoleGateCheckMedianTests
     }
 
     [Fact]
-    public void QueuedManifestAndRunningCheckBothExtendRemaining()
+    public void PlannedScheduleExcludesAuxiliaryRunningCheckFromRemaining()
     {
         var gate = Build([Progress("verification-check", "core tests")]);
-        Assert.Equal(OwnerConsoleGateLaneState.Queued, Assert.Single(gate.Lanes, row => row.Name == "A").State);
+        Assert.Equal(OwnerConsoleGateLaneState.Planned, Assert.Single(gate.Lanes, row => row.Name == "A").State);
         Assert.Equal(OwnerConsoleGateLaneState.Running, Assert.Single(gate.Lanes, row => row.Name == "core tests").State);
-        Assert.Equal(400, gate.RemainingSeconds);
+        Assert.Equal(300, gate.RemainingSeconds);
         Assert.Equal(0, gate.Fraction); // Queued and running work at zero gate elapsed stays at zero.
         Assert.Equal(0, gate.DoneCount);
         Assert.Equal(1, gate.TotalCount);
@@ -89,12 +89,12 @@ public sealed class OwnerConsoleGateCheckMedianTests
     {
         var history = Enumerable.Range(1, 10).Select(value => new OwnerConsoleGateDuration("core tests", value, Now.AddMinutes(-value)))
             .Append(new("core tests", 1000, Now.AddMinutes(-11)));
-        var gate = OwnerConsoleGateProgress.Build(Now, [Progress("verification-check", "core tests")], Manifest, history);
+        var gate = OwnerConsoleGatePlannedTestBuild.Build(Now, [Progress("verification-check", "core tests")], Manifest, history);
         Assert.Equal(5.5, Assert.Single(gate.Lanes, row => row.Name == "core tests").MedianSeconds);
     }
 
     private static OwnerConsoleGateProgress Build(IEnumerable<OwnerConductEvent> events) =>
-        OwnerConsoleGateProgress.Build(Now, events, Manifest, History);
+        OwnerConsoleGatePlannedTestBuild.Build(Now, events, Manifest, History);
 
     private static OwnerConductEvent Progress(string phase, string target, int elapsed = 0, string extra = "") =>
         OwnerConsoleGateProgress.ParseEvent(JsonSerializer.Serialize(new

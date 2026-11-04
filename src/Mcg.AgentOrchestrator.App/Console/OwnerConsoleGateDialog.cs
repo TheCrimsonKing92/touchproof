@@ -14,6 +14,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     private OwnerConsoleGateProgress? _gate;
     internal OwnerConsoleListRenderer SourceRenderer { get; } = new();
     private string? _goalId;
+    private string? _executionId;
     internal bool Expanded { get; private set; }
     internal bool IsOpen { get; private set; }
     internal OwnerConsolePane ReturnPane { get; private set; }
@@ -39,6 +40,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     {
         ReturnPane = returnPane;
         _goalId = goalId;
+        _executionId = goalId is null ? gate?.ExecutionId : null;
         Expanded = false;
         IsOpen = Visible = true;
         Render(gate);
@@ -52,8 +54,11 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         if (_goalId is not null)
         {
             if (gate?.ForMember(_goalId) is { } memberGate) gate = memberGate;
-            else _goalId = null;
+            else gate = OwnerConsoleGateProgress.Idle() with { Members = [new(_goalId, "")],
+                Participation = "selected goal execution unresolved", LanePlanAvailable = false };
         }
+        else if (_executionId is not null) gate = gate?.ForExecution(_executionId) ??
+            OwnerConsoleGateProgress.Idle() with { ExecutionId = _executionId, Participation = "selected historical execution unavailable" };
         var selected = _body.SelectedItem ?? 0;
         var fields = new Dictionary<int, OwnerConsoleFieldSnapshot>();
         Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded, fields);

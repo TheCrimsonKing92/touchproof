@@ -257,7 +257,7 @@ public sealed partial class TaskSpec
                     LastExecution.MaxOutputTokens,
                     LastExecution.PromptCharacterCount,
                     LastExecution.Usage?.CachedInputTokens,
-                    LastExecution.AuthoritativeOutput),
+                    LastExecution.AuthoritativeOutput, LastExecution.PlannerEvidenceBriefVersion),
             LastVerification is null
                 ? null
                 : new TaskVerificationSnapshot(
@@ -447,7 +447,8 @@ public sealed partial class TaskSpec
                 snapshot.LastExecution.MaxOutputTokens,
                 snapshot.LastExecution.PromptCharacterCount,
                 snapshot.LastExecution.AuthoritativeOutput,
-                OutputIsAuthoritative: snapshot.LastExecution.AuthoritativeOutput is not null));
+                OutputIsAuthoritative: snapshot.LastExecution.AuthoritativeOutput is not null,
+                PlannerEvidenceBriefVersion: snapshot.LastExecution.PlannerEvidenceBriefVersion));
         }
 
         if (snapshot.VerificationHistory is { Count: > 0 })

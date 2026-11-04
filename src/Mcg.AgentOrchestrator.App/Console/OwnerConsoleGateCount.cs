@@ -19,9 +19,12 @@ internal sealed record OwnerConsoleGateCount(int Done, int Total, int Failed, in
             !linked.Contains(row.Name) && row.State != OwnerConsoleGateLaneState.Skipped).ToArray();
         var failed = items.Where(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed")
             .OrderBy(row => row.IsManifestLane ? 0 : 1).ToArray();
+        // Failure visibility includes auxiliary checks; scheduled arithmetic does
+        // not. Null supports older hand-authored snapshots, not reconstructed plans.
+        if (gate.LanePlanAvailable is not null) items = observed.Where(row => row.IsScheduled == true).ToArray();
         return new(
             items.Count(row => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached),
-            items.Length, failed.Length,
+            items.Length, items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed"),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Running),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed"),
             items.Count(row => row.State == OwnerConsoleGateLaneState.Cached),

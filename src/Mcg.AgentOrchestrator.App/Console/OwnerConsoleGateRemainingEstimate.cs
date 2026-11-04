@@ -12,7 +12,7 @@ internal static class OwnerConsoleGateRemainingEstimate
         var slots = new double[Math.Min(concurrency, unfinishedManifestLanes.Count)];
         foreach (var lane in unfinishedManifestLanes.Where(lane => lane.State == OwnerConsoleGateLaneState.Running))
             Place(Remaining(lane));
-        foreach (var seconds in unfinishedManifestLanes.Where(lane => lane.State == OwnerConsoleGateLaneState.Queued)
+        foreach (var seconds in unfinishedManifestLanes.Where(lane => lane.State is OwnerConsoleGateLaneState.Queued or OwnerConsoleGateLaneState.Planned)
                      .Select(Remaining).OrderByDescending(seconds => seconds))
             Place(seconds);
         return slots.Max();

@@ -118,6 +118,8 @@ public sealed class AgentTaskRunner
             request.Options.MaxOutputTokens,
             CountPromptCharacters(request));
 
+        if (task.RequiredRole == AgentRole.Planner)
+            execution = execution with { PlannerEvidenceBriefVersion = executionBriefVersion };
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
 
@@ -287,6 +289,18 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
+        if (task.RequiredRole == AgentRole.Planner && hasCompleteWorkerResult &&
+            !WorkerResultBlockers.TryFindBlocker(output, out _) &&
+            humanInputDirective.Directives.Any(item => item.PlannerEvidence is not null))
+        {
+            var diagnostic = _kernel.ProjectAcceptedPlannerOwnership(goal, task, humanInputDirective,
+                executionBriefVersion, execution.CompletedAt);
+            if (diagnostic is not null)
+            {
+                _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
+                return new AgentTaskRunResult(goal, task, execution);
+            }
+        }
         _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
 
         return new AgentTaskRunResult(goal, task, execution);

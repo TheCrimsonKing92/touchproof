@@ -310,7 +310,7 @@ internal sealed partial class ConductorDriver
                 throw new InvalidOperationException("Grouped cohort gate identity changed before child execution.");
             var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
-                CancellationToken.None, null);
+                CancellationToken.None, null, outerAttemptId: attempt.AttemptId);
             return receipt is null ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
         }
         else if (attempt.Kind == "train")
@@ -319,7 +319,7 @@ internal sealed partial class ConductorDriver
             var goals = members.Select(member => kernel.Goals.Single(goal => goal.Id == member.GoalId)).ToArray();
             var result = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
-                gateOnly: true, expectedGateIdentity: attempt.IdentityValue);
+                gateOnly: true, expectedGateIdentity: attempt.IdentityValue, outerAttemptId: attempt.AttemptId);
             return result.RecordedReceipt is { } receipt
                 ? ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId) : result.Detail.StartsWith(
                     $"outcome={CohortStableSlotAcquisitionRounds.DeferredVerdict} ", StringComparison.Ordinal) ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : null;

@@ -16,6 +16,19 @@ internal sealed partial class ConductorDriver
     internal void UseWorkerBuildCapacityReader(Func<WorkerBuildCapacitySnapshot> reader) =>
         _workerBuildCapacityReader = reader;
 
+    private ConductorAdvanceResult? TryHoldWorkerBuildEvidence(
+        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
+        FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)
+    {
+        var hold = WorkerBuildEvidenceRecoveryHold.Decide(goal, state, decision.Identity);
+        if (hold is null) return null;
+        ApplyPendingFailedGoalNotes(goal, pendingNotes);
+        if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
+            hold = new ConductorAdvanceOutcome.Held(state, staleReason) {
+                Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) };
+        return MakeResult(goal.Id.Value, goalPrefix, policy, hold);
+    }
+
     private ConductorAdvanceResult? TryRecoverFailedWorkerBuildCheck(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
         FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)

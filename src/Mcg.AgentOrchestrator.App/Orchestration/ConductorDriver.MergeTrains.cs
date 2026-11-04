@@ -44,7 +44,8 @@ internal sealed partial class ConductorDriver
         bool runGateInBackground = false,
         bool gateOnly = false,
         bool landFromReceiptOnly = false,
-        string? expectedGateIdentity = null)
+        string? expectedGateIdentity = null,
+        string? outerAttemptId = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -200,7 +201,7 @@ internal sealed partial class ConductorDriver
                             // The gate-only replay owns its workspace and writes receipts, including the
                             // bounded RED bisection. A later tick replays those receipts and lands.
                             _ = RunMergeTrain(selection, orderedGoals, policy, cancellationToken,
-                                onGateAdmitted, gateOnly: true);
+                                onGateAdmitted, gateOnly: true, outerAttemptId: outerAttemptId);
                             run.Completion.SetResult();
                         }
                         catch (Exception ex)
@@ -236,7 +237,7 @@ internal sealed partial class ConductorDriver
                     if (receipt is null)
                         receipt = MergeTrainGateReceiptExecution.Run(_cohortAcceptanceVerifier, workspace.Path,
                             identity, changedFiles, _mergeTrainAcceptanceStore, stableSlotLease,
-                            CreateMergeTrainGateExecutionOptions(identity, members, trainKey, goalsById), clock, _utcNow, cancellationToken, attemptId);
+                            CreateMergeTrainGateExecutionOptions(identity, members, trainKey, goalsById, outerAttemptId ?? attemptId), clock, _utcNow, cancellationToken, attemptId);
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
                     DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException or
@@ -405,6 +406,7 @@ internal sealed partial class ConductorDriver
                 $"Dropped after RED receipt {receipt.ReceiptId}.");
             allEjections.Add(ejection);
             _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]);
+            AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, dropped.GoalId, ejection.Reason);
             var remainingIds = members.Where(member => member.GoalId != dropped.GoalId)
                 .Select(member => member.GoalId).ToHashSet();
             composition = originalBindings.Where(member => remainingIds.Contains(member.GoalId)).ToArray();
