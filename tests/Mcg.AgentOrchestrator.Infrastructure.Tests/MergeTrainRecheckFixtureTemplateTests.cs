@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: immutable templates; every WithTrain call owns its repository and state.
-public sealed class MergeTrainRecheckFixtureTemplateTests : AcceptanceCohortWorkflowTests
+public sealed class MergeTrainRecheckFixtureTemplateTests(ITestOutputHelper output) : AcceptanceCohortWorkflowTests
 {
     [Theory]
     [InlineData("abandoned")]
@@ -10,6 +10,10 @@ public sealed class MergeTrainRecheckFixtureTemplateTests : AcceptanceCohortWork
     {
         string? firstRoot = null;
         string? secondRoot = null;
+        using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        var firstObservation = new MergeTrainFixtureObservation(mode, output.WriteLine, probes: () => launches.Count);
+        var secondObservation = new MergeTrainFixtureObservation(mode, output.WriteLine,
+            probes: () => launches.Count, parentId: firstObservation.Id);
         MergeTrainFocusedRecheckTests.WithTrain(mode, true, first =>
         {
             firstRoot = first.Repo;
@@ -56,11 +60,11 @@ public sealed class MergeTrainRecheckFixtureTemplateTests : AcceptanceCohortWork
                     Assert.False(File.Exists(Path.Combine(untouched, relativeWorktree, "copy-only.txt")));
                     Assert.Equal(head, File.ReadAllText(Path.Combine(untouched, ".git", "HEAD")));
                 }
-            });
+            }, secondObservation);
             Assert.NotNull(secondRoot);
             Assert.False(Directory.Exists(secondRoot));
             Assert.True(Directory.Exists(first.Repo));
-        });
+        }, firstObservation);
         Assert.NotNull(firstRoot);
         Assert.False(Directory.Exists(firstRoot));
         Assert.True(Directory.Exists(MergeTrainRecheckFixtureTemplate.TemplateDirectory(mode)));
@@ -71,9 +75,12 @@ public sealed class MergeTrainRecheckFixtureTemplateTests : AcceptanceCohortWork
     [InlineData("overlap")]
     public void WithTrain_WarmCall_LaunchesAtMostThreeGitProcesses(string mode)
     {
-        MergeTrainFocusedRecheckTests.WithTrain(mode, true, _ => { });
+        using (var initialLaunches = InfrastructureTestSupport.CountGitProbeLaunches())
+            MergeTrainFocusedRecheckTests.WithTrain(mode, true, _ => { },
+                new(mode, output.WriteLine, probes: () => initialLaunches.Count));
         using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
-        MergeTrainFocusedRecheckTests.WithTrain(mode, true, _ => { });
+        MergeTrainFocusedRecheckTests.WithTrain(mode, true, _ => { },
+            new(mode, output.WriteLine, probes: () => launches.Count));
         Assert.InRange(launches.Count, 0, 3);
     }
 }
