@@ -57,6 +57,26 @@ internal sealed class PreTesterGuardSelections
         return DeveloperDeferredTestSelectionNormalization.Normalize(new(Selections, NotRun), settings);
     }
 
+    internal DeveloperDeferredTestSelection Augment(DeveloperDeferredTestSelection declaration,
+        AcceptanceGateEngineSettings settings, PreTesterEvidenceEntry? prior,
+        Func<FindingEvidenceSelection, string> format)
+    {
+        var selected = declaration.Selections.ToList();
+        var notRun = declaration.NotRun.ToList();
+        var normalizedGuards = NormalizeWithNotRun(settings);
+        notRun.AddRange(normalizedGuards.NotRun.Where(name => prior?.Outcome != "started" ||
+            prior.NotRun.Contains(name, StringComparer.Ordinal)));
+        selected.AddRange(normalizedGuards.Selections);
+        if (prior?.Outcome == "started")
+        {
+            // CLI discovery belongs to attempt creation. Recorded obligations survive later inventory edits.
+            selected.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.Selections));
+            notRun = prior.NotRun.ToList();
+        }
+        return new(RetainStartedSelections(selected,
+            prior?.Outcome == "started" ? prior.Selections : null, format), notRun);
+    }
+
     internal FindingEvidenceSelection[] RetainStartedSelections(
         IEnumerable<FindingEvidenceSelection> selected, IReadOnlyList<string>? priorSelections,
         Func<FindingEvidenceSelection, string> format)
