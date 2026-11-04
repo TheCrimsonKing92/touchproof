@@ -126,6 +126,7 @@ public static class DispatchFailureDiagnosticMarker
     public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
     public const string WorkerBuildCheckFailed = "worker-build-check-failed";
     public const string WorkerBuildEvidenceMissing = "worker-build-evidence-missing";
+    public const string WorkerBuildApplicability = "worker_build_applicability=";
     public const string WorkerBuildReceiptStale = "worker-build-receipt-stale";
     public const string WorkerBuildReceiptTreeChanged = "the build receipt does not match the final tree; files changed after build: ";
     public const string WorkerBuildReceiptUncoveredProject = "receipt does not cover project ";
@@ -1087,6 +1088,12 @@ public static class DispatchFailureClassifier
         TaskVerificationRecord verification)
     {
         var description = failure.Description;
+        if (failure.Rule == TaskOutcomeRules.WorkerBuildEvidenceMissing || failure.Rule == TaskOutcomeRules.WorkerBuildCheckFailed)
+        {
+            // Presentation only: these lines cannot establish a classification or authorize recovery.
+            if (DispatchContractDiagnostic.TryExtract(verification.StandardError, failure.Rule.Token, out var applicability))
+                return $"{description} {applicability}";
+        }
         if (failure.Rule == TaskOutcomeRules.WorkerBuildReceiptStale)
         {
             var diagnostic = DispatchEvidenceSummaries.GetSubstantiveStandardErrorLines(verification).LastOrDefault(line =>
