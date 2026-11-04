@@ -150,8 +150,18 @@ public sealed class JunitCommandEnvironmentIsolationTests
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
         internal async Task WaitForExit()
         {
-            await WaitForExit(_child, "Fixture child");
-            await WaitForExit(_launcher, "Fixture command launcher");
+            try
+            {
+                await WaitForExit(_child, "Fixture child");
+                await WaitForExit(_launcher, "Fixture command launcher");
+            }
+            finally
+            {
+                // The fixture's using scope ends before the gate's scope. Release the pinned
+                // process handles here, before that scope recursively deletes the workspace.
+                // Exit notification alone does not end this gate's ownership of the handles.
+                DisposeProcesses();
+            }
         }
         private static async Task WaitForExit(Process? process, string eventName)
         {
@@ -160,6 +170,13 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException($"{eventName} did not exit before directory cleanup."); }
             Assert.True(process.HasExited);
         }
-        public void Dispose() { _launcher?.Dispose(); _child?.Dispose(); _writer?.Dispose(); _pipe.Dispose(); }
+        private void DisposeProcesses()
+        {
+            _launcher?.Dispose();
+            _launcher = null;
+            _child?.Dispose();
+            _child = null;
+        }
+        public void Dispose() { DisposeProcesses(); _writer?.Dispose(); _pipe.Dispose(); }
     }
 }
