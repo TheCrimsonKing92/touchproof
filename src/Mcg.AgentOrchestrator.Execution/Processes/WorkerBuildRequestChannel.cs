@@ -33,7 +33,8 @@ public interface IWorkerBuildInvocationOperations
         IReadOnlyList<string> changedPaths, IReadOnlyList<string> dirtyPaths);
 }
 
-public sealed record WorkerBuildConsumption(bool MissingEvidence, bool CompilerFailed, string Diagnostic);
+public sealed record WorkerBuildConsumption(bool MissingEvidence, bool CompilerFailed, string Diagnostic,
+    WorkerBuildEvidenceGap Gap = WorkerBuildEvidenceGap.Unclassified);
 
 // The file locates a dispatch-scoped endpoint. Only an OS-verified peer in the owned job is admitted.
 internal sealed class WorkerBuildRequestChannel : IDisposable

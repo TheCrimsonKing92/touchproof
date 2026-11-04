@@ -46,6 +46,19 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         try
         {
             Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Feature"));
+            // Restore must not read the executor's inherited profile configuration: its
+            // NuGet directory may deny access to the deliberately low-integrity compiler.
+            // These SDK-only projects need no feeds; keep restore inputs in the candidate
+            // so linked worktrees use the same fixture-owned configuration too.
+            File.WriteAllText(Path.Combine(RepositoryRoot, "NuGet.Config"),
+                "<configuration><packageSources><clear /></packageSources></configuration>");
+            File.WriteAllText(Path.Combine(RepositoryRoot, "Directory.Build.props"), """
+                <Project>
+                  <PropertyGroup>
+                    <RestoreConfigFile>$(MSBuildThisFileDirectory)NuGet.Config</RestoreConfigFile>
+                  </PropertyGroup>
+                </Project>
+                """);
             File.WriteAllText(Path.Combine(RepositoryRoot, Project), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             File.WriteAllText(Path.Combine(RepositoryRoot, Source), "public sealed class Feature { }");
             if (extraProject)
