@@ -79,8 +79,9 @@ internal static class SourceSizeRatchetPreflight
             return SourceSizeRatchetPreflightResult.Declined;
         }
 
+        var classes = TryReadClassAuthority(worktreeRoot);
         var violations = SourceSizeRatchet.Evaluate(worktreeRoot, ceilings, readLines)
-            .Concat(SourceSizeRatchet.EvaluateClasses(worktreeRoot, TryReadClassAuthority(worktreeRoot), readLines))
+            .Concat(SourceSizeRatchet.EvaluateClasses(worktreeRoot, classes, readLines))
             .ToArray();
         var blockingViolations = violations
             .Where(violation => violation.ActualLineCount is not null)
@@ -88,7 +89,20 @@ internal static class SourceSizeRatchetPreflight
         return new SourceSizeRatchetPreflightResult(
             blockingViolations.Length > 0,
             string.Join(Environment.NewLine, blockingViolations.Select(violation => violation.Message)),
-            violations);
+            violations, EvaluationComplete: AuthorityEntriesMatch(worktreeRoot, ceilings.Count, classes.Count) &&
+                violations.All(violation => violation.ActualLineCount is not null));
+    }
+
+    private static bool AuthorityEntriesMatch(string root, int files, int classes)
+    {
+        try
+        {
+            var text = File.ReadAllText(Path.Combine(root, SourceSizeRatchet.SourcePath));
+            // Reuse the canonical parser; a partially parsed registry is not complete evidence.
+            return Regex.Matches(text, @"new\s+SourceSizeCeiling\s*\(").Count == files &&
+                Regex.Matches(text, @"new\s+SourceClassCeiling\s*\(").Count == classes;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 
     internal static IReadOnlyList<string> BlockingViolationMessages(
@@ -105,7 +119,8 @@ internal static class SourceSizeRatchetPreflight
 internal sealed record SourceSizeRatchetPreflightResult(
     bool HasBlockingViolation,
     string Message,
-    IReadOnlyList<SourceSizeViolation> Violations)
+    IReadOnlyList<SourceSizeViolation> Violations,
+    bool EvaluationComplete = true, bool AuthorityAvailable = true)
 {
-    internal static SourceSizeRatchetPreflightResult Declined { get; } = new(false, string.Empty, []);
+    internal static SourceSizeRatchetPreflightResult Declined { get; } = new(false, string.Empty, [], false, false);
 }
