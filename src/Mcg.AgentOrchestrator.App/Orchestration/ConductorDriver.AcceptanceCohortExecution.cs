@@ -10,17 +10,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private const int CohortStableSlotRoundCount = 3;
-    private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
-    {
-        private AcceptanceCohortWorkspace? _workspace = workspace;
-
-        internal AcceptanceCohortWorkspace Transfer() =>
-            Interlocked.Exchange(ref _workspace, null)
-            ?? throw new InvalidOperationException("Acceptance cohort workspace ownership was already transferred.");
-
-        public void Dispose() => Interlocked.Exchange(ref _workspace, null)?.Dispose();
-    }
-
     internal ConductorAcceptanceCohortRunResult RunAcceptanceCohort(
         ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
@@ -97,7 +86,7 @@ internal sealed partial class ConductorDriver
                 ex.Message);
         }
 
-        using var integrationScope = new TransferableCohortWorkspace(integration);
+        using var integrationScope = new TransferableAcceptanceCohortWorkspace(integration);
         string manifestIdentity;
         try
         {
