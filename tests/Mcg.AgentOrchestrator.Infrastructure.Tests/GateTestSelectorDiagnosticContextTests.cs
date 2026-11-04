@@ -33,7 +33,7 @@ public sealed class GateTestSelectorDiagnosticContextTests
                 return GateTestSelectorDiagnosticPreparation.Build(goal, candidate, f.Root, f.OrchestratorDirectory, f.Kernel.HumanInputRequests);
             });
         Assert.Equal(1, calls);
-        Assert.Equal(WorkTaskStatus.Assigned, f.Task.Status);
+        Assert.Equal(WorkTaskStatus.Running, f.Task.Status);
         var prompt = File.ReadAllText(prepared.PromptPath);
         Assert.Contains(GateTestSelectorDiagnostic.Marker, prompt);
         Assert.Contains(Prediction, prompt);
