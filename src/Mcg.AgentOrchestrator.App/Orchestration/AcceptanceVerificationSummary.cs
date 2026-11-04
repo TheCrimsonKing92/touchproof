@@ -18,7 +18,8 @@ internal sealed record AcceptanceVerificationSummary(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     [property: System.Text.Json.Serialization.JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]
     IReadOnlyList<AcceptanceLaneWaitOccurrence>? LaneWaits = null,
-    SoloAcceptanceFailureReceipt? SoloFailureReceipt = null)
+    SoloAcceptanceFailureReceipt? SoloFailureReceipt = null,
+    bool RequiresSoloFailureReceipt = false)
 {
     internal static AcceptanceVerificationSummary FromVerification(
         AcceptanceVerificationResult verification,
@@ -31,7 +32,8 @@ internal sealed record AcceptanceVerificationSummary(
         new(verification.Passed, unmetCriteria, verification.Passed ? null : verification.OutputTail,
             failedChecks, branchHeadSha, mainHeadSha, testResultPaths, checkAttributions,
             baselineAttestation, verification.AttemptId,
-            verification.Checks?.Select(check => check.Name).ToArray(), verification.LaneWaits, verification.SoloFailureReceipt);
+            verification.Checks?.Select(check => check.Name).ToArray(), verification.LaneWaits, verification.SoloFailureReceipt,
+            RequiresSoloFailureReceipt: verification.SoloFailureReceipt is not null);
 
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

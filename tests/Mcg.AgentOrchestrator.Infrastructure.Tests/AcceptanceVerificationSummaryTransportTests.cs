@@ -33,9 +33,42 @@ public sealed class AcceptanceVerificationSummaryTransportTests
         var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(summary);
         var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(normalized))!;
         Assert.Equal(receipt, restored.SoloFailureReceipt);
+        Assert.True(restored.RequiresSoloFailureReceipt);
         Assert.Equal("attempt", restored.AttemptId);
         Assert.Single(restored.RequiredUnmetCriteria);
         Assert.Equal(new[] { "solo tests" }, restored.FailedChecks);
+    }
+
+    [Fact]
+    public void LostSoloReceiptRetainsEvidenceObligationAcrossSavedSummaryReload()
+    {
+        var receipt = new SoloAcceptanceFailureReceipt(1, "goal", "attempt", "candidate", "tree", "main", "baseline",
+            "root", new("proof.json", "digest"));
+        var native = new AcceptanceVerificationResult(false, false, 1, "failure")
+            { AttemptId = "attempt", SoloFailureReceipt = receipt };
+        var summary = AcceptanceVerificationSummary.FromVerification(native, [], ["solo tests"], "candidate", "main",
+            null, [new("solo tests", AcceptanceFailureOrigin.Introduced, "baseline proof")], null);
+        var lostReceipt = summary with { SoloFailureReceipt = null };
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(lostReceipt))!;
+
+        Assert.Null(restored.SoloFailureReceipt);
+        Assert.True(restored.RequiresSoloFailureReceipt);
+        Assert.Equal("attempt", restored.AttemptId);
+    }
+
+    [Fact]
+    public void OlderSummaryWithAttemptAndAttributionDoesNotDeclareSoloEvidence()
+    {
+        const string saved = """
+            {"Passed":false,"UnmetCriteria":[],"AttemptId":"background-attempt",
+             "CheckAttributions":[{"CheckName":"tests","Origin":0,"Evidence":"main green"}]}
+            """;
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(saved)!;
+
+        Assert.Equal("background-attempt", restored.AttemptId);
+        Assert.Single(restored.CheckAttributions!);
+        Assert.Null(restored.SoloFailureReceipt);
+        Assert.False(restored.RequiresSoloFailureReceipt);
     }
 
     [Theory]

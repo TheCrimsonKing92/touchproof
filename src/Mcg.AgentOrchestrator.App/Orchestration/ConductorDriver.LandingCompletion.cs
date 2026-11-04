@@ -74,9 +74,11 @@ internal sealed partial class ConductorDriver
             return CreateApparatusCompletionHold(goal, goalPrefix, policy, acceptance, branchHeadSha, mainHeadSha);
         }
 
-        if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null ||
-            acceptance.AttemptId is not null && acceptance.CheckAttributions is { Count: > 0 }))
+        if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
+            // Attempt IDs also identify legacy and background completions. Only
+            // producer-owned solo evidence selects this path; keep that obligation
+            // when a captured receipt is subsequently lost during transport.
             // Preserve the existing apparatus disposition before admitting solo evidence.
             if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
                 return soloApparatus;
