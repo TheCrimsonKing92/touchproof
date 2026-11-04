@@ -107,6 +107,34 @@ internal sealed class ReviewerPassingFindingEvidenceFixture : IDisposable
         ConductorDriver.TryNormalizeFindingEvidenceRequest(request, new AcceptanceGateEngineSettings(),
             (_, testClass) => [testClass], out var normalized, out _, out _, out _) ? normalized : null;
 
+    internal FindingEvidenceReceipt SeedPreTesterCoverage(FindingEvidenceRequest request)
+    {
+        // Pre-Tester covered a broader guard set, not this finding's own execution request.
+        var coverage = request with
+        {
+            Selections = request.Selections.Append(new FindingEvidenceSelection("Infrastructure.Tests", "ConductorDriverTests")).ToArray()
+        };
+        var normalized = Assert.IsType<FindingEvidenceRequest>(NormalizeRequest(coverage));
+        var selected = string.Join("; ", normalized.Selections.Select(ConductorDriver.FormatFindingEvidenceSelection));
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            _root, TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null);
+        // Retain original execution authority before the Reviewer requests it. The driver's
+        // execution callback must stay unused when it subsequently reattaches this receipt.
+        var decision = coordinator.EvaluateFocusedEvidence(
+            ConductorParallelAcceptanceCandidate.Create(Goal, 0, [], Candidate, "main123"),
+            ConductorAutonomyPolicy.Permissive, selected,
+            (_, selection, _, _) => ConductorDriverTestsFindingEvidenceReuse
+                .RetainedEvidenceWithExecutedClasses(_root, selection, Candidate) with
+                { OutcomeReason = FindingEvidenceOutcomeReason.ValidEvidence },
+            new ConductorFocusedEvidenceRequestContext("pre-tester-deferred", "incident-coverage", [],
+                ExecutionBasisIdentity: ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(new()),
+                ReceiptId: "pre-tester-incident-receipt"));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+        var receipt = Assert.IsType<FindingEvidenceReceipt>(coordinator.ReadOriginalFocusedReceipt(decision.Attempt));
+        coordinator.MarkReconciled(decision.Attempt);
+        return receipt;
+    }
+
     private void RestartDriver() => _driver = MakeDriver(
         getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
         resolveFindingEvidenceSiblingClasses: (_, _, testClass) => [testClass],
