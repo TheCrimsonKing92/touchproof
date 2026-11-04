@@ -68,5 +68,24 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         return document.RootElement.GetProperty("value").GetString();
     }
 
-    public void Dispose() => DeleteDirectoryWithRetry(Root);
+    public void Dispose()
+    {
+        try { DeleteDirectoryWithRetry(Root); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The cancellation fixture already waits for its pinned child and launcher.
+            // Collect evidence at the remaining failure instead of guessing another owner
+            // or extending the deletion retry. Never stop processes from this snapshot.
+            var report = AssemblyTempRootCleanupHolderDiagnostics.Describe(Root, ProcessCommandLines.Snapshot);
+            var holders = report.Holders.Take(8).Select(holder =>
+                $"pid={holder.ProcessId} parent_pid={holder.ParentProcessId} " +
+                $"image={holder.Image} match={holder.Match}");
+            // Omit command lines and current-directory paths: fixture input values must
+            // not become diagnostic excerpts, even while diagnosing fixture teardown.
+            var detail = string.Join(Environment.NewLine, holders);
+            throw new IOException($"{exception.Message}{Environment.NewLine}" +
+                $"JUnit fixture cleanup failed; holder_candidates={report.Holders.Count} " +
+                $"unreadable_cwd_count={report.UnreadableCurrentDirectoryCount}{Environment.NewLine}{detail}", exception);
+        }
+    }
 }
