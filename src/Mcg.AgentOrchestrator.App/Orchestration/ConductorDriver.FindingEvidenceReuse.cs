@@ -175,7 +175,7 @@ internal sealed partial class ConductorDriver
 
         observation = BuildReceiptClosureOrDeliveryRetry(
             goal, task, candidateSha!, findings, currentReceipts,
-            "The Developer-owned findings have honoured GREEN evidence at this candidate.");
+            "The Developer-owned findings have honoured GREEN evidence at this candidate.", policy);
         return true;
     }
 

@@ -34,6 +34,8 @@ internal sealed partial class ConductorDriver
         {
             return false;
         }
+        if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy, out decision))
+            return true;
         if (requestingTask.RequiredRole == AgentRole.Reviewer && requestingTask.LastVerification?.CandidateIdentity is not null &&
             ReviewFindings.GetOpenBlockingFindings(mergedFindings, goal.EffectiveAcceptanceCriteriaCorrections)
                 .All(finding => finding.Category == FindingCategory.TestEvidence) &&
@@ -215,7 +217,7 @@ internal sealed partial class ConductorDriver
             decision = BuildReceiptClosureOrDeliveryRetry(
                 goal, requestingTask, telemetryCandidateSha, requestingFindings,
                 reattachedReceiptIds.Distinct(StringComparer.Ordinal).ToArray(),
-                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
+                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.", policy);
             return true;
         }
 
@@ -259,7 +261,7 @@ internal sealed partial class ConductorDriver
             decision = BuildReceiptClosureOrDeliveryRetry(goal, requestingTask, telemetryCandidateSha,
                 plan.CoveredFindings.Concat(redCoverage.Findings).ToArray(),
                 plan.CoveredReceiptIds.Concat(redCoverage.ReceiptIds).Distinct(StringComparer.Ordinal).ToArray(),
-                plan.CoveredEvidence + "; " + redCoverage.Evidence);
+                plan.CoveredEvidence + "; " + redCoverage.Evidence, policy);
             return true;
         }
 
@@ -508,7 +510,7 @@ internal sealed partial class ConductorDriver
 
         decision = FindingRoundRedCoverage.Complete(this, goal, requestingTask, batches.Skip(1).ToArray(),
             runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
-            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, policy);
         return true;
     }
 

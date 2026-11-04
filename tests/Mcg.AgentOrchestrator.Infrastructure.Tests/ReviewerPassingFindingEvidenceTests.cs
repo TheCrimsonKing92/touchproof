@@ -1,0 +1,81 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
+
+// Parallel-safe: all I/O and state are scoped by the fixture; no child process is launched.
+public sealed class ReviewerPassingFindingEvidenceTests
+{
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DeliveredGreen_RepeatedIncidentFinding_RoutesOneSourceCorrection(bool capture)
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture(capture
+            ? "7b50a02394baa03c45d5f557e6a3f8df21f0e530" : "df1cbfc3a1535e3a062ab7fdda0b114c7653c716");
+        var finding = capture ? ReviewerPassingFindingEvidenceFixture.CaptureFinding() : ReviewerPassingFindingEvidenceFixture.CliFinding();
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        Assert.Single(fixture.Executions);
+        var receipt = Assert.Single(fixture.Receipts);
+        Assert.True(receipt.Passed);
+        Assert.Equal(fixture.Candidate, receipt.CandidateSha);
+        Assert.Equal(1, fixture.ReviewDispatches);
+
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(2, fixture.ReviewDispatches);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(2, fixture.Retries.Count);
+        var correction = fixture.Retries[1];
+        Assert.Equal(fixture.Developer.Id, correction.Task);
+        Assert.Equal(RetryCause.NewSourceFinding, correction.Cause);
+        Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", correction.Feedback);
+        Assert.Contains(finding.StableId, correction.Feedback);
+        Assert.Contains(finding.Description, correction.Feedback);
+        Assert.Contains(finding.Location.ToString(), correction.Feedback);
+        Assert.Contains(receipt.ReceiptId, correction.Feedback);
+        Assert.Contains(fixture.Candidate, correction.Feedback);
+        Assert.Contains("review_dispatch=", correction.Feedback);
+        Assert.Contains("review_completed=", correction.Feedback);
+        Assert.Contains(fixture.Reviewer.VerificationHistory.SelectMany(record => record.MergedReviewFindings ?? []),
+            item => item.StableId == finding.StableId && item.State == ReviewFindingState.Open);
+    }
+
+    [Theory]
+    [InlineData("I disagree with the passing receipt.")]
+    [InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/PreTesterGuardSelections.cs:34")]
+    public void DeliveredGreen_NoRemainingChange_HoldsWithOpenFinding(string description)
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with { Description = description };
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        fixture.Report([finding]);
+        var result = fixture.AdvanceToDecision();
+        var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("actionable-change-unavailable", hold.Reason);
+        Assert.Contains(finding.StableId, hold.Reason);
+        Assert.Contains(Assert.Single(fixture.Receipts).ReceiptId, hold.Reason);
+        Assert.NotNull(hold.Decision);
+        Assert.Single(fixture.Retries);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Reviewer.LastVerification!.MergedReviewFindings!).State);
+    }
+
+    [Fact]
+    public void DeliveredGreen_MissingRegression_RemainsOpenAfterCorrection()
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var finding = ReviewerPassingFindingEvidenceFixture.CliFinding() with
+        { Category = FindingCategory.TestCoverage, Description = "Missing regression coverage when prior.NotRun contains a CLI-only class; add that scenario." };
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Developer.Id, fixture.Retries.Last().Task);
+        Assert.All(fixture.Reviewer.VerificationHistory.SelectMany(record => record.MergedReviewFindings ?? []),
+            item => Assert.Equal(ReviewFindingState.Open, item.State));
+        Assert.DoesNotContain(fixture.Goal.Timeline, item => item.Message.StartsWith("FINDING_RECEIPT_CLOSURE", StringComparison.Ordinal));
+    }
+}
