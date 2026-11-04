@@ -19,6 +19,7 @@ internal interface IAcceptanceRunExecutionContext : IAsyncDisposable
     AcceptanceFocusedRunBinding? FocusedRunBinding => null;
     string? TreeRevision => null;
     string? EvidenceKind => null;
+    AcceptanceLaneWaitCollector? GetLaneWaitCollector(TimeProvider clock) => null;
     AcceptanceInvocationContext CreateInvocation(string name);
     T TrackStarted<T>(T task) where T : Task;
     void Cancel();
@@ -79,7 +80,8 @@ public sealed record AcceptanceRunExecutionOptions(
     IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null,
     AcceptanceAttributionLaneScope? AttributionLaneScope = null,
     IReadOnlyList<GoalId>? AttemptMemberGoalIds = null,
-    AcceptanceFocusedRunBinding? FocusedRunBinding = null);
+    AcceptanceFocusedRunBinding? FocusedRunBinding = null,
+    Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -108,6 +110,9 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     private int _releaseOutcome = (int)OwnedRunRootReleaseOutcome.Failed;
     private int _disposed;
     private int _resourcesReleased;
+    private protected AcceptanceLaneWaitCollector? _laneWaitCollector;
+    public AcceptanceLaneWaitCollector GetLaneWaitCollector(TimeProvider clock) =>
+        LazyInitializer.EnsureInitialized(ref _laneWaitCollector, () => new AcceptanceLaneWaitCollector(RunId, clock));
 
     protected AcceptanceRunExecutionOwner(
         string runId,
@@ -304,6 +309,12 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     {
         if (Interlocked.Exchange(ref _resourcesReleased, 1) != 0)
             return;
+        try
+        {
+            if (_laneWaitCollector is not null)
+                _options.LaneWaitSink?.Invoke(_laneWaitCollector.Snapshot());
+        }
+        catch (Exception) { /* Optional diagnostics cannot fail teardown or acceptance. */ }
         var releaseOutcome = (OwnedRunRootReleaseOutcome)Volatile.Read(ref _releaseOutcome);
         foreach (var environment in _ownedRootEnvironments.Values)
             DotnetBuildEnvironmentManager.RecordOwnedRunRootRelease(environment, releaseOutcome);
@@ -384,12 +395,18 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
                 MarkSuccessful();
             }
 
-            return result;
+            return result with { LaneWaits = GetLaneWaitCollector(verifier.WaitTimeProvider).Snapshot() };
         }
         catch (OperationCanceledException)
         {
+            _laneWaitCollector?.Stop("cancelled");
             stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Cancelled);
             MarkCancelled();
+            throw;
+        }
+        catch
+        {
+            _laneWaitCollector?.Stop("faulted");
             throw;
         }
     }
@@ -519,6 +536,7 @@ internal sealed class AcceptanceRunExecutionContextView(
     public AcceptanceFocusedRunBinding? FocusedRunBinding => owner.FocusedRunBinding;
     public string? TreeRevision => treeRevision ?? owner.TreeRevision;
     public string? EvidenceKind => evidenceKind ?? owner.EvidenceKind;
+    public AcceptanceLaneWaitCollector? GetLaneWaitCollector(TimeProvider clock) => owner.GetLaneWaitCollector(clock);
     public AcceptanceInvocationContext CreateInvocation(string name) => owner.CreateInvocation(name);
     public T TrackStarted<T>(T task) where T : Task => owner.TrackStarted(task);
     public void Cancel() => owner.Cancel();

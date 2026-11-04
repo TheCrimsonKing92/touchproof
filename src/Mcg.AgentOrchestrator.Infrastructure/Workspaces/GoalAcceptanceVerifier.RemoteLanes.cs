@@ -116,7 +116,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
-            }) { RemoteLaneHistory = history };
+            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector };
         _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
@@ -209,6 +209,23 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptanceLaneEarlyStop? earlyStop = null;
         var laneStopEnabled = cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled;
         await sharedApparatusCancellation.WaitForOffersAsync().ConfigureAwait(false);
+        var admissionEligible = allShardsUseMtp && primaryBuildPhase?.Run?.Result.Passed == true;
+        var waits = new System.Collections.Concurrent.ConcurrentDictionary<int, AcceptanceLaneWaitCollector.Occurrence?>(
+            orderedShards.Select(shard => new KeyValuePair<int, AcceptanceLaneWaitCollector.Occurrence?>(
+                shard.Index, LaneWaitCollector?.Begin(shard.Check.Name))));
+        foreach (var wait in waits.Values)
+        {
+            wait?.Expect("scheduler-resource-keys");
+            if (admissionEligible)
+            {
+                wait?.Ready();
+                wait?.Start("scheduler-resource-keys");
+            }
+        }
+        using var waitCancellation = sharedApparatusCancellation.Token.Register(() =>
+        {
+            foreach (var wait in waits.Values) wait?.Stop("cancelled");
+        });
 
         bool IsConfirmedLocalFailure(IndexedShard shard, Task task) =>
             laneStopEnabled && task.IsCompleted &&
@@ -217,7 +234,12 @@ public sealed partial class GoalAcceptanceVerifier
         async Task RunShardAsync(IndexedShard shard)
         {
             if (slotBudget is not null)
+            {
+                waits[shard.Index]?.Expect("scheduler-slot");
+                if (admissionEligible) waits[shard.Index]?.Start("scheduler-slot");
                 await slotBudget.WaitAsync(sharedApparatusCancellation.Token).ConfigureAwait(false);
+                waits[shard.Index]?.End("scheduler-slot", "slot-acquired");
+            }
             try
             {
                 await ExecuteShardAsync(shard).ConfigureAwait(false);
@@ -286,6 +308,7 @@ public sealed partial class GoalAcceptanceVerifier
                         break; // Drain active work before rethrowing caller/probe cancellation below.
                     }
                     if (offered is null) continue;
+                    if (waits[shard.Index] is { } unselected) LaneWaitCollector?.DiscardUnselected(unselected);
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
                     if (offered.Reused is { } reused) CompleteShard(shard, reused, false, offered.ReuseElapsed);
@@ -320,6 +343,7 @@ public sealed partial class GoalAcceptanceVerifier
                     }
                 }
 
+                waits[shard.Index]?.End("scheduler-resource-keys", "scheduler-and-keys-granted");
                 activeShards.Add((shard, RunShardAsync(shard), resourceKeys));
             }
 
@@ -368,6 +392,14 @@ public sealed partial class GoalAcceptanceVerifier
                     else if (!sharedApparatusCancellation.IsCancellationRequested)
                     {
                         fallbackOutcomes[completedRemote.Shard.Index] = outcome;
+                        var fallbackWait = LaneWaitCollector?.Begin(completedRemote.Shard.Check.Name);
+                        waits[completedRemote.Shard.Index] = fallbackWait;
+                        fallbackWait?.Expect("scheduler-resource-keys");
+                        if (admissionEligible)
+                        {
+                            fallbackWait?.Ready();
+                            fallbackWait?.Start("scheduler-resource-keys");
+                        }
                         pendingShards.Insert(0, completedRemote.Shard);
                     }
                 }

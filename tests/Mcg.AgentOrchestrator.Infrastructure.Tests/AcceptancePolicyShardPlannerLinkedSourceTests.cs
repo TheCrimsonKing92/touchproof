@@ -36,6 +36,18 @@ public sealed class AcceptancePolicyShardPlannerLinkedSourceTests
     }
 
     [Theory]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceLaneWaitArtifactFixture.cs")]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceLaneWaitTestClock.cs")]
+    public void SharedWaitFixtureChange_KeepsOwnerAndCliConsumer(string path)
+    {
+        var plan = AcceptancePolicyShardPlanner.BuildPolicyShardPlan([path], Scoped);
+        Assert.True(plan.Applies);
+        Assert.False(plan.ForceFull);
+        Assert.True(plan.IncludesProject(AcceptancePolicyShardPlanner.InfrastructureTestsProject));
+        Assert.True(plan.IncludesProject(AcceptancePolicyShardPlanner.CliTestsProject));
+    }
+
+    [Theory]
     [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyTempRedirect.cs")]
     [InlineData("tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\ASSEMBLYTEMPREDIRECT.cs")]
     public void SharedRedirectChange_ReachesEveryNestedConsumer(string path)

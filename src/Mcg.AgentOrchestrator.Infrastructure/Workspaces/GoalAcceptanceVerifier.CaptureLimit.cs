@@ -18,20 +18,20 @@ public sealed partial class GoalAcceptanceVerifier
 
     private static string BuildInterruptedFailureName(AcceptanceManifestCheck check, CommandResult result) =>
         result.CaptureLimited
-            ? $"acceptance-check-capture-limit: {AcceptanceArtifactFileNames.Slug(check.Name)} {BuildTimeoutSummary(result)}"
-            : BuildTimeoutFailureName(check, result);
+            ? $"acceptance-check-capture-limit: {AcceptanceArtifactFileNames.Slug(check.Name)} {AcceptanceCommandResultSummary.BuildTimeoutSummary(result)}"
+            : AcceptanceCommandResultSummary.BuildTimeoutFailureName(check, result);
 
     internal static string BuildInterruptedOutput(CommandResult result) =>
         result.CaptureLimited
             ? BuildCaptureLimitOutput(result, result.CaptureLimitBytes ?? throw new InvalidOperationException(
                 "Capture-limited process result is missing its configured cap bytes."))
-            : BuildTimeoutOutput(result);
+            : AcceptanceCommandResultSummary.BuildTimeoutOutput(result);
 
     private static string BuildCaptureLimitOutput(CommandResult result, long capBytes)
     {
         var details = new List<string>
         {
-            $"Verification command reached output capture limit cap_bytes={capBytes} after {BuildTimeoutSummary(result)}."
+            $"Verification command reached output capture limit cap_bytes={capBytes} after {AcceptanceCommandResultSummary.BuildTimeoutSummary(result)}."
         };
         if (!string.IsNullOrWhiteSpace(result.CommandLine))
             details.Add($"Command: {result.CommandLine}");

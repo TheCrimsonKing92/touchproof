@@ -57,8 +57,14 @@ internal sealed class RemoteLaneEarlyOffer(RemoteLaneCoordinator coordinator) : 
     {
         if (_consulted.Contains(check.Name) || !coordinator.IsEligible(check) || !context.Offer(check.Name)) return null;
         token.ThrowIfCancellationRequested();
-        var entry = await coordinator.ClaimForGateAsync(check, token).ConfigureAwait(false);
+        var wait = coordinator.WaitCollector?.Begin(check.Name, "remote");
+        wait?.Ready();
+        wait?.Start("remote-claim");
+        RemoteLaneExecutorEntry? entry;
+        try { entry = await coordinator.ClaimForGateAsync(check, token).ConfigureAwait(false); }
+        finally { wait?.End("remote-claim", token.IsCancellationRequested ? "cancelled" : "claim-returned"); }
         if (entry is null) return null;
+        wait?.Admit();
         _consulted.Add(check.Name);
         var reuseStarted = context.Time.GetTimestamp();
         if (context.Cache?.TryReuse(check) is { } reused)
@@ -67,7 +73,7 @@ internal sealed class RemoteLaneEarlyOffer(RemoteLaneCoordinator coordinator) : 
             return new(null, reused, context.Time.GetElapsedTime(reuseStarted));
         }
         context.Started(check, entry);
-        return new(coordinator.RunRemoteAsync(check, entry, context.Timeout(check), context.Deadline(check), token), null, TimeSpan.Zero);
+        return new(coordinator.RunRemoteAsync(check, entry, context.Timeout(check), context.Deadline(check), token, wait), null, TimeSpan.Zero);
     }
 
     internal void Cancel() => _cancellation?.Cancel();

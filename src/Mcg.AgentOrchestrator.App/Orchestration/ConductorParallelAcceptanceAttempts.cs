@@ -161,6 +161,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
     public int? BriefVersion { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]
+    public IReadOnlyList<AcceptanceLaneWaitOccurrence>? LaneWaits { get; init; }
     public string? IntegrationBranch { get; init; }
     public string? StateDirectory { get; init; }
     public string? ProjectName { get; init; }
@@ -1801,7 +1804,25 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             new AcceptanceRunExecutionOptions(
                 RunId: attempt.AttemptId,
                 ResultsPrefix: prefix,
-                LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id]));
+                LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id],
+                LaneWaitSink: observations => PersistLaneWaits(attempt, observations)));
+    }
+
+    internal static void PersistLaneWaits(ConductorParallelAcceptanceAttempt attempt,
+        IReadOnlyList<AcceptanceLaneWaitOccurrence> observations)
+    {
+        // Includes cancelled/faulted lanes without a result/TRX. Same metadata and write lock
+        // as the existing lease receipts; this optional write cannot change a gate verdict.
+        try
+        {
+            lock (MetadataWriteGate)
+            {
+                var current = TryReadAttemptFile(attempt.MetadataPath);
+                if (current?.AttemptId == attempt.AttemptId)
+                    WriteAttemptFile(current with { LaneWaits = observations });
+            }
+        }
+        catch (Exception) { /* Advisory diagnostics. */ }
     }
 
     private void EmitAttemptLeaseReceipt(
