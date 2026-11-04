@@ -651,7 +651,7 @@ internal static class SourceSizeRatchet
             // Goal 843fc2d0: one-line kernel recording seam for TaskGraphRepair status transitions.
             // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9270, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9187, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
