@@ -357,6 +357,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var sourceLines = new List<string>(lines);
         void AddLine(string value, bool bound = false)
         { sourceLines.Add(value); lines.Add(bound ? BoundItem(value) : value); }
+        foreach (var item in obligations.Where(item => item.PlannerSources is { Count: > 0 } && !item.HasSatisfiedEvidenceFor(candidate)))
+            AddLine($"{item.DisplayLabel}: {item.State}; owner={item.Owner}; scope={item.RequiredScope}; " +
+                $"Planner sources={string.Join(",", item.PlannerSources!.Select(source => source.Identity.StableId))}", bound: true);
         var failed = applicable.Any(item => item.State == CriterionEvidenceState.Failed);
         var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
         var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :

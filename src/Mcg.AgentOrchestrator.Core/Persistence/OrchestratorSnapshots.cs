@@ -175,7 +175,8 @@ public sealed record TaskExecutionSnapshot(
     int? MaxOutputTokens = null,
     int? PromptCharacterCount = null,
     int? CachedInputTokens = null,
-    string? AuthoritativeOutput = null)
+    string? AuthoritativeOutput = null,
+    int? PlannerEvidenceBriefVersion = null)
 {
     public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
 }

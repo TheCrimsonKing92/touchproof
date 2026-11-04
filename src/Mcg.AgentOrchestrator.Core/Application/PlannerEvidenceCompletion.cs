@@ -3,6 +3,37 @@ namespace Mcg.AgentOrchestrator.Core;
 // Owns dispatch provenance and protocol rejection for completed Planner evidence.
 internal static class PlannerEvidenceCompletion
 {
+    // Historical directive provenance survives retry; only the current accepted
+    // round can authorize execution deferral or lifecycle reconciliation.
+    internal static bool TryGetCurrentAcceptedBatch(Goal goal, TaskSpec task,
+        out HumanInputDirectiveParseResult? batch, out int? briefVersion, out DateTimeOffset recordedAt)
+    {
+        batch = null;
+        briefVersion = null;
+        recordedAt = default;
+        if (task.RequiredRole != AgentRole.Planner || task.Status != WorkTaskStatus.Completed) return false;
+        if (task.LastDispatch is { } dispatch &&
+            task.LastVerification is { Succeeded: true, PlannerEvidenceBatch: { } stored } verification &&
+            verification.DispatchAttemptAt == dispatch.DispatchedAt &&
+            WorkerResultBlockers.AssessSubscriptionVerification(task, verification).AllowsCompletion &&
+            (verification.CompletionVerdictVerifiedSuccess ||
+             DispatchFailureClassifier.Classify(task, verification).Kind == DispatchOutcomeKind.VerifiedSuccess) &&
+            ValidateProvenance(task, verification, out briefVersion) is null)
+        {
+            batch = stored;
+            recordedAt = verification.CompletedAt;
+        }
+        else if (task.LastDispatch is null && task.LastExecution is { PlannerEvidenceBriefVersion: not null } execution &&
+            !OutputTokenLimit.IsHit(execution) && WorkerResultBlockers.HasCompleteWorkerResult(execution.AuthoritativeOutput ?? "") &&
+            !WorkerResultBlockers.TryFindBlocker(execution.AuthoritativeOutput ?? "", out _))
+        {
+            briefVersion = execution.PlannerEvidenceBriefVersion;
+            batch = AgentOutputDirectives.ParseHumanInputRequest(execution.AuthoritativeOutput ?? "", AgentRole.Planner);
+            recordedAt = execution.CompletedAt;
+        }
+        return batch is not null && briefVersion == goal.AuthoritativeBrief.Version;
+    }
+
     internal static string? ValidateProvenance(TaskSpec task, TaskVerificationRecord verification,
         out int? briefVersion)
     {
