@@ -15,6 +15,7 @@ internal static class EffectiveAcceptanceManifestIdentity
             check.Name,
             check.Type,
             check.Command,
+            EnvironmentFingerprint = JunitCommandEnvironmentInputs.Fingerprint(check),
             check.Project,
             Arguments = check.Arguments.ToArray(),
             check.Pattern,

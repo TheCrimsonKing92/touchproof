@@ -164,6 +164,20 @@ public static class AcceptanceHermeticEnvironment
         (string.IsNullOrWhiteSpace(appDataVariable) ? appDataKnownFolder : appDataVariable,
          string.IsNullOrWhiteSpace(localAppDataVariable) ? localAppDataKnownFolder : localAppDataVariable);
 
+    internal static bool IsProtectedInputVariable(string name, IReadOnlyList<DeclaredToolHome>? toolHomes = null) =>
+        IsHermeticVerificationEnvironmentVariable(name, toolHomes) ||
+        name.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("MCG_", StringComparison.OrdinalIgnoreCase) ||
+        WorkerProviderHomeEnvironment.Names.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    internal static void ValidateCommandInputName(string name, IReadOnlyList<DeclaredToolHome>? toolHomes = null)
+    {
+        if (string.IsNullOrEmpty(name) || name.Contains('\0') || name.Contains('='))
+            throw new ArgumentException("Environment variable names must be nonempty and contain neither NUL nor '='.");
+        if (IsProtectedInputVariable(name, toolHomes))
+            throw new ArgumentException("Environment variable input is protected by the gate or worker environment.");
+    }
+
     internal static bool IsHermeticVerificationEnvironmentVariable(string name,
         IReadOnlyList<DeclaredToolHome>? toolHomes = null) =>
         IsInheritedHermeticVerificationEnvironmentVariable(name) ||

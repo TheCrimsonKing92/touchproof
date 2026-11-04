@@ -23,6 +23,8 @@ internal sealed record AcceptanceProcessRequest
     public Action<int>? ResumeObserver { get; init; } = null;
     public bool ResolveBareCommand { get; init; }
     internal IReadOnlyDictionary<string, string?>? ChildEnvironmentOverrides { get; init; }
+    internal JunitCommandEnvironmentInputs? CommandEnvironment { get; init; }
+    internal bool SuppressDiagnosticCaptures { get; init; }
 }
 
 internal static class AcceptanceCheckProcessInvoker
@@ -49,7 +51,7 @@ internal static class AcceptanceCheckProcessInvoker
         var progressInterval = request.ProgressInterval;
         var capturePublicationInterval = request.CapturePublicationInterval;
         var stopOnCaptureLimit = request.StopOnCaptureLimit;
-        var keepCaptureFiles = request.KeepCaptureFiles;
+        var keepCaptureFiles = request.SuppressDiagnosticCaptures ? false : request.KeepCaptureFiles;
         var resumeObserver = request.ResumeObserver;
         engineSettings ??= new AcceptanceGateEngineSettings();
         // Own the capture file offsets in this process. The
@@ -244,7 +246,8 @@ internal static class AcceptanceCheckProcessInvoker
                     commandTimeout,
                     progressSink,
                     progressInterval ?? DefaultProgressInterval,
-                    runningObserver: laneStall is null ? null : laneStall.Observe);
+                    runningObserver: laneStall is null ? null : laneStall.Observe,
+                    suppressDiagnosticCaptures: request.SuppressDiagnosticCaptures);
                 heartbeatTask = GateLaneHeartbeatLoop.RunAsync(
                     heartbeat.WriteRunning, () => { qosSweep?.RunPass(); sampler?.Tick(); }, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
             }
@@ -367,9 +370,9 @@ internal static class AcceptanceCheckProcessInvoker
                 exitCode,
                 (stdout + stderr).Trim(),
                 timedOut,
-                commandLine,
-                stdoutPath,
-                stderrPath,
+                request.SuppressDiagnosticCaptures ? null : commandLine,
+                request.SuppressDiagnosticCaptures ? null : stdoutPath,
+                request.SuppressDiagnosticCaptures ? null : stderrPath,
                 commandTimeout,
                 elapsed.Elapsed,
                 accounting is null

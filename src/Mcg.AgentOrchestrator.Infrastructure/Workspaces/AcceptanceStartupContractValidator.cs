@@ -17,6 +17,7 @@ internal static class AcceptanceStartupContractValidator
         }
         foreach (var check in manifest.Checks)
         {
+            check.ValidateEnvironment();
             var type = check.Type.Trim().ToLowerInvariant();
             if (type == "command")
             {

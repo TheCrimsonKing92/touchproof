@@ -35,7 +35,7 @@ internal sealed class JunitCommandAcceptanceCheck(
             ArgumentException or InvalidOperationException or NotSupportedException)
         {
             return Task.FromResult(new AcceptanceCheckResult(check.Name, false, null,
-                $"JUnit environment contract could not be loaded: {exception.Message}", Advisory: check.Advisory));
+                new JunitCommandEnvironmentDiagnostics(check).Detail($"JUnit environment contract could not be loaded: {exception.Message}"), Advisory: check.Advisory));
         }
 
         return RunOwnedAsync(check, worktreePath, owner, invocation, contract, timeProvider, executableResolver,
@@ -65,6 +65,7 @@ internal sealed class JunitCommandAcceptanceCheck(
         using var ownerLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, owner.CancellationToken);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ownerLifetime.Token, deadline.Token);
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
+        var privacy = new JunitCommandEnvironmentDiagnostics(check);
         var stderr = new List<string>();
         var records = new List<TestResult>();
         string[] paths = [];
@@ -177,6 +178,12 @@ internal sealed class JunitCommandAcceptanceCheck(
         {
             diagnostics.Add(new(exitCode is null ? CrosswalkDiagnosticCategory.StartFailed : CrosswalkDiagnosticCategory.ReceiptFailure, exception.Message));
         }
+        catch (InvalidOperationException) when (privacy.Enabled)
+        {
+            // Owned-launch/apparatus faults must remain loud engine failures. Do not retain an inner
+            // exception: its message and nested launch evidence can contain configured input values.
+            throw new InvalidOperationException(privacy.Detail(""));
+        }
         return Finish();
 
         TimeSpan Remaining() => timeout - timeProvider.GetElapsedTime(started);
@@ -191,20 +198,21 @@ internal sealed class JunitCommandAcceptanceCheck(
         AcceptanceCheckResult Finish()
         {
             Expired();
+            var publishedDiagnostics = diagnostics.Select(item => item with { Detail = privacy.Detail(item.Detail) }).ToArray();
             var passed = diagnostics.Count == 0 && paths.Length > 0;
-            return new(check.Name, passed, exitCode, passed ? null : string.Join("; ", diagnostics.Select(item => $"{item.Category}: {item.Detail}")),
+            return new(check.Name, passed, exitCode, passed ? null : string.Join("; ", publishedDiagnostics.Select(item => $"{item.Category}: {item.Detail}")),
                 ArtifactsPath: paths.FirstOrDefault() is { } path ? Path.GetDirectoryName(path) : null,
                 DurationMilliseconds: (long)timeProvider.GetElapsedTime(started).TotalMilliseconds,
                 ResultSummary: $"junit-command: results={records.Count}", Advisory: check.Advisory,
                 TestResultAttemptId: owner.RunId, TestResultRunOrdinal: invocation.Ordinal,
                 FailureClassification: passed ? null : $"junit-command-{diagnostics.FirstOrDefault()?.Category}",
-                FailingTestIdentities: records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => record.Id).ToArray(),
+                FailingTestIdentities: records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => privacy.Identity(record.Id)).ToArray(),
                 ExecutedTestCount: records.Count(record => record.Status is TestResultStatus.Passed or TestResultStatus.Failed or TestResultStatus.Error),
-                DiscoveredTestCount: records.Count, ProcessStderr: string.Concat(stderr), ProcessStderrPath: lastProcess?.StderrPath,
+                DiscoveredTestCount: records.Count, ProcessStderr: privacy.Detail(string.Concat(stderr)), ProcessStderrPath: privacy.Enabled ? null : lastProcess?.StderrPath,
                 GateHeartbeatPath: heartbeatPath, ChildProcessId: lastProcess?.ChildProcessId, ChildProcessStartedAt: lastProcess?.ChildProcessStartedAt,
-                SkippedTestIdentities: records.Where(record => record.Status == TestResultStatus.Skipped).Select(record => record.Id).ToArray())
+                SkippedTestIdentities: records.Where(record => record.Status == TestResultStatus.Skipped).Select(record => privacy.Identity(record.Id)).ToArray())
             {
-                NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray(), CohortEvidence = cohortEvidence,
+                NormalizedTestResultPaths = paths, CrosswalkDiagnostics = publishedDiagnostics, CohortEvidence = cohortEvidence,
                 CrosswalkExecutablePath = executable?.Path, CrosswalkExecutableSha256 = executable?.Sha256
             };
         }

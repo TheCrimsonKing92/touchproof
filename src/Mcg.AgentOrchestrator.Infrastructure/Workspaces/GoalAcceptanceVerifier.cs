@@ -1937,6 +1937,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Name,
             check.Type,
             check.Command,
+            EnvironmentFingerprint = JunitCommandEnvironmentInputs.Fingerprint(check),
             Project = NormalizePath(check.Project),
             check.Arguments,
             check.Pattern,
@@ -2275,6 +2276,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (new AcceptanceCheckResult(check.Name, false, null, missingToolHome, Advisory: check.Advisory), false);
         try
         {
+        check.ValidateEnvironment();
         if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
             return (await CrosswalkAcceptanceCheck.RunOwnedAsync(check, worktreePath,
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
@@ -2286,8 +2288,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
                 (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
-                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true),
-                RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
+                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true,
+                    commandEnvironment: JunitCommandEnvironmentInputs.FromCheck(check)),
+                (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
+                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: false,
+                    suppressDiagnosticCaptures: check.Environment is { Count: > 0 }), cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
@@ -3864,7 +3869,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GateHeartbeatContext heartbeatContext,
         CancellationToken cancellationToken,
         CancellationToken timeoutSignal,
-        bool resolveBareCommand)
+        bool resolveBareCommand,
+        JunitCommandEnvironmentInputs? commandEnvironment = null,
+        bool suppressDiagnosticCaptures = false)
     {
         return _requiresTestTelemetryReceipt
             ? await AcceptanceProcessRunner.RunProcessAsync(
@@ -3883,7 +3890,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatInterval: _testOverrides.HeartbeatInterval, progressInterval: _testOverrides.ProgressInterval,
                 capturePublicationInterval: _testOverrides.CapturePublicationInterval,
                 stopOnCaptureLimit: StopsOnCaptureLimit(heartbeatContext),
-                resolveBareCommand: resolveBareCommand).ConfigureAwait(false)
+                resolveBareCommand: resolveBareCommand,
+                commandEnvironment: commandEnvironment,
+                suppressDiagnosticCaptures: suppressDiagnosticCaptures).ConfigureAwait(false)
             : await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
     }
     private GateHeartbeatContext CreateGateHeartbeatContext(
