@@ -3,6 +3,110 @@ using System.Runtime.CompilerServices;
 
 public sealed class ResolveRunDirLifecycleTests
 {
+    [Xunit.Fact]
+    public void Explicit_root_publishes_reuses_and_cleans_only_its_own_schema()
+    {
+        var root = NewTestRoot();
+        try
+        {
+            var appDll = CreateOutput(root);
+            var defaultRun = Resolve(root, appDll);
+            Assert.Equal(0, defaultRun.ExitCode);
+            Assert.Equal(Path.Combine(root, "mcg-run", "v2"), Path.GetDirectoryName(defaultRun.Stdout.Trim()));
+            var selectedRoot = Path.Combine(root, "selected cache with spaces");
+            var first = Resolve(root, appDll, selectedRoot, root);
+            Assert.Equal(0, first.ExitCode);
+            var run = first.Stdout.Trim();
+            Assert.Equal(Path.Combine(selectedRoot, "v2"), Path.GetDirectoryName(run));
+            Assert.Equal(Path.GetFileName(defaultRun.Stdout.Trim()), Path.GetFileName(run));
+            var seal = File.ReadAllText(Path.Combine(run, ".mcg-run-closure.json"));
+            var warm = Resolve(root, appDll, selectedRoot, Path.GetDirectoryName(appDll));
+            Assert.Equal(0, warm.ExitCode);
+            Assert.Equal(run, warm.Stdout.Trim());
+            Assert.Equal(seal, File.ReadAllText(Path.Combine(run, ".mcg-run-closure.json")));
+
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(appDll)!, "dependency.dll"), "changed dependency");
+            var changed = Resolve(root, appDll, selectedRoot);
+            Assert.Equal(0, changed.ExitCode);
+            Assert.NotEqual(run, changed.Stdout.Trim());
+            Assert.Equal("changed dependency", File.ReadAllText(Path.Combine(changed.Stdout.Trim(), "dependency.dll")));
+            Assert.False(Directory.Exists(run));
+            Assert.True(Directory.Exists(defaultRun.Stdout.Trim()));
+            Assert.Equal("dependency", File.ReadAllText(Path.Combine(defaultRun.Stdout.Trim(), "dependency.dll")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void Explicit_root_repairs_missing_files_and_refuses_conflicting_content()
+    {
+        var root = NewTestRoot();
+        try
+        {
+            var appDll = CreateOutput(root);
+            var selectedRoot = Path.Combine(root, "selected cache");
+            var first = Resolve(root, appDll, selectedRoot);
+            Assert.Equal(0, first.ExitCode);
+            var run = first.Stdout.Trim();
+            var dependency = Path.Combine(run, "dependency.dll");
+            File.Delete(dependency);
+            var repair = Resolve(root, appDll, selectedRoot);
+            Assert.Equal(0, repair.ExitCode);
+            Assert.Equal(run, repair.Stdout.Trim());
+            Assert.Equal("dependency", File.ReadAllText(dependency));
+            File.WriteAllText(dependency, "conflict");
+            var refused = Resolve(root, appDll, selectedRoot);
+            Assert.NotEqual(0, refused.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(refused.Stdout), refused.Stdout);
+            Assert.Contains("invalid and will not be modified or launched", refused.Stderr);
+            Assert.Equal("conflict", File.ReadAllText(dependency));
+            Assert.False(Directory.Exists(Path.Combine(root, "mcg-run")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(@"C:\selected cache")]
+    [Xunit.InlineData(@"\\fixture-server\share\selected cache")]
+    public void Fully_qualified_roots_can_be_validated_without_filesystem_writes(string selectedRoot)
+    {
+        var root = NewTestRoot();
+        try
+        {
+            var result = Resolve(root, Path.Combine(root, "not-built.dll"), selectedRoot, validateOnly: true);
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+            Assert.Empty(Directory.GetFileSystemEntries(root));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("   ")]
+    [Xunit.InlineData("relative cache")]
+    [Xunit.InlineData("C:cache")]
+    [Xunit.InlineData("\\cache")]
+    [Xunit.InlineData("C:\\bad|cache")]
+    public void Invalid_explicit_roots_fail_before_directory_creation(string selectedRoot)
+    {
+        var root = NewTestRoot();
+        try
+        {
+            var appDll = CreateOutput(root);
+            var before = Directory.GetFileSystemEntries(root, "*", SearchOption.AllDirectories).Order().ToArray();
+            foreach (var caller in new[] { root, Path.GetDirectoryName(appDll)! })
+            {
+                var result = Resolve(root, appDll, selectedRoot, caller);
+                Assert.NotEqual(0, result.ExitCode);
+                Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+                Assert.Contains("cache root", result.Stderr, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(before, Directory.GetFileSystemEntries(root, "*", SearchOption.AllDirectories).Order());
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -235,16 +339,22 @@ public sealed class ResolveRunDirLifecycleTests
         return appDll;
     }
 
-    private static (int ExitCode, string Stdout, string Stderr) Resolve(string root, string appDll)
+    private static (int ExitCode, string Stdout, string Stderr) Resolve(
+        string root, string appDll, string? cacheRoot = null, string? caller = null, bool validateOnly = false)
     {
         var startInfo = new ProcessStartInfo("powershell.exe")
         {
-            WorkingDirectory = RepositoryRoot(),
+            WorkingDirectory = caller ?? RepositoryRoot(),
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        var inherited = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in new[] { "SystemRoot", "WINDIR", "COMSPEC", "PATH", "PATHEXT" })
+            inherited[name] = Environment.GetEnvironmentVariable(name);
+        startInfo.Environment.Clear();
+        foreach (var pair in inherited) startInfo.Environment[pair.Key] = pair.Value;
         startInfo.Environment["TEMP"] = root;
         startInfo.Environment["TMP"] = root;
         startInfo.ArgumentList.Add("-NoProfile");
@@ -253,6 +363,12 @@ public sealed class ResolveRunDirLifecycleTests
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(Path.Combine(RepositoryRoot(), "scripts", "resolve-run-dir.ps1"));
         startInfo.ArgumentList.Add(appDll);
+        if (cacheRoot is not null)
+        {
+            startInfo.ArgumentList.Add("-CacheRoot");
+            startInfo.ArgumentList.Add(cacheRoot);
+        }
+        if (validateOnly) startInfo.ArgumentList.Add("-ValidateCacheRootOnly");
         var result = TestChildProcessCapture.Run(startInfo);
         return (result.ExitCode, result.Stdout, result.Stderr);
     }
