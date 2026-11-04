@@ -81,5 +81,44 @@ public sealed class OwnerConsoleGateProjectionReplayTests
             OwnerConsoleEpicFormatter.Width(selectedGoal.BodyPane.Viewport.Width), false), selectedGoal.Lines);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TerminalUnknownAuxiliary_RemainsVisibleWithoutChangingSchedule(
+        bool expanded, bool attribution)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var before = fixture.Build().ForMember(Survivor)!;
+        fixture.Events.Add(attribution
+            ? new(Now.AddSeconds(-10), "gate-progress", Survivor,
+                $"PHASE_PROGRESS goal={Survivor} execution=partition-run phase=attribution-complete " +
+                $"target=Console members={Survivor} scope=attribution outer_attempt={Outer} " +
+                $"parent_execution={Current} outcome=unknown elapsed_ms=1000")
+            : Progress(-10, Current, "check-complete", "auxiliary check"));
+        var gate = new OwnerGoalDetailSnapshot(Goal(Survivor), null, [])
+            .WithGate(fixture.Build()).Gate!;
+        var auxiliary = Assert.Single(gate.Lanes, row => attribution
+            ? row.IsAttribution : row.Name == "auxiliary check");
+        Assert.Equal(OwnerConsoleGateLaneState.Done, auxiliary.State);
+        Assert.Equal("unknown", auxiliary.Outcome);
+        Assert.False(auxiliary.IsScheduled);
+
+        var lines = OwnerConsoleGateLayout.Lines(gate, 180, expanded);
+        Assert.Contains("AUXILIARY (outcome unknown)", lines);
+        var name = attribution ? "reproduction " + Survivor + ": unknown" : "auxiliary check";
+        Assert.Single(lines, line => line.Contains(name, StringComparison.Ordinal));
+        var count = OwnerConsoleGateCount.Of(gate);
+        Assert.Equal(2, count.Total);
+        Assert.Equal(1, count.Done);
+        Assert.Equal(1, count.Passed);
+        Assert.Equal(1, count.Running);
+        Assert.Equal(0, count.Unknown);
+        Assert.Equal(before.Failing, gate.Failing);
+        Assert.Equal(OwnerConsoleGateFormatter.CountText(before), OwnerConsoleGateFormatter.CountText(gate));
+        Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(before), OwnerConsoleGateFormatter.ProgressLine(gate));
+    }
+
     private static Goal Goal(string id) => new(new(id), "Replay " + id, [new(new("task-" + id), "Work", AgentRole.Developer)]);
 }

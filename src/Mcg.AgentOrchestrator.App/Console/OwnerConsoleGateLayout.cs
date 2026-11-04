@@ -25,9 +25,12 @@ internal static class OwnerConsoleGateLayout
             var running = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running).ToArray();
             var queued = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Queued).ToArray();
             var planned = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Planned).ToArray();
+            var unknownAuxiliary = ordinary.Where(row => Kind(row) != RowKind.Lane &&
+                row.State == OwnerConsoleGateLaneState.Done && row.Outcome is not ("passed" or "failed")).ToArray();
             var baseline = gate.Lanes.Where(row => Kind(row) == RowKind.Baseline).ToArray();
             var passed = ordinary.Where(Passed).ToArray();
             var printed = failed.Concat(running).Concat(queued).Concat(planned).Concat(skipped)
+                .Concat(unknownAuxiliary)
                 .Concat(expanded ? baseline.Concat(passed) : []).ToArray();
             var columns = new Columns(printed, width);
             var header = $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m";
@@ -49,6 +52,7 @@ internal static class OwnerConsoleGateLayout
             Section("QUEUED", queued);
             Section("PLANNED (unobserved)", planned);
             Section("SKIPPED", skipped);
+            Section("AUXILIARY (outcome unknown)", unknownAuxiliary);
             var toggle = expanded ? "(Enter to collapse)" : "(Enter to expand)";
             if (baseline.Length > 0)
             {
