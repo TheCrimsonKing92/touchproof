@@ -65,6 +65,8 @@ internal sealed partial class ConductorDriver
                 facts = facts.WithVerifyingFindingObservation(verifyingFindingObservation);
             decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         }
+        if (TryHoldCompletionBuildEvidence(goal, goalPrefix, policy, state, decision, pendingNotes) is { } completionHold)
+            return completionHold;
         if (TryHoldUnverifiedWorkerBuildChannel(goal, goalPrefix, policy, state, decision, pendingNotes) is { } channelHold)
             return channelHold;
         if (decision.Action is (FailedGoalRecoveryAction.CriterionRetry or FailedGoalRecoveryAction.Escalate) &&

@@ -71,6 +71,9 @@ public static class FailedGoalRecoveryDecisionRecords
     public static PolicyDecisionRecord BuildChannelEvidenceHeld(FailedGoalRecoveryIdentity identity, string reason) =>
         FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 18, "build-channel-evidence-unverified", reason);
 
+    public static PolicyDecisionRecord CompletionBuildEvidenceHeld(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 19, "completion-build-evidence-held", reason);
+
     private static PolicyDecisionRecord FromDriver(
         FailedGoalRecoveryIdentity identity, FailedGoalRecoveryAction action, int rung, string evidence, string reason) =>
         new(StageName, action.ToString(), rung, evidence, reason, Facts(identity));

@@ -6,7 +6,7 @@ public sealed partial class BackgroundDispatchRunner
 {
     private OrchestratorBuildEvidenceResolution ResolveWorkerBuildInvocation(AgentOrchestratorKernel kernel,
         GoalId goalId, TaskId taskId, IReadOnlyList<string> changedPaths, IReadOnlyList<string> dirtyPaths,
-        string workerOutput, Func<OrchestratorBuildEvidenceResolution> reconcileBuild,
+        string workerOutput, bool completeWorkerResult, Func<OrchestratorBuildEvidenceResolution> reconcileBuild,
         ref string? orchestratorFailureReason)
     {
         if (WorkerBuildInvocations is null)
@@ -20,15 +20,25 @@ public sealed partial class BackgroundDispatchRunner
         var host = new OrchestratorBuildEvidenceResolution(receipt.MissingEvidence, receipt.CompilerFailed, receipt.Diagnostic);
         var task = kernel.GetTask(goalId, taskId);
         var infrastructure = WorkerBuildInfrastructureEvidence.Classify(task);
-        if (infrastructure == WorkerBuildInfrastructureBlocker.None)
+        var missingOutcome = receipt.Gap == WorkerBuildEvidenceGap.MissingApplicableInvocation &&
+            task.RequiredRole is AgentRole.Developer or AgentRole.Tester && completeWorkerResult &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(workerOutput, out var scopeComplete, out _) && scopeComplete;
+        if (infrastructure == WorkerBuildInfrastructureBlocker.None && !missingOutcome)
             return OrchestratorBuildEvidenceCheck.RetainUnverifiedBusyClaim(host, workerOutput);
         if (!receipt.MissingEvidence || receipt.CompilerFailed ||
-            _completionBuildEvidence is null ||
             WorkerResultBlockers.TryGetAssignedScopeComplete(workerOutput, out var complete, out _) && !complete)
             return host;
+        if (_completionBuildEvidence is null)
+        {
+            orchestratorFailureReason ??= "completion-build-coordinator-unavailable";
+            return host with { Diagnostic = AppendDiagnostic(host.Diagnostic,
+                "completion_build_hold=coordinator-unavailable; operator decision required to restore existing build execution authority") };
+        }
 
         var build = reconcileBuild();
-        var diagnostic = $"worker_build_infrastructure={infrastructure}";
+        var diagnostic = missingOutcome
+            ? "worker_build_recovery=missing-applicable-outcome; transport_cause=unknown; automatic_attempt_limit=1"
+            : $"worker_build_infrastructure={infrastructure}";
         if (build.Pending || build.BuildFailed ||
             !build.FailsRound && build.Operation is { Phase: CompletionBuildEvidencePhase.Success } operation &&
             operation.DispatchAt == task.LastDispatch?.DispatchedAt)

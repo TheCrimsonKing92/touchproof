@@ -28,15 +28,16 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal bool BusyLease;
     internal bool FailStop;
     internal Action? BeforeChildCheckpoint;
+    internal Action<CompletionBuildEvidenceOperation>? BeforeLaunch;
     internal CompletionBuildEvidenceOperation? Launched;
 
-    internal CompletionBuildEvidenceFixture(bool workerBuildProtocol1 = false)
+    internal CompletionBuildEvidenceFixture(bool workerBuildProtocol1 = false, AgentRole role = AgentRole.Developer)
     {
         Root = CreateSeededDispatchRepository();
         Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
         StatePath = Path.Combine(Root, "state.db");
         ReceiptPath = Path.Combine(Root, "build-receipt.json");
-        var fixture = CreateCompletedGoalWorktreeDispatch(Root, AgentRole.Developer,
+        var fixture = CreateCompletedGoalWorktreeDispatch(Root, role,
             WorkerResultBlock("src/Feature/Feature.cs", "implemented feature", "deferred - Acceptance owns tests"),
             string.Empty, Clock, worktree =>
             {
@@ -84,6 +85,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
         launch: startProcess is not null ? null : operation =>
         {
             Launches++;
+            BeforeLaunch?.Invoke(operation);
             if (FailLaunch) throw new IOException("injected child launch failure");
             Launched = operation;
             return new(42, Clock.UtcNow, "fake-owned-build-host", () =>
@@ -146,11 +148,15 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal void WriteReceipt(IReadOnlyList<string> projects)
     {
         Xunit.Assert.True(WorktreeTreeDigest.TryCompute(Task.LastProcess!.WorkingDirectory, out var digest, out _));
+        var scopeDigest = Task.LastDispatch?.WorkerBuildScope is not null
+            ? WorkerBuildProjectScope.ResolveForDispatch(Task.LastProcess.WorkingDirectory, [],
+                GoalId, TaskId, Task.LastDispatch).MetadataDigest : null;
         File.WriteAllText(ReceiptPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1, treeDigest = digest, digestAlgorithm = WorktreeTreeDigest.Algorithm,
             buildOutcome = "success", generatedAtUtc = Clock.UtcNow.ToString("O"),
-            worktreeRoot = Task.LastProcess.WorkingDirectory, configuration = "Debug", projects
+            worktreeRoot = Task.LastProcess.WorkingDirectory, configuration = "Debug", projects,
+            scopeMetadataDigest = scopeDigest
         }));
     }
 

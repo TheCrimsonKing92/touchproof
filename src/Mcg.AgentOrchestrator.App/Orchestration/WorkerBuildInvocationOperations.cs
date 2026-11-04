@@ -92,6 +92,7 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         foreach (var pending in invocations.Where(i => !i.IsTerminal || !i.CustodyReleased)) Reconcile(pending);
         current = Load(goalId.Value);
         task = current.GetTask(goalId, taskId);
+        Synchronize(kernel, goalId, taskId, task.WorkerBuildInvocations);
         var required = WorkerBuildEvidenceRequirement.FindRequiredProjects(dispatch.WorkingDirectory, task.RequiredRole, changedPaths, dirtyPaths);
         if (required.Count == 0 && invocations.Length == 0) return new(false, false, "worker_build_host=not-required");
         WorkerBuildProjectScope.Result scope;
@@ -102,7 +103,28 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         var applicable = task.WorkerBuildInvocations.Where(i => i.DispatchId == reference.DispatchId &&
             i.TreeDigest == digest && i.Projects.Intersect(scope.Projects, StringComparer.OrdinalIgnoreCase).Count() == scope.Projects.Count)
             .OrderByDescending(i => i.Deadline).FirstOrDefault();
-        if (applicable is null) return new(true, false, "worker_build_host=missing-current-candidate-outcome");
+        if (applicable is null)
+        {
+            // Missing evidence is eligible only under the current host-owned origin. A stale
+            // caller, pending invocation or invalid identity cannot authorize another build.
+            var caller = kernel.GetTask(goalId, taskId);
+            var process = task.LastProcess;
+            if (caller.LastDispatch is not { } callerDispatch || caller.LastProcess is not { } callerProcess ||
+                callerDispatch.DispatchedAt != dispatch.DispatchedAt ||
+                BuildWorkerDispatchId(goalId, taskId, callerDispatch) != reference.DispatchId ||
+                process is null || callerProcess.ProcessId != process.ProcessId ||
+                callerProcess.StartedAt != process.StartedAt ||
+                process.ProcessIdentityStartedAt is not { } started ||
+                string.IsNullOrWhiteSpace(process.ProcessIdentityImagePath))
+                return new(true, false, "worker_build_host=origin-invalid; current dispatch/host identity is required");
+            RequireOrigin(current, reference, new(process.ProcessId, started, process.ProcessIdentityImagePath), requireRunning: false);
+            RequireOrigin(kernel, reference, new(process.ProcessId, started, process.ProcessIdentityImagePath), requireRunning: false);
+            if (task.WorkerBuildInvocations.Any(i => i.DispatchId == reference.DispatchId &&
+                    (!i.IsTerminal || !i.CustodyReleased)))
+                return new(true, false, "worker_build_host=reconciliation-pending; existing invocation retains custody");
+            return new(true, false, "worker_build_host=missing-current-candidate-outcome; transport_cause=unknown",
+                WorkerBuildEvidenceGap.MissingApplicableInvocation);
+        }
         RequireOrigin(current, reference, applicable.Host, requireRunning: false);
         if (!applicable.IsTerminal || !applicable.CustodyReleased)
             return new(true, false, $"worker_build_invocation={applicable.Id}; phase={applicable.Phase}; reconciliation=pending");
