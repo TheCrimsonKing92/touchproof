@@ -138,6 +138,35 @@ public sealed class ForegroundRuntimeCacheTests
     }
 
     [Xunit.Fact]
+    public void Explicit_prefix_preserves_unquoted_delimiters_like_the_default_path()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CacheFixture();
+        // Keep these tokens raw: quoting every argument hides CMD's %1/SHIFT
+        // splitting of equals signs, commas and semicolons.
+        const string rawTail = """
+            goals --name=a,b --map=left;right --empty= "" "two words" "left&right" "bang!literal" --runtime-cache-root "native option value" "brackets (x)"
+            """;
+        string[] expected = ["goals", "--name=a,b", "--map=left;right", "--empty=", "",
+            "two words", "left&right", "bang!literal", "--runtime-cache-root", "native option value", "brackets (x)"];
+        AssertExitCode(7, fixture.LauncherRaw(rawTail, exitCode: 7));
+        var baseline = fixture.NativeArguments();
+        Assert.Equal(expected, baseline.Skip(1));
+        Assert.Equal(Path.Combine(fixture.TempRoot, "mcg-run", "v2"),
+            Path.GetDirectoryName(Path.GetDirectoryName(baseline[0])));
+
+        var externalCache = Path.Combine(fixture.Root, "external cache !literal");
+        var prefix = $"--runtime-cache-root \"{externalCache}\"";
+        AssertExitCode(7, fixture.LauncherRaw(prefix + " " + rawTail, exitCode: 7));
+        var selected = fixture.NativeArguments();
+        Assert.Equal(baseline.Skip(1), selected.Skip(1));
+        Assert.Equal(Path.Combine(externalCache, "v2"),
+            Path.GetDirectoryName(Path.GetDirectoryName(selected[0])));
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(selected[0])!, ".mcg-run-closure.json")));
+        Assert.False(File.Exists(fixture.BuildLog));
+    }
+
+    [Xunit.Fact]
     public void Omitted_launcher_option_keeps_the_default_cache()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -458,13 +487,15 @@ public sealed class ForegroundRuntimeCacheTests
             return TestChildProcessCapture.Run(start, TimeSpan.FromMinutes(3));
         }
 
-        internal TestChildProcessCapture.Result Launcher(string[] arguments, int exitCode = 0, bool intree = true)
+        internal TestChildProcessCapture.Result Launcher(string[] arguments, int exitCode = 0, bool intree = true) =>
+            LauncherRaw(string.Join(" ", arguments.Select(value => "\"" + value + "\"")), exitCode, intree);
+
+        internal TestChildProcessCapture.Result LauncherRaw(string arguments, int exitCode = 0, bool intree = true)
         {
             var start = StartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"));
             start.Environment["FIXTURE_EXIT"] = exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
             start.Environment["MCG_ORCHESTRATOR_LAUNCHER_INTREE"] = intree ? "1" : "0";
-            start.Arguments = "/d /s /c \"" + string.Join(" ",
-                new[] { Path.Combine(Repository, "mcg-orchestrator.cmd") }.Concat(arguments).Select(value => "\"" + value + "\"")) + "\"";
+            start.Arguments = $"/d /s /c \"\"{Path.Combine(Repository, "mcg-orchestrator.cmd")}\" {arguments}\"";
             return TestChildProcessCapture.Run(start, TimeSpan.FromMinutes(3));
         }
 

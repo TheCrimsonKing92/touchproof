@@ -59,14 +59,39 @@ if errorlevel 1 exit /b 1
 shift
 shift
 if "%~1"=="--runtime-cache-root" goto invalid_cache_option
-:: SHIFT does not alter %*. Retain each original token (including its quotes and
-:: empty quoted tokens), without CALL's second expansion or delayed expansion.
-set "NATIVE_ARGS="
-:collect_native_args
-if [%1]==[] goto intree_path
-set NATIVE_ARGS=%NATIVE_ARGS% %1
-shift
-goto collect_native_args
+:: Batch parameters split unquoted = , and ;, so never rebuild the native tail
+:: from %1/SHIFT. Slice only the two launcher tokens from the original %* text.
+:: Capture with delayed expansion disabled to preserve literal exclamation marks.
+set NATIVE_ARGS=%*
+setlocal EnableDelayedExpansion
+set "PREFIX_TOKENS=0"
+set "PREFIX_IN_TOKEN="
+set "PREFIX_QUOTED="
+:strip_launcher_prefix
+if not defined NATIVE_ARGS goto launcher_prefix_stripped
+set "PREFIX_CHAR=!NATIVE_ARGS:~0,1!"
+set "NATIVE_ARGS=!NATIVE_ARGS:~1!"
+set "PREFIX_NONQUOTE=!PREFIX_CHAR:"=!"
+if not defined PREFIX_NONQUOTE goto launcher_prefix_quote
+if defined PREFIX_QUOTED goto strip_launcher_prefix
+if "!PREFIX_CHAR!"==" " goto launcher_prefix_separator
+if "!PREFIX_CHAR!"=="	" goto launcher_prefix_separator
+set "PREFIX_IN_TOKEN=1"
+goto strip_launcher_prefix
+:launcher_prefix_quote
+set "PREFIX_IN_TOKEN=1"
+if defined PREFIX_QUOTED (set "PREFIX_QUOTED=") else set "PREFIX_QUOTED=1"
+goto strip_launcher_prefix
+:launcher_prefix_separator
+if not defined PREFIX_IN_TOKEN goto strip_launcher_prefix
+set "PREFIX_IN_TOKEN="
+set /a PREFIX_TOKENS+=1
+if !PREFIX_TOKENS! lss 2 goto strip_launcher_prefix
+:launcher_prefix_stripped
+:: All subsequent launcher work and native execution retain their existing
+:: expansion rules. The nested SETLOCAL scopes unwind when the launcher exits.
+setlocal DisableDelayedExpansion
+goto intree_path
 
 :invalid_cache_option
 echo ERROR: --runtime-cache-root requires one absolute directory path and may appear only once before the native command. >&2
