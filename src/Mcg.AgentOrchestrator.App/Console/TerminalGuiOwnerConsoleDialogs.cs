@@ -5,8 +5,30 @@ using Terminal.Gui.Views;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, CancellationToken token) : IOwnerConsoleDialogs
+internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, CancellationToken token,
+    OwnerConsoleClipboard? clipboard = null) : IOwnerConsoleDialogs
 {
+    private readonly OwnerConsoleClipboard _clipboard = clipboard ?? OwnerConsoleClipboard.For(app);
+    public Task ShowFieldsAsync(OwnerConsoleFieldSnapshot snapshot, string? selectedKey = null) => OnUiAsync(() =>
+    {
+        using var dialog = new OwnerConsoleFieldsDialog(snapshot, _clipboard, selectedKey);
+        void Close() => app.RequestStop(dialog);
+        void Handle(object? sender, Key key) { if (app.TopRunnableView == dialog) dialog.HandleKey(key); }
+        dialog.CloseRequested += Close;
+        using var cancellation = token.Register(() => { if (app.Initialized) app.Invoke(Close); });
+        var keyboard = app.Keyboard;
+        if (keyboard is not null) keyboard.KeyDown += Handle;
+        try { app.Run(dialog); }
+        finally
+        {
+            if (keyboard is not null) keyboard.KeyDown -= Handle;
+            dialog.CloseRequested -= Close;
+        }
+        return true;
+    });
+
+    public Task<int?> ShowStructuredAsync(string title, string text, OwnerConsoleStructuredText fields,
+        IReadOnlyList<int>? choiceLines = null) => ShowPageCoreAsync(title, text, choiceLines, fields);
     private readonly int _uiThread = Environment.CurrentManagedThreadId;
     public int? TextWidth => OwnerConsoleDialogWidth.TextColumns(app.Screen.Width);
 
@@ -28,19 +50,28 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
     public async Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => await OnUiAsync(() =>
     {
         using var dialog = new OwnerConsoleDecisionDialog(detail, action => app.Invoke(action));
+        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields); dialog.BodyPane.SetFocus(); }
+        dialog.FieldsRequested += Fields;
         dialog.Closed += () => app.RequestStop(dialog);
         void Handle(object? sender, Key key)
         { if (app.TopRunnableView == dialog) _ = dialog.HandleKeyAsync(key); }
         var keyboard = app.Keyboard;
         if (keyboard is not null) keyboard.KeyDown += Handle;
         try { app.Run(dialog); }
-        finally { if (keyboard is not null) keyboard.KeyDown -= Handle; }
+        finally { if (keyboard is not null) keyboard.KeyDown -= Handle; dialog.FieldsRequested -= Fields; }
         return true;
     });
 
     public Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null) => OnUiAsync(() =>
+        ShowPageCore(title, text, choiceLines, null));
+
+    private Task<int?> ShowPageCoreAsync(string title, string text, IReadOnlyList<int>? choiceLines,
+        OwnerConsoleStructuredText? fields) => OnUiAsync(() => ShowPageCore(title, text, choiceLines, fields));
+
+    private int? ShowPageCore(string title, string text, IReadOnlyList<int>? choiceLines, OwnerConsoleStructuredText? fields)
     {
         using var dialog = new OwnerConsoleTextDialog(title, text, choiceLines);
+        dialog.Structured = fields;
         int? selected = null;
         dialog.ChoiceAccepted += choice => { selected = choice; app.RequestStop(dialog); };
         var close = new Button { Text = "Close", IsDefault = true };
@@ -48,7 +79,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         dialog.AddButton(close);
         Run(dialog);
         return selected;
-    });
+    }
 
     public Task<string?> PromptTextAsync(string title, string text) => OnUiAsync(() =>
     {
@@ -87,6 +118,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         var buttons = construction.Buttons;
         void Refresh()
         {
+            dialog.Structured = goal.Current.Fields;
             foreach (var button in buttons.Values) button.Visible = goal.Actions.Contains(button.Text.ToString());
             dialog.TitleStatus = goal.TitleStatus;
             dialog.Render();
@@ -104,6 +136,8 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         async void Handle(object? sender, Key key)
         {
             if (app.TopRunnableView != dialog) return;
+            if (key == OwnerConsoleBindings.OpenFields && dialog.Body.HasFocus)
+            { dialog.HandleKey(key); return; }
             var character = char.ToLowerInvariant((char)key.AsRune.Value);
             var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, character, key.IsCtrl);
             if (!key.IsAlt && binding is not null && (binding.Command == "quit" ||
@@ -112,6 +146,8 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
             else if (dialog.Body.HasFocus) dialog.HandleKey(key);
         }
         dialog.ChoiceAccepted += async index => await ActAsync(() => goal.OpenResolutionAsync(index));
+        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields); dialog.Body.SetFocus(); }
+        dialog.FieldsRequested += Fields;
         goal.Changed += Refresh; goal.CloseRequested += Close;
         goal.Start(action => { if (app.Initialized) app.Invoke(action); else action(); });
         Refresh();
@@ -122,18 +158,21 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         {
             if (keyboard is not null) keyboard.KeyDown -= Handle;
             goal.Changed -= Refresh; goal.CloseRequested -= Close;
+            dialog.FieldsRequested -= Fields;
         }
         return true;
     });
 
     private void Run(OwnerConsoleTextDialog dialog)
     {
+        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields); dialog.Body.SetFocus(); }
+        dialog.FieldsRequested += Fields;
         void Handle(object? sender, Key key)
-        { if (app.TopRunnableView == dialog && dialog.Body.HasFocus) dialog.HandleKey(key); }
+        { if (app.TopRunnableView == dialog) dialog.HandleFocusedKey(key); }
         var keyboard = app.Keyboard;
         if (keyboard is not null) keyboard.KeyDown += Handle;
         try { app.Run(dialog); }
-        finally { if (keyboard is not null) keyboard.KeyDown -= Handle; }
+        finally { if (keyboard is not null) keyboard.KeyDown -= Handle; dialog.FieldsRequested -= Fields; }
     }
 
     private Task<T> OnUiAsync<T>(Func<T> action)

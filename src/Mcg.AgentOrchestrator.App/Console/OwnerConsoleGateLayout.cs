@@ -7,7 +7,8 @@ internal static class OwnerConsoleGateLayout
 {
     private enum RowKind { Lane, Check, Confirming, Baseline }
 
-    internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate, int width, bool expanded)
+    internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate, int width, bool expanded,
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null)
     {
         width = Math.Max(1, width);
         if (gate is null) return [Fit("gate: unavailable", width)];
@@ -32,7 +33,10 @@ internal static class OwnerConsoleGateLayout
             if (gate.Failing)
                 lines.AddRange(Wrap(header + " | " + OwnerConsoleGateConfirmation.Header(failed.Where(row => !row.IsAttribution).ToArray()), width));
             else lines.Add(header);
+            var memberStart = lines.Count;
             lines.AddRange(OwnerConsoleGateMemberLines.Lines(gate.Members));
+            if (fields is not null) for (var i = 0; i < gate.Members.Count; i++)
+                fields[memberStart + i] = OwnerConsoleGateProgress.MemberFields(gate.Members[i]);
             lines.Add($" x {count.Failed} failed   > {count.Running} running   + {count.Passed} passed   = {count.Cached} cached   . {count.Queued} queued");
             if (skipped.Length > 0) lines[^1] += $"   - {skipped.Length} skipped";
             if (gate.LanePlanAvailable == false) lines[^1] += "  (lane plan unavailable)";
@@ -50,7 +54,8 @@ internal static class OwnerConsoleGateLayout
                     (baseline.Count(Passed), "passed"));
                 lines.Add($"BASELINE  {baseline.Length} comparison runs" + (counts.Length == 0 ? "" : ": " + counts) + " " + toggle);
                 if (expanded)
-                    foreach (var row in baseline.OrderBy(BaselineOrder)) lines.Add(columns.Row(row));
+                    foreach (var row in baseline.OrderBy(BaselineOrder))
+                    { if (fields is not null) fields[lines.Count] = OwnerConsoleGateProgress.LaneFields(row); lines.Add(columns.Row(row)); }
             }
             if (passed.Length > 0)
             {
@@ -60,7 +65,9 @@ internal static class OwnerConsoleGateLayout
                 if (expanded) Section(null, passed);
             }
             if (count.Unknown > 0) lines.Add($"DONE  {count.Unknown} without a recorded outcome");
+            var whereStart = lines.Count;
             lines.AddRange(OwnerConsoleGateWhereLine.Lines(gate, ordinary, width));
+            if (fields is not null) for (var i = whereStart; i < lines.Count; i++) fields[i] = gate.CapacityFields();
 
             void Section(string? heading, OwnerConsoleGateLane[] rows, bool sort = false, bool failureNames = false)
             {
@@ -74,6 +81,8 @@ internal static class OwnerConsoleGateLayout
                     var ordered = sort ? group.OrderBy(RunningOrder).ThenByDescending(RunningPole).ThenBy(row => row.Name, StringComparer.Ordinal) : group.AsEnumerable();
                     foreach (var row in ordered)
                     {
+                        var start = lines.Count;
+                        if (fields is not null) fields[start] = OwnerConsoleGateProgress.LaneFields(row);
                         lines.Add(columns.Row(row));
                         if (!failureNames || Kind(row) == RowKind.Confirming) continue;
                         lines.AddRange((row.FailingTestNames ?? []).Select(name => "     " + name));
@@ -82,15 +91,24 @@ internal static class OwnerConsoleGateLayout
                             lines.AddRange(Wrap(confirmation.Line, width, "     "));
                         foreach (var reproduction in row.Reproductions ?? [])
                             lines.AddRange(Wrap(reproduction.Line, width, "     "));
+                        if (fields is not null) for (var i = start; i < lines.Count; i++) fields[i] = OwnerConsoleGateProgress.LaneFields(row);
                     }
                 }
             }
         }
         foreach (var other in gate.OtherLiveGates ?? [])
+        {
+            if (fields is not null) fields[lines.Count] = other.FieldSnapshot();
             lines.Add($"ALSO ON HOST  gate {other.Kind} {Members(other)} {(int)other.Elapsed.TotalMinutes}m");
+        }
         foreach (var run in gate.HostActivity ?? [])
+        {
+            if (fields is not null) fields[lines.Count] = OwnerConsoleFieldSnapshot.Create(run.GoalId + "/" + run.Attempt,
+                new("goal", "Goal ID", run.GoalId), new("label", "Label", run.Label), new("started", "Started at", run.StartedAt.ToString("O")),
+                new("age", "Age", run.Age.ToString("c")), new("attempt", "Attempt", run.Attempt));
             lines.Add($"ALSO ON HOST  {run.GoalId[..Math.Min(8, run.GoalId.Length)]} evidence" +
                 (run.Label.Length == 0 ? "" : " (" + run.Label + ")") + $" {(int)run.Age.TotalMinutes}m");
+        }
         return lines.Select(line => Fit(Ascii(line), width)).ToArray();
     }
 

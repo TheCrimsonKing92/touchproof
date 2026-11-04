@@ -21,8 +21,10 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     internal const int MaxArtifactBytes = 1_056_000;
     private readonly object _cacheGate = new();
     private readonly SemaphoreSlim _diffRead = new(1, 1);
-    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _committed;
-    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _whole;
+    private readonly Dictionary<CommittedRange, RangeRead> _ranges = new();
+    private CommittedRange? _observedRange;
+    private CommittedRange? _wholeRange;
+    private long _loadVersion;
 
     internal static OwnerGoalChangeSummaryQuery ForWorkspace(OrchestratorWorkspace workspace) => new(
         async (id, token) =>
@@ -56,6 +58,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        using var request = BeginRangeRequest();
         GoalPromotionFact? landed = null;
         string? promotionFailure = promotion is null ? "promotion query unavailable" : null;
         try { if (promotion is not null) landed = await promotion(goal.Id.Value, token); }
@@ -77,37 +80,30 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             !string.Equals(item.BaseCommit, candidate, StringComparison.OrdinalIgnoreCase));
         var promotionRange = landed is not null && landed.CandidateRevision == candidate;
         var basis = promotionRange ? landed!.PriorMainRevision : contributing?.BaseCommit ?? dispatch?.BaseCommit;
+        var observedRange = changes is not null && FullRevision(basis) && FullRevision(candidate)
+            ? new CommittedRange(basis!, candidate!) : null;
+        ResolveRange(request, whole: false, observedRange);
         var planned = await PlannedAsync(goal, token);
         var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
-        if (candidate is not null && FullRevision(basis) && changes is not null)
+        if (observedRange is not null)
         {
             try
             {
-                Task<CommittedGoalChanges> read;
-                lock (_cacheGate)
-                {
-                    if (_committed is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
-                        cached.Read.IsCanceled || cached.Read.IsFaulted)
-                        _committed = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
-                    read = _committed.Value.Read;
-                }
-                var facts = await read.WaitAsync(token);
+                var facts = await SharedChangesAsync(request, observedRange, token).WaitAsync(token);
                 observed = facts.Available
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
                         $"Git {basis}..{candidate}; " + (promotionRange ? "promotion range" : "latest contributing dispatch range, not whole-goal coverage"),
-                        Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray())
+                        Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray(),
+                        SourceItems: facts.Files.Take(20).ToArray())
                     : new("unavailable — " + facts.Reason, [], $"Git {basis}..{candidate}");
-                // Retry an unavailable observation on the next refresh; never cache it as an empty diff.
-                if (!facts.Available) lock (_cacheGate) { if (_committed?.Read == read) _committed = null; }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 observed = new("unavailable — " + ex.GetType().Name, [], $"Git {basis}..{candidate}");
-                lock (_cacheGate) _committed = null;
             }
         }
-        var previewChanges = await WholeGoalChangesAsync(candidate, landed, promotionRange, promotionFailure, token);
+        var previewChanges = await WholeGoalChangesAsync(request, candidate, landed, promotionRange, promotionFailure, token);
         var reported = await ReportedAsync(goal, candidate, token);
         var landing = landed is null
             ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
@@ -120,44 +116,120 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         };
     }
 
-    private async Task<OwnerGoalPreviewChanges> WholeGoalChangesAsync(string? candidate, GoalPromotionFact? landed,
+    private async Task<OwnerGoalPreviewChanges> WholeGoalChangesAsync(RangeRequest request, string? candidate, GoalPromotionFact? landed,
         bool promotionRange, string? promotionFailure, CancellationToken token)
     {
-        if (candidate is null || changes is null) return new(OwnerGoalPreviewChangeKind.None, [], 0);
+        if (candidate is null || changes is null)
+        {
+            ResolveRange(request, whole: true, null);
+            return new(OwnerGoalPreviewChangeKind.None, [], 0);
+        }
         var unavailable = new OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind.Unavailable, [], 0);
         try
         {
             // Promotion failures cannot safely be treated as unlanded goals: main may already contain the candidate.
             if ((landed is not null && !promotionRange) || (promotion is not null && promotionFailure is not null))
+            {
+                ResolveRange(request, whole: true, null);
                 return unavailable;
+            }
             var basis = landed is not null ? landed.PriorMainRevision :
                 mergeBase is not null ? await mergeBase(candidate, token).WaitAsync(token) : null;
-            if (!FullRevision(basis)) return unavailable;
-
-            Task<CommittedGoalChanges> read;
-            lock (_cacheGate)
+            if (!FullRevision(basis) || !FullRevision(candidate))
             {
-                // Separate from detail even when the endpoints match. Resolve the base on every refresh
-                // so a moved integration ref cannot reuse a diff for a different whole-goal range.
-                if (_whole is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
-                    cached.Read.IsCanceled || cached.Read.IsFaulted)
-                    _whole = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
-                read = _whole.Value.Read;
-            }
-            var facts = await read.WaitAsync(token);
-            if (!facts.Available)
-            {
-                lock (_cacheGate) { if (_whole?.Read == read) _whole = null; }
+                ResolveRange(request, whole: true, null);
                 return unavailable;
             }
+            // Applicability is resolved anew before sharing immutable committed range facts.
+            var range = new CommittedRange(basis!, candidate);
+            ResolveRange(request, whole: true, range);
+            var facts = await SharedChangesAsync(request, range, token).WaitAsync(token);
+            if (!facts.Available) return unavailable;
             return new(facts.TotalFiles == 0 ? OwnerGoalPreviewChangeKind.None : OwnerGoalPreviewChangeKind.Listed,
                 facts.Files, facts.TotalFiles);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            lock (_cacheGate) _whole = null;
+            ResolveRange(request, whole: true, null);
             return unavailable;
         }
+    }
+
+    private sealed record CommittedRange(string Base, string Candidate);
+
+    private sealed class RangeRead(Task<CommittedGoalChanges> task)
+    {
+        internal Task<CommittedGoalChanges> Task { get; } = task;
+        internal int Users { get; set; }
+    }
+
+    private sealed class RangeRequest(OwnerGoalChangeSummaryQuery owner, long version) : IDisposable
+    {
+        internal long Version { get; } = version;
+        internal bool ObservedResolved { get; set; }
+        internal bool WholeResolved { get; set; }
+        internal HashSet<RangeRead> Reads { get; } = [];
+
+        public void Dispose()
+        {
+            lock (owner._cacheGate)
+            {
+                foreach (var read in Reads) read.Users--;
+                if (Version == owner._loadVersion)
+                {
+                    if (!ObservedResolved) owner._observedRange = null;
+                    if (!WholeResolved) owner._wholeRange = null;
+                }
+                owner.PruneRanges();
+            }
+        }
+    }
+
+    private RangeRequest BeginRangeRequest()
+    {
+        lock (_cacheGate) return new(this, ++_loadVersion);
+    }
+
+    private void ResolveRange(RangeRequest request, bool whole, CommittedRange? range)
+    {
+        lock (_cacheGate)
+        {
+            if (whole) request.WholeResolved = true;
+            else request.ObservedResolved = true;
+            // Late continuations may finish their own load, but cannot restore obsolete relevance.
+            if (request.Version != _loadVersion) return;
+            if (whole) _wholeRange = range;
+            else _observedRange = range;
+            PruneRanges();
+        }
+    }
+
+    private Task<CommittedGoalChanges> SharedChangesAsync(RangeRequest request, CommittedRange range,
+        CancellationToken token)
+    {
+        lock (_cacheGate)
+        {
+            PruneRanges();
+            if (!_ranges.TryGetValue(range, out var read))
+            {
+                // The initiating caller owns cancellation; other callers cancel only their own wait.
+                read = new(ReadChangesAsync(range.Base, range.Candidate, token));
+                _ranges.Add(range, read);
+            }
+            if (request.Reads.Add(read)) read.Users++;
+            return read.Task;
+        }
+    }
+
+    // At rest at most two distinct ranges survive. Superseded loads hold leases only until they exit;
+    // their completion never publishes a range back into this dictionary.
+    private void PruneRanges()
+    {
+        foreach (var (range, read) in _ranges.ToArray())
+            if ((read.Users == 0 && range != _observedRange && range != _wholeRange) ||
+                read.Task.IsCanceled || read.Task.IsFaulted ||
+                (read.Task.IsCompletedSuccessfully && !read.Task.Result.Available))
+                _ranges.Remove(range);
     }
 
     private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)
@@ -203,7 +275,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                                     .Select(group => group.Key! + " [criteria " + string.Join(",", group.Select(item => item.Number)) + "]").ToArray();
                                 return new("completed plan", items.Take(5).Select(BoundItem).ToArray(),
                                     Source(verification, dispatch) + $"; brief v{dispatch.BriefVersion}; criteria {verification.AcceptanceCriteriaVersionHash}",
-                                    Math.Max(0, items.Length - 5), items.Take(5).Where(item => item.Length > 360).ToArray());
+                                    Math.Max(0, items.Length - 5), items.Take(5).Where(item => item.Length > 360).ToArray(),
+                                    SourceItems: items.Take(5).ToArray());
                             }
                         }
                         reason = "planning stale — criterion mapping incomplete or incompatible";
@@ -226,7 +299,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         return new(reason + "; Expected from brief", expectations.Take(5).Select(BoundItem).ToArray(),
             $"authoritative brief v{goal.AuthoritativeBrief.Version}" +
             (goal.AuthoritativeRefinedSpecVersion is { } version ? $"; spec v{version.Version}" : ""),
-            Math.Max(0, expectations.Count - 5), expectations.Take(5).Where(item => item.Length > 360).ToArray());
+            Math.Max(0, expectations.Count - 5), expectations.Take(5).Where(item => item.Length > 360).ToArray(),
+            SourceItems: expectations.Take(5).ToArray());
     }
 
     private async Task<OwnerGoalSummarySection> ReportedAsync(Goal goal, string? candidate, CancellationToken token)
@@ -246,7 +320,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 (string.Equals(commit, candidate, StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(commit, "none", StringComparison.OrdinalIgnoreCase)))
                 return new("worker-reported; not proof of behavior", [BoundItem(summary)], Source(record, dispatch) + "; candidate " + candidate,
-                    ExpandedItems: summary.Length > 360 ? [summary] : null);
+                    ExpandedItems: summary.Length > 360 ? [summary] : null, SourceItems: [summary]);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { return new("unavailable — " + ex.GetType().Name, [], Source(record, dispatch)); }
@@ -280,6 +354,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             (item.State == CriterionEvidenceState.Failed || item.HasSatisfiedEvidenceFor(candidate)) &&
             (item.ExpectedCandidateSha is null || item.ExpectedCandidateSha == candidate)).ToArray();
         var lines = applicable.Select(item => $"{item.DisplayLabel}: {item.State}; {item.RequiredScope}; receipt {item.ReceiptId}").Take(10).ToList();
+        var sourceLines = new List<string>(lines);
+        void AddLine(string value, bool bound = false)
+        { sourceLines.Add(value); lines.Add(bound ? BoundItem(value) : value); }
         var failed = applicable.Any(item => item.State == CriterionEvidenceState.Failed);
         var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
         var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :
@@ -298,10 +375,10 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     "pending — full acceptance passed; criterion evidence outstanding"
                 : failed ? state : outcome.Status == GoalOperationStatus.Failed || outcome.AcceptanceOutcome == "failed"
                     ? "failed — applicable full acceptance" : "pending — acceptance " + outcome.AcceptanceOutcome;
-            lines.Add(BoundItem($"Full acceptance: {outcome.AcceptanceOutcome}; event {outcome.IdempotencyKey}; main {outcome.MainHeadSha}; {outcome.At:O}"));
-            lines.AddRange((outcome.FailedCheckNames ?? []).Take(5).Select(BoundItem));
+            AddLine($"Full acceptance: {outcome.AcceptanceOutcome}; event {outcome.IdempotencyKey}; main {outcome.MainHeadSha}; {outcome.At:O}", bound: true);
+            foreach (var check in (outcome.FailedCheckNames ?? []).Take(5)) AddLine(check, bound: true);
         }
-        if (unavailable is not null) lines.Add("Acceptance evidence unavailable — " + unavailable);
+        if (unavailable is not null) AddLine("Acceptance evidence unavailable — " + unavailable);
         if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure &&
             string.Equals(failure.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase) &&
             (outcome is null || failure.OccurredAt > outcome.At))
@@ -311,20 +388,20 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 previewEvidence = new(OwnerGoalPreviewEvidenceKind.Gate, false, failure.OccurredAt,
                     failure.FailedChecks.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)));
                 state = "failed — recorded acceptance (main " + failure.MainHeadSha + ")";
-                lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
+                foreach (var check in failure.FailedChecks.Take(5)) AddLine(check, bound: true);
             }
             else
-                lines.Add("Retained acceptance failure " + (expectedMain is null ? "applicability unavailable" : "superseded") +
+                AddLine("Retained acceptance failure " + (expectedMain is null ? "applicability unavailable" : "superseded") +
                     "; recorded main " + (failure.MainHeadSha ?? "unknown") + "; expected main " + (expectedMain ?? "unavailable"));
         }
         if (obligations.Any(item => item.Owner == CriterionEvidenceOwner.Operator && !item.HasSatisfiedEvidenceFor(candidate)))
-            lines.Add("Operator obligation outstanding");
+            AddLine("Operator obligation outstanding");
         if (candidate is not null)
             foreach (var task in goal.Tasks)
                 foreach (var receipt in task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? [])
                              .GroupBy(item => item.ReceiptId).Select(group => group.Last())
                              .Where(item => item.Accepted && item.CandidateSha == candidate).Take(5))
-                    lines.Add($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
+                    AddLine($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
         if (previewEvidence is null && candidate is not null)
         {
             var focused = goal.Tasks.SelectMany(task => task.VerificationHistory.SelectMany(record =>
@@ -338,7 +415,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     focused.Record.CompletedAt);
         }
         return (new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance run events/retained failure; candidate " + (candidate ?? "unknown"),
-            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20)), previewEvidence);
+            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20), SourceItems: sourceLines.Take(20).ToArray()), previewEvidence);
     }
 
     private async Task<string?> ReadArtifactAsync(TaskVerificationRecord record, CancellationToken token)

@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleBoardRenderer
 {
+    internal static IReadOnlyList<string> FieldKeys { get; } = ["goal", "epic", "title", "priority", "stage", "age"];
     internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width,
         string? stage = null, TimeZoneInfo? zone = null) =>
         string.Join('\n', OwnerConsoleSelectedPreview.Lines(preview, stage, zone ?? TimeZoneInfo.Local, width));

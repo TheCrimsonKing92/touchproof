@@ -6,6 +6,8 @@ using Xunit;
 // Parallel-safe: frozen v1 schema and migration run only in this test's private workspace.
 public sealed class PortfolioStoreTestsSchemaV2Upgrade : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string root = CreateTempDirectory();
 
     [Fact]

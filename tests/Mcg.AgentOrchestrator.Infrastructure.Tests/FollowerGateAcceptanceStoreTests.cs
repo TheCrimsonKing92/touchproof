@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: every fact owns and removes its database and evidence files.
 public sealed class FollowerGateAcceptanceStoreTests : AcceptanceCohortWorkflowTests
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void FirstReceiptWinsEvenWhenLaterVerdictDiffers()
     {

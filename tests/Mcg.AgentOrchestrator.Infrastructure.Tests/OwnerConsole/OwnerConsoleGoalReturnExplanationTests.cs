@@ -37,6 +37,12 @@ public sealed class OwnerConsoleGoalReturnExplanationTests
             "  Finding RV-1: Missing empty-input control", "Recent events");
         Assert.DoesNotContain("Second line detail", text);
         Assert.DoesNotContain("Reason: not recorded", text);
+        var goal = harness.Kernel.Goals.Single();
+        var fields = new OwnerGoalDetailSnapshot(goal, null, []).Fields();
+        Assert.Equal("abcdef1234567890", fields.Fields.Single(field => field.Key == "return/candidate").Value);
+        Assert.Equal("Missing empty-input control\nSecond line detail", fields.Fields.Single(field => field.Key == "return/description").Value);
+        Assert.Equal(T2.ToString("O"), fields.Fields.Single(field => field.Key == "return/at").Value);
+        Assert.Equal("NewSourceFinding", fields.Fields.Single(field => field.Key == "return/cause").Value);
     }
 
     [Fact]

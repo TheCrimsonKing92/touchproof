@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -15,12 +16,13 @@ internal static class CliOwnerDigestCommand
         args.Count > 0 && args[0].Equals("owner-digest", StringComparison.OrdinalIgnoreCase);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        IClock? clock = null, TextWriter? output = null)
+        IClock? clock = null, TextWriter? output = null, Action<OwnerDigestResult>? observeDigest = null)
     {
         try
         {
             var (since, until, json, rounds, relaunch) = Parse(args);
             var digest = Read(workspace, clock ?? new SystemClock(), out var goals, since, until);
+            observeDigest?.Invoke(digest);
             var panel = CliOwnerDigestJudgePanel.Read(workspace, digest, goals);
             var measurements = relaunch ? CliOwnerDigestRelaunch.Read(workspace, digest.Since, digest.Until) : null;
             var writer = output ?? Console.Out;
@@ -80,6 +82,10 @@ internal static class CliOwnerDigestCommand
         writer.WriteLine("Latest decisions:");
         foreach (var decision in digest.LatestDecisions.Entries)
         {
+            if (writer is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create(decision.GoalId + "/" + decision.OccurredAt.ToString("O"),
+                new("goal", "Goal ID", decision.GoalId), new("stage", "Stage", decision.Stage), new("action", "Action", decision.Action),
+                new("rung", "Rung", decision.Rung.ToString(CultureInfo.InvariantCulture)), new("evidence", "Evidence", decision.Evidence),
+                new("at", "Occurred at", decision.OccurredAt.ToString("O"))));
             var evidence = Regex.Replace(decision.Evidence, @"\s+", " ").Trim();
             writer.WriteLine($"{GoalPrefix(decision.GoalId)} | {decision.Stage} | rung {decision.Rung} | {(evidence.Length == 0 ? "-" : evidence)}");
         }
@@ -92,6 +98,9 @@ internal static class CliOwnerDigestCommand
         writer.WriteLine($"Escapes: records={records.Count}");
         foreach (var record in records)
         {
+            if (writer is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create(record.GoalId,
+                new("goal", "Goal ID", record.GoalId), new("found-by", "Found by goal ID", record.FoundByGoalId),
+                new("at", "Recorded at", record.RecordedAt.ToString("O")), new("reason", "Reason", record.Reason)));
             var reason = Regex.Replace(record.Reason, @"\s+", " ");
             writer.WriteLine($"{GoalPrefix(record.GoalId)} | {(record.FoundByGoalId is null ? "-" : GoalPrefix(record.FoundByGoalId))} | {record.RecordedAt.ToUniversalTime():O} | {reason[..Math.Min(80, reason.Length)]}");
         }

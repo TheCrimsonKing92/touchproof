@@ -85,6 +85,10 @@ internal static class CliCommandHelp
     public const string EpicMembersUsage = "Usage: epic-members <epic>";
     public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
     public const string ProjectAddUsage = "Usage: project-add <title> | project-add --text-file <path>";
+    private static readonly CommandHelpEntry ProjectEventSources = new(
+        ProjectEventSourcesCommand.Usage,
+        "Export registered fleet conduct-tail sources as UTF-8 label=absolute-path records. Read-only; independent of project selection. Missing log files are valid.",
+        ["--help", "-h"]);
     public const string ProjectAssignUsage = "Usage: project-assign <epic> <project>";
     public const string PortfolioUsage = "Usage: portfolio | portfolio-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
@@ -351,9 +355,14 @@ internal static class CliCommandHelp
         ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Attention = new(
-        AttentionUsage,
+        AttentionUsage + " | attention fleet [--json] [--limit N]",
         "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry FleetCapacity = new(
+        CliFleetCapacityQueryCommand.Usage,
+        "Report recorded task-worker occupancy and configured local limits across the fleet.",
+        ["--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AbandonGoal = new(
         AbandonGoalUsage,
@@ -972,6 +981,16 @@ internal static class CliCommandHelp
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
+        if (CliFleetCapacityQueryCommand.IsCommand(args))
+        {
+            if (!IsCommandSpecificHelp(args)) _ = CliFleetCapacityQueryCommand.Parse(args);
+            return;
+        }
+        if (CliFleetAttentionQueryCommand.IsCommand(args))
+        {
+            if (!IsCommandSpecificHelp(args)) _ = CliFleetAttentionQueryCommand.Parse(args);
+            return;
+        }
         if (args.Count > 0 && args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
             GoalCreationSummaryView.IsRequested(args) &&
             args.Skip(1).Any(arg => arg.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||
@@ -1262,6 +1281,11 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("fleet-capacity", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FleetCapacity;
+            return true;
+        }
         if (args[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
         {
             entry = Attention;
@@ -1664,6 +1688,13 @@ internal static class CliCommandHelp
             args[0].Equals("epic-suggestions", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicSuggest;
+            return true;
+        }
+
+        if (args.Count > 1 && args[0].Equals("project", StringComparison.OrdinalIgnoreCase) &&
+            args[1].Equals("event-sources", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ProjectEventSources;
             return true;
         }
 

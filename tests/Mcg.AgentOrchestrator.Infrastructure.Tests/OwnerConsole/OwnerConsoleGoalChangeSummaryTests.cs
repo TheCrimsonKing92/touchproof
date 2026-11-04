@@ -17,6 +17,48 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
     private static readonly string Next = new('c', 40);
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FieldsRetainOrderedShortAndLongSourceItemsAndPreview(bool includeLong)
+    {
+        var goal = Fixture("changed");
+        string[] files = includeLong ? ["M src/short.cs", "A src/" + new string('長', 400) + ".cs", "M src/last.cs"] : ["M src/short.cs"];
+        var query = new OwnerGoalChangeSummaryQuery(changes: (_, _, _) =>
+            Task.FromResult(new CommittedGoalChanges(true, files, files.Length)),
+            mergeBase: (_, _) => Task.FromResult<string?>(Basis));
+        var detail = await new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: query).LoadAsync(goal.Id.Value, Token);
+        var summary = Assert.IsType<OwnerGoalChangeSummary>(detail!.Changes);
+        var fields = summary.Fields().ToArray();
+        Assert.Equal(files, fields.Where(field => field.Key.StartsWith("Changed/", StringComparison.Ordinal) &&
+            int.TryParse(field.Key[8..], out _)).Select(field => field.Value));
+        Assert.Equal(summary.Preview!.Changes.Total.ToString(), fields.Single(field => field.Key == "preview/changes/total").Value);
+        Assert.Equal(summary.Preview.Changes.Files, fields.Where(field => field.Key.StartsWith("preview/changes/", StringComparison.Ordinal) &&
+            int.TryParse(field.Key[16..], out _)).Select(field => field.Value));
+        Assert.Equal(summary.Preview.Evidence?.At.ToString("O"), fields.Single(field => field.Key == "preview/evidence/at").Value);
+        var writes = new List<string>();
+        using var modal = new OwnerConsoleFieldsDialog(detail.Fields(), new(value => { writes.Add(value); return true; }), includeLong ? "Changed/1" : "Changed/0");
+        modal.Copy(); Assert.Equal(files[includeLong ? 1 : 0], Assert.Single(writes));
+    }
+
+    [Fact]
+    public async Task FieldsKeepFullVerifiedCheckNamesAndPreviewEvidence()
+    {
+        var check = "Full.Check." + new string('長', 400);
+        var goal = new TestGoal(Fixture("changed").ToSnapshot() with {
+            LatestAcceptanceFailure = new(At.AddMinutes(4), [check], Candidate, Basis) });
+        var query = new OwnerGoalChangeSummaryQuery(acceptance: (_, _, _, _) =>
+            Task.FromResult(new OwnerGoalAcceptanceEvidence(Basis, null)));
+        var detail = await new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: query).LoadAsync(goal.Id.Value, Token);
+        var summary = Assert.IsType<OwnerGoalChangeSummary>(detail!.Changes);
+        Assert.DoesNotContain(check, summary.Verified.Items);
+        var fields = detail.Fields();
+        Assert.Equal(check, fields.Fields.Single(field => field.Key == "Verified/0").Value);
+        Assert.Equal(check, fields.Fields.Single(field => field.Key == "preview/evidence/failed").Value);
+        Assert.Equal("False", fields.Fields.Single(field => field.Key == "preview/evidence/passed").Value);
+        Assert.Equal(At.AddMinutes(4).ToString("O"), fields.Fields.Single(field => field.Key == "preview/evidence/at").Value);
+    }
+
     [Fact]
     public void CommittedDiff_NulPathsPreserveKindsAndFailuresCannotLookEmpty()
     {
@@ -117,7 +159,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(string.Join('\n', "Readable goal", changed
             ? "Changes 2 files in 2 areas: Feature.cs and 1 more" : "No committed changes yet", "Developer"), view.PreviewText);
         Assert.Equal(phase == "pending" ? 0 : changed ? 2 : 1, artifactReads);
-        Assert.Equal(changed ? 2 : 0, diffReads);
+        Assert.Equal(changed ? 1 : 0, diffReads);
         Assert.Equal(1, promotionReads);
         Assert.Equal(new[] { goal.Id.Value }, queries.ReadIds);
         Assert.Equal(0, queries.MetadataReads);
@@ -130,7 +172,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Contains("Planned: " + planned, text);
         Assert.Contains("Changed:", text); Assert.Contains("Reported:", text); Assert.Contains("Verified: " + verified, text);
         Assert.Contains("brief v1", text);
-        Assert.Equal(changed ? 2 : 0, diffReads); // Separate immutable-range caches survive preview/detail refresh.
+        Assert.Equal(changed ? 1 : 0, diffReads); // Separate immutable-range caches survive preview/detail refresh.
         if (changed)
         {
             Assert.Contains("M src/Feature.cs", text);
@@ -339,7 +381,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                 new CommittedGoalChanges(true, ["M src/Feature.cs"], 1));
         }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
-        Assert.Equal(new[] { (advanced ? Next : Basis, candidate), (Basis, candidate) }, reads);
+        Assert.Equal(advanced ? new[] { (Next, candidate), (Basis, candidate) } : new[] { (Basis, candidate) }, reads);
         Assert.Contains("Candidate: " + candidate, detail);
         Assert.Contains("Git " + (advanced ? Next : Basis) + ".." + candidate, detail);
         var expected = advanced ? "Changed: observed empty committed range" : "Changed: observed 1 files";
@@ -522,11 +564,11 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(Next, updated.Candidate);
         Assert.StartsWith("pending", updated.Verified.State);
         Assert.StartsWith("unavailable", updated.Reported.State);
-        Assert.Equal(new[] { Candidate, Candidate, Next, Next }, comparisons);
+        Assert.Equal(new[] { Candidate, Next }, comparisons);
         snapshot = queries.Goal.ToSnapshot();
         queries.Goal = new TestGoal(snapshot with { CriterionEvidenceObligations = [Obligation(Next, true)] });
         Assert.StartsWith("passed", (await query.LoadSummaryAsync(goal.Id.Value, Token))!.Verified.State);
-        Assert.Equal(4, comparisons.Count); // A receipt-only update doesn't re-run either diff.
+        Assert.Equal(2, comparisons.Count); // A receipt-only update doesn't re-run either diff.
     }
 
     [Theory]

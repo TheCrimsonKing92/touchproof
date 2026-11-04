@@ -14,6 +14,9 @@ internal sealed class OwnerConsoleDecisionsPane
         Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false
     };
     internal IReadOnlyList<string> Lines { get; private set; } = [];
+    internal IReadOnlyList<OwnerConsoleDecision> Items { get; private set; } = [];
+    internal OwnerConsoleFieldSnapshot? SelectedFields => List.SelectedItem is { } index && index >= 0 && index < Items.Count
+        ? Items[index].Fields() : null;
 
     internal void Render(OwnerConsoleViewModel model, int selectedIndex, int width)
     {
@@ -27,6 +30,7 @@ internal sealed class OwnerConsoleDecisionsPane
         TitleStatus = retained ? state is { Loading: true } ? "refreshing" : "refresh failed: " + state!.Error : null;
         var rows = items.Select(item => OwnerConsoleLineFitter.Fit(
             $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", OwnerConsoleLineSpans.None, width)).ToArray();
+        Items = state is null || retained ? items : [];
         EmptyLabel.Text = !retained && state is { Loading: true } ? "loading..." :
             !retained && state?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
         EmptyLabel.Visible = rows.Length == 0;

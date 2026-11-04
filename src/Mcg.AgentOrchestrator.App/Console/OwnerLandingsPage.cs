@@ -5,12 +5,14 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed record OwnerLandingsPage(string Text, IReadOnlyList<int> ChoiceLines,
     IReadOnlyList<string> ChoiceGoalIds)
 {
+    internal OwnerConsoleStructuredText? Fields { get; init; }
     internal static OwnerLandingsPage Plain(string text) => new(text, [], []);
 
     internal static OwnerLandingsPage From(OwnerLandingsQuery.Result result)
     {
         var lines = OwnerLandingsQuery.Render(result);
-        if (result.InvalidWindow || result.Rows.Count == 0) return Plain(string.Join("\n", lines));
+        if (result.InvalidWindow) return Plain(string.Join("\n", lines));
+        if (result.Rows.Count == 0) return Plain(string.Join("\n", lines)) with { Fields = new(result.Fields()) };
         var choiceLines = new List<int>();
         var goalIds = new List<string>();
         for (var i = 0; i < result.Rows.Count; i++)
@@ -21,7 +23,8 @@ internal sealed record OwnerLandingsPage(string Text, IReadOnlyList<int> ChoiceL
             goalIds.Add(result.Rows[i].GoalId);
         }
         return new(string.Join("\n", new[] { "Enter on a row opens its goal detail." }.Concat(lines)),
-            choiceLines, goalIds);
+            choiceLines, goalIds) { Fields = new(result.Fields(), choiceLines.Select((line, index) =>
+                (line, fields: result.Rows[index / 2].Fields())).ToDictionary(item => item.line, item => item.fields)) };
     }
 
     internal static OwnerLandingsPage Load(IOrchestratorStateQueries state, string orchestratorDirectory,

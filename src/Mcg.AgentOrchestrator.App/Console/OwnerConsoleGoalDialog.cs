@@ -8,12 +8,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 {
     internal sealed record Content(string Text, IReadOnlyList<int> ChoiceLines,
         IReadOnlyList<OwnerQuestionResolution> Resolved, OwnerConsoleDecision? Question,
-        string? Failure, string? EpicId, string? GateGoalId = null);
+        string? Failure, string? EpicId, string? GateGoalId = null, OwnerConsoleStructuredText? Fields = null,
+        OwnerConsoleStructuredText? FailureFields = null);
 
     private readonly OwnerConsoleScreenController _controller;
     private readonly Func<CancellationToken, Task<Content?>> _load;
     private readonly Func<OwnerConsoleDecision, Task> _question;
     private readonly Func<string, string, Task> _text;
+    private readonly Func<string, string, OwnerConsoleStructuredText, Task>? _structuredText;
     private readonly CancellationTokenSource _session;
     private readonly object _gate = new();
     private readonly bool _loadOnStart;
@@ -24,7 +26,6 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     private bool _dirty;
     private bool _started;
     private bool _disposed;
-    private int _revision;
 
     internal Content Current { get; private set; }
     internal string Title => "Goal";
@@ -41,6 +42,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         Action close, Func<char, Task> action)
     {
         var dialog = new OwnerConsoleTextDialog(Title, Current.Text, Current.ChoiceLines, Page) { TitleStatus = TitleStatus };
+        dialog.Structured = Current.Fields;
         dialog.Render();
         var closeButton = new Button { Text = "Close", IsDefault = true };
         closeButton.Accepting += (_, args) => { args.Handled = true; close(); };
@@ -70,12 +72,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     internal OwnerConsoleGoalDialog(OwnerConsoleScreenController controller, Content initial,
         Func<CancellationToken, Task<Content?>> load, Func<OwnerConsoleDecision, Task> question,
         Func<string, string, Task> text, CancellationToken token, bool loadOnStart = false,
-        bool initialContentLoaded = false, Action<Content>? remember = null)
+        bool initialContentLoaded = false, Action<Content>? remember = null,
+        Func<string, string, OwnerConsoleStructuredText, Task>? structuredText = null)
     {
         _controller = controller; Current = initial; _load = load; _question = question; _text = text;
         _session = CancellationTokenSource.CreateLinkedTokenSource(token);
         _loadOnStart = loadOnStart; _contentLoaded = !loadOnStart || initialContentLoaded;
         _remember = remember;
+        _structuredText = structuredText;
         TitleStatus = loadOnStart && _contentLoaded ? "refreshing" : null;
         Page = new(initial.Text, 60, 15, initial.ChoiceLines);
     }
@@ -92,13 +96,13 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed) return;
-            _dirty = true; _revision++;
+            if (_disposed || _session.IsCancellationRequested) return;
+            _dirty = true;
             _invoke(() =>
             {
                 lock (_gate)
                 {
-                    if (_disposed || !_dirty && _loading is null) return;
+                    if (_disposed || _session.IsCancellationRequested || !_dirty && _loading is null) return;
                     if (_contentLoaded) TitleStatus = "refreshing";
                     Changed?.Invoke();
                 }
@@ -121,13 +125,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     {
         while (true)
         {
-            int revision;
             CancellationToken token;
             lock (_gate)
             {
-                if (_disposed || !_dirty)
+                if (_disposed || _session.IsCancellationRequested || !_dirty)
                 { _loading!.TrySetResult(); _loading = null; return; }
-                _dirty = false; revision = _revision; token = _session.Token;
+                _dirty = false; token = _session.Token;
             }
             try
             {
@@ -138,12 +141,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                     { TitleStatus = "refresh failed: " + OwnerConsoleGoalDetailLoading.UnavailableText; Changed?.Invoke(); return; }
                     if (content is not null)
                     { _contentLoaded = true; _remember?.Invoke(content); }
-                    TitleStatus = null;
+                    TitleStatus = _contentLoaded && _dirty ? "refreshing" : null;
                     content ??= OwnerConsoleGoalDetailLoading.Unavailable(null);
                     Current = content;
                     Page.Replace(content.Text, content.ChoiceLines);
                     Changed?.Invoke();
-                }, revision, token).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
@@ -158,12 +161,12 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                         Page.Replace(Current.Text, Current.ChoiceLines);
                     }
                     Changed?.Invoke();
-                }, revision, token).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
             }
         }
     }
 
-    private async Task ApplyAsync(Action apply, int revision, CancellationToken token)
+    private async Task ApplyAsync(Action apply, CancellationToken token)
     {
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _invoke(() =>
@@ -171,7 +174,9 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
             try
             {
                 lock (_gate)
-                    if (!_disposed && !token.IsCancellationRequested && revision == _revision) apply();
+                    // Each dialog is bound to one goal. Refresh demand cannot revoke its
+                    // latest available result; awaiting this callback also orders publications.
+                    if (!_disposed && !token.IsCancellationRequested) apply();
                 applied.TrySetResult();
             }
             catch (Exception ex) { applied.TrySetException(ex); }
@@ -186,7 +191,11 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         switch (OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key)?.Command)
         {
             case "question" when Current.Question is { } question: await _question(question); return true;
-            case "failure" when Current.Failure is { } failure: await _text("Last failure", failure); return true;
+            case "failure" when Current.Failure is { } failure:
+                if (Current.FailureFields is { } fields && _structuredText is not null)
+                    await _structuredText("Last failure", failure, fields);
+                else await _text("Last failure", failure);
+                return true;
             case "epics" when Current.EpicId is { } epic:
                 RequestedEpicId = epic; CloseRequested?.Invoke(); return true;
             case "gate" when Current.GateGoalId is { } goalId:
@@ -197,14 +206,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     }
 
     internal Task OpenResolutionAsync(int index) => index >= 0 && index < Current.Resolved.Count
-        ? _text("Question resolution", _controller.ResolutionText(Current.Resolved[index])) : Task.CompletedTask;
+        ? _controller.ShowResolutionAsync(Current.Resolved[index]) : Task.CompletedTask;
 
     public void Dispose()
     {
         lock (_gate)
         {
             if (_disposed) return;
-            _disposed = true; _revision++;
+            _disposed = true;
             _controller.ModelApplied -= ModelApplied;
             _session.Cancel(); _session.Dispose();
         }

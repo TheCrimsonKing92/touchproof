@@ -12,6 +12,7 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     private readonly ListView _body = new() { Width = Dim.Fill() };
     private readonly Label _notice = new() { Width = Dim.Fill() };
     private readonly Label _hint = new() { Width = Dim.Fill() };
+    private readonly Label _fieldsHint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1, Text = "F2 fields (snapshot)" };
     private readonly Button _answer = new() { Text = "Answer (r)" };
     private readonly Button _accept = new() { Text = "Accept default (a)" };
     private readonly Button _close = new() { Text = "Close", IsDefault = true };
@@ -22,6 +23,7 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     private readonly OwnerConsoleListRenderer _source = new();
 
     internal event Action? Closed;
+    internal event Action<OwnerConsoleFieldSnapshot>? FieldsRequested;
     internal string BannerText { get; private set; } = "";
     internal string NoticeText { get; private set; } = "";
     internal string HintText { get; private set; } = "";
@@ -36,7 +38,7 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     {
         _detail = detail; _invoke = invoke;
         Title = "Decision"; Width = Dim.Percent(85); Height = Dim.Percent(80);
-        Add(_banner, _body, _notice, _hint);
+        Add(_banner, _body, _notice, _hint, _fieldsHint);
         AddButton(_answer); AddButton(_accept); AddButton(_close);
         _answer.Accepting += (_, args) => { args.Handled = true; _ = AnswerAsync(false); };
         _accept.Accepting += (_, args) => { args.Handled = true; _ = AnswerAsync(true); };
@@ -53,6 +55,8 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     internal async Task HandleKeyAsync(Key key)
     {
         var state = _detail.State;
+        if (key == OwnerConsoleBindings.OpenFields && _body.HasFocus)
+        { key.Handled = true; if (state.Fields is { } fields) FieldsRequested?.Invoke(fields); return; }
         var character = char.ToLowerInvariant((char)key.AsRune.Value);
         if (character == 'r' && state.CanAnswer || character == 'a' && state.CanAcceptDefault)
         { key.Handled = true; await AnswerAsync(character == 'a'); }
@@ -86,9 +90,9 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
             var noticeHeight = FormatLabel(_notice, NoticeText, width);
             var hintHeight = FormatLabel(_hint, HintText, width);
             _body.Y = Pos.Bottom(_banner);
-            _hint.Y = Pos.AnchorEnd(hintHeight + 1);
-            _notice.Y = Pos.AnchorEnd(hintHeight + noticeHeight + 1);
-            _body.Height = Dim.Fill(hintHeight + noticeHeight + 1);
+            _hint.Y = Pos.AnchorEnd(hintHeight + 2);
+            _notice.Y = Pos.AnchorEnd(hintHeight + noticeHeight + 2);
+            _body.Height = Dim.Fill(hintHeight + noticeHeight + 2);
             var height = _body.Viewport.Height > 0 ? _body.Viewport.Height : 15;
             if (_text != state.Text) { _text = state.Text; _page = new(state.Text, width, height); }
             else _page.Resize(width, height);
@@ -115,7 +119,7 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _disposed = true; _detail.Changed -= Changed; }
+        if (disposing) { _disposed = true; _detail.Changed -= Changed; FieldsRequested = null; }
         base.Dispose(disposing);
     }
 }

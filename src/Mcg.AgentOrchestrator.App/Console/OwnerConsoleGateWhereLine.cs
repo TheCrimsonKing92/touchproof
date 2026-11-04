@@ -53,7 +53,7 @@ internal static class OwnerConsoleGateWhereLine
         return lines;
     }
 
-    private static bool IsLocal(string location) => location == "local" || location.StartsWith("local ", StringComparison.Ordinal);
+    internal static bool IsLocal(string location) => location == "local" || location.StartsWith("local ", StringComparison.Ordinal);
     private static string Occupancy(string location, int running, int capacity) =>
         $"{location} {running}/{capacity} " + Bar(capacity > 0 ? (double)running / capacity : running > 0 ? 1 : 0);
     private static string Bar(double fraction)

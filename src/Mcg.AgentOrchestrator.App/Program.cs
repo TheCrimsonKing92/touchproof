@@ -136,10 +136,55 @@ var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
+if (CliFleetAttentionQueryCommand.IsCommand(startupArgs) || CliFleetCapacityQueryCommand.IsCommand(startupArgs))
+{
+    try
+    {
+        var capacity = CliFleetCapacityQueryCommand.IsCommand(startupArgs);
+        if (capacity) _ = CliFleetCapacityQueryCommand.Parse(startupArgs);
+        else _ = CliFleetAttentionQueryCommand.Parse(startupArgs);
+        OrchestratorWorkspace? launchWorkspace = null;
+        // Explicit expectations still bind the launch workspace. Fleet never consults
+        // current-project.txt, including when no project override was given.
+        if (invocationBinding.RepositoryRoot is not null || invocationBinding.ExpectedStateDirectory is not null ||
+            projectSelection.ProjectName is not null)
+        {
+            var project = projectRegistry.ResolveActiveProject(repoRoot,
+                projectSelection.ProjectName ?? OrchestratorWorkspace.DefaultProjectName);
+            launchWorkspace = SelectedProjectWorkspaceResolver.Resolve(project, executionDirectory,
+                tenantSelection.TenantName, projectRegistry);
+            invocationBinding.Verify(launchWorkspace);
+        }
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancel = (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+        Console.CancelKeyPress += cancel;
+        try
+        {
+            if (capacity)
+                return await CliFleetCapacityQueryCommand.ExecuteAsync(startupArgs, repoRoot,
+                    tenantSelection.TenantName, projectRegistry, Console.Out, launchWorkspace, cancellation.Token);
+            return await CliFleetAttentionQueryCommand.ExecuteAsync(startupArgs, repoRoot,
+                tenantSelection.TenantName, projectRegistry, Console.Out, launchWorkspace, cancellation.Token);
+        }
+        finally { Console.CancelKeyPress -= cancel; }
+    }
+    catch (OperationCanceledException) when (CliFleetCapacityQueryCommand.IsCommand(startupArgs))
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return 1;
+    }
+}
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
 {
     try
     {
+        if (startupArgs.Count > 1 && startupArgs[1].Equals("event-sources", StringComparison.OrdinalIgnoreCase))
+            return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName,
+                tenant: tenantSelection.TenantName, eventSourcesBinding: invocationBinding);
         if (invocationBinding.DisposableFixture || invocationBinding.ExpectedStateDirectory is not null)
             throw new InvalidOperationException("A state-directory binding cannot authorize project registry commands; manage the registry separately, then bind the resolved workspace.");
         return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName);
@@ -708,7 +753,8 @@ while (true)
         var command = CliArgumentParser.SplitCommand(line);
         if (command.Count > 0 && command[0].Equals("project", StringComparison.OrdinalIgnoreCase))
         {
-            ProjectCliCommand.Execute(command, projectRegistry, repoRoot, projectSelection.ProjectName);
+            ProjectCliCommand.Execute(command, projectRegistry, repoRoot, projectSelection.ProjectName,
+                tenant: tenantSelection.TenantName);
             continue;
         }
 

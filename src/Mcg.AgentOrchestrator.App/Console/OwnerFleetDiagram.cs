@@ -9,11 +9,13 @@ internal static class OwnerFleetDiagram
     internal const int MinimumWidth = 40;
 
     // Slots describe configured capacity, not live occupancy; peak is historical.
-    internal static string Render(OwnerFleetViewModel model, int width = DefaultWidth)
+    internal static string Render(OwnerFleetViewModel model, int width = DefaultWidth,
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, MinimumWidth);
         var lines = new List<string>();
         var host = model.Host;
+        var owner = host.Fields();
         var content = new List<string>
         {
             "Orchestrator host",
@@ -32,6 +34,7 @@ internal static class OwnerFleetDiagram
         Box(content, false, wrapRow: skipRow);
         foreach (var hold in model.ProviderHolds ?? [])
         {
+            owner = hold.Fields();
             lines.Add("│" + new string(' ', width - 1));
             Box([
                 $"Provider {hold.Name}: HELD !",
@@ -46,6 +49,7 @@ internal static class OwnerFleetDiagram
         }
         foreach (var executor in model.Executors)
         {
+            owner = executor.Fields();
             lines.Add("│" + new string(' ', width - 1));
             content = [$"Executor {executor.Id}"];
             if (executor.Owner is not null) content.Add($"owner: {executor.Owner}");
@@ -87,6 +91,7 @@ internal static class OwnerFleetDiagram
 
         void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue, int wrapRow = -1)
         {
+            var start = lines.Count;
             var edge = unreachable ? '═' : '─';
             var side = unreachable ? '║' : '│';
             lines.Add((unreachable ? "╔" : "┌") + new string(edge, width - 2) + (unreachable ? "╗" : "┐"));
@@ -100,6 +105,7 @@ internal static class OwnerFleetDiagram
                     lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
             }
             lines.Add((unreachable ? "╚" : "└") + new string(edge, width - 2) + (unreachable ? "╝" : "┘"));
+            if (fields is not null) for (var i = start; i < lines.Count; i++) fields[i] = owner;
         }
     }
 
