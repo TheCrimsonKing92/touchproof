@@ -223,6 +223,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     {
         var path = Path.Combine(root, SourceSizeRatchet.SourcePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        if (aggregate)
+            File.WriteAllText(Path.Combine(root, Source), "public sealed partial class Feature { }");
         File.WriteAllText(path, $"new SourceSizeCeiling(\"{Source}\", {(aggregate ? 100 : 1)})\n" +
             (aggregate ? "new SourceClassCeiling(\"Feature\", 1, 1)\n" : ""));
     }

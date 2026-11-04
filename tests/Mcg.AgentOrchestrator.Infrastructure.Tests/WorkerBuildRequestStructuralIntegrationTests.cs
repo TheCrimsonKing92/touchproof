@@ -11,6 +11,9 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
     public async Task RealCompileViolationReplayAndFreshCorrection(bool aggregate)
     {
         using var fixture = new WorkerBuildRequestFixture(seedRepository: root => WorkerBuildRequestFixture.SeedSizePolicy(root, aggregate));
+        var expected = DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
+        Assert.True(expected.EvaluationComplete);
+        Assert.True(expected.HasViolation);
         var adapter = Path.Combine(WorkerBuildRequestFixture.FindRepository(), "scripts", "Request-HostWorkerBuild.ps1").Replace("'", "''");
         var key = Guid.NewGuid().ToString("N");
         var fresh = Guid.NewGuid().ToString("N");
@@ -18,7 +21,7 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
         var scans = 0;
         var invocation = await fixture.RunHelper(command: call + "; if($LASTEXITCODE -ne 1){throw 'violation adapter exit'}; " +
             call + "; if($LASTEXITCODE -ne 1){throw 'replay adapter exit'}; " +
-            $"[IO.File]::WriteAllText('{WorkerBuildRequestFixture.Source}', 'public sealed class Feature {{ }} public sealed class Added {{ }}'); " +
+            $"[IO.File]::WriteAllText('{WorkerBuildRequestFixture.Source}', 'public sealed partial class Feature {{ }} public sealed class Added {{ }}'); " +
             $"& '{adapter}' -Projects '{WorkerBuildRequestFixture.Project}' -RequestKey '{fresh}'; exit $LASTEXITCODE",
             structuralEvaluator: () =>
             {
@@ -36,6 +39,7 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
         Assert.Equal(0, failed.CompilerExitCode);
         Assert.Equal(1, failed.ExitCode);
         Assert.Equal(WorkerBuildStructuralStatus.Violation, failed.StructuralCheck!.Status);
+        Assert.Equal(expected.Message, failed.StructuralDiagnostic);
         Assert.Contains(aggregate ? "class:Feature" : WorkerBuildRequestFixture.Source, failed.StructuralDiagnostic);
         Assert.Contains("2", failed.StructuralDiagnostic);
         Assert.Contains("ceiling of 1", failed.StructuralDiagnostic);
@@ -98,15 +102,34 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
             });
         var adapter = Path.Combine(WorkerBuildRequestFixture.FindRepository(), "scripts", "Request-HostWorkerBuild.ps1").Replace("'", "''");
         var call = $"& '{adapter}' -Projects '{WorkerBuildRequestFixture.Project}' -RequestKey '{Guid.NewGuid():N}'";
+        var service = new ReplayRejectionService(fixture.Host());
         var invocation = await fixture.RunHelper(assertAdapterExit: false, command: "$ErrorActionPreference='Stop'; " +
             call + "; if($LASTEXITCODE -ne 0){throw 'initial adapter exit'}; " +
             $"[IO.File]::AppendAllText('{WorkerBuildRequestFixture.Source}', '// changed'); " +
-            "try { " + call + "; throw 'replay unexpectedly accepted' } catch { " +
-            "if($_.Exception.Message -notlike '*closed without a terminal response*'){throw}; exit 0 }");
+            "$rejected=$false; try { " + call + " } catch { $rejected=$true }; " +
+            "if(-not $rejected){throw 'replay unexpectedly accepted'}; exit 0", service: service);
         Assert.Equal(WorkerBuildStructuralStatus.Passed, invocation.StructuralCheck!.Status);
+        Assert.Contains("idempotency key was reused for another payload/candidate",
+            Assert.IsType<UnauthorizedAccessException>(service.Rejection).Message);
         Assert.Single(fixture.Responses);
         Assert.Equal(0, fixture.Worker!.TryReadOwnedExitCode());
         Assert.Single(fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
+    }
+
+    private sealed class ReplayRejectionService(WorkerBuildRequestHost host) : IWorkerBuildRequestService
+    {
+        internal Exception? Rejection { get; private set; }
+
+        public async Task<WorkerBuildResponse> ExecuteAsync(WorkerBuildRequest request, WorkerBuildProcess worker,
+            CancellationToken lifetime)
+        {
+            try { return await host.ExecuteAsync(request, worker, lifetime); }
+            catch (UnauthorizedAccessException error)
+            {
+                Rejection = error;
+                throw;
+            }
+        }
     }
 
     [Fact]

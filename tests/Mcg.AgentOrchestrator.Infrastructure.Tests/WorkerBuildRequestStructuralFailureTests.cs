@@ -121,7 +121,9 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, seedRepository: root =>
         {
             Write(root, "config/acceptance-manifest.json", """
-                { "version": 1, "engine": { "infrastructureTestLanes": [
+                { "version": 1, "engine": {
+                  "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],
+                  "infrastructureTestLanes": [
                   { "name": "Dotnet build slots", "filter": "FullyQualifiedName~ConductorBatchLoopTests", "ownedCollections": ["DotnetBuildSlots"] },
                   { "name": "Remainder", "filter": "FullyQualifiedName!~ConductorBatchLoopTests" }
                 ] } }
@@ -130,11 +132,20 @@ public sealed class WorkerBuildRequestStructuralFailureTests
             Write(root, relative, (isolated ? "[Xunit.Collection(\"DotnetBuildSlots\")] " : "") +
                 $"public class {name} {{ [Xunit.Fact] public void Case() {{ }} }}");
         });
-        var invocation = await fixture.RunHelper();
+        var descriptor = Assert.Single(AcceptanceTestClassSourceScanner.Scan(fixture.RepositoryRoot));
+        Assert.Equal(name, descriptor.FullName);
+        var expected = DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
+        Assert.True(expected.EvaluationComplete);
+        Assert.True(expected.HasViolation);
+        var reached = false;
+        var invocation = await fixture.RunHelper(structuralEvaluator: () =>
+        {
+            reached = true;
+            return DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
+        });
+        Assert.True(reached);
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
         Assert.Equal(WorkerBuildStructuralStatus.Violation, invocation.StructuralCheck!.Status);
-        var expected = DeveloperCompletionStructuralPreflight.Evaluate(fixture.RepositoryRoot);
-        Assert.True(expected.HasViolation);
         Assert.Equal(expected.Message, invocation.StructuralCheck.Diagnostic);
         Assert.Contains(relative, expected.Message);
         Assert.Contains(name, expected.Message);
