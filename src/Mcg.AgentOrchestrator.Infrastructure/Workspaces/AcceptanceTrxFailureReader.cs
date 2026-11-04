@@ -54,6 +54,14 @@ internal static class AcceptanceTrxFailureReader
                 FirstNonEmptyLine(ex.Message));
         }
 
+        return Read(document, path);
+    }
+
+    // Callers that attest retained bytes must parse those very bytes, avoiding a
+    // separate hash/read race at the consuming boundary.
+    internal static AcceptanceTrxReadResult Read(XDocument document, string path)
+    {
+
         var definitionsByTestId = document
             .Descendants()
             .Where(element =>

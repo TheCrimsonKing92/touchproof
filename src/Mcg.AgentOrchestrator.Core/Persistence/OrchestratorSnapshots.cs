@@ -80,7 +80,9 @@ public sealed record AcceptanceFailureSnapshot(
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
     string? BaselineAttestation = null,
-    AcceptanceAttributionPending? AttributionPending = null);
+    AcceptanceAttributionPending? AttributionPending = null,
+    string? AttemptId = null,
+    SoloAcceptanceFailureReceipt? SoloFailureReceipt = null);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,
