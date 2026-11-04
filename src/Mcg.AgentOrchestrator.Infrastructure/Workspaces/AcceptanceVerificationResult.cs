@@ -23,6 +23,11 @@ public sealed record AcceptanceVerificationResult(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SoloAcceptanceFailureReceipt? SoloFailureReceipt { get; init; }
 
+    // Producer ownership survives attribution returning without a captured receipt.
+    // An attempt ID alone does not establish this obligation.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequiresSoloFailureReceipt { get; init; }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonConverter(typeof(AcceptanceLaneWaitJsonConverter))]
     public IReadOnlyList<AcceptanceLaneWaitOccurrence>? LaneWaits { get; init; }

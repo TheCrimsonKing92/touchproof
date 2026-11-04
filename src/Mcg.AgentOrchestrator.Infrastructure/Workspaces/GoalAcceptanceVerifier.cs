@@ -868,6 +868,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             AttemptId = executionOwner.Identity.AttemptId,
             SoloFailureReceipt = soloFailure.Receipt,
+            // This run entered solo attribution even if preparation or baseline
+            // execution returned before the capture callback could run.
+            RequiresSoloFailureReceipt = true,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&

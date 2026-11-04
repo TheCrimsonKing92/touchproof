@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -6,6 +7,39 @@ using static AttributedFailureDeveloperRouteTests;
 
 public sealed class SoloAttributedFailureRouteControlTests
 {
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public async Task ThrowingBaseline_ReloadAndRestart_HoldsWithoutRetry()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineThrows: true);
+        Assert.True(fixture.Summary.RequiresSoloFailureReceipt);
+        Assert.Null(fixture.Summary.SoloFailureReceipt);
+        var attributions = fixture.Summary.UnmetCriteria.SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
+        Assert.NotEmpty(attributions);
+        Assert.All(attributions, attribution =>
+            Assert.Contains("focused baseline execution failed: AcceptanceGateEngineException", attribution.Evidence));
+
+        var artifact = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
+            fixture.Summary, fixture.Context.CandidateSha, fixture.Context.MainSha, null, null);
+        var resultPath = Path.Combine(fixture.Root, "acceptance-result.json");
+        File.WriteAllBytes(resultPath, JsonSerializer.SerializeToUtf8Bytes(artifact));
+        var saved = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllBytes(resultPath))!;
+        Assert.True(saved.Acceptance!.RequiresSoloFailureReceipt);
+        Assert.Null(saved.Acceptance.SoloFailureReceipt);
+        fixture.Complete(saved.Acceptance);
+        await fixture.Restart();
+        var driver = fixture.Driver();
+        driver.BeginTick(fixture.Kernel, 2);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(
+            driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.Contains("solo-receipt-absent", held.Reason);
+        Assert.Equal("solo-acceptance-correction", Assert.IsType<PolicyDecisionRecord>(held.Decision).Stage);
+        Assert.Empty(fixture.Starts);
+        Assert.Empty(MarkerRetries(fixture.Goal));
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+    }
+
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("absent", "solo-receipt-absent")]
     [InlineData("missing", "FileNotFoundException")]

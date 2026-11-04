@@ -33,7 +33,7 @@ internal sealed record AcceptanceVerificationSummary(
             failedChecks, branchHeadSha, mainHeadSha, testResultPaths, checkAttributions,
             baselineAttestation, verification.AttemptId,
             verification.Checks?.Select(check => check.Name).ToArray(), verification.LaneWaits, verification.SoloFailureReceipt,
-            RequiresSoloFailureReceipt: verification.SoloFailureReceipt is not null);
+            RequiresSoloFailureReceipt: verification.RequiresSoloFailureReceipt || verification.SoloFailureReceipt is not null);
 
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

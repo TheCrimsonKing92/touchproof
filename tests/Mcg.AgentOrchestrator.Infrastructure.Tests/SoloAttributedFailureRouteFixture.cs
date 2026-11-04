@@ -62,7 +62,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Goal = CompletedGoal(Kernel, committed: committed);
     }
 
-    internal async Task Produce()
+    internal async Task Produce(bool baselineThrows = false)
     {
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
         {
@@ -78,6 +78,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
             var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(Repo), StringComparison.OrdinalIgnoreCase);
             if (baseline) BaselineRuns++; else CandidateRuns++;
+            if (baseline && baselineThrows) throw new InvalidOperationException("Fixture baseline runner failed.");
             var method = Array.IndexOf(args, "--filter-method");
             string[] names = method < 0 ? [First, Long] : [args[method + 1].Trim('*')];
             Directory.CreateDirectory(args[results + 1]);
@@ -90,17 +91,23 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             options: new(RunId: "solo-attempt", ResultsPrefix: Path.Combine(Root, "results"), IntegrationBranch: "main"));
         var verification = await verifier.RunOwnedAsync(Repo, Goal.Id, ["README.md"], null, null, owner);
         Assert.False(verification.Passed);
-        Assert.NotNull(verification.SoloFailureReceipt);
-        Assert.Null(verification.SoloFailureReceipt.CaptureError);
+        if (baselineThrows) Assert.Null(verification.SoloFailureReceipt);
+        else
+        {
+            Assert.NotNull(verification.SoloFailureReceipt);
+            Assert.Null(verification.SoloFailureReceipt.CaptureError);
+        }
         Assert.True(BaselineRuns > 0, "The real baseline attribution execution must have run.");
         Assert.True(CandidateRuns > 0);
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
         Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
-            attr => Assert.Equal(AcceptanceTestFailureOrigin.Introduced, attr.Origin));
+            attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed : AcceptanceTestFailureOrigin.Introduced,
+                attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
             Context.CandidateSha, Context.MainSha, verification.TestResultPaths,
-            failed.Select(check => new AcceptanceCheckAttribution(check.Name, AcceptanceFailureOrigin.Introduced,
-                "fixture authoritative baseline is green")).ToArray(), null);
+            failed.Select(check => new AcceptanceCheckAttribution(check.Name,
+                baselineThrows ? AcceptanceFailureOrigin.Unattributed : AcceptanceFailureOrigin.Introduced,
+                baselineThrows ? "fixture baseline execution failed" : "fixture authoritative baseline is green")).ToArray(), null);
     }
 
     internal ConductorDriver Driver()
