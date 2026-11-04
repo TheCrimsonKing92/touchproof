@@ -110,12 +110,11 @@ internal sealed partial class ConductorDriver
         }
         var guards = PreTesterGuardSelections.Create(_preTesterChangedFileGuards, worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
-            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace));
-        notRun.AddRange(guards.NotRun.Where(name => prior?.Outcome != "started" ||
-            prior.NotRun.Contains(name, StringComparer.Ordinal)));
-        selected.AddRange(guards.Normalize(settings));
-        var distinct = guards.RetainStartedSelections(selected,
-            prior?.Outcome == "started" ? prior.Selections : null, FormatFindingEvidenceSelection);
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), settings: settings,
+            priorSelections: prior?.Outcome == "started" ? prior.Selections : null);
+        var augmented = guards.Augment(new(selected, notRun), settings, prior, FormatFindingEvidenceSelection);
+        var distinct = augmented.Selections.ToArray();
+        notRun = augmented.NotRun.ToList();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
         if (prior?.Outcome == "started" &&
