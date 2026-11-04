@@ -222,6 +222,67 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         Process.Kill(entireProcessTree);
     }
 
+    internal async Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(TimeSpan timeout)
+    {
+        if (!OwnsRegisteredJob)
+            throw new InvalidOperationException("Cannot terminate an owned tree after its registration was released.");
+
+        using var deadline = new CancellationTokenSource(timeout);
+        if (OperatingSystem.IsWindows())
+        {
+            // Retain a duplicate job handle across Kill: an empty job proves that every
+            // descendant exited, including descendants created after cancellation began.
+            var treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out var remaining);
+            try
+            {
+                await WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+                return (treeExited, remaining);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                return (false, Process.HasExited ? remaining : remaining.Append(_processId).Distinct().ToArray());
+            }
+        }
+
+        // On Unix retain handles to the current group members before requesting termination.
+        // Never re-open a PID after the kill, when it might identify an unrelated process.
+        var members = new List<Process>();
+        try
+        {
+            if (!_registration.Group.TryGetActiveProcessIds(out var processIds))
+                throw new InvalidOperationException("Cannot inspect the owned process group before termination.");
+            foreach (var processId in processIds.Where(id => id != _processId))
+            {
+                Process? member = null;
+                try
+                {
+                    member = System.Diagnostics.Process.GetProcessById(processId);
+                    _ = member.SafeHandle;
+                    members.Add(member);
+                }
+                catch (ArgumentException) { member?.Dispose(); } // Already exited.
+                catch (InvalidOperationException) { member?.Dispose(); } // Exited before handle acquisition.
+            }
+            Kill(entireProcessTree: true);
+            try
+            {
+                await Task.WhenAll(members.Select(member => member.WaitForExitAsync(deadline.Token))
+                    .Append(WaitForExitAsync(deadline.Token))).ConfigureAwait(false);
+                return (true, []);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                var remaining = members.Where(member => !member.HasExited).Select(member => member.Id).ToList();
+                if (!Process.HasExited) remaining.Add(_processId);
+                return (false, remaining);
+            }
+        }
+        finally
+        {
+            foreach (var member in members) member.Dispose();
+        }
+    }
+
     internal bool Release(out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;

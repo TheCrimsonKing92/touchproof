@@ -242,12 +242,30 @@ internal static class AcceptanceCheckProcessInvoker
             {
                 await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException exception)
             {
                 laneStall?.Complete();
-                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var termination = await process.KillTreeAndWaitForExitAsync(CaptureDrainTimeout).ConfigureAwait(false);
+                        if (!termination.ExitConfirmed)
+                        {
+                            exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
+                            exception.Data["AcceptanceCancellationRemainingProcessIds"] = string.Join(",", termination.RemainingProcessIds);
+                        }
+                    }
+                    catch (Exception cleanupException)
+                    {
+                        // Preserve caller cancellation; report only the failure type, never command inputs.
+                        exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
+                        exception.Data["AcceptanceCancellationCleanupFailure"] = cleanupException.GetType().Name;
+                    }
                     throw;
+                }
+
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
 
                 timedOut = !captureLimitStop.Stopped;
                 if (captureLimitStop.Stopped)

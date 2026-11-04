@@ -83,7 +83,17 @@ public sealed class JunitCommandEnvironmentIsolationTests
             if (cancel)
             {
                 lifetime.Cancel();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(120)));
+                var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(120)));
+                Assert.False(exception.Data.Contains("AcceptanceCancellationTreeExitConfirmed"));
+                // Assert at the cancellation boundary, before teardown's waits can hide live holders.
+                gate.AssertExited();
+                if (OperatingSystem.IsWindows())
+                {
+                    var snapshot = ProcessCommandLines.Snapshot();
+                    Assert.Null(snapshot.Failure);
+                    var holders = AssemblyTempRootCleanupHolderDiagnostics.Describe(fixture.Root, () => snapshot);
+                    Assert.DoesNotContain(holders.Holders, holder => holder.Match == "cwd");
+                }
             }
             else
             {
@@ -143,8 +153,8 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 if (OperatingSystem.IsWindows())
                 {
                     // cmd.exe owns the command working directory independently of pwsh. Pin it
-                    // while pwsh is gated: cancellation requests termination but does not await
-                    // the launcher's exit, and waiting for pwsh alone cannot release both handles.
+                    // while pwsh is gated: cancellation must await both identities, and waiting
+                    // for pwsh alone cannot prove that both working-directory holders exited.
                     var parent = WindowsNativeProcessInspection.ReadParentProcessId(_child.Id);
                     Assert.Equal(ProcessInspectionStatus.Available, parent.Status);
                     _launcher = Process.GetProcessById(Assert.IsType<int>(parent.ParentProcessId));
@@ -157,6 +167,16 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
+        internal void AssertExited()
+        {
+            Assert.NotNull(_child);
+            Assert.True(_child.HasExited, $"Cancellation returned with a live fixture child: {_childIdentity}");
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.NotNull(_launcher);
+                Assert.True(_launcher.HasExited, $"Cancellation returned with a live fixture launcher: {_launcherIdentity}");
+            }
+        }
         internal async Task WaitForExit()
         {
             try
