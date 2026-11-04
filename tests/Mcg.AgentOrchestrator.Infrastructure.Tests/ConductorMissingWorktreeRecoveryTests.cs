@@ -95,9 +95,10 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         WorkerProfileDispatcher.PrepareTask(f.Kernel, f.Goal, task,
             new WorkerProfile("codex-cli", "codex exec --cd {workingDirectory}"),
             workspace.PromptDirectory, f.Path, DateTimeOffset.UtcNow,
-            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSubscriptionModelAlias,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
             paidRoute: PaidRouteClassification.Paid, sandboxOptions: sandbox, integrationBranch: f.MainBranch);
         var original = task.LastDispatch!;
+        var contextReceipt = Assert.IsType<WorkerContextPackageReceipt>(original.ContextPackageReceipt);
         var fingerprint = Assert.IsType<RetryContextFingerprint>(original.RetryContextFingerprint);
         var at = original.DispatchedAt;
         f.Kernel.ApplyPreparedRetryAdmission(f.Goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
@@ -106,7 +107,7 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         var reservation = Assert.Single(task.RetryAdmissionHistory);
         var operations = new GoalDispatchOperations();
         Assert.False(operations.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
-        var mandatory = original.ContextPackageReceipt!.Sections
+        var mandatory = contextReceipt.Sections
             .Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile).ToArray();
         Assert.NotEmpty(mandatory);
         Assert.All(mandatory, section => Assert.True(File.Exists(Path.Combine(f.Path, section.MandatoryRelativePath!))));

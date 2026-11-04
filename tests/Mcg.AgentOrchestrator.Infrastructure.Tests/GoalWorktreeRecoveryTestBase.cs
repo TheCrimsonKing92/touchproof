@@ -18,6 +18,9 @@ public abstract class GoalWorktreeRecoveryTestBase : GoalWorktreeTestBase
 
         internal MissingFixture(bool stale = true, bool uniqueCommit = true)
         {
+            // Test probes omit global Git config, while production checkout inherits it.
+            // Give both paths the same repository-local line-ending contract.
+            RunGit(Repo, "config", "core.autocrlf", "false");
             Goal = Kernel.CreateGoal("Recover fixture workspace", [new(TaskId.New(), "Implement fixture change", AgentRole.Developer)]);
             Kernel.ActivateGoal(Goal.Id, AgentCatalog.Default().Agents);
             Kernel.RecordGoalRefinement(Goal.Id, new RefinedSpec(Goal.Objective, ["Preserve the existing branch"], VerificationClass.TestVerifiable, [], []));
@@ -45,6 +48,7 @@ public abstract class GoalWorktreeRecoveryTestBase : GoalWorktreeTestBase
                 RunGit(Path, "commit", "-m", "Unique goal commit");
             }
             Tip = RunGitOutput(Repo, "rev-parse", $"refs/heads/{Branch}").Trim();
+            Assert.Equal(string.Empty, RunGitOutput(Path, "status", "--porcelain=v1", "--untracked-files=no"));
             File.WriteAllText(System.IO.Path.Combine(Repo, "new-main.txt"), "later main change");
             RunGit(Repo, "add", "new-main.txt");
             RunGit(Repo, "commit", "-m", "Advance main after goal");
