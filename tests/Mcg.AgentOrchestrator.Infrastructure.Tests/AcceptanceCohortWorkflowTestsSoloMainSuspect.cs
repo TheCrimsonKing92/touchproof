@@ -51,6 +51,10 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         Assert.DoesNotContain(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
         Assert.Empty(await scenario.Events.ReadAllAsync());
         Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+
+        // The receipt reader must release its database before fixture cleanup on Windows.
+        File.Delete(scenario.StorePath);
+        Assert.False(File.Exists(scenario.StorePath));
     }
 
     [Fact]
@@ -136,7 +140,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     {
         using var scenario = CreateScenario();
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-               { DataSource = scenario.StorePath }.ToString()))
+               { DataSource = scenario.StorePath, Pooling = false }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -151,6 +155,10 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
         var error = Assert.Single(scenario.ReadLog().Where(evt => evt.EventKind == "solo-main-suspect"));
         Assert.Contains("result=error reason=SqliteException", error.Detail);
+
+        // The fault-injection connection also owns no handles after disposal.
+        File.Delete(scenario.StorePath);
+        Assert.False(File.Exists(scenario.StorePath));
     }
 
     internal static Scenario CreateScenario(bool firstTouchesSource = false, bool secondTouchesSource = false)
@@ -272,7 +280,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             // Inspect the durable artifact independently of the new store API, so these tests
             // also compile with the production source reverted for the negative control.
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-                { DataSource = StorePath }.ToString());
+                { DataSource = StorePath, Pooling = false }.ToString());
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='solo_inherited_receipts';";
