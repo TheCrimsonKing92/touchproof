@@ -70,15 +70,16 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         _arbiter = new(_occupancyRoot, cache.AttemptId, claimClass, clock);
     }
 
+    internal IReadOnlyList<string> RemoteEligibleResourceKeys => _configuration.ExecutorSerializedResourceKeys.Count == 0
+        ? _configuration.MachineLocalResourceKeys
+        : _configuration.MachineLocalResourceKeys.Union(_configuration.ExecutorSerializedResourceKeys, StringComparer.Ordinal).ToArray();
+
     internal bool IsEligible(Check check)
     {
         if (!_configuration.Lanes.Contains(check.Name, StringComparer.Ordinal) ||
             !GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _)) return false;
-        var eligibleKeys = _configuration.ExecutorSerializedResourceKeys.Count == 0
-            ? _configuration.MachineLocalResourceKeys
-            : _configuration.MachineLocalResourceKeys.Union(_configuration.ExecutorSerializedResourceKeys, StringComparer.Ordinal).ToArray();
         if (RemoteLaneResourceEligibility.ExclusionReason(check.ExclusiveResourceKeys,
-                check.RequiresBuildSystemChange, eligibleKeys) is null) return true;
+                check.RequiresBuildSystemChange, RemoteEligibleResourceKeys) is null) return true;
         bool first;
         lock (_gate) first = _excluded.Add(check.Name);
         if (first) Record(CreateRequest(check, ""), RemoteLaneOutcomeCode.NotEligibleExclusiveResource);
