@@ -771,6 +771,7 @@ internal sealed class GitRevisionReader : IDisposable
     internal sealed class ReaderProcess
     {
         private readonly Process process;
+        private readonly GitCli.ProcessCompletion? completion;
         private readonly string packedRefsPath;
         private readonly string packedRefsVersion;
         private readonly object terminationGate = new();
@@ -782,9 +783,11 @@ internal sealed class GitRevisionReader : IDisposable
         internal long LastCompleted;
         internal bool HasExited => exited;
 
-        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion)
+        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion,
+            GitCli.ProcessCompletion? completion)
         {
             this.process = process;
+            this.completion = completion;
             this.packedRefsPath = packedRefsPath;
             this.packedRefsVersion = packedRefsVersion;
         }
@@ -806,8 +809,11 @@ internal sealed class GitRevisionReader : IDisposable
             foreach (var arg in new[] { "--git-dir=" + gitDirectory,
                 "cat-file", "--batch-check" }) info.ArgumentList.Add(arg);
             GitCli.ApplyLaunchSettings(info, readCommand: true);
+            var completion = GitCli.ProcessCompletion.Begin(Volatile.Read(ref GitCli.CompletionObserver),
+                "cat-file", TimeProvider.System);
             var process = ProcessTreeGuiSuppression.Start(info);
-            var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion);
+            completion?.Started();
+            var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion, completion);
             try
             {
                 // Notify on the querying thread, preserving census/test identity and source frames.
@@ -906,6 +912,7 @@ internal sealed class GitRevisionReader : IDisposable
                 {
                     if (!process.HasExited) process.Kill(entireProcessTree: true);
                     exited = process.WaitForExit(PipeDrain.DefaultTimeoutMilliseconds);
+                    if (exited) completion?.Complete(process);
                 }
                 catch (Exception ex) when (IsReaderFailure(ex)) { /* Already exited/disposed. */ }
             }

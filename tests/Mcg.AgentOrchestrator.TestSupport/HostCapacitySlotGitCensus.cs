@@ -5,12 +5,15 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Tests")]
+
 /// <summary>Test-only cumulative counts with independent snapshots for each slot hold.</summary>
 public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
 {
     private readonly object sync = new();
     private readonly Dictionary<string, Dictionary<string, int>> counts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, int>> callers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<Window>> openWindows = new(StringComparer.Ordinal);
     [ThreadStatic] private static long stackWalks;
     private static readonly ConcurrentDictionary<MethodBase, CallerFrame> callerFrames = new();
 
@@ -29,7 +32,10 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     public static HostCapacitySlotGitCensus Shared { get; } = new(HostCapacitySlotTimingWriter.CurrentTestName);
 
     public sealed record GitLaunchDelta(int Launches, IReadOnlyDictionary<string, int> Subcommands,
-        IReadOnlyDictionary<string, int>? Callers = null);
+        IReadOnlyDictionary<string, int>? Callers = null, GitTimingDelta? Timing = null);
+
+    public sealed record GitTimingDelta(int Processes, double StartMs, double WallMs, double? CpuMs,
+        int CpuUnavailable, IReadOnlyDictionary<string, double> WallMsBySubcommand);
 
     public static string CallerOf(string key)
     {
@@ -60,8 +66,45 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         return grouped;
     }
 
-    public static bool EnsureInstalled(string? destination) =>
-        EnsureInstalled(destination, ref GitCli.LaunchObserver);
+    public static bool EnsureInstalled(string? destination)
+    {
+        var installed = EnsureInstalled(destination, ref GitCli.LaunchObserver);
+        EnsureTimingInstalled(destination, ref GitCli.CompletionObserver);
+        return installed;
+    }
+
+    internal static bool EnsureTimingInstalled(string? destination,
+        ref Func<string, Action<GitCli.GitProcessTiming>?>? target)
+    {
+        if (string.IsNullOrEmpty(destination)) return false;
+        try { return Interlocked.CompareExchange(ref target, Shared.BeginTiming, null) is null; }
+        catch (Exception error) { Diagnose(error); return false; }
+    }
+
+    internal Action<GitCli.GitProcessTiming>? BeginTiming(string subcommand)
+    {
+        try
+        {
+            Window[] windows;
+            var name = currentTestName();
+            lock (sync)
+            {
+                if (!openWindows.TryGetValue(name, out var open)) return null;
+                windows = open.ToArray();
+            }
+            return timing =>
+            {
+                try
+                {
+                    lock (sync)
+                        foreach (var window in windows)
+                            window.RecordTiming(timing);
+                }
+                catch (Exception error) { Diagnose(error); }
+            };
+        }
+        catch (Exception error) { Diagnose(error); return null; }
+    }
 
     // A ref target permits lifecycle checks without changing process-global instrumentation.
     public static bool EnsureInstalled(string? destination, ref Action<string>? target)
@@ -120,10 +163,16 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         try
         {
             lock (sync)
-                return new Window(this, testName, counts.TryGetValue(testName, out var commands)
+            {
+                var window = new Window(this, testName, counts.TryGetValue(testName, out var commands)
                     ? new(commands, StringComparer.Ordinal) : new(StringComparer.Ordinal),
                     callers.TryGetValue(testName, out var sources)
                     ? new(sources, StringComparer.Ordinal) : new(StringComparer.Ordinal));
+                if (!openWindows.TryGetValue(testName, out var windows))
+                    openWindows[testName] = windows = new();
+                windows.Add(window);
+                return window;
+            }
         }
         catch (Exception error) { Diagnose(error); return null; }
     }
@@ -134,6 +183,35 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         private readonly string testName;
         private readonly Dictionary<string, int> initial;
         private readonly Dictionary<string, int> initialCallers;
+        private readonly Dictionary<string, double> wallBySubcommand = new(StringComparer.Ordinal);
+        private int processes, cpuUnavailable;
+        private double startMs, wallMs;
+        private double? cpuMs;
+        private bool closed;
+        private GitLaunchDelta? result;
+
+        internal void RecordTiming(GitCli.GitProcessTiming timing)
+        {
+            // A cached batch process may outlive its launching hold. Drop that late completion;
+            // never attribute it to a subsequent hold or defer slot release to await telemetry.
+            if (closed) return;
+            var start = startMs + timing.StartMs;
+            var wall = wallMs + timing.WallMs;
+            var commandWall = wallBySubcommand.GetValueOrDefault(timing.Subcommand) + timing.WallMs;
+            var cpu = timing.CpuMs is { } sample ? (cpuMs is { } sum ? sum + sample : sample) : cpuMs;
+            if (!double.IsFinite(timing.StartMs) || timing.StartMs < 0 ||
+                !double.IsFinite(timing.WallMs) || timing.WallMs < 0 ||
+                (timing.CpuMs is { } cpuSample && (!double.IsFinite(cpuSample) || cpuSample < 0)) ||
+                !double.IsFinite(start) || !double.IsFinite(wall) || !double.IsFinite(commandWall) ||
+                (cpu is { } value && (!double.IsFinite(value) || value < 0)))
+                throw new InvalidOperationException("Invalid git timing sample or aggregate");
+            startMs = start;
+            wallMs = wall;
+            cpuMs = cpu;
+            wallBySubcommand[timing.Subcommand] = commandWall;
+            processes++;
+            if (timing.CpuMs is null) cpuUnavailable++;
+        }
 
         internal Window(HostCapacitySlotGitCensus census, string testName, Dictionary<string, int> initial,
             Dictionary<string, int> initialCallers)
@@ -150,6 +228,11 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
             {
                 lock (census.sync)
                 {
+                    if (closed) return result;
+                    closed = true;
+                    var windows = census.openWindows[testName];
+                    windows.Remove(this);
+                    if (windows.Count == 0) census.openWindows.Remove(testName);
                     var delta = new Dictionary<string, int>(StringComparer.Ordinal);
                     var total = 0;
                     if (census.counts.TryGetValue(testName, out var commands))
@@ -167,7 +250,9 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
                             var difference = count - initialCallers.GetValueOrDefault(source);
                             if (difference != 0) callerDelta[source] = difference;
                         }
-                    return new(total, delta, callerDelta);
+                    return result = new(total, delta, callerDelta, processes == 0 ? null :
+                        new(processes, startMs, wallMs, cpuMs, cpuUnavailable,
+                            new Dictionary<string, double>(wallBySubcommand, StringComparer.Ordinal)));
                 }
             }
             catch (Exception error) { Diagnose(error); return null; }
