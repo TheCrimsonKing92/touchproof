@@ -33,6 +33,7 @@ public sealed class AcceptanceProcessRunnerTests
             Assert.Equal(exitCode, result.ExitCode);
             Assert.False(result.TimedOut);
             Assert.False(result.CaptureLimited);
+            if (OperatingSystem.IsWindows()) Assert.NotNull(result.ResourceAccounting);
             Assert.Equal(Stdout, result.StandardOutput);
             Assert.Equal(Stderr, result.Stderr);
             Assert.Equal(Stdout + Stderr, result.Output);
@@ -131,6 +132,48 @@ public sealed class AcceptanceProcessRunnerTests
         finally
         {
             launcher?.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task Caller_cancellation_at_final_heartbeat_keeps_custody_until_cleanup()
+    {
+        var root = Directory.CreateTempSubdirectory("mcg-acceptance-final-cancel-").FullName;
+        using var cancellation = new CancellationTokenSource(TestHangGuard.HangSafetyBound);
+        var cleanup = new List<AcceptanceProcessCleanupObservation>();
+        var finalHeartbeatObserved = false;
+        try
+        {
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                AcceptanceProcessRunner.RunProcessAsync(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+                    root, CommandHangFailsafe, forceUtf8ConsoleOutput: false,
+                    cancellationToken: cancellation.Token,
+                    heartbeatContext: new(null, "check", "final-cancellation", null,
+                        Path.Combine(root, "heartbeat.json"), null, "exit 0", null),
+                    cleanupObserver: observation =>
+                    {
+                        cleanup.Add(observation);
+                        if (observation.Stage != "heartbeat-final") return;
+                        Assert.True(observation.RegistryActive);
+                        finalHeartbeatObserved = true;
+                        cancellation.Cancel();
+                        cancellation.Token.ThrowIfCancellationRequested();
+                    }));
+
+            Assert.True(finalHeartbeatObserved, "Cancellation must be injected at the final heartbeat.");
+            Assert.True(Assert.IsType<bool>(exception.Data["AcceptanceCancellationCleanupRan"]));
+            Assert.True(Assert.IsType<bool>(exception.Data["AcceptanceCancellationTreeExitConfirmed"]));
+            Assert.False(exception.Data.Contains("AcceptanceCancellationCleanupSkippedReason"));
+            Assert.Single(cleanup, observation => observation.Stage == "registration-released");
+            var disposed = Assert.Single(cleanup, observation => observation.Stage == "owned-child-disposed");
+            Assert.True(disposed.ProcessDisposed);
+            Assert.False(disposed.RegistryActive);
+            Assert.False(disposed.NativeHandleOpen);
+        }
+        finally
+        {
             Directory.Delete(root, recursive: true);
         }
     }

@@ -170,18 +170,23 @@ internal sealed class JunitCommandAcceptanceCheck(
                 return lastProcess;
             }
         }
-        catch (OperationCanceledException exception) when (exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false)
+        catch (OperationCanceledException exception) when (
+            exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false ||
+            (ownerLifetime.IsCancellationRequested && exception.Data.Contains("AcceptanceCancellationCleanupRan")))
         {
             // A generic Cancelled result would discard the cleanup failure before the verifier
             // throws its boundary cancellation. Publish only owned-process evidence, never the
             // original exception/inner exception, which may contain check-local input values.
-            var failure = new OperationCanceledException(
-                $"JUnit cancellation could not confirm owned process-tree exit; " +
+            var message = exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false
+                ? "JUnit cancellation could not confirm owned process-tree exit; "
+                : "JUnit invocation cancelled; ";
+            var failure = new OperationCanceledException(message +
                 $"process_id={exception.Data["AcceptanceCancellationProcessId"]}; " +
                 $"remaining_process_ids={exception.Data["AcceptanceCancellationRemainingProcessIds"]}; " +
                 $"cleanup_failure={exception.Data["AcceptanceCancellationCleanupFailure"]}.", cancellationToken);
             foreach (var key in new[] { "AcceptanceCancellationTreeExitConfirmed", "AcceptanceCancellationProcessId",
-                "AcceptanceCancellationRemainingProcessIds", "AcceptanceCancellationCleanupFailure" })
+                "AcceptanceCancellationRemainingProcessIds", "AcceptanceCancellationCleanupFailure",
+                "AcceptanceCancellationCleanupRan", "AcceptanceCancellationCleanupSkippedReason" })
                 if (exception.Data.Contains(key)) failure.Data[key] = exception.Data[key];
             throw failure;
         }

@@ -91,3 +91,38 @@ in its normal Balanced shard, plus `AcceptanceProcessRunnerTests`. The original
 pre-cleanup assertion is retained and now includes the captured cancellation
 message, allowing the next receipt to distinguish a reported job-cleanup failure
 from a child surviving a confirmed cleanup. A build proves compilation only.
+
+## Revision after the main-move re-gate
+
+Typed retry feedback for candidate `ad017405582179a1b047673c00719e9d1af5d6c6`
+names attempt `18718c48-0-20261105121314372`, Balanced 1, and the same cancellation
+case: child PID 45068 remained unobserved at exit while launcher PID 46288 had
+exited. No original executed-count receipt or cleanup metadata is supplied in this
+package. Which cleanup path ran remains undetermined; Developer test execution is
+prohibited.
+
+Source inspection identifies two independently unsafe paths. A member inspection
+exception could bypass termination, and final-heartbeat cancellation could unwind
+through the early registration release before the outer cancellation catch. The
+revision puts termination in a `finally` around member pinning and moves release
+and disposal to the outer finalizer, after cancellation cleanup. Accounting is
+attached to the command result after release. Cancellation detected during final
+capture/heartbeat draining also stops the owned tree before release.
+
+`AcceptanceCancellationCleanupRan` and a skipped-cleanup reason now accompany
+the existing cancellation evidence. The JUnit wrapper preserves these safe fields
+on caller cancellation, and the existing fixture boundary assertion prints every
+`AcceptanceCancellation*` entry and whether cleanup ran.
+
+Acceptance owns these executable checks and their negative controls:
+
+- `RegisteredOwnedProcessCancellationTests.KillTree_MemberPinningThrows_StillTerminatesAndEmptiesJob`
+  injects a Win32 failure into member pinning of a live job. A duplicated job handle
+  must report empty before release can mask missing termination. Moving termination
+  out of the pinning `finally` must fail this assertion.
+- `AcceptanceProcessRunnerTests.Caller_cancellation_at_final_heartbeat_keeps_custody_until_cleanup`
+  injects cancellation at the final heartbeat and requires cleanup evidence plus
+  exactly one release/disposal. Restoring early release must fail its cleanup assertion.
+- Rerun `JunitCommandEnvironmentIsolationTests`, including the original cancellation
+  boundary assertion, and `JunitCommandEnvironmentDiagnosticTests`. Build success
+  does not prove the failed boundary has been repaired.

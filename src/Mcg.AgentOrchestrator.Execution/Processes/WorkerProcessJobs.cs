@@ -222,7 +222,11 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         Process.Kill(entireProcessTree);
     }
 
-    internal async Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(TimeSpan timeout)
+    internal Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(TimeSpan timeout) =>
+        KillTreeAndWaitForExitAsync(timeout, PinMembers);
+
+    internal async Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(
+        TimeSpan timeout, Action<OwnedProcessGroup, ICollection<Process>> pinMembers)
     {
         if (!OwnsRegisteredJob)
             throw new InvalidOperationException("Cannot terminate an owned tree after its registration was released.");
@@ -234,38 +238,20 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         var members = new List<Process>();
         try
         {
-            if (!_registration.Group.TryGetActiveProcessIds(out var processIds))
-                throw new InvalidOperationException("Cannot inspect the owned process group before termination.");
-            foreach (var processId in processIds.Where(id => id != _processId))
-            {
-                Process? member = null;
-                try
-                {
-                    member = System.Diagnostics.Process.GetProcessById(processId);
-                    _ = member.SafeHandle;
-                    // A member can exit and its PID can be reused between enumeration and
-                    // handle acquisition. Only retain handles still belonging to this job.
-                    if (OperatingSystem.IsWindows() && !_registration.Group.Contains(member.SafeHandle))
-                    {
-                        member.Dispose();
-                        continue;
-                    }
-                    members.Add(member);
-                }
-                catch (ArgumentException) { member?.Dispose(); } // Already exited.
-                catch (InvalidOperationException) { member?.Dispose(); } // Exited before handle acquisition.
-            }
             var treeExited = true;
             IReadOnlyList<int> remainingInJob = [];
-            if (OperatingSystem.IsWindows())
+            try
             {
-                // Reuse job termination and its bounded ActiveProcesses==0 check. This also
-                // covers descendants created after the handle snapshot above.
-                treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out remainingInJob);
+                pinMembers(_registration.Group, members);
             }
-            else
+            finally
             {
-                Kill(entireProcessTree: true);
+                // Inspection/handle acquisition is best effort; even an unexpected failure
+                // must terminate the job before propagating to cancellation diagnostics.
+                if (OperatingSystem.IsWindows())
+                    treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out remainingInJob);
+                else
+                    Kill(entireProcessTree: true);
             }
             try
             {
@@ -283,6 +269,35 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         finally
         {
             foreach (var member in members) member.Dispose();
+        }
+    }
+
+    private void PinMembers(OwnedProcessGroup group, ICollection<Process> members)
+    {
+        if (!group.TryGetActiveProcessIds(out var processIds))
+            throw new InvalidOperationException("Cannot inspect the owned process group before termination.");
+        foreach (var processId in processIds.Where(id => id != _processId))
+        {
+            Process? member = null;
+            try
+            {
+                member = System.Diagnostics.Process.GetProcessById(processId);
+                _ = member.SafeHandle;
+                // Bind the handle to this job before termination; never reopen a recycled PID.
+                if (OperatingSystem.IsWindows() && !group.Contains(member.SafeHandle))
+                {
+                    member.Dispose();
+                    continue;
+                }
+                members.Add(member);
+            }
+            catch (ArgumentException) { member?.Dispose(); } // Already exited.
+            catch (InvalidOperationException) { member?.Dispose(); } // Exited before handle acquisition.
+            catch
+            {
+                member?.Dispose();
+                throw;
+            }
         }
     }
 

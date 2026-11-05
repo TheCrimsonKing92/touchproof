@@ -89,6 +89,9 @@ internal static class AcceptanceCheckProcessInvoker
         int? startedProcessId = null;
         int? completedProcessId = null;
         DateTimeOffset? completedProcessStartedAt = null;
+        WorkerProcessJobAccounting? accounting = null;
+        CommandResult result;
+        OperationCanceledException? callerCancellation = null;
         try
         {
             captureDrainCts = new CancellationTokenSource();
@@ -305,49 +308,29 @@ internal static class AcceptanceCheckProcessInvoker
                 commandIdentityTracker = null;
             }
             keepOutputFiles = AcceptanceCaptureDrain.ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
-            WorkerProcessJobAccounting? accounting = null;
-            try
+            if (heartbeat is not null)
             {
-                if (heartbeat is not null)
+                if (heartbeatCts is not null)
                 {
-                    if (heartbeatCts is not null)
-                    {
-                        try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
-                    }
+                    try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
+                }
 
-                    if (heartbeatTask is not null)
-                    {
-                        try { await heartbeatTask.ConfigureAwait(false); } catch { }
-                    }
+                if (heartbeatTask is not null)
+                {
+                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                }
 
-                    heartbeatFinalized = true;
-                    heartbeat.WriteFinal(timedOut ? "timed-out" : captureLimited ? "failed" : "completed", childPid: process.Id, exitCode: exitCode);
-                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
-                    heartbeat = null;
-                    heartbeatCts?.Dispose();
-                    heartbeatCts = null;
-                    heartbeatTask = null;
-                }
+                heartbeatFinalized = true;
+                heartbeat.WriteFinal(timedOut ? "timed-out" : captureLimited ? "failed" : "completed", childPid: process.Id, exitCode: exitCode);
+                ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
+                heartbeat = null;
+                heartbeatCts?.Dispose();
+                heartbeatCts = null;
+                heartbeatTask = null;
             }
-            finally
-            {
-                try
-                {
-                    registrationReleased = true;
-                    _ = process.Release(out accounting);
-                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
-                }
-                finally
-                {
-                    var disposedProcessId = process.Id;
-                    processDisposed = true;
-                    process.Dispose();
-                    ObserveProcessCleanup(cleanupObserver, disposedProcessId, process, "owned-child-disposed");
-                    process = null;
-                    startedProcessId = null;
-                }
-            }
-            return new CommandResult(
+            // Keep custody through the outer cancellation handler and final capture cleanup.
+            cancellationToken.ThrowIfCancellationRequested();
+            result = new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
                 timedOut,
@@ -356,13 +339,7 @@ internal static class AcceptanceCheckProcessInvoker
                 request.SuppressDiagnosticCaptures ? null : stderrPath,
                 commandTimeout,
                 elapsed.Elapsed,
-                accounting is null
-                    ? null
-                    : new TaskProcessResourceAccounting(
-                        accounting.CpuMilliseconds,
-                        accounting.PeakMemoryBytes,
-                        accounting.IoBytes,
-                        AccountingSource: accounting.AccountingSource),
+                ResourceAccounting: null,
                 ResourceAccountingExpected: OperatingSystem.IsWindows(),
                 stdoutBytes,
                 stderrBytes,
@@ -377,6 +354,7 @@ internal static class AcceptanceCheckProcessInvoker
         }
         catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {
+            callerCancellation = exception;
             // Cancellation can interrupt capture connection (before WaitForExitAsync), too.
             // Retain registration and handles until the entire owned tree is stopped, before
             // the finally block drains captures and releases process custody.
@@ -384,6 +362,12 @@ internal static class AcceptanceCheckProcessInvoker
             {
                 await AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync(
                     process, exception, CaptureDrainTimeout).ConfigureAwait(false);
+            }
+            else
+            {
+                exception.Data["AcceptanceCancellationCleanupRan"] = false;
+                exception.Data["AcceptanceCancellationCleanupSkippedReason"] = processDisposed
+                    ? "process disposed" : registrationReleased ? "registration released" : "process not started";
             }
             throw;
         }
@@ -430,10 +414,19 @@ internal static class AcceptanceCheckProcessInvoker
             {
                 try
                 {
+                    // Cancellation can also arrive while finally drains captures/heartbeats.
+                    // Do not release the job until that cancellation has stopped its members.
+                    if (callerCancellation is null && cancellationToken.IsCancellationRequested &&
+                        process is not null && !registrationReleased && !processDisposed)
+                    {
+                        callerCancellation = new OperationCanceledException(cancellationToken);
+                        await AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync(
+                            process, callerCancellation, CaptureDrainTimeout).ConfigureAwait(false);
+                    }
                     if (process is not null && startedProcessId is { } processId && !registrationReleased)
                     {
                         registrationReleased = true;
-                        _ = process.Release(out _);
+                        _ = process.Release(out accounting);
                         ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
                     }
                 }
@@ -458,6 +451,13 @@ internal static class AcceptanceCheckProcessInvoker
                 AcceptanceBestEffortFileOperations.TryDeleteFile(stderrPath);
             }
         }
+        if (callerCancellation is not null) throw callerCancellation;
+        return result with
+        {
+            ResourceAccounting = accounting is null ? null : new TaskProcessResourceAccounting(
+                accounting.CpuMilliseconds, accounting.PeakMemoryBytes, accounting.IoBytes,
+                AccountingSource: accounting.AccountingSource)
+        };
     }
 
     private static void ObserveProcessCleanup(

@@ -87,7 +87,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 var cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(
                     () => run.WaitAsync(TimeSpan.FromSeconds(120)));
                 // Assert at the cancellation boundary, before teardown's waits can hide live holders.
-                gate.AssertExited(cancellation.Message);
+                gate.AssertExited(cancellation);
                 if (OperatingSystem.IsWindows())
                 {
                     var snapshot = ProcessCommandLines.Snapshot();
@@ -186,8 +186,12 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
-        internal void AssertExited(string cancellationDetail)
+        internal void AssertExited(OperationCanceledException cancellation)
         {
+            var cleanupRan = cancellation.Data["AcceptanceCancellationCleanupRan"] is true;
+            var cancellationDetail = string.Join("; ", cancellation.Data.Keys.Cast<object>()
+                .OfType<string>().Where(key => key.StartsWith("AcceptanceCancellation", StringComparison.Ordinal))
+                .OrderBy(key => key, StringComparer.Ordinal).Select(key => $"{key}={cancellation.Data[key]}"));
             Assert.NotNull(_child);
             _childExitObserved = _child.HasExited;
             if (OperatingSystem.IsWindows())
@@ -196,7 +200,9 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 _launcherExitObserved = _launcher.HasExited;
             }
             Assert.True(_childExitObserved && (!OperatingSystem.IsWindows() || _launcherExitObserved),
-                $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}; cancellation={cancellationDetail}");
+                $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}; " +
+                $"cleanup_ran={cleanupRan}; cancellation={cancellation.Message}; {cancellationDetail}");
+            Assert.True(cleanupRan, $"Cancellation cleanup was not observed: {cancellationDetail}");
         }
         internal async Task WaitForExit()
         {

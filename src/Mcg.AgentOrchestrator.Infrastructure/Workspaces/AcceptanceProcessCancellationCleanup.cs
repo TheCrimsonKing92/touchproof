@@ -9,6 +9,7 @@ internal static class AcceptanceProcessCancellationCleanup
         OperationCanceledException exception,
         TimeSpan timeout)
     {
+        exception.Data["AcceptanceCancellationCleanupRan"] = true;
         exception.Data["AcceptanceCancellationProcessId"] = process.Id;
         try
         {
