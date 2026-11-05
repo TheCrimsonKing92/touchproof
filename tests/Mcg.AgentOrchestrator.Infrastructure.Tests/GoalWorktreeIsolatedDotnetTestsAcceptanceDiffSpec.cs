@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Repository = GoalGitFactIndexProcessSpawningTests.Repository;
+using Repository = GoalWorktreeIsolatedDotnetTestsGitFactIndex.Repository;
 
 // Serial: shares the revision-reader owner; observes launches only on the current thread.
+// The GoalWorktreeIsolatedDotnetTests prefix selects the owning ProcessSpawning lane.
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class GoalAcceptanceDiffSpecProcessSpawningTests
+public sealed class GoalWorktreeIsolatedDotnetTestsAcceptanceDiffSpec
 {
     [Xunit.Fact]
     public void ChangedFiles_IntegrationPresent_ResolvesThenLaunchesOnlyDiff()

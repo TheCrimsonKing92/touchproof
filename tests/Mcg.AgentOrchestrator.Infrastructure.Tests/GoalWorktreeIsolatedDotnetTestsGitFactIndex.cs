@@ -3,8 +3,9 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serial: installs the process-wide launch observer; repositories are private to each case.
+// The GoalWorktreeIsolatedDotnetTests prefix selects the owning ProcessSpawning lane.
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class GoalGitFactIndexProcessSpawningTests
+public sealed class GoalWorktreeIsolatedDotnetTestsGitFactIndex
 {
     [Xunit.Theory]
     [Xunit.InlineData("main", false)]
