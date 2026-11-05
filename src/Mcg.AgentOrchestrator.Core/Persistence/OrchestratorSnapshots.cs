@@ -327,7 +327,8 @@ public sealed record ProgressEventSnapshot(
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
     OperatorIntentAppliedPayload? OperatorIntentApplied = null,
     HumanInputSupersededPayload? HumanInputSuperseded = null,
-    ConductorTickOutcomePayload? TickOutcome = null);
+    ConductorTickOutcomePayload? TickOutcome = null,
+    ProgressFailurePayload? Failure = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,

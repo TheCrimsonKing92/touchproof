@@ -346,6 +346,7 @@ internal sealed partial class OperatorIntentCoordinator
             }
             catch (Exception ex)
             {
+                goal = kernel.GetGoal(goal.Id);
                 var outcome = $"Rejected {intent.Verb}: {Sanitize(ex.Message)}";
                 _store.CompleteAsync(
                     intent.Id,
@@ -600,6 +601,12 @@ internal sealed partial class OperatorIntentCoordinator
                     task.LastDispatch?.ResultCommit is null
                     ? TryResolveGoalHead(goal.Id)
                     : null;
+                if (progress.CompletionVerification is not null)
+                {
+                    OperatorProgressCompletion.Apply(kernel, goal, task, intent, progress, observedCandidate,
+                        verification => kernel.RecordTaskVerification(goal.Id, taskId, verification));
+                    break;
+                }
                 kernel.ReportTaskProgress(
                     goal.Id,
                     taskId,

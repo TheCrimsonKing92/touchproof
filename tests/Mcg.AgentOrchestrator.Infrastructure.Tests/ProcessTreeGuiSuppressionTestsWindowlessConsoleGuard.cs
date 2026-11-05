@@ -4,19 +4,15 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOutputHelper output)
+public sealed class ProcessTreeGuiSuppressionTestsWindowlessConsoleGuard(ITestOutputHelper output)
 {
     [Fact]
-    public async Task WindowlessConsoleArmsMeasureConhostsAndPreserveHiddenDescendantsAndOutput()
+    public async Task HiddenChildren_ShowNoWindowStealNoFocusAndKeepBaselineOutput()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var launchesText = Environment.GetEnvironmentVariable("MCG_CONHOST_EXPERIMENT_LAUNCHES") ?? "4";
-        Assert.True(int.TryParse(launchesText, NumberStyles.None, CultureInfo.InvariantCulture, out var launches) && launches > 0,
-            "MCG_CONHOST_EXPERIMENT_LAUNCHES must be a positive integer.");
-        var selectedArms = Environment.GetEnvironmentVariable("MCG_CONHOST_EXPERIMENT_ARMS") ?? "both";
-        Assert.True(selectedArms is "both" or "off" or "inherit", "MCG_CONHOST_EXPERIMENT_ARMS must be both, off or inherit.");
-        var reportPath = Environment.GetEnvironmentVariable("MCG_CONHOST_EXPERIMENT_REPORT");
-        using var document = await ConsoleHostExperimentHarness.Run(launches, selectedArms, reportPath: reportPath, writeOutput: output.WriteLine);
+        var launches = 4;
+        var selectedArms = "both";
+        using var document = await ConsoleHostExperimentHarness.Run(launches, selectedArms, writeOutput: output.WriteLine);
         var report = document.RootElement;
         Assert.Equal("InheritWindowlessConsole", report.GetProperty("switchAtStartup").GetString());
         Assert.Equal(0, report.GetProperty("consoleWindow").GetInt64());
@@ -145,7 +141,7 @@ public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOut
 internal static class ConsoleHostExperimentHarness
 {
     internal static async Task<JsonDocument> Run(int launches, string arms, bool startupOnly = false,
-        string? reportPath = null, Action<string>? writeOutput = null,
+        Action<string>? writeOutput = null,
         IReadOnlyDictionary<string, string>? environmentOverrides = null, bool ownConsoleCheck = false,
         bool sdkOwnConsoleCheck = false)
     {
@@ -185,12 +181,6 @@ internal static class ConsoleHostExperimentHarness
             var errors = await stderr.WaitAsync(guard.Token);
             Assert.True(File.Exists(path), $"Measurement report missing: exit={host.ExitCode} stdout={output} stderr={errors}");
             var json = await File.ReadAllTextAsync(path, guard.Token);
-            if (!string.IsNullOrWhiteSpace(reportPath))
-            {
-                var destination = Path.GetFullPath(reportPath);
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                await File.WriteAllTextAsync(destination, json, guard.Token);
-            }
             writeOutput?.Invoke(json);
             Assert.True(host.ExitCode == 0, $"Measurement host failed: exit={host.ExitCode} stdout={output} stderr={errors} report={json}");
             var report = JsonDocument.Parse(json);
@@ -216,7 +206,7 @@ internal static class ConsoleHostExperimentHarness
     private static string ResolveProbeAssembly()
     {
         const string name = "Mcg.AgentOrchestrator.ConsoleIoProbe.dll";
-        var output = new DirectoryInfo(Path.GetDirectoryName(typeof(ProcessTreeGuiSuppressionTestsConsoleHostExperiment).Assembly.Location)!);
+        var output = new DirectoryInfo(Path.GetDirectoryName(typeof(ProcessTreeGuiSuppressionTestsWindowlessConsoleGuard).Assembly.Location)!);
         var parent = output.Parent;
         var candidates = new List<string> { Path.Combine(output.FullName, name) };
         if (parent?.Parent?.Parent is { } project)
@@ -225,9 +215,9 @@ internal static class ConsoleHostExperimentHarness
             candidates.Add(Path.Combine(artifacts.FullName, "Mcg.AgentOrchestrator.ConsoleIoProbe", output.Name, name));
         var probe = candidates.FirstOrDefault(File.Exists);
         if (probe is not null) return probe;
-        if (FixtureProbeLocator.FindDirectory(typeof(ProcessTreeGuiSuppressionTestsConsoleHostExperiment),
+        if (FixtureProbeLocator.FindDirectory(typeof(ProcessTreeGuiSuppressionTestsWindowlessConsoleGuard),
             "Mcg.AgentOrchestrator.ConsoleIoProbe", name) is { } directory)
             return Path.Combine(directory, name);
-        throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(ProcessTreeGuiSuppressionTestsConsoleHostExperiment), "Mcg.AgentOrchestrator.ConsoleIoProbe", name))}");
+        throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(ProcessTreeGuiSuppressionTestsWindowlessConsoleGuard), "Mcg.AgentOrchestrator.ConsoleIoProbe", name))}");
     }
 }

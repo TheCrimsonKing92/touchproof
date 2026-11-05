@@ -11,7 +11,9 @@ internal static class AcceptanceBalancedLaneExpander
         AcceptanceBalancedLanePoolSettings settings)
     {
         settings.Validate(lanes);
-        var constrained = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, classes).Where(IsConstrained).ToArray();
+        var constrained = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, classes)
+            .Where(lane => IsConstrained(lane) &&
+                !settings.PoolEligibleLaneNames.Contains(lane.Name, StringComparer.OrdinalIgnoreCase)).ToArray();
         var pool = new List<AcceptanceTestClassDescriptor>();
         foreach (var item in classes.DistinctBy(item => item.FullName).OrderBy(item => item.FullName, StringComparer.Ordinal))
         {

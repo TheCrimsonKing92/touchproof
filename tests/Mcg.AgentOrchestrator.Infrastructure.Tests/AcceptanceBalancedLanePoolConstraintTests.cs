@@ -85,6 +85,74 @@ public sealed class AcceptanceBalancedLanePoolConstraintTests
         Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
             { ExclusiveResourceKeys = ["machine:resource", key] }.Validate([]));
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void PoolEligibility_InvalidNames_RejectsSettings(string? name)
+    {
+        Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = [name!] }.Validate([]));
+    }
+
+    [Fact]
+    public void PoolEligibility_NullOrDuplicateNames_RejectsSettings()
+    {
+        Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = null! }.Validate([]));
+        Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = ["Local", "local"] }.Validate([]));
+    }
+
+    [Fact]
+    public void PoolEligibility_UnknownName_RejectsSettings()
+    {
+        Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = ["Missing"] }.Validate([new("Local", "FullyQualifiedName~Local")]));
+    }
+
+    [Theory]
+    [InlineData("resource")]
+    [InlineData("collection")]
+    [InlineData("build")]
+    [InlineData("trait")]
+    public void PoolEligibility_UnpreservedIsolation_RejectsSettings(string constraint)
+    {
+        var lane = new AcceptanceTestLane("Local", "FullyQualifiedName~Local");
+        lane = constraint switch
+        {
+            "resource" => lane with { ExclusiveResourceKeys = ["machine:resource"] },
+            "collection" => lane with { OwnedCollections = ["owned"] },
+            "build" => lane with { RequiresBuildSystemChange = true },
+            "trait" => lane with { Filter = "FullyQualifiedName~Local&Category!=Other" },
+            _ => throw new InvalidOperationException("Unknown test constraint.")
+        };
+        Assert.Throws<InvalidDataException>(() => new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = ["Local"], TraitExclusions = ["Category!=HostIntegration"] }.Validate([lane]));
+    }
+
+    [Fact]
+    public void PoolEligibility_MatchingTraits_MoveOnlyTheNamedLane()
+    {
+        AcceptanceTestLane[] lanes = [
+            new("Local", "FullyQualifiedName~Local&Category!=HostIntegration"),
+            new("Protected", "FullyQualifiedName~Protected&Category!=HostIntegration")];
+        AcceptanceTestClassDescriptor[] classes = [new("Tests.Local", null), new("Tests.Protected", null)];
+        var settings = new AcceptanceBalancedLanePoolSettings
+            { PoolEligibleLaneNames = ["local"], TraitExclusions = ["Category!=HostIntegration"] };
+
+        var expansion = AcceptanceBalancedLaneExpander.Expand(lanes, classes, new Dictionary<string, double>(), settings);
+
+        Assert.All(lanes, lane => Assert.True(AcceptanceBalancedLaneExpander.IsConstrained(lane)));
+        Assert.DoesNotContain(expansion.Lanes, lane => lane.Name == "Local");
+        Assert.Equal(lanes[1], Assert.Single(expansion.Lanes, lane => lane.Name == "Protected"));
+        Assert.Equal(["Tests.Local"], Assert.Single(expansion.Layout!.Lanes).Members);
+        var poolLane = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expansion.Lanes, "Tests.Local"));
+        Assert.StartsWith("Balanced ", poolLane.Name);
+        Assert.True(AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(
+            AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(poolLane.Filter).ToArray(), "Category=HostIntegration"));
+    }
+
     private static TestDescriptor Test(string name, bool host = false) => new(name, name, name, "Runs",
         host ? [new("Category", "HostIntegration")] : []);
 }
