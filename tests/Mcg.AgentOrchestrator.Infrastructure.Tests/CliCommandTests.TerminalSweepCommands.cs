@@ -1990,10 +1990,10 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var result = RunSweep(kernel, root, gitRunner: GitRunner);
 
             Assert.Equal(3, result.Goals.Count);
-            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
-            Assert.Equal(1, batchedGitCalls.Count(call => call == "rev-parse --verify refs/heads/main"));
+            Assert.Equal(0, batchedGitCalls.Count(call => call == "rev-parse --verify refs/heads/main"));
         }
         finally
         {

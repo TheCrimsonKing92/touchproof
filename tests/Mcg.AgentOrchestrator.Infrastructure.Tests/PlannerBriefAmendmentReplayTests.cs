@@ -47,10 +47,10 @@ public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
 
             Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
             var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
-            Assert.Equal(HumanWaitKind.SpecClarification, request.Kind);
+            Assert.Equal(HumanWaitKind.PlannerBriefAmendment, request.Kind);
             Assert.Equal(request.Id, Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id)).Id);
             Assert.Empty(goal.GateTestObligations);
-            Assert.Equal(HumanWaitKind.SpecClarification, planner.LastVerification!.HumanInputKind);
+            Assert.Equal(HumanWaitKind.PlannerBriefAmendment, planner.LastVerification!.HumanInputKind);
             Assert.Equal(request.BlockerFingerprint, planner.LastVerification.HumanInputBlockerFingerprint);
             Assert.Null(Assert.Single(planner.LastVerification.PlannerEvidenceBatch!.Directives).PlannerEvidence);
             Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed);
@@ -82,19 +82,15 @@ public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
             Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed));
             Assert.Empty(goal.GateTestObligations);
             const string ruling = "Preserve the existing behavior and narrow criterion 1 accordingly.";
-            kernel.SubmitHumanInput(request.Id, ruling);
+            kernel.SubmitHumanInput(request.Id, ruling, amendmentDisposition: PlannerBriefAmendmentDisposition.Decline);
 
             Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
-            Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
-            kernel.RecordDispatchExecutionResult(goal.Id, planner.Id,
-                repeated with { CompletedAt = original.CompletedAt.AddSeconds(2) });
-
             Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
             Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
             Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.HumanInputRequested));
-            Assert.Equal(2, goal.Timeline.Count(item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed));
-            Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed &&
-                item.Message.Contains("state=answered", StringComparison.Ordinal));
+            Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed));
+            Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+            Assert.True(request.AmendmentReplanRouted);
             Assert.Empty(goal.GateTestObligations);
             Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed);
             var prepared = WorkerProfileDispatcher.PrepareTask(kernel, goal, planner,

@@ -73,7 +73,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_FiftyCalls_LaunchesOneCatFileProcess(Type helper, string method)
+    public void Resolve_FiftyCalls_LaunchesNoGitProcess(Type helper, string method)
     {
         var repo = CreateRepository();
         var expected = Oracle(repo);
@@ -97,10 +97,9 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
         }
 
         Assert.NotNull(delta);
-        Assert.Equal(1, delta.Launches);
-        var command = Assert.Single(delta.Subcommands);
-        Assert.Equal("cat-file", command.Key);
-        Assert.Equal(1, command.Value);
+        Assert.Equal(0, delta.Launches);
+        Assert.Empty(delta.Subcommands);
+        Assert.Null(GitRevisionReader.Shared.GetReader(repo));
     }
 
     private string? Resolve(Type helper, string method, string? path)

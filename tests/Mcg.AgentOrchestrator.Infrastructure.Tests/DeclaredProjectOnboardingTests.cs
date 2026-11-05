@@ -79,6 +79,10 @@ public sealed class DeclaredProjectOnboardingTests
         checks[1]!.AsObject().Remove("project");
         checks[1]!["reports"] = new JsonArray("more/**/*.xml", "reports/*.xml");
         Assert.All(ManifestCheckComparer.Compare(model, manifest.ToJsonString(), applied), result => Assert.Equal(ManifestCheckResultKind.Match, result.Kind));
+        var withInputs = JsonNode.Parse(manifest.ToJsonString())!;
+        withInputs["checks"]![1]!["environment"] = new JsonObject { ["FIXTURE_PROJECT"] = "fixtures/selected" };
+        Assert.Contains(ManifestCheckComparer.Compare(model, withInputs.ToJsonString(), applied),
+            result => result.Kind == ManifestCheckResultKind.RunnerDiffers);
         foreach (var field in new[] { "type", "name", "command", "project", "arguments", "reports" })
         {
             var changed = JsonNode.Parse(manifest.ToJsonString())!;

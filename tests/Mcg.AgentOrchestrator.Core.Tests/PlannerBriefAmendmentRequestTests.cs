@@ -11,7 +11,7 @@ public sealed class PlannerBriefAmendmentRequestTests
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
-    public void Parse_valid_amendment_returns_only_one_spec_clarification(bool withEvidence)
+    public void Parse_valid_amendment_returns_only_one_typed_amendment(bool withEvidence)
     {
         var output = Amendment();
         if (withEvidence)
@@ -22,7 +22,8 @@ public sealed class PlannerBriefAmendmentRequestTests
         Xunit.Assert.False(result.IsMalformed, result.Diagnostic);
         var directive = Xunit.Assert.Single(result.Directives);
         Xunit.Assert.Same(directive, result.Directive);
-        Xunit.Assert.Equal(HumanWaitKind.SpecClarification, directive.Kind);
+        Xunit.Assert.Equal(HumanWaitKind.PlannerBriefAmendment, directive.Kind);
+        Xunit.Assert.Equal(1, directive.AmendmentCriterionIndex);
         Xunit.Assert.Null(directive.PlannerEvidence);
         Xunit.Assert.Equal(0, result.EvidenceLineCount);
         Xunit.Assert.Contains("criterion 1", directive.Question);

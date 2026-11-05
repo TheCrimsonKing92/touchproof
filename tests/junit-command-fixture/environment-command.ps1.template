@@ -1,0 +1,46 @@
+param([Parameter(ValueFromRemainingArguments=$true)][string[]]$InputArguments)
+$ErrorActionPreference = 'Stop'
+$config = Get-Content -LiteralPath ($PSCommandPath + '.json') -Raw | ConvertFrom-Json
+$value = [Environment]::GetEnvironmentVariable($config.variable)
+$observed = @{ value = $value; mode = $config.mode; processId = $PID } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText($config.observation, $observed)
+if ($config.pipe) {
+    $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $config.pipe, [IO.Pipes.PipeDirection]::InOut)
+    $pipe.Connect(90000)
+    $writer = [IO.StreamWriter]::new($pipe)
+    $writer.AutoFlush = $true
+    $reader = [IO.StreamReader]::new($pipe)
+    $writer.WriteLine($observed)
+    if ($reader.ReadLine() -ne 'release') { throw 'Fixture release event was not received.' }
+    $pipe.Dispose()
+}
+if ($config.mode -eq 'probe') {
+    if ($null -ne $value) { throw 'Probe received a check-local variable.' }
+    Write-Output 'probe-ok'
+    exit 0
+}
+if ($config.mode -eq 'parser') {
+    if ($null -ne $value) { throw 'Parser received a check-local variable.' }
+    if ($config.failParser) { [Console]::Error.WriteLine($config.diagnostic); exit 8 }
+    [xml]$report = [IO.File]::ReadAllText($InputArguments[2])
+    $rows = @($report.testsuite.testcase | ForEach-Object {
+        $row = @{ testId = ($_.file + '::' + $_.name); filePath = $_.file; name = $_.name; status = 'passed' }
+        if ($null -ne $config.diagnostic) { $row.message = $config.diagnostic }
+        $row
+    })
+    @{ reportFormat = 'CTRF'; schemaVersion = 'mcg-test-result/1'
+       results = @{ tool = @{ name = $InputArguments[-1] }; tests = $rows } } | ConvertTo-Json -Depth 8 -Compress
+    exit 0
+}
+if ($config.expected) {
+    if ($value -cne $config.expected) { throw 'Command did not receive the exact literal fixture input.' }
+    if ([IO.File]::ReadAllText((Join-Path (Get-Location) $value)) -cne 'selected fixture') {
+        throw 'The relative fixture was not read from the declared working directory.'
+    }
+} elseif ($null -ne $value) { throw 'Unrelated command received a check-local variable.' }
+$caseName = if ($config.expected) { 'opt-in-selected' } else { 'no-opt-in' }
+[IO.Directory]::CreateDirectory((Join-Path (Get-Location) 'reports')) | Out-Null
+[IO.File]::WriteAllText((Join-Path (Get-Location) 'reports/junit.xml'),
+    ('<testsuite><testcase file="src/fixture.case" name="' + $caseName + '" /></testsuite>'))
+if ($config.diagnostic) { [Console]::Error.WriteLine($config.diagnostic) }
+exit $config.exitCode

@@ -5,26 +5,6 @@ using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptanceProcessRunner.ProcessInvokerAccess;
 
-internal sealed record AcceptanceProcessRequest
-{
-    public Action<AcceptanceProcessCleanupObservation>? CleanupObserver { get; init; } = null;
-    public Action<SpawnProcessIdentity>? CommandIdentityObserver { get; init; } = null;
-    public GateHeartbeatContext? HeartbeatContext { get; init; } = null;
-    public Action<AcceptanceGateProgress>? ProgressSink { get; init; } = null;
-    public AcceptanceGateEngineSettings? EngineSettings { get; init; } = null;
-    public string? AttemptResultsPrefix { get; init; } = null;
-    public string? GateInvocationId { get; init; } = null;
-    public string? ApparatusReceiptPath { get; init; } = null;
-    public TimeSpan? HeartbeatInterval { get; init; } = null;
-    public TimeSpan? ProgressInterval { get; init; } = null;
-    public TimeSpan? CapturePublicationInterval { get; init; } = null;
-    public bool StopOnCaptureLimit { get; init; } = false;
-    public bool? KeepCaptureFiles { get; init; } = null;
-    public Action<int>? ResumeObserver { get; init; } = null;
-    public bool ResolveBareCommand { get; init; }
-    internal IReadOnlyDictionary<string, string?>? ChildEnvironmentOverrides { get; init; }
-}
-
 internal static class AcceptanceCheckProcessInvoker
 {
     internal static async Task<CommandResult> RunAsync(
@@ -49,7 +29,7 @@ internal static class AcceptanceCheckProcessInvoker
         var progressInterval = request.ProgressInterval;
         var capturePublicationInterval = request.CapturePublicationInterval;
         var stopOnCaptureLimit = request.StopOnCaptureLimit;
-        var keepCaptureFiles = request.KeepCaptureFiles;
+        var keepCaptureFiles = request.SuppressDiagnosticCaptures ? false : request.KeepCaptureFiles;
         var resumeObserver = request.ResumeObserver;
         engineSettings ??= new AcceptanceGateEngineSettings();
         // Own the capture file offsets in this process. The
@@ -92,6 +72,9 @@ internal static class AcceptanceCheckProcessInvoker
         int? startedProcessId = null;
         int? completedProcessId = null;
         DateTimeOffset? completedProcessStartedAt = null;
+        WorkerProcessJobAccounting? accounting = null;
+        CommandResult result;
+        OperationCanceledException? callerCancellation = null;
         try
         {
             captureDrainCts = new CancellationTokenSource();
@@ -228,7 +211,8 @@ internal static class AcceptanceCheckProcessInvoker
                     commandTimeout,
                     progressSink,
                     progressInterval ?? DefaultProgressInterval,
-                    runningObserver: laneStall is null ? null : laneStall.Observe);
+                    runningObserver: laneStall is null ? null : laneStall.Observe,
+                    suppressDiagnosticCaptures: request.SuppressDiagnosticCaptures);
                 heartbeatTask = GateLaneHeartbeatLoop.RunAsync(
                     heartbeat.WriteRunning, () => { qosSweep?.RunPass(); sampler?.Tick(); }, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
             }
@@ -248,9 +232,12 @@ internal static class AcceptanceCheckProcessInvoker
             catch (OperationCanceledException)
             {
                 laneStall?.Complete();
-                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
+                {
                     throw;
+                }
+
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
 
                 timedOut = !captureLimitStop.Stopped;
                 if (captureLimitStop.Stopped)
@@ -277,7 +264,7 @@ internal static class AcceptanceCheckProcessInvoker
                 AcceptanceCaptureDrain.EmitCaptureLimitReached(
                     heartbeatContext,
                     attemptResultsPrefix,
-                    capture.Path,
+                    request.SuppressDiagnosticCaptures ? null : capture.Path,
                     engineSettings.OutputCaptureLimitBytes);
             }
 
@@ -305,64 +292,38 @@ internal static class AcceptanceCheckProcessInvoker
                 commandIdentityTracker = null;
             }
             keepOutputFiles = AcceptanceCaptureDrain.ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
-            WorkerProcessJobAccounting? accounting = null;
-            try
+            if (heartbeat is not null)
             {
-                if (heartbeat is not null)
+                if (heartbeatCts is not null)
                 {
-                    if (heartbeatCts is not null)
-                    {
-                        try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
-                    }
+                    try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
+                }
 
-                    if (heartbeatTask is not null)
-                    {
-                        try { await heartbeatTask.ConfigureAwait(false); } catch { }
-                    }
+                if (heartbeatTask is not null)
+                {
+                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                }
 
-                    heartbeatFinalized = true;
-                    heartbeat.WriteFinal(timedOut ? "timed-out" : captureLimited ? "failed" : "completed", childPid: process.Id, exitCode: exitCode);
-                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
-                    heartbeat = null;
-                    heartbeatCts?.Dispose();
-                    heartbeatCts = null;
-                    heartbeatTask = null;
-                }
+                heartbeatFinalized = true;
+                heartbeat.WriteFinal(timedOut ? "timed-out" : captureLimited ? "failed" : "completed", childPid: process.Id, exitCode: exitCode);
+                ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
+                heartbeat = null;
+                heartbeatCts?.Dispose();
+                heartbeatCts = null;
+                heartbeatTask = null;
             }
-            finally
-            {
-                try
-                {
-                    registrationReleased = true;
-                    _ = process.Release(out accounting);
-                    ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
-                }
-                finally
-                {
-                    var disposedProcessId = process.Id;
-                    processDisposed = true;
-                    process.Dispose();
-                    ObserveProcessCleanup(cleanupObserver, disposedProcessId, process, "owned-child-disposed");
-                    process = null;
-                    startedProcessId = null;
-                }
-            }
-            return new CommandResult(
+            // Keep custody through the outer cancellation handler and final capture cleanup.
+            cancellationToken.ThrowIfCancellationRequested();
+            result = new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
                 timedOut,
-                commandLine,
-                stdoutPath,
-                stderrPath,
+                request.SuppressDiagnosticCaptures ? null : commandLine,
+                request.SuppressDiagnosticCaptures ? null : stdoutPath,
+                request.SuppressDiagnosticCaptures ? null : stderrPath,
                 commandTimeout,
                 elapsed.Elapsed,
-                accounting is null
-                    ? null
-                    : new TaskProcessResourceAccounting(
-                        accounting.CpuMilliseconds,
-                        accounting.PeakMemoryBytes,
-                        accounting.IoBytes,
-                        AccountingSource: accounting.AccountingSource),
+                ResourceAccounting: null,
                 ResourceAccountingExpected: OperatingSystem.IsWindows(),
                 stdoutBytes,
                 stderrBytes,
@@ -374,6 +335,25 @@ internal static class AcceptanceCheckProcessInvoker
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
                 LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
             { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath };
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            callerCancellation = exception;
+            // Cancellation can interrupt capture connection (before WaitForExitAsync), too.
+            // Retain registration and handles until the entire owned tree is stopped, before
+            // the finally block drains captures and releases process custody.
+            if (process is not null && !registrationReleased && !processDisposed)
+            {
+                await AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync(
+                    process, exception, CaptureDrainTimeout).ConfigureAwait(false);
+            }
+            else
+            {
+                exception.Data["AcceptanceCancellationCleanupRan"] = false;
+                exception.Data["AcceptanceCancellationCleanupSkippedReason"] = processDisposed
+                    ? "process disposed" : registrationReleased ? "registration released" : "process not started";
+            }
+            throw;
         }
         finally
         {
@@ -418,10 +398,19 @@ internal static class AcceptanceCheckProcessInvoker
             {
                 try
                 {
+                    // Cancellation can also arrive while finally drains captures/heartbeats.
+                    // Do not release the job until that cancellation has stopped its members.
+                    if (callerCancellation is null && cancellationToken.IsCancellationRequested &&
+                        process is not null && !registrationReleased && !processDisposed)
+                    {
+                        callerCancellation = new OperationCanceledException(cancellationToken);
+                        await AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync(
+                            process, callerCancellation, CaptureDrainTimeout).ConfigureAwait(false);
+                    }
                     if (process is not null && startedProcessId is { } processId && !registrationReleased)
                     {
                         registrationReleased = true;
-                        _ = process.Release(out _);
+                        _ = process.Release(out accounting);
                         ObserveProcessCleanup(cleanupObserver, process.Id, process, "registration-released");
                     }
                 }
@@ -446,6 +435,13 @@ internal static class AcceptanceCheckProcessInvoker
                 AcceptanceBestEffortFileOperations.TryDeleteFile(stderrPath);
             }
         }
+        if (callerCancellation is not null) throw callerCancellation;
+        return result with
+        {
+            ResourceAccounting = accounting is null ? null : new TaskProcessResourceAccounting(
+                accounting.CpuMilliseconds, accounting.PeakMemoryBytes, accounting.IoBytes,
+                AccountingSource: accounting.AccountingSource)
+        };
     }
 
     private static void ObserveProcessCleanup(
@@ -529,7 +525,7 @@ internal static class AcceptanceCheckProcessInvoker
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}",
-            registrationIdentityReader, resumeObserver: resumeObserver, requestOwnConsole: requestOwnConsole);
+            registrationIdentityReader, containDescendants: true, resumeObserver: resumeObserver, requestOwnConsole: requestOwnConsole);
     }
 
 }

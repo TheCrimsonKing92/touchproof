@@ -240,18 +240,8 @@ internal static class GoalAcceptanceVerifierCaptureCustody
     }
 
     internal static void EmitCaptureLimitReached(
-        string? goalId,
-        string? attemptPrefix,
-        string path,
-        long capBytes,
-        TextWriter writer)
-    {
-        var runId = Path.GetFileName(
-            attemptPrefix ?? Path.GetFileNameWithoutExtension(path));
-        writer.WriteLine(
-            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={GoalAcceptanceVerifier.FormatNullableToken(goalId, 8)} run={GoalAcceptanceVerifier.QuoteProgressToken(runId)} path={GoalAcceptanceVerifier.QuoteProgressToken(path)} cap_bytes={capBytes}");
-        writer.Flush();
-    }
+        string? goalId, string? attemptPrefix, string? path, long capBytes, TextWriter writer) =>
+        AcceptanceCaptureLimitDiagnostics.Emit(goalId, attemptPrefix, path, capBytes, writer);
 
     internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes)
     {

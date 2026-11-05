@@ -429,12 +429,12 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
     private static string BuildDiffSpec(string workingDirectory, string integrationBranch)
     {
-        if (RevisionExists(workingDirectory, integrationBranch))
+        if (RevisionExists(workingDirectory, integrationBranch, isBranch: true))
         {
             return $"{integrationBranch}...HEAD";
         }
 
-        if (RevisionExists(workingDirectory, "master"))
+        if (RevisionExists(workingDirectory, "master", isBranch: true))
         {
             return "master...HEAD";
         }
@@ -444,8 +444,14 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             : "HEAD";
     }
 
-    private static bool RevisionExists(string workingDirectory, string revision)
+    private static bool RevisionExists(string workingDirectory, string revision, bool isBranch = false)
     {
+        if (isBranch)
+        {
+            if (GitRevisionReader.TryConfirmBranchAbsent(workingDirectory, revision)) return false;
+            if (GitRevisionReader.Shared.TryResolve(workingDirectory, revision, out _)) return true;
+        }
+
         var result = GitCli.Run(workingDirectory, "rev-parse", "--verify", "--quiet", revision);
         if (result.ProcessStarted && result.ExitCode == 0 && !result.DrainTimedOut)
         {

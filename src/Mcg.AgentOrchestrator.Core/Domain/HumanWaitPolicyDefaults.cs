@@ -9,7 +9,7 @@ public static class HumanWaitPolicyDefaults
     /// kind silently changes when goals park and which answers the operator views show.
     /// </summary>
     public static bool IsSpecClarificationClass(HumanWaitKind kind) =>
-        kind is HumanWaitKind.SpecClarification or HumanWaitKind.PlannerPrerequisiteEvidence;
+        kind is HumanWaitKind.SpecClarification or HumanWaitKind.PlannerPrerequisiteEvidence or HumanWaitKind.PlannerBriefAmendment;
 
     public static bool IsAutoDefaultable(HumanWaitKind kind) =>
         IsSpecClarificationClass(kind);

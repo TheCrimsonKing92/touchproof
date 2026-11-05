@@ -23,12 +23,21 @@ public static partial class GoalWorktrees
             return existing;
         }
 
-        RequireGitWorkTree(executionDirectory);
-        EnsureWorktreeRootIgnored(executionDirectory);
-
         var path = WorktreePath(executionDirectory, goalId);
         var branch = BranchName(goalId);
-        var branchExists = BranchExists(executionDirectory, branch);
+        bool branchExists;
+        if (GoalWorktreeCreationProbe.Resolve(executionDirectory, branch) is { } facts)
+        {
+            EnsureWorktreeRootIgnoredAtGitDirectory(facts.GitDirectory);
+            branchExists = facts.BranchExists;
+        }
+        else
+        {
+            // Preserve the existing diagnostic and error handling for unrecognized probe results.
+            RequireGitWorkTree(executionDirectory);
+            EnsureWorktreeRootIgnored(executionDirectory);
+            branchExists = BranchExists(executionDirectory, branch);
+        }
         var result = AddWorktree(executionDirectory, path, branch, branchExists);
         if (result.ExitCode != 0 && WorktreeAddFailedBecausePathExists(result, path))
         {
@@ -129,6 +138,18 @@ public static partial class GoalWorktrees
                 }
             }
 
+            EnsureWorktreeRootIgnoredAtGitDirectory(gitDir);
+        }
+        catch
+        {
+            // Ignore hygiene failures; git worktree creation remains the authoritative operation.
+        }
+    }
+
+    private static void EnsureWorktreeRootIgnoredAtGitDirectory(string gitDir)
+    {
+        try
+        {
             var infoDirectory = Path.Combine(gitDir, "info");
             Directory.CreateDirectory(infoDirectory);
             var excludePath = Path.Combine(infoDirectory, "exclude");

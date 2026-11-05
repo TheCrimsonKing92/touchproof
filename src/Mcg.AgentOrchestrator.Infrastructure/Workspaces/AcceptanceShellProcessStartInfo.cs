@@ -38,6 +38,11 @@ internal static class AcceptanceShellProcessStartInfo
                 else environment[pair.Key] = pair.Value;
             }
         }
+        if (request.CommandEnvironment is { } inputs)
+        {
+            inputs.Validate(request.EngineSettings?.DeclaredToolHomes);
+            foreach (var pair in inputs.Overrides) environment[pair.Key] = pair.Value;
+        }
         if (timingPath is not null)
             AcceptanceDeclaredTestSettings.Apply(environment, request.EngineSettings?.DeclaredTestSettings);
     }

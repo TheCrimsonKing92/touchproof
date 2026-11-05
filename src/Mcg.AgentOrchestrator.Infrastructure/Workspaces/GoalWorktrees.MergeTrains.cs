@@ -166,7 +166,8 @@ public static partial class GoalWorktrees
         {
             throw new InvalidOperationException($"Failed to remove merge train worktree '{workspacePath}': {remove.Error}");
         }
-        _ = GitCli.Run(executionDirectory, "worktree", "prune");
+        if (remove.ExitCode != 0)
+            _ = GitCli.Run(executionDirectory, "worktree", "prune");
     }
 
     internal static IReadOnlyList<string> ReadMergeTrainConflictPaths(string workspacePath)

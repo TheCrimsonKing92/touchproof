@@ -27,7 +27,8 @@ internal sealed record ConductorStatusSnapshot(
     internal sealed record LoopBuildObservation(string? Commit, string Source);
     internal sealed record LateFleetAdoptionObservation(string Commit, DateTimeOffset AdoptedAt, TimeSpan Elapsed);
     internal sealed record GoalObservation(string Id, string Status, string Role, GoalLandingBlocker? LandingBlocker = null,
-        IReadOnlyList<ConductorStatusClarification>? Clarifications = null);
+        IReadOnlyList<ConductorStatusClarification>? Clarifications = null,
+        PlannerBriefAmendmentRevisionPendingHold? AmendmentRevisionPending = null);
     internal sealed record GoalsObservation(bool Available, IReadOnlyList<GoalObservation>? NonTerminal,
         int? PendingClarifications, int? HumanWaits);
     internal sealed record LandingObservation(string Goal, DateTimeOffset At);

@@ -52,6 +52,8 @@ internal static class CliConductorStatusReader
                 if (output is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create(goal.Id,
                     new("goal", "Goal ID", goal.Id), new("status", "Status", goal.Status), new("role", "Role", goal.Role)));
                 output.WriteLine($"  {goal.Id} | {goal.Status} | role={goal.Role}");
+                if (goal.AmendmentRevisionPending is { } amendmentHold)
+                    output.WriteLine($"    {amendmentHold.Render()}");
                 if (goal.LandingBlocker is { } blocker)
                 {
                     if (output is OwnerConsoleStructuredWriter blocked) blocked.Mark(OwnerConsoleFieldSnapshot.Create(goal.Id,
