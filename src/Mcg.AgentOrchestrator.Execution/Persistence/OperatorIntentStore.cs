@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -14,7 +15,9 @@ public enum OperatorIntentStatus
 
 public sealed record ProgressOperatorIntentPayload(
     WorkTaskStatus Status,
-    string Message);
+    string Message,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ManualVerificationRequest? CompletionVerification = null);
 
 public sealed record RetryOperatorIntentPayload(
     string Message,
