@@ -85,6 +85,8 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
         Assert.Equal(0, invocation.CompilerExitCode);
         Assert.Equal(WorkerBuildStructuralStatus.Unavailable, invocation.StructuralCheck!.Status);
         Assert.Contains("WorkerBuildCandidateChangedException", invocation.StructuralCheck.Diagnostic);
+        Assert.DoesNotContain("host/operator owns recovery", invocation.StructuralCheck.Diagnostic);
+        Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", invocation.StructuralCheck.Diagnostic);
         Assert.Equal(1, Assert.Single(fixture.Responses).ExitCode);
         Assert.True(invocation.CustodyReleased);
         fixture.AssertSlotsFree();

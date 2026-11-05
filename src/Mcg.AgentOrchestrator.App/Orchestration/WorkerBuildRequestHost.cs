@@ -255,7 +255,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     try
                     {
                         var structural = invocation.Outcome != WorkerBuildOutcome.Success
-                            ? _structural.Unavailable(invocation, policyDigest, "Structural evaluation skipped after unsuccessful compilation.")
+                            ? _structural.Skipped(invocation, policyDigest, "Structural evaluation skipped after unsuccessful compilation.")
                             : policyError is not null ? _structural.Unavailable(invocation, policyDigest, policyError)
                             : _structural.Run(invocation, policyDigest, () => CheckCurrent(), lifetime);
                         Save(invocation with { StructuralCheck = structural });
@@ -352,5 +352,5 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         return info;
     }
 
-    private sealed class WorkerBuildCandidateChangedException : Exception;
+    internal sealed class WorkerBuildCandidateChangedException : Exception;
 }

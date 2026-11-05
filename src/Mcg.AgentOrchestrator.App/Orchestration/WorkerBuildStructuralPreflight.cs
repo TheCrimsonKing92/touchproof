@@ -90,7 +90,7 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
             lifetime.ThrowIfCancellationRequested();
             validateCurrent();
             if (PolicyDigest(invocation.WorktreeRoot) != policyDigest)
-                return Unavailable(invocation, policyDigest, "Structural policy changed during evaluation.");
+                return Skipped(invocation, policyDigest, "Structural policy changed during evaluation.");
             if (findings is null || string.IsNullOrWhiteSpace(findings.Message))
                 return Unavailable(invocation, policyDigest, "Structural evaluator returned malformed findings.");
             if (!findings.EvaluationComplete)
@@ -100,6 +100,10 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
             return Bound(invocation, policyDigest, findings.HasViolation ? WorkerBuildStructuralStatus.Violation
                 : findings.IsApplicable ? WorkerBuildStructuralStatus.Passed : WorkerBuildStructuralStatus.NotApplicable, findings.Message);
         }
+        catch (WorkerBuildRequestHost.WorkerBuildCandidateChangedException error)
+        {
+            return Skipped(invocation, policyDigest, $"{error.GetType().Name}: {error.Message}");
+        }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             return Unavailable(invocation, policyDigest, error is TimeoutException
@@ -107,6 +111,9 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
                 : $"{error.GetType().Name}: {error.Message}");
         }
     }
+
+    internal WorkerBuildStructuralCheck Skipped(WorkerBuildInvocation invocation, string policyDigest, string diagnostic) =>
+        Bound(invocation, policyDigest, WorkerBuildStructuralStatus.Unavailable, diagnostic);
 
     internal WorkerBuildStructuralCheck Unavailable(WorkerBuildInvocation invocation, string policyDigest, string diagnostic) =>
         Bound(invocation, policyDigest, WorkerBuildStructuralStatus.Unavailable, diagnostic +

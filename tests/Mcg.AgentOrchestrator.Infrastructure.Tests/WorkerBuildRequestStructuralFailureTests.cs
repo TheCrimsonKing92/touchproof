@@ -326,6 +326,8 @@ public sealed class WorkerBuildRequestStructuralFailureTests
             AssertUnavailable(fixture, invocation);
             Assert.Equal(home, invocation.StructuralCheck!.ProjectHomeDirectory);
             Assert.Contains("Structural policy changed during evaluation", invocation.StructuralCheck.Diagnostic);
+            Assert.DoesNotContain("host/operator owns recovery", invocation.StructuralCheck.Diagnostic);
+            Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", invocation.StructuralCheck.Diagnostic);
         }
         finally { SharedTestSupport.RemoveTempDirectory(home); }
     }
@@ -415,6 +417,12 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         Assert.Equal(1, invocation.CompilerExitCode);
         Assert.Equal(WorkerBuildStructuralStatus.Unavailable, invocation.StructuralCheck!.Status);
         Assert.Contains("skipped after unsuccessful compilation", invocation.StructuralCheck.Diagnostic);
+        Assert.DoesNotContain("host/operator owns recovery", invocation.StructuralCheck.Diagnostic);
+        Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", invocation.StructuralCheck.Diagnostic);
+        var output = File.ReadAllText(Path.Combine(fixture.Root, "worker.out.log"));
+        Assert.Contains("outcome=CompilerFailure", output);
+        Assert.DoesNotContain("host/operator owns recovery", output);
+        Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", output);
         Assert.True(invocation.CustodyReleased);
         fixture.AssertSlotsFree();
     }
