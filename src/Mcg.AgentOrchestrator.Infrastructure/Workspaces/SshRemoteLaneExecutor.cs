@@ -148,6 +148,8 @@ internal sealed class SshRemoteLaneExecutor(
             ["lane"] = request.Lane, ["attemptId"] = request.AttemptId, ["executorId"] = request.ExecutorId,
             ["filterHash"] = request.FilterHash, ["mainSha"] = request.MainSha, ["manifestIdentity"] = request.ManifestIdentity
         };
+        if (request.Kind == "lane" && request.TestSettings is { Count: > 0 })
+            job["testSettings"] = JsonSerializer.SerializeToNode(request.TestSettings);
         if (request.TestHostTimeoutSeconds is { } budget) job["testHostTimeoutSeconds"] = budget;
         if (request.Kind == "build-check")
         {

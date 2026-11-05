@@ -46,6 +46,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
     internal RemoteLaneOccupancyHeartbeat? Occupancy { get; set; }
     internal AcceptanceLaneWaitCollector? WaitCollector { get; init; }
+    internal IReadOnlyDictionary<string, string> TestSettings { get; init; } = AcceptanceDeclaredTestSettings.Empty;
     private readonly Dictionary<string, AcceptanceLaneWaitCollector.Occurrence> _waits = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
@@ -284,14 +285,14 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out var filter);
         return new(executorId, _cache.AttemptId, _cache.GoalId, check.Name, check.Project!, filter,
             GoalAcceptanceVerifier.ShortHash(filter), _cache.VerifyingCommitSha, _cache.CandidateTreeSha,
-            _cache.MainSha, _cache.ManifestIdentity);
+            _cache.MainSha, _cache.ManifestIdentity, TestSettings: TestSettings);
     }
 
     internal RemoteLaneRequest CreateRequest(string lane, string project, string filter,
         IRemoteLaneCandidateIdentity identity, string executorId) =>
         new(executorId, identity.AttemptId, identity.GoalId, lane, project, filter,
             GoalAcceptanceVerifier.ShortHash(filter), identity.VerifyingCommitSha, identity.CandidateTreeSha,
-            identity.MainSha, identity.ManifestIdentity);
+            identity.MainSha, identity.ManifestIdentity, TestSettings: TestSettings);
 
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, TimeSpan deadline, CancellationToken cancellationToken,
@@ -541,6 +542,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         if (result.FilterHash != request.FilterHash || result.Lane != request.Lane) return RemoteLaneOutcomeCode.BindingMismatchFilter;
         if (result.ExecutorId != request.ExecutorId) return RemoteLaneOutcomeCode.BindingMismatchExecutor;
         if (result.ManifestIdentity != request.ManifestIdentity) return RemoteLaneOutcomeCode.BindingMismatchManifest;
+        if (!AcceptanceDeclaredTestSettings.Equal(request.TestSettings, result.TestSettings)) return RemoteLaneOutcomeCode.BindingMismatchTestSettings;
         return null;
     }
 

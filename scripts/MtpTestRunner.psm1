@@ -940,11 +940,48 @@ function Assert-MtpTestInputEnvironment {
     return ,$environment
 }
 
+function Assert-MtpDeclaredTestSettings {
+    param([System.Collections.IDictionary]$TestSettings)
+
+    foreach ($entry in $TestSettings.GetEnumerator()) {
+        $name = [string]$entry.Key
+        if ($name -cnotmatch '\AMCG_TEST_[A-Z0-9_]+\z' -or
+            $name.StartsWith('MCG_TEST_INPUT_', [StringComparison]::Ordinal) -or
+            $name -cin @('MCG_TEST_SLOT_TIMING_FILE', 'MCG_TEST_BUILD_OUTPUT_ROOT', 'MCG_TEST_ONLY_ACCEPTANCE_LEGACY_START_THEN_ATTACH')) {
+            throw "Declared test setting name '$name' is invalid or reserved."
+        }
+        if ($entry.Value -isnot [string] -or $entry.Value.Length -eq 0 -or $entry.Value.IndexOfAny([char[]]@([char]0, [char]13, [char]10)) -ge 0) {
+            throw "Declared test setting value for '$name' must be a non-empty string without NUL, CR or LF."
+        }
+    }
+}
+
+function Read-MtpDeclaredTestSettingsFile {
+    param([string]$Path)
+
+    $settings = [System.Collections.Generic.SortedDictionary[string,string]]::new([StringComparer]::Ordinal)
+    if (-not [string]::IsNullOrEmpty($Path)) {
+        $document = [System.Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($Path))
+        try {
+            if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { throw 'Declared test settings must be an object.' }
+            foreach ($property in $document.RootElement.EnumerateObject()) {
+                if ($settings.ContainsKey($property.Name)) { throw "Declared test setting name '$($property.Name)' is duplicated." }
+                if ($property.Value.ValueKind -ne [System.Text.Json.JsonValueKind]::String) { throw "Declared test setting value for '$($property.Name)' must be a string." }
+                $settings.Add($property.Name, $property.Value.GetString())
+            }
+        }
+        finally { $document.Dispose() }
+    }
+    Assert-MtpDeclaredTestSettings -TestSettings $settings
+    return ,$settings
+}
+
 function Set-MtpHermeticEnvironment {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][string]$WritableRoot,
-        [System.Collections.IDictionary]$TestInputEnvironment = @{}
+        [System.Collections.IDictionary]$TestInputEnvironment = @{},
+        [System.Collections.IDictionary]$TestSettings = @{}
     )
 
     foreach ($name in $TestInputEnvironment.Keys) {
@@ -953,6 +990,7 @@ function Set-MtpHermeticEnvironment {
         }
     }
 
+    Assert-MtpDeclaredTestSettings -TestSettings $TestSettings
     $nugetPackages = $env:NUGET_PACKAGES
     $userProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
     $allowedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -996,6 +1034,9 @@ function Set-MtpHermeticEnvironment {
     $env:APPDATA = $appData
     $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = [System.IO.Path]::GetFullPath($RepositoryRoot)
     foreach ($entry in $TestInputEnvironment.GetEnumerator()) {
+        [System.Environment]::SetEnvironmentVariable([string]$entry.Key, [string]$entry.Value, [System.EnvironmentVariableTarget]::Process)
+    }
+    foreach ($entry in $TestSettings.GetEnumerator()) {
         [System.Environment]::SetEnvironmentVariable([string]$entry.Key, [string]$entry.Value, [System.EnvironmentVariableTarget]::Process)
     }
 }
@@ -2945,6 +2986,7 @@ function Invoke-MtpTestRun {
         [string]$DotnetPath = 'dotnet',
         [string]$AcceptanceAttributionReplayInput,
         [string[]]$TestInput = @(),
+        [string]$TestSettingsFile,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [scriptblock]$RetainedEvidenceOwnershipWriter
@@ -2977,6 +3019,7 @@ function Invoke-MtpTestRun {
     }
     try {
         $testInputEnvironment = Assert-MtpTestInputEnvironment -TestInput $TestInput
+        $testSettings = Read-MtpDeclaredTestSettingsFile -Path $TestSettingsFile
     }
     catch {
         $diagnostic = "TEST INPUT FAILURE - managed build/test processes were not launched: $($_.Exception.Message)"
@@ -3019,7 +3062,7 @@ function Invoke-MtpTestRun {
     try {
         # Resolve the caller's build location before hermetic environment filtering; carry it as a typed value.
         $workerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot
-        Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory -TestInputEnvironment $testInputEnvironment
+        Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory -TestInputEnvironment $testInputEnvironment -TestSettings $testSettings
         $appliedTestInputNames = @($testInputEnvironment.Keys)
         Write-Host "Results directory: $runDirectory"
         if ($appliedTestInputNames.Count -gt 0) {

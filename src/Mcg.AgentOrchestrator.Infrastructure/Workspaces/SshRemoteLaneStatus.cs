@@ -69,5 +69,12 @@ internal sealed record SshRemoteLaneStatus(JsonElement Fields)
         BuildReceiptPath = paths.FirstOrDefault(path => Path.GetFileName(path) == "worker-build-receipt.json")
     };
     internal RemoteLaneResult Result(int code, string[] paths) => new(String("executorId"), String("lane"),
-        String("filterHash"), String("commitSha"), String("treeSha"), String("mainSha"), String("manifestIdentity"), code, paths);
+        String("filterHash"), String("commitSha"), String("treeSha"), String("mainSha"), String("manifestIdentity"), code, paths,
+        TestSettings: ReadTestSettings());
+
+    private IReadOnlyDictionary<string, string>? ReadTestSettings()
+    {
+        try { return AcceptanceDeclaredTestSettings.Read(Fields); }
+        catch (InvalidDataException) { throw new RemoteLaneTransportException("invalid-testSettings"); }
+    }
 }

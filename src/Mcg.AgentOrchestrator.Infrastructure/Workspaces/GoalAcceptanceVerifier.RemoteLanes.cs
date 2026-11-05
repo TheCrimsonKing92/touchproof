@@ -116,7 +116,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
-            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector };
+            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, TestSettings = EngineSettings.DeclaredTestSettings };
         _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;

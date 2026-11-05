@@ -24,6 +24,7 @@ internal sealed class AcceptanceGateEngineSettings
     [JsonIgnore] public AcceptanceManifestCheck? DeclaredGoTestCheck { get; private set; }
     [JsonIgnore] public AcceptanceManifestCheck? DeclaredCrosswalkTestCheck { get; private set; }
     [JsonIgnore] public IReadOnlyList<DeclaredToolHome> DeclaredToolHomes { get; private set; } = [];
+    [JsonIgnore] public IReadOnlyDictionary<string, string> DeclaredTestSettings { get; private set; } = AcceptanceDeclaredTestSettings.Empty;
     public AcceptanceGateTimeoutSettings Timeouts { get; init; } = new();
     public int MaxConcurrentShards { get; init; } = 1;
     public bool EnforceStructuralCoverage { get; init; }
@@ -48,12 +49,14 @@ internal sealed class AcceptanceGateEngineSettings
         using var document = JsonDocument.Parse(manifestJson);
         var checks = CheckDeclaredTestProjects.Read(document.RootElement);
         var toolHomes = DeclaredToolHomeManifest.Read(document.RootElement);
+        var testSettings = AcceptanceDeclaredTestSettings.Read(document.RootElement);
         if (!document.RootElement.TryGetProperty("engine", out var engineElement))
         {
             return new AcceptanceGateEngineSettings
             {
                 DeclaredDotnetTestChecks = checks,
                 DeclaredToolHomes = toolHomes,
+                DeclaredTestSettings = testSettings,
                 DeclaredGoTestCheck = GoPackageFocusedEvidence.ReadDeclaredCheck(document.RootElement),
                 DeclaredCrosswalkTestCheck = CrosswalkFocusedEvidence.ReadDeclaredCheck(document.RootElement)
             };
@@ -63,6 +66,7 @@ internal sealed class AcceptanceGateEngineSettings
             ?? throw new InvalidDataException("Acceptance manifest engine settings could not be read.");
         settings.DeclaredDotnetTestChecks = checks;
         settings.DeclaredToolHomes = toolHomes;
+        settings.DeclaredTestSettings = testSettings;
         settings.DeclaredGoTestCheck = GoPackageFocusedEvidence.ReadDeclaredCheck(document.RootElement);
         settings.DeclaredCrosswalkTestCheck = CrosswalkFocusedEvidence.ReadDeclaredCheck(document.RootElement);
         settings.Validate();
