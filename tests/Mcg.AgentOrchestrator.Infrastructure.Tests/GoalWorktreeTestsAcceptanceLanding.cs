@@ -686,6 +686,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         try
         {
+            RunGit(repo, "branch", "-M", "main");
             var kernel = new AgentOrchestratorKernel();
             var present = kernel.CreateGoal("Present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             var alsoPresent = kernel.CreateGoal("Also present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
