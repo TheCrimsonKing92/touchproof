@@ -420,7 +420,9 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         Assert.DoesNotContain("host/operator owns recovery", invocation.StructuralCheck.Diagnostic);
         Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", invocation.StructuralCheck.Diagnostic);
         var output = File.ReadAllText(Path.Combine(fixture.Root, "worker.out.log"));
-        Assert.Contains("outcome=CompilerFailure", output);
+        // The channel serializes compiler outcomes as numeric enum values.
+        Assert.Contains($"outcome={(int)WorkerBuildOutcome.CompilerFailure};", output);
+        Assert.Contains("compiler_exit=1; structural_status=Unavailable; verification_exit=1;", output);
         Assert.DoesNotContain("host/operator owns recovery", output);
         Assert.DoesNotContain("Do not edit unrelated source or repeatedly rebuild", output);
         Assert.True(invocation.CustodyReleased);
