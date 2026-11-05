@@ -179,7 +179,7 @@ internal static class AcceptanceCaptureDrain
     internal static void EmitCaptureLimitReached(
         GateHeartbeatContext? context,
         string? attemptResultsPrefix,
-        string path,
+        string? path,
         long capBytes) =>
         GoalAcceptanceVerifierCaptureCustody.EmitCaptureLimitReached(
             context?.GoalId,

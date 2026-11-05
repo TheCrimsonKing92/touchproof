@@ -80,11 +80,11 @@ internal static class SourceSizeRatchet
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.BuildArtifactLock.cs", 334),
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 332),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 322),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 652),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 539),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 535),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.

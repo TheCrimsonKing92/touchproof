@@ -6,6 +6,7 @@ internal static class JunitCommandCheckDefinition
 {
     internal static void Validate(Check check)
     {
+        check.ValidateEnvironment();
         if (string.IsNullOrWhiteSpace(check.Command))
             throw new ArgumentException($"JUnit command check '{check.Name}' requires a nonempty command.");
         if (!IsRelativePath(check.Project ?? "."))
