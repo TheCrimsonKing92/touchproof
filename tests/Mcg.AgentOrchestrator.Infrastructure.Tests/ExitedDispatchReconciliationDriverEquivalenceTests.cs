@@ -54,7 +54,7 @@ public sealed class ExitedDispatchReconciliationDriverEquivalenceTests
         Assert.Equal(expectedReason, decision.Reason);
         var expectedFacts = new DispatchStartFacts(goal.Id.Value)
             { UnreconciledTaskIdPrefix = task.Id.Value[..8] }.ToRecordedFacts();
-        Assert.Equal(13, decision.Facts.Count);
+        Assert.Equal(15, decision.Facts.Count);
         Assert.Equal(expectedFacts, decision.Facts);
         var replay = DispatchStartPolicy.Evaluate(DispatchStartFacts.FromRecordedFacts(decision.Facts)).ToRecord();
         Assert.Equal(decision.Stage, replay.Stage);

@@ -11,6 +11,8 @@ public enum DispatchStartAction
 public sealed record DispatchStartFacts(string GoalId)
 {
     public string UnreconciledTaskIdPrefix { get; init; } = string.Empty;
+    public string WorkspacePreparationLeaseUnavailableMessage { get; init; } = string.Empty;
+    public string WorkspacePreparationFailureMessage { get; init; } = string.Empty;
     public string LeaseRecoveryStatus { get; init; } = string.Empty;
     public string ConcurrentLeaseRefusal { get; init; } = string.Empty;
     public string IntegrationCanDispatch { get; init; } = string.Empty;
@@ -37,14 +39,17 @@ public sealed record DispatchStartFacts(string GoalId)
         new("readinessVerdict", ReadinessVerdict),
         new("readinessReason", ReadinessReason),
         new("cancelledPredecessorBlocker", CancelledPredecessorBlocker),
-        new("assignedTasksBlockedReason", AssignedTasksBlockedReason)
+        new("assignedTasksBlockedReason", AssignedTasksBlockedReason),
+        new("workspacePreparationLeaseUnavailableMessage", WorkspacePreparationLeaseUnavailableMessage),
+        new("workspacePreparationFailureMessage", WorkspacePreparationFailureMessage)
     ]);
 
     public static DispatchStartFacts FromRecordedFacts(IReadOnlyList<PolicyDecisionFact> facts)
     {
         ArgumentNullException.ThrowIfNull(facts);
-        if (facts.Count != 13)
-            throw new InvalidOperationException("Dispatch start replay requires exactly thirteen named facts.");
+        // Retained decisions predate workspace recovery attribution and contain thirteen facts.
+        if (facts.Count is not (13 or 15))
+            throw new InvalidOperationException("Dispatch start replay requires thirteen legacy or fifteen current named facts.");
 
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var fact in facts)
@@ -67,6 +72,8 @@ public sealed record DispatchStartFacts(string GoalId)
         return new DispatchStartFacts(Read("goalId"))
         {
             UnreconciledTaskIdPrefix = Read("unreconciledTaskIdPrefix"),
+            WorkspacePreparationLeaseUnavailableMessage = facts.Count == 13 ? string.Empty : Read("workspacePreparationLeaseUnavailableMessage"),
+            WorkspacePreparationFailureMessage = facts.Count == 13 ? string.Empty : Read("workspacePreparationFailureMessage"),
             LeaseRecoveryStatus = Read("leaseRecoveryStatus"),
             ConcurrentLeaseRefusal = ReadChoice("concurrentLeaseRefusal", "", "refused"),
             IntegrationCanDispatch = ReadChoice("integrationCanDispatch", "", "allowed", "refused"),
@@ -105,6 +112,12 @@ public static class DispatchStartPolicy
         if (facts.UnreconciledTaskIdPrefix.Length > 0)
             return new(DispatchStartAction.Hold, 1, "exited-unapplied-process-record",
                 $"Dispatch start refused for task {facts.UnreconciledTaskIdPrefix}: latest process record exited without an applied completion (exited-unapplied-process-record).", facts);
+        if (facts.WorkspacePreparationLeaseUnavailableMessage.Length > 0)
+            return new(DispatchStartAction.Hold, 11, "workspace-preparation-lease-unavailable",
+                facts.WorkspacePreparationLeaseUnavailableMessage, facts);
+        if (facts.WorkspacePreparationFailureMessage.Length > 0)
+            return new(DispatchStartAction.Escalate, 12, "workspace-preparation-failed",
+                facts.WorkspacePreparationFailureMessage, facts);
         if (facts.LeaseRecoveryStatus.Length > 0)
             return new(DispatchStartAction.Hold, 2, "evidence-lease-held",
                 $"Goal evidence mutation is held for {facts.GoalId}; lease-recovery={facts.LeaseRecoveryStatus}.", facts);

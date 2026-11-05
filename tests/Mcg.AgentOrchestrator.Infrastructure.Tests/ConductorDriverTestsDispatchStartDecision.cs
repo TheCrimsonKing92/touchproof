@@ -166,7 +166,7 @@ public sealed class ConductorDriverTestsDispatchStartDecision
         Assert.Equal(rung, decision.Rung);
         Assert.Equal(evidence, decision.DiscriminatingEvidence);
         Assert.Equal(reason, decision.Reason);
-        Assert.Equal(13, decision.Facts.Count);
+        Assert.Equal(15, decision.Facts.Count);
         var replay = DispatchStartPolicy.Evaluate(DispatchStartFacts.FromRecordedFacts(decision.Facts));
         Assert.Equal(action, replay.Action.ToString());
         Assert.Equal(rung, replay.DiscriminatingRung);
