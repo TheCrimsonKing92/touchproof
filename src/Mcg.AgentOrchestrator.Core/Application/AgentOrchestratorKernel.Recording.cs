@@ -597,6 +597,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (task.RequiredRole == AgentRole.Reviewer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
             new ReviewerVerdictEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m)).Close(goal, task, verification, HumanInputRequests);
+        ProgressFailurePayload? failure = null;
         ReportWorkerTaskProgress(goalId, taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
@@ -606,7 +607,7 @@ public sealed partial class AgentOrchestratorKernel
                           : $"Dispatch completed successfully: {task.LastDispatch.Command}",
                       task,
                       verification)
-                : BuildDispatchFailureMessage(outcome, task, verification));
+                : BuildDispatchFailureMessage(outcome, task, verification, out failure), failure);
     }
 
     private static bool TryAcceptEvidenceOnlyRetryRound(
@@ -743,10 +744,13 @@ public sealed partial class AgentOrchestratorKernel
     private static string BuildDispatchFailureMessage(
         DispatchOutcome outcome,
         TaskSpec task,
-        TaskVerificationRecord verification)
+        TaskVerificationRecord verification,
+        out ProgressFailurePayload failure)
     {
         var rule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) ??
             TaskOutcomeRules.UnknownFailure.Token;
+        failure = new(ProgressKind.TaskFailed.ToString(), rule,
+            DispatchContractDiagnostic.ExtractEvidence(verification.StandardError, rule));
         if (!string.Equals(
                 rule,
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,

@@ -82,13 +82,15 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
         }
     }
 
-    [Xunit.Fact]
-    public async Task CompetingSaveKeepsClaimAndStoredChangeThenFreshRunAppliesOnce()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task CompetingSaveKeepsClaimAndStoredChangeThenFreshRunAppliesOnce(bool completion)
     {
         var root = CreateTempDirectory();
         try
         {
-            var seed = await CreateSeed(root);
+            var seed = await CreateSeed(root, completion);
             var baseline = (await seed.Repository.LoadGoalAsync(seed.GoalId, TestContext.Current.CancellationToken))!;
             var competingObjective = baseline.Objective + " (competing)";
             var repository = new CompetingSaveRepository(seed.Repository, seed.GoalId, competingObjective);
@@ -109,6 +111,7 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             Assert.Equal(competingObjective, Assert.Single(competing.BriefVersions!).Text);
             Assert.DoesNotContain(competing.Timeline, item => item.OperatorIntentApplied?.IntentId == seed.Intent.Id);
             Assert.Equal(WorkTaskStatus.Assigned, Assert.Single(competing.Tasks).Status);
+            Assert.Empty(Assert.Single(competing.Tasks).VerificationHistory ?? []);
             Assert.False(File.Exists(LockPath(seed)));
 
             Assert.IsType<OperatorIntentOfflineOutcome.Applied>(
@@ -118,6 +121,11 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             await AssertAppliedOnce(seed);
             Assert.Equal(competingObjective, (await seed.Repository.LoadGoalAsync(seed.GoalId, TestContext.Current.CancellationToken))!.Objective);
             Assert.False(File.Exists(LockPath(seed)));
+
+            Assert.IsType<OperatorIntentOfflineOutcome.NothingPending>(
+                await OperatorIntentGoalApplication.ApplyOffline(
+                    seed.Workspace, seed.Repository, new OperatorIntentCoordinator(seed.Store), seed.Attempts, seed.GoalId));
+            await AssertAppliedOnce(seed);
         }
         finally
         {
@@ -128,13 +136,32 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
     private static async Task AssertAppliedOnce(Seed seed)
     {
         Assert.Equal(OperatorIntentStatus.Applied, (await seed.Store.GetAsync(seed.Intent.Id))!.Status);
-        var stored = (await seed.Repository.LoadGoalAsync(seed.GoalId))!;
+        // Raw snapshots compact authoritative text; inspect the hydrated receipt after reload.
+        var restored = await seed.Repository.LoadGoalsAsync([seed.GoalId]);
+        var stored = restored.GetGoal(seed.GoalId);
         var marker = Assert.Single(stored.Timeline, item => item.OperatorIntentApplied?.IntentId == seed.Intent.Id);
         Assert.Equal("applied", marker.OperatorIntentApplied!.Outcome);
-        Assert.Equal(WorkTaskStatus.Running, Assert.Single(stored.Tasks).Status);
+        var task = Assert.Single(stored.Tasks);
+        var payload = JsonSerializer.Deserialize<ProgressOperatorIntentPayload>(seed.Intent.PayloadJson, JsonSerializerOptions.Web)!;
+        Assert.Equal(payload.Status, task.Status);
+        if (payload.CompletionVerification is { } request)
+        {
+            Assert.Single(stored.Timeline, item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskCompleted);
+            var receipt = Assert.Single(task.VerificationHistory!);
+            Assert.Equal(request.Note, receipt.AuthoritativeStandardOutput);
+            Assert.Equal("manual-verification passed", receipt.Command);
+            Assert.Equal(VerificationEvidenceSource.Manual, receipt.EvidenceSource);
+            Assert.Equal(request.WorkingDirectory, receipt.WorkingDirectory);
+            Assert.Equal(seed.Intent.CreatedAt, receipt.CompletedAt);
+            Assert.True(receipt.Succeeded);
+            Assert.Equal(seed.Intent.Actor, marker.OperatorIntentApplied.Actor);
+            Assert.Equal(seed.Intent.ActorKind, marker.OperatorIntentApplied.ActorKind);
+            Assert.Equal(seed.Intent.Channel, marker.OperatorIntentApplied.Channel);
+            Assert.Equal(seed.Intent.AuthenticationAssurance, marker.OperatorIntentApplied.AuthenticationAssurance);
+        }
     }
 
-    private static async Task<Seed> CreateSeed(string root)
+    private static async Task<Seed> CreateSeed(string root, bool completion = false)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -148,7 +175,9 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
         var intent = new OperatorIntentRecord(
             Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Progress,
             goal.Id.Value, task.Id.Value,
-            JsonSerializer.Serialize(new ProgressOperatorIntentPayload(WorkTaskStatus.Running, "Offline progress."),
+            JsonSerializer.Serialize(new ProgressOperatorIntentPayload(
+                completion ? WorkTaskStatus.Completed : WorkTaskStatus.Running, "Offline progress.",
+                completion ? new ManualVerificationRequest(true, "Offline progress.", root) : null),
                 JsonSerializerOptions.Web),
             [], "operator", "cli", "local-process", DateTimeOffset.UtcNow);
         await store.EnqueueAsync(intent);

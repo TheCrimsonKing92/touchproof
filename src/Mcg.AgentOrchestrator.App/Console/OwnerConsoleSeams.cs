@@ -70,7 +70,7 @@ internal interface IGoalEventTail
 }
 
 internal sealed record OwnerConductEvent(DateTimeOffset Timestamp, string EventKind, string? GoalId, string Detail,
-    OwnerActivityDetailEvidence? Evidence = null);
+    OwnerActivityDetailEvidence? Evidence = null, Mcg.AgentOrchestrator.App.Orchestration.GoalProgressEventFields? GoalProgress = null);
 
 internal enum OwnerQuestionKind { Clarification, HumanInput, StewardHold, ExperimentReading, Onboarding, PassedGateHold }
 

@@ -58,6 +58,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
             OwnerConsoleGateProgress Enrich(OwnerConsoleGateProgress snapshot) => snapshot with
             {
                 Capacity = capacity,
+                ConcurrentRuns = snapshot.ConcurrentRuns?.Select(Enrich).ToArray(),
                 Lanes = OwnerConsoleGateReproduction.Attach(snapshot with { Lanes = LoadLanes(snapshot.Lanes) }, reproductions)
             };
         }

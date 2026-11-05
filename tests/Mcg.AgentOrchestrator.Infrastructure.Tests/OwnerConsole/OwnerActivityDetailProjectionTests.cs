@@ -46,7 +46,7 @@ public sealed class OwnerActivityDetailProjectionTests
         Assert.Contains("\n\nOriginal event\nSource: unknown a=two words empty= none_\n    ", detail.Text);
         Assert.Equal(raw, detail.Fields.Fields.Single(field => field.Key == "event/0/original").Value);
         Assert.Equal("  none_\r\n=  ", detail.Fields.Fields.Single(field => field.Key == "event/0/opaque").Value);
-        Assert.Equal("", detail.Fields.Fields.Single(field => field.Key == "event/0/empty").Value);
+        Assert.DoesNotContain(detail.Fields.Fields, field => field.Key == "event/0/empty");
         Assert.DoesNotContain(detail.Fields.Fields, field => field.Key.Contains("diagnostic/"));
     }
 

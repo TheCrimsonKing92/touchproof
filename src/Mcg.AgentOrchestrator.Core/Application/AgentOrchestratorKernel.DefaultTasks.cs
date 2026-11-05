@@ -21,7 +21,8 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         IReadOnlyList<OperatorGateRecord>? operatorGates = null,
         DateTimeOffset? occurredAt = null,
-        ConductorTickOutcomePayload? tickOutcome = null)
+        ConductorTickOutcomePayload? tickOutcome = null,
+        ProgressFailurePayload? failure = null)
     {
         var progressEvent = new ProgressEvent(
             goal.Id,
@@ -30,7 +31,7 @@ public sealed partial class AgentOrchestratorKernel
             message,
             occurredAt ?? _clock.UtcNow,
             OperatorGates: operatorGates,
-            TickOutcome: tickOutcome);
+            TickOutcome: tickOutcome, Failure: failure);
         goal.Append(progressEvent);
         _eventWriter.AppendTimelineEvent(progressEvent);
     }

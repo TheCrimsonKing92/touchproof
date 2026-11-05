@@ -12,19 +12,8 @@ public static class DispatchContractDiagnostic
             // Detail belongs to the final build marker regardless of that selected rule.
             // Earlier worker text, even with matching prefixes/markers, is not host detail.
             // These observations add failure detail only; they are never verdict inputs.
-            var buildLines = (standardError ?? string.Empty)
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var markerIndex = Array.FindLastIndex(buildLines, line =>
-                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed), StringComparison.Ordinal) ||
-                string.Equals(line, DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing), StringComparison.Ordinal));
-            if (markerIndex < 0)
-                return false;
-
-            var applicability = buildLines.Skip(markerIndex + 1)
-                .SkipWhile(line => line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed) ||
-                    line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing))
-                .TakeWhile(line => line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildApplicability, StringComparison.Ordinal))
-                .Take(9).Select(DispatchEvidenceSummaries.TruncateEvidence).ToArray();
+            var applicability = BuildApplicabilityLines(standardError).Take(9)
+                .Select(DispatchEvidenceSummaries.TruncateEvidence).ToArray();
             diagnostic = string.Join(" | ", applicability);
             return applicability.Length > 0;
         }
@@ -72,6 +61,32 @@ public static class DispatchContractDiagnostic
         }
 
         return false;
+    }
+
+    public static IReadOnlyList<ProgressFailureEvidence> ExtractEvidence(string? standardError, string rule)
+    {
+        if (rule is not (DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing or DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed))
+            return [];
+        return BuildApplicabilityLines(standardError).Select(line =>
+        {
+            var value = line[DispatchFailureDiagnosticMarker.WorkerBuildApplicability.Length..];
+            var separator = value.IndexOf("; next=", StringComparison.Ordinal);
+            return new ProgressFailureEvidence("worker_build_applicability",
+                separator < 0 ? value : value[..separator], separator < 0 ? null : value[(separator + 7)..]);
+        }).ToArray();
+    }
+
+    private static IEnumerable<string> BuildApplicabilityLines(string? standardError)
+    {
+        var lines = (standardError ?? string.Empty)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var markerIndex = Array.FindLastIndex(lines, line =>
+            line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed) ||
+            line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+        return markerIndex < 0 ? [] : lines.Skip(markerIndex + 1)
+            .SkipWhile(line => line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed) ||
+                line == DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing))
+            .TakeWhile(line => line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildApplicability, StringComparison.Ordinal));
     }
 
     private static bool TryExtractPlannerRejection(string? standardError, out string diagnostic)
