@@ -23,8 +23,6 @@ internal static class AcceptanceCheckProcessInvoker
         var progressSink = request.ProgressSink;
         var engineSettings = request.EngineSettings;
         var attemptResultsPrefix = request.AttemptResultsPrefix;
-        var gateInvocationId = request.GateInvocationId;
-        var apparatusReceiptPath = request.ApparatusReceiptPath;
         var heartbeatInterval = request.HeartbeatInterval;
         var progressInterval = request.ProgressInterval;
         var capturePublicationInterval = request.CapturePublicationInterval;
@@ -59,6 +57,7 @@ internal static class AcceptanceCheckProcessInvoker
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
         RegisteredOwnedProcess? process = null;
+        SpawnProcessIdentity? directCommandIdentity = null;
         AcceptanceCommandProcessIdentityTracker? commandIdentityTracker = null;
         var heartbeatFinalized = false;
         var registrationReleased = false;
@@ -116,19 +115,23 @@ internal static class AcceptanceCheckProcessInvoker
             var requestOwnConsole = forceUtf8ConsoleOutput || AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments);
             try
             {
-                if (directStartInfo is null && !requestOwnConsole && resumeObserver is null)
-                {
-                    process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
-                }
-                else
-                {
-                    process = StartAcceptanceProcess(
-                        startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
-                        directStartInfo,
-                        stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
-                        stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
-                        resumeObserver);
-                }
+                process = StartAcceptanceProcess(
+                    startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
+                    directStartInfo,
+                    stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+                    stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
+                    directLaunch ? id =>
+                    {
+                        // The owned root is still suspended, so its PID cannot be recycled
+                        // and even a short-lived command has an identity without a registry.
+                        using var child = Process.GetProcessById(id);
+                        var read = WindowsNativeProcessInspection.ReadLifecycleIdentity(id, child.SafeHandle);
+                        directCommandIdentity = read is { Status: ProcessInspectionStatus.Available,
+                            StartedAt: { } startedAt, ExecutablePath: { Length: > 0 } image }
+                            ? new SpawnProcessIdentity(id, startedAt, image)
+                            : throw new InvalidOperationException($"Direct acceptance command identity unavailable: pid={id}; {read}");
+                        resumeObserver?.Invoke(id);
+                    } : resumeObserver);
             }
             catch (InvalidOperationException ex) when (directLaunch &&
                 ex.InnerException is OwnedProcessLaunchException { NativeErrorCode: 2 or 3 or 267 })
@@ -159,7 +162,7 @@ internal static class AcceptanceCheckProcessInvoker
                 commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
                 commandIdentityTracker.Start();
             }
-            else if (process.Identity is { } identity)
+            else if ((directCommandIdentity ?? process.Identity) is { } identity)
             {
                 commandIdentityObserver?.Invoke(identity);
             }
@@ -167,7 +170,7 @@ internal static class AcceptanceCheckProcessInvoker
             using var qosSweep = AcceptanceChildQos.StartSweep(process.Id, ownLoop: heartbeatContext is null);
             var sampler = heartbeatContext is null ? null : new LaneSchedulingSampler(process.Id);
             completedProcessId = process.Id;
-            completedProcessStartedAt = process.Identity?.StartedAt;
+            completedProcessStartedAt = directCommandIdentity?.StartedAt ?? process.Identity?.StartedAt;
             ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
             if (captureConnections is not null)
             {

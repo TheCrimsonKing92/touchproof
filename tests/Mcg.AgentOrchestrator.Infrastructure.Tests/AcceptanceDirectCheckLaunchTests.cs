@@ -83,8 +83,10 @@ public sealed class AcceptanceDirectCheckLaunchTests
         Assert.False(info.RedirectStandardError);
     }
 
-    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
-    public async Task OrdinaryChildCapturesExactBytesAndExitSevenWithoutCmd()
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OrdinaryChildCapturesExactBytesAndExitSevenWithoutCmd(bool useRegistry)
     {
         if (!OperatingSystem.IsWindows()) return;
         var directory = SharedTestSupport.CreateTempDirectory();
@@ -97,7 +99,7 @@ public sealed class AcceptanceDirectCheckLaunchTests
                 $"$e=[Convert]::FromBase64String('{Convert.ToBase64String(stderr)}'); " +
                 "[Console]::OpenStandardOutput().Write($o,0,$o.Length); " +
                 "[Console]::OpenStandardError().Write($e,0,$e.Length); exit 7";
-            var run = await RunObservedChildAsync(script, directory);
+            var run = await RunObservedChildAsync(script, directory, useRegistry);
             result = run.Result;
 
             Assert.Equal(7, result.ExitCode);
@@ -106,6 +108,7 @@ public sealed class AcceptanceDirectCheckLaunchTests
             Assert.Equal("powershell.exe", Path.GetFileName(run.Image), ignoreCase: true);
             Assert.Equal(run.ProcessId, result.ChildProcessId);
             Assert.Equal(run.ProcessId, run.CommandProcessId);
+            Assert.Equal(run.StartedAt, result.ChildProcessStartedAt);
             Assert.Equal(stdout, await File.ReadAllBytesAsync(result.StdoutPath!));
             Assert.Equal(stderr, await File.ReadAllBytesAsync(result.StderrPath!));
             Assert.Equal(stdout.LongLength, result.StdoutBytes);
@@ -148,24 +151,31 @@ public sealed class AcceptanceDirectCheckLaunchTests
         }
     }
 
-    private static async Task<ChildRun> RunObservedChildAsync(string script, string directory)
+    private static async Task<ChildRun> RunObservedChildAsync(string script, string directory, bool useRegistry = true)
     {
         var registryPath = Path.Combine(directory, "spawn-registry.db");
         _ = StateDbMigrations.EnsureUpToDate(registryPath);
-        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(registryPath);
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(useRegistry ? registryPath : null);
         using var guard = new CancellationTokenSource(TestHangGuard.HangSafetyBound);
         var processId = 0;
         var commandProcessId = 0;
+        DateTimeOffset? startedAt = null;
+        SpawnProcessIdentity? commandIdentity = null;
         string? image = null;
         var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
         var result = await AcceptanceProcessRunner.RunProcessForTestsAsync(
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script], directory,
             TimeSpan.FromMinutes(5), cancellationToken: guard.Token, keepCaptureFiles: true,
-            commandIdentityObserver: identity => commandProcessId = identity.ProcessId,
+            commandIdentityObserver: identity =>
+            {
+                commandProcessId = identity.ProcessId;
+                commandIdentity = identity;
+            },
             resumeObserver: id =>
             {
                 processId = id;
                 using var process = Process.GetProcessById(id);
+                startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
                 var capacity = 32768u;
                 var path = new StringBuilder((int)capacity);
                 if (!QueryFullProcessImageNameW(process.Handle, 0, path, ref capacity))
@@ -173,8 +183,13 @@ public sealed class AcceptanceDirectCheckLaunchTests
                 image = path.ToString();
             });
         Assert.NotNull(image); // The callback must observe the suspended root before it can exit.
+        Assert.NotNull(startedAt);
+        Assert.NotNull(commandIdentity);
+        Assert.Equal(processId, commandIdentity.ProcessId);
+        Assert.Equal(startedAt, commandIdentity.StartedAt);
+        Assert.Equal(image, commandIdentity.ImagePath, ignoreCase: true);
         Assert.Equal(powershell, image, ignoreCase: true);
-        return new ChildRun(result, image, processId, commandProcessId);
+        return new ChildRun(result, image, processId, commandProcessId, startedAt.Value);
     }
 
     private static void DeleteCaptures(GoalAcceptanceVerifier.CommandResult? result)
@@ -188,5 +203,5 @@ public sealed class AcceptanceDirectCheckLaunchTests
     private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref uint size);
 
     private sealed record ChildRun(GoalAcceptanceVerifier.CommandResult Result, string Image,
-        int ProcessId, int CommandProcessId);
+        int ProcessId, int CommandProcessId, DateTimeOffset StartedAt);
 }
