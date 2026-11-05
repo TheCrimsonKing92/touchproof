@@ -64,6 +64,7 @@ internal sealed partial class ConductorBatchLoop
     internal const bool DefaultSelfRelaunchEnabled = true;
     internal const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
+    private readonly LandingRelaunchDecisions _landingRelaunchDecisions;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
@@ -176,6 +177,7 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
+        _landingRelaunchDecisions = new(selfRelaunchEnabled, _selfRelaunch is not null, _postLandingCanary is null ? null : receipt => _postLandingCanary.LaunchLandingAsync(receipt));
         _loadTrxCoherenceVerdicts = loadTrxCoherenceVerdicts ?? (directory =>
         {
             if (workspace is null) return;
@@ -378,42 +380,30 @@ internal sealed partial class ConductorBatchLoop
 
             return effectiveInterval;
         }
+        void HandleLandingRelaunch(int tick, ConductorLandingReceipt receipt, bool changedFilesAvailable = true)
+        {
+            _landingRelaunchDecisions.Handle(tick, receipt, () =>
+            {
+                selfRelaunchDrainCap.NoteLanding(receipt.ChangedFiles);
+                pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, tick);
+                deferredSelfRelaunch = null;
+                selfRelaunchRetryAfterTick = null;
+                selfRelaunchDrainStartedAt ??= _utcNow();
+            }, canaryTask =>
+            {
+                lock (canaryTasksGate)
+                {
+                    canaryTasks.Add(canaryTask);
+                }
+            }, line => EmitProgress(line), changedFilesAvailable);
+        }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         driver.SuccessfulLandingSink = receipt =>
         {
             var landedAt = _promptRolloutWatch is null ? default : _utcNow();
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
-            if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
-            {
-                selfRelaunchDrainCap.NoteLanding(receipt.ChangedFiles);
-                pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
-                deferredSelfRelaunch = null;
-                selfRelaunchRetryAfterTick = null;
-                selfRelaunchDrainStartedAt ??= _utcNow();
-                EmitProgress(
-                    $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
-                    $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
-            }
-            else
-            {
-                var reason = decision.Required
-                    ? (_selfRelaunchEnabled ? "self-relaunch-unavailable" : "self-relaunch-disabled") +
-                      $"+{decision.Classification}"
-                    : decision.Classification;
-                EmitRelaunchNotRequired(totalTicks, receipt, decision with { Required = false, Classification = reason });
-            }
-
+            HandleLandingRelaunch(totalTicks, receipt);
             NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
-            if (_postLandingCanary is not null)
-            {
-                var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
-                lock (canaryTasksGate)
-                {
-                    canaryTasks.Add(canaryTask);
-                }
-            }
-
             _promptRolloutWatch?.NoteLanding(receipt, landedAt);
             previousSuccessfulLandingSink?.Invoke(receipt);
         };
@@ -760,6 +750,8 @@ internal sealed partial class ConductorBatchLoop
                 nextTick,
                 () => PersistSweepTerminalizations(
                     sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay)) ?? [];
+            foreach (var recovered in RecoverSweepLandingReceipts(sweepResult, sweepTerminalizedGoalIds))
+                HandleLandingRelaunch(nextTick, recovered.Receipt, recovered.ChangedFilesAvailable);
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
