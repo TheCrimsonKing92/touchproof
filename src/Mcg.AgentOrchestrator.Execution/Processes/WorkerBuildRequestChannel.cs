@@ -20,6 +20,7 @@ public sealed record WorkerBuildResponse(string InvocationId, WorkerBuildOutcome
 {
     private bool HasValidStructuralCheck => StructuralCheck is { IsWellFormed: true } && StructuralCheck.InvocationId == InvocationId;
     public string StructuralStatus => HasValidStructuralCheck ? StructuralCheck!.Status.ToString() : "Unavailable";
+    public double? StructuralElapsedMilliseconds => HasValidStructuralCheck ? StructuralCheck!.ElapsedMilliseconds : null;
     public string StructuralDiagnostic => StructuralCheck is null ? "Legacy host response has no structural evidence."
         : HasValidStructuralCheck ? StructuralCheck.Diagnostic : "Malformed structural evidence in host response.";
     // Missing legacy evidence preserves compiler compatibility, without claiming a structural pass.

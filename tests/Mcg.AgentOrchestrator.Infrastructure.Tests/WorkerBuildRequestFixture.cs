@@ -390,7 +390,10 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     {
         private readonly ManualStewardTimeProvider _timers = new();
         private DateTimeOffset _now = DateTimeOffset.UtcNow;
+        private long _timestamp;
         public override DateTimeOffset GetUtcNow() => _now;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
         internal Action<TimeSpan>? TimerScheduled;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
@@ -398,6 +401,11 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             TimerScheduled?.Invoke(dueTime);
             return timer;
         }
-        internal void Advance(TimeSpan by) { _now += by; _timers.Advance(by); }
+        internal void Advance(TimeSpan by)
+        {
+            _now += by;
+            Interlocked.Add(ref _timestamp, by.Ticks);
+            _timers.Advance(by);
+        }
     }
 }
