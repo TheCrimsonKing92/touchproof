@@ -331,6 +331,14 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             attempt.Outcome == "Running" && File.Exists(attempt.ResultPath);
     }
 
+    internal bool OwnsWorkspaceReadOnly(ConductorGroupedGateAttempt attempt)
+    {
+        var binding = AcceptanceHolderBinding.For(attempt);
+        if (attempt.HolderContractVersion == 1 || LeaseFilePresent(binding.LeasePath))
+            return HolderLease.Read(binding).Phase is not ("Released" or "Cancelled");
+        return LegacyHolderSettlementReason(attempt) is null;
+    }
+
     // Published terminal evidence outranks leases. Legacy classification never backfills a lease.
     internal bool ReservesCapacity(ConductorGroupedGateAttempt attempt)
     {

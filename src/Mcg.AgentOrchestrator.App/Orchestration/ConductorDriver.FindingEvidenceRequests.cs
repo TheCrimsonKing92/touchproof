@@ -34,19 +34,28 @@ internal sealed partial class ConductorDriver
         {
             return false;
         }
-        if (requestingTask.RequiredRole == AgentRole.Reviewer && requestingTask.LastVerification?.CandidateIdentity is not null &&
-            ReviewFindings.GetOpenBlockingFindings(mergedFindings, goal.EffectiveAcceptanceCriteriaCorrections)
-                .All(finding => finding.Category == FindingCategory.TestEvidence) &&
-            ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier).IsAtCap)
-        {
-            decision = FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingRetryCapReached,
-                "Finding evidence continuation held: the normal Reviewer retry budget is exhausted.");
-            return true;
-        }
-
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
         var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
         var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
+
+        void ReattachCoveredEvidence(ReviewFinding finding, IReadOnlyList<FindingEvidenceReceipt> receipts,
+            string identity, string reason)
+        {
+            _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
+                [new(finding.StableId, identity, "covered-by-receipt", reason,
+                    FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
+                    SourceReceiptIds: receipts.Select(receipt => receipt.ReceiptId).ToArray(),
+                    ExecutionBasisIdentity: executionBasisIdentity)]);
+            FindingEvidenceCoverageReattachment.Reattach(goal, requestingTask,
+                ReviewFindingConvergence.ResolveMergedFinding(mergedFindings, round, finding.StableId) ?? finding,
+                receipts, identity, reason, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
+        }
+
+        if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy,
+                out decision, ReattachCoveredEvidence))
+            return true;
+        if (ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, requestingTask, policy, out decision))
+            return true;
 
         if (requestingTask.RequiredRole == AgentRole.Reviewer)
         {
@@ -154,18 +163,7 @@ internal sealed partial class ConductorDriver
                 reusedGreenReceipt = true;
                 if (uncoveredSelections.Count == 0)
                 {
-                    _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
-                        [new(finding.StableId, identity, "covered-by-receipt", coverageReason,
-                            FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
-                            SourceReceiptIds: coverageReceipts.Select(receipt => receipt.ReceiptId).ToArray(),
-                            ExecutionBasisIdentity: executionBasisIdentity)]);
-                    ReattachCoverageReusableGreenFindingEvidence(
-                        goal,
-                        requestingTask,
-                        mergedFinding ?? finding,
-                        coverageReceipts,
-                        identity,
-                        coverageReason);
+                    ReattachCoveredEvidence(finding, coverageReceipts, identity, coverageReason);
                     reattachedReceiptIds.AddRange(coverageReceipts.Select(receipt => receipt.ReceiptId));
                     continue;
                 }
@@ -215,7 +213,7 @@ internal sealed partial class ConductorDriver
             decision = BuildReceiptClosureOrDeliveryRetry(
                 goal, requestingTask, telemetryCandidateSha, requestingFindings,
                 reattachedReceiptIds.Distinct(StringComparer.Ordinal).ToArray(),
-                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
+                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.", policy);
             return true;
         }
 
@@ -259,7 +257,7 @@ internal sealed partial class ConductorDriver
             decision = BuildReceiptClosureOrDeliveryRetry(goal, requestingTask, telemetryCandidateSha,
                 plan.CoveredFindings.Concat(redCoverage.Findings).ToArray(),
                 plan.CoveredReceiptIds.Concat(redCoverage.ReceiptIds).Distinct(StringComparer.Ordinal).ToArray(),
-                plan.CoveredEvidence + "; " + redCoverage.Evidence);
+                plan.CoveredEvidence + "; " + redCoverage.Evidence, policy);
             return true;
         }
 
@@ -508,7 +506,7 @@ internal sealed partial class ConductorDriver
 
         decision = FindingRoundRedCoverage.Complete(this, goal, requestingTask, batches.Skip(1).ToArray(),
             runnable, plan, receipt, candidateSha!, findingRoundFingerprint, executionBasisIdentity,
-            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
+            _recordFindingEvidenceRequestDispositions, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest, policy);
         return true;
     }
 
