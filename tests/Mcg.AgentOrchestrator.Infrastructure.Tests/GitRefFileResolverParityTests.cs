@@ -1,0 +1,87 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
+// Parallel-safe: all repositories and child-process environments are fixture-owned.
+public sealed class GitRefFileResolverParityTests
+{
+    [Theory]
+    [InlineData("loose")]
+    [InlineData("packed")]
+    [InlineData("override")]
+    [InlineData("detached")]
+    [InlineData("symbolic")]
+    [InlineData("symbolic-packed")]
+    [InlineData("linked")]
+    [InlineData("sha256")]
+    [InlineData("unborn-head")]
+    [InlineData("unborn-branch")]
+    public void FileRef_MatchesGit(string shape)
+    {
+        using var fixture = new Fixture(shape == "sha256", !shape.StartsWith("unborn-", StringComparison.Ordinal));
+        var repo = fixture.Repo;
+        var revision = shape is "detached" or "symbolic" or "symbolic-packed" or "linked" or "unborn-head"
+            ? "HEAD" : "refs/heads/fixture-main";
+        var loose = Path.Combine(repo, ".git", "refs", "heads", "fixture-main");
+        if (shape is "packed" or "override" or "symbolic-packed")
+        {
+            var original = fixture.Oracle("HEAD");
+            fixture.Git("tag", "-a", "annotated", "-m", "peel line");
+            fixture.Git("pack-refs", "--all");
+            Assert.False(File.Exists(loose));
+            if (shape == "override")
+            {
+                fixture.Git("commit", "--allow-empty", "-m", "new loose value");
+                Assert.NotEqual(original, fixture.Oracle("HEAD"));
+                Assert.Contains(original + " refs/heads/fixture-main", File.ReadAllText(Path.Combine(repo, ".git", "packed-refs")));
+                Assert.Equal(fixture.Oracle("HEAD"), File.ReadAllText(loose).Trim());
+            }
+        }
+        else if (shape == "detached") fixture.Git("checkout", "--detach");
+        else if (shape == "linked")
+        {
+            var original = fixture.Oracle("HEAD");
+            var linked = Path.Combine(fixture.Root, "linked");
+            fixture.Git("worktree", "add", "-b", "other", linked);
+            fixture.Git("commit", "--allow-empty", "-m", "main advances");
+            Assert.NotEqual(original, fixture.Oracle("HEAD"));
+            repo = linked;
+        }
+        else if (!shape.StartsWith("unborn-", StringComparison.Ordinal)) Assert.True(File.Exists(loose));
+
+        var expected = GitCli.Run(repo, "rev-parse", "--verify", revision);
+        var decided = GitRefFileResolver.TryResolve(repo, revision, out var actual);
+        Assert.Equal(expected.Succeeded, decided);
+        Assert.Equal(decided ? expected.Output.Trim() : string.Empty, actual);
+    }
+
+    internal sealed class Fixture : IDisposable
+    {
+        internal string Root { get; } = Directory.CreateTempSubdirectory("git-ref-files-").FullName;
+        internal string Repo { get; }
+        internal Fixture(bool sha256 = false, bool commit = true)
+        {
+            Repo = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
+            Git("init", "--initial-branch=fixture-main", sha256 ? "--object-format=sha256" : "--object-format=sha1");
+            if (commit) Git("commit", "--allow-empty", "-m", "seed");
+        }
+        internal void Git(params string[] args)
+        {
+            var result = GitCli.RunWithEnvironment(Repo, new Dictionary<string, string>
+            {
+                ["GIT_AUTHOR_NAME"] = "Reader", ["GIT_AUTHOR_EMAIL"] = "reader@example.test",
+                ["GIT_COMMITTER_NAME"] = "Reader", ["GIT_COMMITTER_EMAIL"] = "reader@example.test",
+                ["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null",
+                ["GIT_CONFIG_NOSYSTEM"] = "1", ["GIT_CONFIG_COUNT"] = "2",
+                ["GIT_CONFIG_KEY_0"] = "commit.gpgSign", ["GIT_CONFIG_VALUE_0"] = "false",
+                ["GIT_CONFIG_KEY_1"] = "core.hooksPath", ["GIT_CONFIG_VALUE_1"] = Path.Combine(Root, "no-hooks")
+            }, args);
+            Assert.True(result.Succeeded, result.Error);
+        }
+        internal string Oracle(string revision)
+        {
+            var result = GitCli.Run(Repo, "rev-parse", "--verify", revision);
+            Assert.True(result.Succeeded, result.Error);
+            return result.Output.Trim();
+        }
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
+    }
+}
