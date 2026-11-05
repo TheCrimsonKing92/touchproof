@@ -59,7 +59,7 @@ public sealed class ProcessTreeGuiSuppressionTests
                     ?? throw new InvalidOperationException("Failed to start error-mode probe.");
             }
 
-            Assert.Equal(clearedErrorMode, WindowsProbe.GetErrorMode());
+            Assert.Equal(clearedErrorMode | ProcessTreeGuiSuppression.SuppressedErrorModeFlags, WindowsProbe.GetErrorMode());
             using (process)
             {
                 var stdoutRead = process.StandardOutput.ReadToEndAsync();

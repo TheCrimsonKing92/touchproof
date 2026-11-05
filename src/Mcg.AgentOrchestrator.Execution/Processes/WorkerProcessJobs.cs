@@ -2427,7 +2427,7 @@ public static partial class WorkerProcessJobs
             process.StartInfo.ArgumentList.Add("/F");
             process.StartInfo.ArgumentList.Add("/PID");
             process.StartInfo.ArgumentList.Add(processId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            if (!process.Start())
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
             {
                 return false;
             }

@@ -64,7 +64,7 @@ public static class WorkerProcessRunner
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
         var startInfo = BuildPowerShellStartInfo(request.Command, request.WorkingDirectory);
-        using var process = Process.Start(startInfo)
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
         OwnedProcessGroup? processGroup = null;
         try
@@ -135,7 +135,7 @@ public static class WorkerProcessRunner
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var startInfo = BuildPowerShellStartInfo(request.Command, request.WorkingDirectory);
-        using var process = Process.Start(startInfo)
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
 
         try { process.StandardInput.Close(); } catch { }

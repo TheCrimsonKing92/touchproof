@@ -713,7 +713,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     private const int MaximumAclBytes = 64 * 1024;
 
     public IcaclsIntegrityLabeler()
-        : this(Process.Start)
+        : this(info => ProcessTreeGuiSuppression.StartWithLaunchLock(info))
     {
     }
 

@@ -95,6 +95,14 @@ internal static class GitCli
         params string[] args)
         => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args);
 
+    // Instance-scoped observation for coordinated launch-window tests; no ambient hook.
+    internal static GitResult RunExecutable(
+        string executable, string workingDirectory, int timeoutMilliseconds, string[] args,
+        ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess, Action? lockContended,
+        Action<Process>? processStarted = null)
+        => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args,
+            errorModeAccess: errorModeAccess, lockContended: lockContended, startedObserver: processStarted);
+
     private static GitResult RunExecutableCore(
         string executable,
         string workingDirectory,
@@ -102,7 +110,9 @@ internal static class GitCli
         string? standardInput,
         string[] args,
         IReadOnlyDictionary<string, string>? environment = null,
-        bool isolateRepository = false)
+        bool isolateRepository = false,
+        ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
+        Action? lockContended = null, Action<Process>? startedObserver = null)
     {
         var processStarted = false;
         try
@@ -136,7 +146,8 @@ internal static class GitCli
             // never take or block on it; write commands take their required locks regardless.
             ApplyLaunchSettings(startInfo, readCommand: true);
 
-            using var process = Process.Start(startInfo);
+            using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo,
+                LaunchLockEntryPoint.GitCli, errorModeAccess, lockContended);
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
@@ -151,6 +162,7 @@ internal static class GitCli
             // thread would block on an inherited pipe after git exits.
             var outputDrain = PipeDrain.Start(process.StandardOutput, "git-stdout-drain");
             var errorDrain = PipeDrain.Start(process.StandardError, "git-stderr-drain");
+            startedObserver?.Invoke(process);
 
             // Write while both output pipes drain: git may emit diagnostics before consuming stdin.
             var inputWrite = standardInput is null ? null : Task.Run(() =>

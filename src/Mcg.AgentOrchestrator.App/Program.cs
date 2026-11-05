@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+ProcessTreeGuiSuppression.InitializeProcessErrorMode();
 Mcg.AgentOrchestrator.App.Cli.CliTimingRecorder.Install(args);
 CliProtectedProcessEnvironment.EnsureProtectedPid();
 

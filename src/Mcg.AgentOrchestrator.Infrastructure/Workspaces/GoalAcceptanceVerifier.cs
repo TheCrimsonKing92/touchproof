@@ -3623,7 +3623,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start())
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
             {
                 return null;
             }

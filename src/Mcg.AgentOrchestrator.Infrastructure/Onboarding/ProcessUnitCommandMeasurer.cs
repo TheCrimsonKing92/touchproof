@@ -41,7 +41,7 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
         var clock = Stopwatch.StartNew();
         try
         {
-            if (!process.Start())
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
                 return UnitCommandMeasurementResult.Failed($"The {tool} process did not start.");
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
