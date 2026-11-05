@@ -117,8 +117,9 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
         public DateTimeOffset UtcNow { get; set; } = new(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
     }
 
-    // Literal fixture transcribed from the pre-change brief path at 7a5529d6;
-    // minimal Pending Reviewer inputs yield these same bytes for both goal shapes.
+    // Literal fixture transcribed from the pre-change brief path at 7a5529d6,
+    // deliberately updated for the shared delivered-evidence Reviewer rule.
+    // Minimal Pending Reviewer inputs yield these same bytes for both goal shapes.
     private const string PreChangeBriefFixture = """
         # Agent Task Brief
 
@@ -178,6 +179,7 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
         - A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.
         - Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.
         - Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.
+        - Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings.
         - Do not modify repository files; implementation belongs to the Developer task.
 
         ## Executed Test Evidence
