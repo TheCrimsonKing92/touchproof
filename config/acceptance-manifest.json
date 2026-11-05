@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "testSettings": {
+    "MCG_TEST_HOST_CAPACITY_SLOTS": "4"
+  },
   "engine": {
     "slotCount": 4,
     "maxConcurrentShards": 5,
