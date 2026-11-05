@@ -68,6 +68,70 @@ public sealed class ReviewerPassingFindingEvidenceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MixedDelivery_PreTesterOnlyReceipt_ReachesNextReviewOnce(bool reload)
+    {
+        using var fixture = new ReviewerPassingFindingEvidenceFixture();
+        var consumed = ReviewerPassingFindingEvidenceFixture.CliFinding();
+        var fresh = ReviewerPassingFindingEvidenceFixture.CaptureFinding();
+        fixture.Report([consumed]);
+        fixture.AdvanceToDecision();
+        Assert.Equal(fixture.Reviewer.Id, Assert.Single(fixture.Retries).Task);
+        var firstReceipt = Assert.Single(fixture.Receipts);
+        Assert.Single(fixture.Executions);
+
+        var preTesterReceipt = fixture.SeedPreTesterCoverage(fresh.EvidenceRequest!);
+        Assert.Equal("pre-tester-deferred", preTesterReceipt.FindingRoundFingerprint);
+        Assert.DoesNotContain(fixture.Receipts, item => item.ReceiptId == preTesterReceipt.ReceiptId);
+        fixture.Report([consumed, fresh]);
+        var beforeDelivery = fixture.Reviewer.DispatchHistory.Last().FindingEvidenceReviewContext!;
+        Assert.Contains(firstReceipt.ReceiptId, beforeDelivery.ReceiptIds);
+        Assert.DoesNotContain(preTesterReceipt.ReceiptId, beforeDelivery.ReceiptIds);
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(2, fixture.Retries.Count);
+        Assert.Equal(fixture.Reviewer.Id, fixture.Retries.Last().Task);
+        Assert.Contains(preTesterReceipt.ReceiptId, fixture.Retries.Last().Feedback);
+        Assert.Equal(2, fixture.Receipts.Count);
+        var delivered = fixture.Reviewer.VerificationHistory.Last();
+        var disposition = Assert.Single(delivered.FindingEvidenceRequestDispositions!,
+            item => item.FindingStableId == fresh.StableId);
+        Assert.Equal(FindingEvidenceRequestDecision.CoveredByReceipt, disposition.Decision);
+        Assert.Equal(preTesterReceipt.ReceiptId, Assert.Single(disposition.SourceReceiptIds!));
+
+        if (reload) fixture.Reload();
+        fixture.Report([consumed, fresh]);
+        var context = fixture.Reviewer.DispatchHistory.Last().FindingEvidenceReviewContext!;
+        Assert.Contains(preTesterReceipt.ReceiptId, context.ReceiptIds);
+        Assert.Contains(firstReceipt.ReceiptId, context.ReceiptIds);
+        if (reload) fixture.Reload();
+        var result = fixture.AdvanceToDecision();
+
+        Assert.IsNotType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(3, fixture.ReviewDispatches);
+        Assert.Single(fixture.Executions);
+        Assert.Equal(3, fixture.Retries.Count);
+        var correction = fixture.Retries.Last();
+        Assert.Equal(fixture.Developer.Id, correction.Task);
+        Assert.Equal(RetryCause.NewSourceFinding, correction.Cause);
+        Assert.Contains("REVIEWER_PASSING_EVIDENCE_CORRECTION", correction.Feedback);
+        Assert.Contains(preTesterReceipt.ReceiptId, correction.Feedback);
+        Assert.DoesNotContain("budget-exhausted", correction.Feedback);
+        foreach (var finding in new[] { consumed, fresh })
+        {
+            Assert.Equal(1, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
+                fixture.Goal.Timeline, fixture.Reviewer.Id, fixture.Candidate, finding.StableId));
+            Assert.Contains(finding.StableId, correction.Feedback);
+            Assert.Contains(finding.Description, correction.Feedback);
+            Assert.Contains(finding.Location.ToString(), correction.Feedback);
+        }
+        var remaining = fixture.Reviewer.VerificationHistory.Last().MergedReviewFindings!;
+        Assert.Equal(2, remaining.Count);
+        Assert.All(remaining, finding => Assert.Equal(ReviewFindingState.Open, finding.State));
+    }
+
+    [Theory]
     [InlineData(FindingCategory.Correctness)]
     [InlineData(FindingCategory.TestEvidence)]
     public void ConsumedEvidence_NewSourceBlocker_PreservesNormalReviewRoute(FindingCategory category)

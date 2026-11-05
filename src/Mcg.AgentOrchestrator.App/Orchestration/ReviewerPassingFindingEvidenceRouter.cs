@@ -25,7 +25,8 @@ internal static class ReviewerPassingFindingEvidenceRouter
     }
 
     internal static bool TryObserve(ConductorDriver driver, Goal goal, TaskSpec task,
-        ConductorAutonomyPolicy policy, out FailedGoalFindingObservation observation)
+        ConductorAutonomyPolicy policy, out FailedGoalFindingObservation observation,
+        Action<ReviewFinding, IReadOnlyList<FindingEvidenceReceipt>, string, string>? reattachCoveredEvidence = null)
     {
         observation = FailedGoalFindingObservation.None;
         if (task.RequiredRole != AgentRole.Reviewer) return false;
@@ -40,13 +41,15 @@ internal static class ReviewerPassingFindingEvidenceRouter
             BuildFindingEvidenceExecutionBasisIdentity(settings),
             ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier),
             out observation, driver._resolveCandidateIdentity(goal).Identity,
-            PreTesterCoverageComposition.ReadCoverage(driver, goal, candidate!, BuildFindingEvidenceExecutionBasisIdentity(settings)));
+            PreTesterCoverageComposition.ReadCoverage(driver, goal, candidate!, BuildFindingEvidenceExecutionBasisIdentity(settings)),
+            reattachCoveredEvidence);
     }
 
     internal static bool TryDecide(Goal goal, TaskSpec task, TaskSpec? developer, string candidate,
         Func<FindingEvidenceRequest, FindingEvidenceRequest?> normalize, string executionBasis,
         ReviewRetryCapReceipt cap, out FailedGoalFindingObservation observation, CandidateIdentity? currentIdentity = null,
-        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null,
+        Action<ReviewFinding, IReadOnlyList<FindingEvidenceReceipt>, string, string>? reattachCoveredEvidence = null)
     {
         observation = FailedGoalFindingObservation.None;
         if (task.RequiredRole != AgentRole.Reviewer || !ConductorGitRevisionReader.IsValid(candidate) ||
@@ -63,19 +66,20 @@ internal static class ReviewerPassingFindingEvidenceRouter
             ReviewerFindingEvidenceSuppressionRouting.Resolve(task.LastVerification,
                 goal.EffectiveAcceptanceCriteriaCorrections, findings).DeferToReviewRetryRoute) return false;
         var episodes = new List<Episode>();
-        var fresh = new List<(ReviewFinding Finding, IReadOnlyList<FindingEvidenceReceipt> Receipts)>();
+        var fresh = new List<(ReviewFinding Finding, IReadOnlyList<FindingEvidenceReceipt> Receipts,
+            string RequestId, string CoverageReason)>();
         foreach (var finding in findings.Where(item => item.EvidenceRequest is not null))
         {
             var request = normalize(finding.EvidenceRequest!);
             // A pending, expanded, negative or unqualified request keeps its existing execution path.
             if (request is null || !TryResolveFindingEvidenceCoverage(task, request, candidate, executionBasis,
-                    out var receipts, out var uncovered, out _, preTesterCoverage) || uncovered.Count > 0) return false;
+                    out var receipts, out var uncovered, out var coverageReason, preTesterCoverage) || uncovered.Count > 0) return false;
             var requestId = BuildFindingEvidenceIdentity(request);
             var proof = FindCompletedReview(goal, task, finding.StableId, candidate, requestId, receipts, normalize);
             if (proof is null && FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
                     goal.Timeline, task.Id, candidate, finding.StableId) < 2 && !cap.IsAtCap)
             {
-                fresh.Add((finding, receipts));
+                fresh.Add((finding, receipts, requestId, coverageReason));
                 continue;
             }
             var receiptIds = receipts.Select(receipt => receipt.ReceiptId).Order(StringComparer.Ordinal).ToArray();
@@ -86,6 +90,10 @@ internal static class ReviewerPassingFindingEvidenceRouter
         if (episodes.Count == 0) return false;
         if (fresh.Count > 0)
         {
+            // This route bypasses the ordinary request loop. Attach its qualified receipts and
+            // dispositions before delivery so the next dispatch can prove what the Reviewer saw.
+            foreach (var item in fresh)
+                reattachCoveredEvidence?.Invoke(item.Finding, item.Receipts, item.RequestId, item.CoverageReason);
             // Independent requests retain their entitlement. Do not charge another delivery
             // against an already consumed finding when delivering this material request progress.
             observation = BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidate,

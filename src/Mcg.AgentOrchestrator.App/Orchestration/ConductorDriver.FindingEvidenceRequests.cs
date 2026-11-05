@@ -34,14 +34,28 @@ internal sealed partial class ConductorDriver
         {
             return false;
         }
-        if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy, out decision))
-            return true;
-        if (ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, requestingTask, policy, out decision))
-            return true;
-
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
         var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
         var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
+
+        void ReattachCoveredEvidence(ReviewFinding finding, IReadOnlyList<FindingEvidenceReceipt> receipts,
+            string identity, string reason)
+        {
+            _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
+                [new(finding.StableId, identity, "covered-by-receipt", reason,
+                    FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
+                    SourceReceiptIds: receipts.Select(receipt => receipt.ReceiptId).ToArray(),
+                    ExecutionBasisIdentity: executionBasisIdentity)]);
+            ReattachCoverageReusableGreenFindingEvidence(goal, requestingTask,
+                ReviewFindingConvergence.ResolveMergedFinding(mergedFindings, round, finding.StableId) ?? finding,
+                receipts, identity, reason);
+        }
+
+        if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy,
+                out decision, ReattachCoveredEvidence))
+            return true;
+        if (ReviewerPassingFindingEvidenceRouter.TryObserveContinuationCap(goal, requestingTask, policy, out decision))
+            return true;
 
         if (requestingTask.RequiredRole == AgentRole.Reviewer)
         {
@@ -149,18 +163,7 @@ internal sealed partial class ConductorDriver
                 reusedGreenReceipt = true;
                 if (uncoveredSelections.Count == 0)
                 {
-                    _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
-                        [new(finding.StableId, identity, "covered-by-receipt", coverageReason,
-                            FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
-                            SourceReceiptIds: coverageReceipts.Select(receipt => receipt.ReceiptId).ToArray(),
-                            ExecutionBasisIdentity: executionBasisIdentity)]);
-                    ReattachCoverageReusableGreenFindingEvidence(
-                        goal,
-                        requestingTask,
-                        mergedFinding ?? finding,
-                        coverageReceipts,
-                        identity,
-                        coverageReason);
+                    ReattachCoveredEvidence(finding, coverageReceipts, identity, coverageReason);
                     reattachedReceiptIds.AddRange(coverageReceipts.Select(receipt => receipt.ReceiptId));
                     continue;
                 }
