@@ -146,6 +146,7 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.",
             "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.",
             "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.",
+            "- Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         (AgentRole.Reviewer, true) =>
@@ -173,6 +174,7 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.",
             "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.",
             "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.",
+            "- Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         (AgentRole.Planner, false) =>

@@ -30,9 +30,11 @@ internal static class SdlcRolePromptRequirements
         "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.";
     private const string ReviewerPassConditionRule =
         "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.";
-    // Literal caps preserve current headroom; GuidanceTextBudgetTests owns the normalized text budgets.
-    internal const int ReviewerComplexRequirementsMaxChars = 5723;
-    internal const int ReviewerCompactRequirementsMaxChars = 4632;
+    private const string ReviewerDeliveredEvidenceRule =
+        "- Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings.";
+    // Add 223 chars for receipt-aware re-raise guidance (221 plus CRLF); preserve existing headroom.
+    internal const int ReviewerComplexRequirementsMaxChars = 5946;
+    internal const int ReviewerCompactRequirementsMaxChars = 4855;
     internal const int TesterCompactRequirementsMaxChars = 3882;
 
     private const string ReviewerExhaustiveFindingsContract =
@@ -157,6 +159,7 @@ internal static class SdlcRolePromptRequirements
                 ReviewerNonexistentClaimRule,
                 ReviewerSourceChangeRule,
                 ReviewerPassConditionRule,
+                ReviewerDeliveredEvidenceRule,
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []
@@ -329,6 +332,7 @@ internal static class SdlcRolePromptRequirements
                 ReviewerNonexistentClaimRule,
                 ReviewerSourceChangeRule,
                 ReviewerPassConditionRule,
+                ReviewerDeliveredEvidenceRule,
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []

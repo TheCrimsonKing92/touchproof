@@ -57,6 +57,9 @@ internal sealed partial class ConductorDriver
     private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
+    private readonly Func<Goal, GoalEvidenceOperationScope?>? _prepareMissingWorkspace;
+    private readonly Func<Goal, ConductorAutonomyPolicy, GoalEvidenceOperationScope?, DispatchStartOutcome>? _dispatchWithWorkspaceOwnership;
+    private readonly Func<Goal, ConductorAutonomyPolicy, GoalEvidenceOperationScope?, DispatchStartOutcome>? _startWithWorkspaceOwnership;
     private readonly Func<Goal, TaskId, bool> _reconcileExitedDispatch;
     private readonly Action<Goal, FailedGoalRecoveryDecision>? _beforeFailedGoalRecoveryEffect;
     private readonly Func<TimeSpan, string> _buildServerShutdown;
@@ -286,30 +289,19 @@ internal sealed partial class ConductorDriver
             ProjectJournalFacts(GoalOperationJournal.ReadActive(dir, goalId));
         void RefreshJournal(GoalId goalId) =>
             journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
-        var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
-        var goalEvidenceOperationCoordinator = new GoalEvidenceOperationCoordinator(
-            evidenceMutationLeaseStore,
-            dir,
-            EvidenceMutationLeaseDuration,
-            pidProbe: new ConductLockPidProbe());
-        _tryBeginDeveloperIntegrationEvidenceOperation = goal =>
-            goalEvidenceOperationCoordinator.TryBegin(goal, "conductor:developer-branch-integration");
-        _tryRecoverTerminalDeveloperIntegrationLease = goal =>
-            goalEvidenceOperationCoordinator.TryRecoverTerminal(goal);
-        _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
-            goal.Id.Value,
-            EvidenceMutationLeaseDuration);
+        var workspacePreparation = new ConductorWorkspacePreparation(
+            workspace, EvidenceMutationLeaseDuration, () => kernel.Goals.ToArray(), _cohortCleanupHooks,
+            (goal, path) =>
+            {
+                worktreeSnapshot[goal.Id] = path;
+                RefreshJournal(goal.Id);
+            });
+        _tryBeginDeveloperIntegrationEvidenceOperation = workspacePreparation.BeginDeveloperIntegration;
+        _tryRecoverTerminalDeveloperIntegrationLease = workspacePreparation.Coordinator.TryRecoverTerminal;
+        _getEvidenceMutationLease = workspacePreparation.ReadLease;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
-        {
-            _tryRecoverTerminalDeveloperIntegrationLease(goal);
-            var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
-            return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
-                goal.Id.Value,
-                owner,
-                EvidenceMutationLeaseDuration);
-        }
-        _tryAcquireEvidenceMutationLease = AcquireEvidenceMutationLease;
+        _tryAcquireEvidenceMutationLease = workspacePreparation.AcquireMutationLease;
+        _prepareMissingWorkspace = workspacePreparation.PrepareMissing;
         void RecordMissingBranchRetirement(Goal goal, string detail)
         {
             GoalOperationJournal.RecordTerminalDisposition(
@@ -350,25 +342,12 @@ internal sealed partial class ConductorDriver
                 return state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified;
             });
 
-        _createWorkspace = goal =>
-        {
-            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:workspace-create")
-                ?? throw new EvidenceMutationLeaseUnavailableException(
-                    $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation=conductor:workspace-create reason=concurrent-acceptance-or-replacement");
-            GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
-            // Worktree-add retry clears an orphan directory; that deletion, its warning sink and
-            // lock-holder discovery must use the same cleanup owner as conductor cleanup below.
-            var path = GoalWorktrees.Ensure(dir, goal.Id, _cohortCleanupHooks, workspace.IntegrationBranch);
-            GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
-            worktreeSnapshot[goal.Id] = path;
-            RefreshJournal(goal.Id);
-            return path;
-        };
+        _createWorkspace = workspacePreparation.Create;
 
-        _dispatchAndStart = (goal, policy) =>
+        DispatchStartOutcome DispatchAndStart(Goal goal, ConductorAutonomyPolicy policy, GoalEvidenceOperationScope? workspaceOwnership)
         {
-            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:dispatch");
-            if (evidenceMutationLease is null)
+            using var evidenceMutationLease = workspaceOwnership is null ? _tryAcquireEvidenceMutationLease(goal, "conductor:dispatch") : null;
+            if (evidenceMutationLease is null && workspaceOwnership is null)
             {
                 return DispatchStartOutcome.Deferred(
                     $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
@@ -434,12 +413,14 @@ internal sealed partial class ConductorDriver
             }
             GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", outcome.Reason!);
             return outcome;
-        };
+        }
+        _dispatchAndStart = (goal, policy) => DispatchAndStart(goal, policy, null);
+        _dispatchWithWorkspaceOwnership = DispatchAndStart;
 
-        _startRecordedDispatches = (goal, policy) =>
+        DispatchStartOutcome StartRecordedDispatches(Goal goal, ConductorAutonomyPolicy policy, GoalEvidenceOperationScope? workspaceOwnership)
         {
-            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:dispatch-start");
-            if (evidenceMutationLease is null)
+            using var evidenceMutationLease = workspaceOwnership is null ? _tryAcquireEvidenceMutationLease(goal, "conductor:dispatch-start") : null;
+            if (evidenceMutationLease is null && workspaceOwnership is null)
             {
                 return DispatchStartOutcome.Deferred(
                     $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
@@ -494,7 +475,9 @@ internal sealed partial class ConductorDriver
 
             GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", outcome.Reason!);
             return outcome;
-        };
+        }
+        _startRecordedDispatches = (goal, policy) => StartRecordedDispatches(goal, policy, null);
+        _startWithWorkspaceOwnership = StartRecordedDispatches;
 
         _buildServerShutdownTimeout = DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = RunRetryOnlyRemediation;
@@ -1092,8 +1075,10 @@ internal sealed partial class ConductorDriver
         Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null,
         Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null,
         Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
-        AgentOrchestratorKernel? findingStagnationKernel = null)
+        AgentOrchestratorKernel? findingStagnationKernel = null,
+        Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null)
     {
+        _prepareMissingWorkspace = prepareMissingWorkspace;
         _findingStagnationKernel = findingStagnationKernel;
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1557,19 +1542,25 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState, startDecision.Reason) { Decision = startDecision.ToRecord() });
         }
 
+        if (!ConductorMissingWorktreeRecovery.TryPrepareForDispatch(
+            goal, _prepareMissingWorkspace, startFacts, out var workspaceOwnership, out var preparationFailure))
+        {
+            return DispatchStartResult(goal, goalPrefix, policy, fromState, preparationFailure);
+        }
+        using var retainedWorkspaceOwnership = workspaceOwnership;
         if (EnvironmentGate?.Check(goal, policy, fromState) is { } environmentHold) return environmentHold;
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
-            var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal);
+            var operationStart = workspaceOwnership is null ? _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal) : null;
             using var operationScope = operationStart?.Scope;
-            using var integrationEvidenceMutationLease = operationStart is null
+            using var integrationEvidenceMutationLease = operationStart is null && workspaceOwnership is null
                 ? _tryAcquireEvidenceMutationLease(goal, "conductor:developer-branch-integration")
                 : null;
             var integrationExecution = DeveloperDispatchIntegrationExecutor.Execute(
                 goal,
                 operationStart,
-                integrationEvidenceMutationLease,
+                integrationEvidenceMutationLease ?? workspaceOwnership,
                 _integrateMainBeforeDeveloperDispatch,
                 _recordPreDispatchIntegrationReceipt);
             startFacts = integrationExecution.RefusalKind switch
@@ -1590,7 +1581,7 @@ internal sealed partial class ConductorDriver
         }
 
         if (fromState == GoalLifecycleState.WorkspaceReady &&
-            TryIntegrateMainBeforeReadOnlyDispatch(goal, goalPrefix, policy, fromState, out var readOnlyIntegrationHold))
+            TryIntegrateMainBeforeReadOnlyDispatch(goal, goalPrefix, policy, fromState, out var readOnlyIntegrationHold, workspaceOwnership))
         {
             return readOnlyIntegrationHold;
         }
@@ -1610,7 +1601,9 @@ internal sealed partial class ConductorDriver
 
         var currentGoal = goal;
         var execution = DispatchStartExecutor.Execute(
-            goal, goalPrefix, policy, fromState, _dispatchAndStart, _startRecordedDispatches,
+            goal, goalPrefix, policy, fromState,
+            (g, p) => _dispatchWithWorkspaceOwnership is { } dispatch ? dispatch(g, p, workspaceOwnership) : _dispatchAndStart(g, p),
+            (g, p) => _startWithWorkspaceOwnership is { } start ? start(g, p, workspaceOwnership) : _startRecordedDispatches(g, p),
             _recoverSandboxPrep, RunDispatchRemediation, () => currentGoal = GetCurrentGoal(currentGoal),
             timing =>
             {
@@ -1619,6 +1612,7 @@ internal sealed partial class ConductorDriver
                 else
                     EmitGoalPhaseTiming(timing.Phase, timing.Goal, timing.Elapsed, timing.Detail);
             });
+        workspaceOwnership?.Complete("Ordinary dispatch preparation returned; its independent outcome remains authoritative.");
         goal = GetCurrentGoal(currentGoal);
         if (execution.RecoveryFailureReason is { } recoveryFailure)
         {
