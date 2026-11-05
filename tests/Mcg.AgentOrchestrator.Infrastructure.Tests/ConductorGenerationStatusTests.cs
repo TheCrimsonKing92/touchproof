@@ -17,7 +17,7 @@ public sealed class ConductorGenerationStatusTests
 
         var text = ReadStatus(fixture.Workspace, () => { calls++; return $" {main}\r\n"; });
 
-        AssertGeneration(text, $"Generation: current with main {main}");
+        AssertGeneration(text, $"Generation: current with main (running {BuildCommit}, main {main})");
         Assert.Equal(1, calls);
     }
 
@@ -79,9 +79,9 @@ public sealed class ConductorGenerationStatusTests
     private static void AssertGeneration(string text, string expected)
     {
         var lines = text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        var supervisor = Assert.Single(lines.Where(line => line.StartsWith("Supervisor build:", StringComparison.Ordinal)));
+        var loop = Assert.Single(lines.Where(line => line.StartsWith("Loop build:", StringComparison.Ordinal)));
         Assert.Equal(expected, Assert.Single(lines.Where(line => line.StartsWith("Generation:", StringComparison.Ordinal))));
-        Assert.Equal(expected, lines[Array.IndexOf(lines, supervisor) + 1]);
+        Assert.Equal(expected, lines[Array.IndexOf(lines, loop) + 1]);
     }
 
     private static void WriteEvents(OrchestratorWorkspace workspace, string? build)
