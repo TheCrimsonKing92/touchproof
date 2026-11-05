@@ -5,7 +5,7 @@
 The optional top-level `testSettings` object in `config/acceptance-manifest.json` supplies literal
 name/value pairs to gate test lanes, focused checks and reruns after their environments are sealed.
 For example, `"testSettings": { "MCG_TEST_HOST_CAPACITY_SLOTS": "6" }` fixes the test host slot budget.
-The shipped manifest declares none, preserving the default slot budget and fixture timeouts.
+The shipped manifest pins `MCG_TEST_HOST_CAPACITY_SLOTS` to 4 for a stepwise slot comparison against the derived default of 3 on a 24-processor host. Gate results are compared at each step before the value moves again.
 Names must match `^MCG_TEST_[A-Z0-9_]+$` exactly; duplicates, lane-owned names (including
 `MCG_TEST_SLOT_TIMING_FILE`) and the operator-only `MCG_TEST_INPUT_` namespace are rejected.
 Values must be non-empty strings without NUL, CR or LF; they are passed without normalization.
