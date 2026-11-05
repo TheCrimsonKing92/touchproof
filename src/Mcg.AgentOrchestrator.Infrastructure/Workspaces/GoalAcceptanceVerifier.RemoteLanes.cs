@@ -194,7 +194,7 @@ public sealed partial class GoalAcceptanceVerifier
         }
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.LaneExecution);
         var wallClock = _timeProvider.GetTimestamp();
-        var orderedShards = RemoteLaneEarlyOffer.Order(shardChecks).Select(shard => new IndexedShard(shard.Index, shard.Check)).ToArray();
+        var orderedShards = LocalAdmissionOrder.Order(shardChecks, remote?.RemoteEligibleResourceKeys).Select(shard => new IndexedShard(shard.Index, shard.Check)).ToArray();
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
         var maxConcurrentExecutions = allShardsUseMtp ? Math.Min(maxConcurrentShards, shardChecks.Count) : 1;
         var pendingShards = orderedShards.ToList();
