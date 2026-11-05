@@ -234,19 +234,21 @@ internal static partial class LandingExecutor
                 AcceptanceCohortLandingOutcome.StateInvalidated,
                 $"Merge train receipt invalidated at the main compare-and-swap boundary: {mainUpdate.Error}");
         }
-        RecordSuccessfulPromotion(workspace, kernel,
-            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
-            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.MergeTrainProvenance, promotionClock);
+        string? checkoutFailure = null;
         if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
             RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
             var checkout = RunGit(executionDirectory, "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
             if (checkout.ExitCode != 0)
             {
-                throw new InvalidOperationException(
-                    $"Main advanced to the exact merge train commit, but checkout refresh failed: {checkout.Error}");
+                checkoutFailure = $"Main advanced to the exact merge train commit, but checkout refresh failed: {checkout.Error}";
             }
         }
+
+        RecordSuccessfulPromotion(workspace, kernel,
+            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
+            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.MergeTrainProvenance, promotionClock);
+        if (checkoutFailure is not null) throw new InvalidOperationException(checkoutFailure);
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
         foreach (var goal in goals)
