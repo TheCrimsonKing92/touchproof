@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 using static LandingExecutorCheckoutSynchronizationTests;
 
 // Parallel-safe: each case owns its repositories, stores, and event writer.
-public sealed class CohortLandingCheckoutSynchronizationTests : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsCheckoutSynchronization : AcceptanceCohortWorkflowTests
 {
     [Theory]
     [InlineData(false)]
