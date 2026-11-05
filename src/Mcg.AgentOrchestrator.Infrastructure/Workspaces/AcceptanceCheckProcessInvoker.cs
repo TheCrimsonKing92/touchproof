@@ -529,7 +529,7 @@ internal static class AcceptanceCheckProcessInvoker
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}",
-            registrationIdentityReader, resumeObserver: resumeObserver, requestOwnConsole: requestOwnConsole);
+            registrationIdentityReader, containDescendants: true, resumeObserver: resumeObserver, requestOwnConsole: requestOwnConsole);
     }
 
 }

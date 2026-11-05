@@ -163,3 +163,44 @@ failed. Developer test execution remains prohibited, and the supplied package
 does not contain a full executed-count receipt admitting a local reproduction.
 This is a test correction and diagnostic revision, not a completed repair of
 the surviving-child failure.
+
+## Containment correction for receipt finding-evidence-ef6f345688c084b22398294c
+
+The supplied typed receipt binds three executed tests to candidate
+`4d41436a6634f463b960a4e0edd4eb314c6a7620`, with the cancellation row failing:
+"Fixture processes must belong to the owned job before cancellation". The pinned
+launcher PID was 58716, the child PID was 3576, and the reported job contained
+only 58716. These source anchors are unchanged at dispatch HEAD `bb553e64`.
+This failure precedes cancellation and does not establish a termination defect.
+
+The shell branch of `AcceptanceCheckProcessInvoker.StartAcceptanceProcess` omitted
+`containDescendants`, whose default is false. Its job therefore enabled
+`JOB_OBJECT_LIMIT_BREAKAWAY_OK`; the direct file-capture branch already used a
+contained job. The shell branch now explicitly requests containment through the
+existing typed launch argument. This aligns both acceptance launch paths with
+their obligation to retain descendants until cleanup. An explicit breakaway request
+now fails at launch instead of escaping this job. Other worker launch defaults
+are unchanged.
+
+Hypothesis, not an established runtime cause: the permissive shell-job policy
+allowed the observed child to escape. The receipt does not show how the child
+left the job. A read-only Claude Opus 5.5 cross-family review agreed with the
+bounded policy correction and found no PID-list layout defect, while retaining
+that uncertainty. The current worker's PATH resolves to an installed
+`AppData/Local/Programs/PowerShell/7/pwsh.exe`, rather than an app-execution alias;
+this observation does not identify the executable used by the historical gate.
+
+The isolation test now requires membership for both failure/cancellation rows.
+Pinned identity diagnostics include full image
+paths. The original immediate exit assertion, cleanup evidence requirement and
+survivor release ordering remain intact.
+
+Developer-side test execution remains prohibited. Acceptance must execute
+`JunitCommandEnvironmentIsolationTests`, including at least five runs of
+`FailureOrCancellation_LeavesParentEnvironmentUnchanged(cancel: True)`, plus
+`AcceptanceProcessRunnerTests.Caller_cancellation_at_final_heartbeat_keeps_custody_until_cleanup`
+and `JunitCommandEnvironmentDiagnosticTests`. Retain each complete failing
+exception and distinguish membership failures, cancellation-cleanup failures,
+and passing cancellation boundaries. A membership failure after this correction
+rejects the hypothesis that containment alone is sufficient. Build evidence
+proves compilation, not repair of that boundary.

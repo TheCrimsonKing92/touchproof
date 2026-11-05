@@ -79,11 +79,11 @@ public sealed class JunitCommandEnvironmentIsolationTests
         try
         {
             await gate.Ready();
+            gate.AssertOwned();
             Assert.Equal(JunitCommandEnvironmentFixture.Literal, JunitCommandEnvironmentFixture.ObservedValue(fixture.CommandObservation));
             Assert.Equal(before, Environment.GetEnvironmentVariable(variable));
             if (cancel)
             {
-                gate.AssertOwned();
                 lifetime.Cancel();
                 var cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(
                     () => run.WaitAsync(TimeSpan.FromSeconds(120)));
@@ -268,7 +268,17 @@ public sealed class JunitCommandEnvironmentIsolationTests
             $"owned_job_members_before_cancellation={_ownedMembers}";
 
         private static string DescribeIdentity(Process process, string role) =>
-            $"{role}_pid={process.Id} {role}_start_utc_ticks={process.StartTime.ToUniversalTime().Ticks} {role}_image={process.ProcessName}";
+            $"{role}_pid={process.Id} {role}_start_utc_ticks={process.StartTime.ToUniversalTime().Ticks} " +
+            $"{role}_image={process.ProcessName} {role}_image_path={ImagePath(process)}";
+
+        private static string ImagePath(Process process)
+        {
+            try { return process.MainModule?.FileName ?? "unavailable"; }
+            catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                return $"unavailable({exception.GetType().Name})";
+            }
+        }
 
         public void Dispose() { DisposeProcesses(); _writer?.Dispose(); _pipe.Dispose(); }
     }
