@@ -187,6 +187,47 @@ public sealed class GateDeclaredTestSettingsTests : IDisposable
         Assert.Null(outcome.Accepted);
     }
 
+    [Theory]
+    [InlineData("remote-first")]
+    [InlineData("shadow")]
+    public async Task FocusedEvidence_DeclaredSettingsReachSubmittedJobs(string mode)
+    {
+        using var scenario = new RemoteFirstFocusedEvidenceFixture.Scenario(new FocusedFixture(),
+            """{"version":1,"checks":[],"testSettings":{"MCG_TEST_HOST_CAPACITY_SLOTS":"6"}}""");
+        scenario.Configure(mode: mode, sample: 1);
+        await using var owner = AcceptanceExecutionOwners.CreateFocusedVerification(scenario.Root, scenario.Goal,
+            null, options: new(RunId: "declared-settings", ResultsPrefix: scenario.Prefix));
+        var context = (IAcceptanceRunExecutionContext)owner;
+        var settings = context.Settings.DeclaredTestSettings;
+        Assert.Equal("6", settings[Slots]);
+        var executor = scenario.CompletedExecutor(change: result => result with { TestSettings = settings });
+        var check = RemoteFirstFocusedEvidenceFixture.FocusedCheck();
+        AcceptanceCheckResult[] localResults = [new(check.Name, true, 0, "local-passed")];
+        if (mode == "remote-first")
+        {
+            var pending = RemoteFirstFocusedEvidence.RunAsync(scenario.Overrides, scenario.Clock, scenario.Root,
+                [check], scenario.Goal, context, false,
+                _ => throw new InvalidOperationException("Declared-settings remote verdict must own the check."), default);
+            await RemoteFirstFocusedEvidenceFixture.Event(pending, "remote-first settings verdict returned");
+            Assert.Equal("remote-executor=fixture-executor", Assert.Single((await pending).Results).ResultSummary);
+        }
+        else
+        {
+            await using var shadow = RemoteFocusedEvidenceShadow.Start(scenario.Overrides, scenario.Clock,
+                scenario.Root, [check], scenario.Goal, context, default);
+            var pending = shadow.CompleteAsync(localResults);
+            await RemoteFirstFocusedEvidenceFixture.Event(pending, "shadow settings verdict recorded");
+            await pending;
+        }
+
+        var request = Assert.Single(executor.Requests);
+        Assert.Same(settings, request.TestSettings);
+        Assert.Equal("6", request.TestSettings![Slots]);
+        Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(scenario.Health()).Outcome);
+    }
+
+    private sealed class FocusedFixture : RemoteFirstFocusedEvidenceFixture { }
+
     [Fact]
     public void RemoteBinding_RequiresExactAppliedSettingsEcho()
     {
