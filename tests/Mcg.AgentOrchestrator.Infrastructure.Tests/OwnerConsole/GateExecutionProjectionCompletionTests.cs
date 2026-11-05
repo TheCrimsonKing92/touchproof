@@ -206,7 +206,7 @@ public sealed class GateExecutionProjectionCompletionTests
         {
             var row = Assert.Single(model.Board, row => row.GoalId == member);
             Assert.Equal("Verified", row.State);
-            Assert.StartsWith("gate: outer attempt completed [", row.Stage);
+            Assert.Equal("gate: outer attempt completed", row.Stage);
             Assert.DoesNotContain("unresolved", row.Stage);
         }
     }
