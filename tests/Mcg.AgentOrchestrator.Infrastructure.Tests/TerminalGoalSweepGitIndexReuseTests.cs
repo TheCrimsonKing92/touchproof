@@ -20,8 +20,8 @@ public sealed class TerminalGoalSweepGitIndexReuseTests
 
         foreach (var command in MetadataFixture.IndexCommands)
             Assert.Equal(1, fixture.Commands.Count(actual => actual == command));
-        Assert.Equal(first.GitSpawnCount - 4, second.GitSpawnCount);
-        Assert.Equal(first.GitSpawnCount - 4, third.GitSpawnCount);
+        Assert.Equal(first.GitSpawnCount - 3, second.GitSpawnCount);
+        Assert.Equal(first.GitSpawnCount - 3, third.GitSpawnCount);
         Assert.Equal(firstCommands.Where(command => !MetadataFixture.IndexCommands.Contains(command)).ToArray(), secondCommands);
         Assert.Equal(secondCommands, thirdCommands);
         AssertContentState(first, "inconclusive");

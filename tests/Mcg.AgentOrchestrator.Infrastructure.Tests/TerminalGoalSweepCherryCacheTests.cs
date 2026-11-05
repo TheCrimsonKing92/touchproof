@@ -176,8 +176,8 @@ public sealed class TerminalGoalSweepCherryCacheTests
             var command = string.Join(" ", args);
             switch (command)
             {
-                case "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/":
-                    return new(0, $"{GoalWorktrees.BranchName(GoalId)} {TipSha}\n", string.Empty);
+                case "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main":
+                    return new(0, $"{GoalWorktrees.BranchName(GoalId)} {TipSha}\nmain {MainSha}\n", string.Empty);
                 case "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/":
                 case "worktree list --porcelain":
                     return new(0, string.Empty, string.Empty);
