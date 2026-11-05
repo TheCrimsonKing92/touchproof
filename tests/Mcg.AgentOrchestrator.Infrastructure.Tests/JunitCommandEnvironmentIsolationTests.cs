@@ -71,10 +71,11 @@ public sealed class JunitCommandEnvironmentIsolationTests
         var variable = "FIXTURE_" + Guid.NewGuid().ToString("N");
         var before = Environment.GetEnvironmentVariable(variable);
         using var gate = new ChildGate();
-        using var fixture = new JunitCommandEnvironmentFixture(variable, true, gate.Name, exitCode: 9)
+        var fixture = new JunitCommandEnvironmentFixture(variable, true, gate.Name, exitCode: 9)
             { CleanupProcessEvidence = gate.DescribeProcesses };
         using var lifetime = new CancellationTokenSource();
         var run = fixture.RunAsync(lifetime.Token);
+        Exception? failure = null;
         try
         {
             await gate.Ready();
@@ -104,11 +105,29 @@ public sealed class JunitCommandEnvironmentIsolationTests
             }
             Assert.Equal(before, Environment.GetEnvironmentVariable(variable));
         }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
         finally
         {
-            lifetime.Cancel();
-            await Drain(run);
-            await gate.WaitForExit();
+            // Teardown used to replace a boundary assertion/timeout with Directory.Delete's
+            // IOException. Retain every failure so the gate receipt names the first boundary.
+            var cleanupFailures = new List<Exception>();
+            await CaptureCleanup(() => { lifetime.Cancel(); return Task.CompletedTask; });
+            await CaptureCleanup(() => Drain(run));
+            await CaptureCleanup(gate.WaitForExit);
+            await CaptureCleanup(() => { fixture.Dispose(); return Task.CompletedTask; });
+            if (cleanupFailures.Count > 0)
+                throw new AggregateException("JUnit fixture failed before or during cleanup.",
+                    failure is null ? cleanupFailures : new[] { failure }.Concat(cleanupFailures));
+
+            async Task CaptureCleanup(Func<Task> cleanup)
+            {
+                try { await cleanup(); }
+                catch (Exception exception) { cleanupFailures.Add(exception); }
+            }
         }
     }
 
@@ -169,12 +188,14 @@ public sealed class JunitCommandEnvironmentIsolationTests
         internal void AssertExited()
         {
             Assert.NotNull(_child);
-            Assert.True(_child.HasExited, $"Cancellation returned with a live fixture child: {_childIdentity}");
+            _childExitObserved = _child.HasExited;
             if (OperatingSystem.IsWindows())
             {
                 Assert.NotNull(_launcher);
-                Assert.True(_launcher.HasExited, $"Cancellation returned with a live fixture launcher: {_launcherIdentity}");
+                _launcherExitObserved = _launcher.HasExited;
             }
+            Assert.True(_childExitObserved && (!OperatingSystem.IsWindows() || _launcherExitObserved),
+                $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}");
         }
         internal async Task WaitForExit()
         {
@@ -197,7 +218,10 @@ public sealed class JunitCommandEnvironmentIsolationTests
         {
             if (process is null) return; // Ready never acquired this process's handle.
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(120)); }
-            catch (TimeoutException) { throw new TimeoutException($"{eventName} did not exit before directory cleanup."); }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException($"{eventName} did not exit before directory cleanup: {DescribeIdentity(process, "pending")}");
+            }
             Assert.True(process.HasExited);
         }
         private void DisposeProcesses()

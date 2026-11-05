@@ -71,7 +71,7 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
 
     public void Dispose()
     {
-        try { DeleteDirectoryWithRetry(Root); }
+        try { Directory.Delete(Root, recursive: true); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // Correlate the remaining holders with the identities pinned by the event gate.
