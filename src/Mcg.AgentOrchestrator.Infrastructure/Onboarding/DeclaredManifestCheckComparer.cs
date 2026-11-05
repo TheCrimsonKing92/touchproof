@@ -35,7 +35,8 @@ internal static class DeclaredManifestCheckComparer
     private static bool Equivalent(Check left, Check right) =>
         left.Type.Equals(right.Type, StringComparison.OrdinalIgnoreCase) && left.Name == right.Name && left.Command == right.Command &&
         Project(left.Project) == Project(right.Project) && left.Arguments.SequenceEqual(right.Arguments, StringComparer.Ordinal) &&
-        left.Reports.Select(Normalize).ToHashSet(StringComparer.Ordinal).SetEquals(right.Reports.Select(Normalize));
+        left.Reports.Select(Normalize).ToHashSet(StringComparer.Ordinal).SetEquals(right.Reports.Select(Normalize)) &&
+        JunitCommandEnvironmentInputs.Fingerprint(left) == JunitCommandEnvironmentInputs.Fingerprint(right);
 
     private static string Normalize(string path) => path.Replace('\\', '/');
     private static string Project(string? path)

@@ -15,27 +15,8 @@ public sealed class ConductorDriverTests
 
     internal static ConductorParallelAcceptanceAttemptCoordinator SeedLiveAcceptanceAttempt(
         string root,
-        Goal goal)
-    {
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, "acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
-            isProcessAlive: _ => true,
-            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(4242));
-        var candidate = ConductorParallelAcceptanceCandidate.Create(
-            goal,
-            0,
-            ["src/CurrentAttempt.cs"],
-            "branch-current",
-            "main-current");
-        var decision = coordinator.Evaluate(
-            candidate,
-            ConductorAutonomyPolicy.Conservative,
-            (_, _, _, _, _) => throw new InvalidOperationException("Owned acceptance callback should not run inline."));
-
-        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
-        Assert.True(coordinator.HasLiveAttempt(goal.Id.Value));
-        return coordinator;
-    }
+        Goal goal) =>
+        ConductorDriverTestHelpers.SeedLiveAcceptanceAttempt(root, goal);
 
     internal static (AgentOrchestratorKernel Kernel, Goal Goal) SimpleGoal(string objective = "Test goal")
     {
@@ -468,7 +449,8 @@ public sealed class ConductorDriverTests
         string? executionDirectory = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null, Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
-        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null, Func<GoalId, string>? workerBuildArtifactsPath = null)
+        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null, Func<GoalId, string>? workerBuildArtifactsPath = null,
+        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -498,6 +480,7 @@ public sealed class ConductorDriverTests
             evaluateReadiness,
             completeGoal: completeGoal,
             normalizeLifecycleState: normalizeLifecycleState,
+            getAmendmentRevisionPending: getAmendmentRevisionPending,
             recoverSandboxPrep: recoverSandboxPrep,
             hasGateReadyGoal: hasGateReadyGoal,
             getAcceptanceSlotCount: getAcceptanceSlotCount,

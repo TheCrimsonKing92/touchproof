@@ -67,7 +67,7 @@ public sealed class GitLaunchHardeningOwnerTests : IDisposable
         using var reader = new GitRevisionReader();
         var launches = CaptureLaunches(() =>
         {
-            Assert.True(reader.TryResolve(repo, "HEAD", out var actual));
+            Assert.True(reader.TryResolve(repo, "HEAD^{commit}", out var actual));
             Assert.Equal(expected, actual);
         });
 

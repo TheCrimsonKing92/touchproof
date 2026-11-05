@@ -121,7 +121,9 @@ internal static class AcceptanceProcessRunner
         bool stopOnCaptureLimit = false,
         bool? keepCaptureFiles = null,
         Action<int>? resumeObserver = null,
-        bool resolveBareCommand = false) =>
+        bool resolveBareCommand = false,
+        JunitCommandEnvironmentInputs? commandEnvironment = null,
+        bool suppressDiagnosticCaptures = false) =>
         await AcceptanceCheckProcessInvoker.RunAsync(
             arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput, cancellationToken,
             timeoutSignal, registrationIdentityReader, new AcceptanceProcessRequest
@@ -141,6 +143,8 @@ internal static class AcceptanceProcessRunner
                 KeepCaptureFiles = keepCaptureFiles,
                 ResumeObserver = resumeObserver,
                 ResolveBareCommand = resolveBareCommand,
+                CommandEnvironment = commandEnvironment,
+                SuppressDiagnosticCaptures = suppressDiagnosticCaptures || commandEnvironment is not null,
             }).ConfigureAwait(false);
 
     internal static class ProcessInvokerAccess

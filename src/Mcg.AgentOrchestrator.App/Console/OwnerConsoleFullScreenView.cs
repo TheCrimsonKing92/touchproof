@@ -167,6 +167,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _preview.ViewportChanged += (_, _) => RenderPreview();
         RenderPreview();
         _notice.ViewportChanged += (_, _) => RenderNotices();
+        _status.ViewportChanged += (_, _) => RenderStatus();
         _decisions.ValueChanged += (_, _) =>
         {
             if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
@@ -393,7 +394,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         if (_controller.Model is not { } model) return;
         _status.Text = _statusPresenter.Compose(model.Status, model.Gate, _controller.BellStatusText,
-            _refreshedAt, _clock.GetUtcNow(), _clock.LocalTimeZone, _refreshInterval, _working.Values);
+            _refreshedAt, _clock.GetUtcNow(), _clock.LocalTimeZone, _refreshInterval, _working.Values, _status.Viewport.Width);
     }
 
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.

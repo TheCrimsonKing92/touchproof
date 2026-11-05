@@ -19,7 +19,7 @@ public static partial class WorkerProfileDispatcher
         // Prerequisite evidence keeps its existing priority within the shared resolver budgets.
         var clarificationAnswers = kernel.HumanInputRequests
             .Where(request => request.GoalId == goal.Id && request.TaskId is not null && request.TaskId == task.Id
-                && request.Kind == HumanWaitKind.SpecClarification
+                && request.Kind is HumanWaitKind.SpecClarification or HumanWaitKind.PlannerBriefAmendment
                 && request.IsCompleted && !request.WasDismissed && request.SupersededByRequestId is null
                 && !request.IsSyntheticParkedHumanWaitCompletion
                 && !string.IsNullOrWhiteSpace(request.AuthoritativeAnswer?.Text))

@@ -17,7 +17,8 @@ public sealed class GitRevisionReaderTests : IDisposable
         var repo = CreateRepository();
         Git(repo, "branch", "topic");
         AssertResolved(reader, repo, revision, Oracle(repo, revision));
-        Assert.NotNull(reader.GetReader(repo));
+        if (revision is "HEAD" or "refs/heads/topic") Assert.Null(reader.GetReader(repo));
+        else Assert.NotNull(reader.GetReader(repo));
     }
 
     [Fact]
@@ -149,14 +150,14 @@ public sealed class GitRevisionReaderTests : IDisposable
     public void Resolve_TwoWorktrees_KeepDistinctHeadsAndAllowRemoval()
     {
         var repo = CreateRepository();
-        var original = Oracle(repo, "HEAD");
+        var original = Oracle(repo, "HEAD^{commit}");
         Git(repo, "commit", "--allow-empty", "-m", "main only");
-        var main = Oracle(repo, "HEAD");
+        var main = Oracle(repo, "HEAD^{commit}");
         var linked = Path.Combine(root, "linked");
         Git(repo, "worktree", "add", "--detach", linked, original);
         Assert.NotEqual(main, original);
-        AssertResolved(reader, repo, "HEAD", main);
-        AssertResolved(reader, linked, "HEAD", original);
+        AssertResolved(reader, repo, "HEAD^{commit}", main);
+        AssertResolved(reader, linked, "HEAD^{commit}", original);
         Assert.Equal(2, reader.RetainedCount);
         Git(repo, "worktree", "remove", "--force", linked);
         Assert.False(Directory.Exists(linked));
@@ -172,7 +173,7 @@ public sealed class GitRevisionReaderTests : IDisposable
             Assert.False(reader.TryResolve(repo, "refs/heads/missing", out var objectId));
             Assert.Empty(objectId);
         }
-        launches.AssertCommands("cat-file", "rev-parse", "rev-parse");
+        launches.AssertCommands("cat-file");
         Assert.Equal(1, reader.RetainedCount);
     }
 
@@ -180,15 +181,15 @@ public sealed class GitRevisionReaderTests : IDisposable
     public void Resolve_TerminatedReader_FallsBackThenRestarts()
     {
         var repo = CreateRepository();
-        var expected = Oracle(repo, "HEAD");
-        AssertResolved(reader, repo, "HEAD", expected);
+        var expected = Oracle(repo, "HEAD^{commit}");
+        AssertResolved(reader, repo, "HEAD^{commit}", expected);
         var killed = Assert.IsType<GitRevisionReader.ReaderProcess>(reader.GetReader(repo));
         killed.KillProcess();
         Assert.True(killed.HasExited, "The owned reader process did not exit.");
         var launches = new LaunchRecording();
-        AssertResolved(reader, repo, "HEAD", expected);
+        AssertResolved(reader, repo, "HEAD^{commit}", expected);
         Assert.Equal(0, reader.RetainedCount);
-        AssertResolved(reader, repo, "HEAD", expected);
+        AssertResolved(reader, repo, "HEAD^{commit}", expected);
         Assert.NotSame(killed, reader.GetReader(repo));
         launches.AssertCommands("rev-parse", "cat-file");
     }
@@ -197,9 +198,9 @@ public sealed class GitRevisionReaderTests : IDisposable
     public void Resolve_200Queries_RecordsOneLaunch()
     {
         var repo = CreateRepository();
-        var expected = Oracle(repo, "HEAD");
+        var expected = Oracle(repo, "HEAD^{commit}");
         var launches = new LaunchRecording();
-        for (var index = 0; index < 200; index++) AssertResolved(reader, repo, "HEAD", expected);
+        for (var index = 0; index < 200; index++) AssertResolved(reader, repo, "HEAD^{commit}", expected);
         launches.AssertCommands("cat-file");
         Assert.Equal(1, reader.RetainedCount);
     }
@@ -220,11 +221,11 @@ public sealed class GitRevisionReaderTests : IDisposable
     {
         var repos = Enumerable.Range(0, 17).Select(index => CreateRepository(index.ToString())).ToArray();
         for (var index = 0; index < 16; index++)
-            Assert.True(reader.TryResolve(repos[index], "HEAD", out _));
+            Assert.True(reader.TryResolve(repos[index], "HEAD^{commit}", out _));
         var first = Assert.IsType<GitRevisionReader.ReaderProcess>(reader.GetReader(repos[0]));
         var oldest = Assert.IsType<GitRevisionReader.ReaderProcess>(reader.GetReader(repos[1]));
-        Assert.True(reader.TryResolve(repos[0], "HEAD", out _));
-        Assert.True(reader.TryResolve(repos[16], "HEAD", out _));
+        Assert.True(reader.TryResolve(repos[0], "HEAD^{commit}", out _));
+        Assert.True(reader.TryResolve(repos[16], "HEAD^{commit}", out _));
         Assert.True(oldest.HasExited, "The least recently used reader process did not exit.");
         Assert.False(first.HasExited);
         Assert.Same(first, reader.GetReader(repos[0]));
@@ -236,11 +237,11 @@ public sealed class GitRevisionReaderTests : IDisposable
     public void Cache_FullPathAliases_ReuseReader()
     {
         var repo = CreateRepository();
-        var expected = Oracle(repo, "HEAD");
+        var expected = Oracle(repo, "HEAD^{commit}");
         var launches = new LaunchRecording();
-        AssertResolved(reader, repo, "HEAD", expected);
-        AssertResolved(reader, Path.Combine(repo, "."), "HEAD", expected);
-        AssertResolved(reader, repo + Path.DirectorySeparatorChar, "HEAD", expected);
+        AssertResolved(reader, repo, "HEAD^{commit}", expected);
+        AssertResolved(reader, Path.Combine(repo, "."), "HEAD^{commit}", expected);
+        AssertResolved(reader, repo + Path.DirectorySeparatorChar, "HEAD^{commit}", expected);
         launches.AssertCommands("cat-file");
     }
 
@@ -250,7 +251,7 @@ public sealed class GitRevisionReaderTests : IDisposable
         var repo = CreateRepository();
         var clock = new ManualClock();
         using var timedReader = new GitRevisionReader(clock: clock);
-        Assert.True(timedReader.TryResolve(repo, "HEAD", out _));
+        Assert.True(timedReader.TryResolve(repo, "HEAD^{commit}", out _));
         var process = Assert.IsType<GitRevisionReader.ReaderProcess>(timedReader.GetReader(repo));
         clock.Advance(TimeSpan.FromSeconds(59));
         Assert.False(process.HasExited);
@@ -265,10 +266,10 @@ public sealed class GitRevisionReaderTests : IDisposable
         var repo = CreateRepository();
         var clock = new ManualClock();
         using var timedReader = new GitRevisionReader(clock: clock);
-        Assert.True(timedReader.TryResolve(repo, "HEAD", out _));
+        Assert.True(timedReader.TryResolve(repo, "HEAD^{commit}", out _));
         var process = Assert.IsType<GitRevisionReader.ReaderProcess>(timedReader.GetReader(repo));
         clock.Advance(TimeSpan.FromSeconds(59));
-        Assert.True(timedReader.TryResolve(repo, "HEAD", out _));
+        Assert.True(timedReader.TryResolve(repo, "HEAD^{commit}", out _));
         clock.Advance(TimeSpan.FromSeconds(1));
         Assert.False(process.HasExited);
         clock.Advance(TimeSpan.FromSeconds(59));
@@ -281,8 +282,8 @@ public sealed class GitRevisionReaderTests : IDisposable
     {
         var first = CreateRepository("first");
         var second = CreateRepository("second");
-        Assert.True(reader.TryResolve(first, "HEAD", out _));
-        Assert.True(reader.TryResolve(second, "HEAD", out _));
+        Assert.True(reader.TryResolve(first, "HEAD^{commit}", out _));
+        Assert.True(reader.TryResolve(second, "HEAD^{commit}", out _));
         var processes = new[] { reader.GetReader(first)!, reader.GetReader(second)! };
         reader.Dispose();
         Assert.All(processes, process => Assert.True(process.HasExited));
@@ -293,16 +294,16 @@ public sealed class GitRevisionReaderTests : IDisposable
     public async Task Resolve_ConcurrentQueries_SerializesProtocol()
     {
         var repo = CreateRepository();
-        var first = Oracle(repo, "HEAD");
+        var first = Oracle(repo, "HEAD^{commit}");
         Git(repo, "branch", "first");
         Git(repo, "commit", "--allow-empty", "-m", "second");
-        var second = Oracle(repo, "HEAD");
+        var second = Oracle(repo, "HEAD^{commit}");
         Assert.NotEqual(first, second);
         using var start = new ManualResetEventSlim();
         var tasks = Enumerable.Range(0, 12).Select(index => Task.Factory.StartNew(() =>
         {
             Assert.True(start.Wait(TimeSpan.FromSeconds(30)), "Concurrent query start was not signaled.");
-            var revision = index % 2 == 0 ? "first" : "HEAD";
+            var revision = index % 2 == 0 ? "first" : "HEAD^{commit}";
             AssertResolved(reader, repo, revision, index % 2 == 0 ? first : second);
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
         start.Set();

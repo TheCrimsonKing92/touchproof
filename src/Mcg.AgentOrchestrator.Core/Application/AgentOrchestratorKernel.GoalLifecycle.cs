@@ -614,11 +614,15 @@ public sealed partial class AgentOrchestratorKernel
         if (IsReopenProtectedGoalStatus(goal.Status) ||
             IsTerminalGoalStatus(goal.LifecycleStatus) && PlannerOwnership.HasRecordedExecutionRequests(goal))
             return false;
+        var amendmentRouted = false;
+        lock (_humanInputRequestLock)
+            foreach (var planner in goal.Tasks.Where(task => task.RequiredRole == AgentRole.Planner))
+                amendmentRouted |= RouteAnsweredPlannerBriefAmendment(goal, planner, out _);
         var ownershipReconciled = PlannerOwnership.Reconcile(goal, (ownerGoal, reviewer) =>
             !TryFailWorkerResultBlocker(ownerGoal.Id, reviewer, reviewer.LastVerification!, enforceFailureEvidenceRule: true) &&
             TryCompleteTaskWithPassingVerification(ownerGoal, reviewer,
                 "Reconciled passing source review after accepted Planner execution ownership projection; full acceptance evidence remains pending."));
-        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow) || ownershipReconciled;
+        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow) || ownershipReconciled || amendmentRouted;
 
         if (reconciled)
         {
@@ -1825,126 +1829,17 @@ public sealed partial class AgentOrchestratorKernel
         bool recordDuplicateSuppression = true,
         string? evidenceOwner = null,
         PlannerEvidenceStoreReference? storeReference = null,
-        IReadOnlyList<string>? testNames = null, PlannerEvidenceIdentity? plannerIdentity = null, PlannerEvidencePayload? plannerEvidence = null)
+        IReadOnlyList<string>? testNames = null, PlannerEvidenceIdentity? plannerIdentity = null, PlannerEvidencePayload? plannerEvidence = null,
+        int? amendmentCriterionIndex = null)
     {
-        var goal = GetGoal(goalId);
-        if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
-            EnsureGoalCanResumeWork(goal);
-        if (taskId is not null)
-        {
-            goal.FindTask(taskId);
-        }
-
-        var effectiveQuestionFingerprint = string.IsNullOrWhiteSpace(questionFingerprint)
-            ? HumanInputRequest.BuildQuestionFingerprint(question)
-            : questionFingerprint.Trim();
-
-        lock (_humanInputRequestLock)
-        {
-            var matches = _humanInputRequests.Values
-                .Where(candidate =>
-                    candidate.GoalId == goalId &&
-                    candidate.TaskId == taskId &&
-                    candidate.Kind == kind &&
-                    (plannerIdentity is null && candidate.PlannerIdentity is null
-                        ? string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal)
-                        : plannerIdentity is not null && candidate.PlannerIdentity == plannerIdentity))
-                .OrderBy(candidate => candidate.RequestedAt)
-                .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
-                .ToList();
-            if (plannerIdentity is not null && matches.Any(candidate => !plannerEvidence!.SemanticallyEquals(candidate.PlannerEvidence)))
-                throw new InvalidOperationException("Conflicting stored Planner evidence payload; request a new brief before changing the requirement.");
-            var open = matches.FirstOrDefault(candidate => !candidate.IsCompleted);
-            if (open is not null)
-            {
-                if (recordDuplicateSuppression && completedRound is not null)
-                {
-                    ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
-                }
-
-                HoldTaskForExistingHumanInput(goal, taskId, open.Kind);
-                if (recordDuplicateSuppression)
-                {
-                    open.IncrementSuppressionCount();
-                    AppendDuplicateHumanInputSuppressed(
-                        goal,
-                        taskId,
-                        open,
-                        answered: false,
-                        completedRound,
-                        workerResultLogReference);
-                }
-
-                return new HumanInputRequestCreationResult(open, WasReused: true, WasSuppressedByAnswer: false);
-            }
-
-            if (!string.IsNullOrWhiteSpace(blockerFingerprint))
-            {
-                var answered = matches.FirstOrDefault(candidate =>
-                    candidate.IsCompleted &&
-                    !candidate.WasDismissed &&
-                    !candidate.IsSyntheticParkedHumanWaitCompletion &&
-                    !string.IsNullOrWhiteSpace(candidate.Answer) &&
-                    string.Equals(candidate.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
-                if (answered is not null)
-                {
-                    if (!recordDuplicateSuppression)
-                    {
-                        return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
-                    }
-
-                    if (completedRound is not null)
-                    {
-                        ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, answered.Id);
-                    }
-                    answered.IncrementSuppressionCount();
-                    RestoreTaskAfterSuppressedAnsweredInput(
-                        goal,
-                        taskId,
-                        answered,
-                        completedRound,
-                        workerResultLogReference);
-                    AppendDuplicateHumanInputSuppressed(
-                        goal,
-                        taskId,
-                        answered,
-                        answered: true,
-                        completedRound,
-                        workerResultLogReference);
-                    return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
-                }
-            }
-
-            if (completedRound is not null)
-            {
-                ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
-            }
-            var id = HumanInputRequestId.New();
-            var request = new HumanInputRequest(
-                id,
-                goal.Id,
-                taskId,
-                question,
-                _clock.UtcNow,
-                kind,
-                isAutoDefaultable,
-                isDismissible,
-                isAnswerRequired,
-                isExternallyBlocked,
-                suggestedDefaultAnswer,
-                resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id),
-                effectiveQuestionFingerprint,
-                blockerFingerprint,
-                evidenceOwner: evidenceOwner,
-                storeReference: storeReference,
-                testNames: testNames, plannerIdentity: plannerIdentity, plannerEvidence: plannerEvidence);
-            _humanInputRequests.Add(request.Id, request);
-
-            HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
-            Append(goal, taskId, ProgressKind.HumanInputRequested, question);
-            AppendContradictoryRecordAdvisoryIfNeeded(goal, request);
-            return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
-        }
+        var registrar = new HumanInputRequestRegistrar(_humanInputRequestLock, _humanInputRequests, _clock,
+            EnsureGoalCanResumeWork, HoldTaskForExistingHumanInput, ResetAnsweredHumanInputSuppressionStreaks,
+            AppendDuplicateHumanInputSuppressed, RestoreTaskAfterSuppressedAnsweredInput,
+            AppendContradictoryRecordAdvisoryIfNeeded, (g, t, k, message) => Append(g, t, k, message));
+        return registrar.Request(GetGoal(goalId), taskId, question, kind, isAutoDefaultable, isDismissible,
+            isAnswerRequired, isExternallyBlocked, suggestedDefaultAnswer, resumeCommand, questionFingerprint,
+            blockerFingerprint, completedRound, workerResultLogReference, recordDuplicateSuppression,
+            evidenceOwner, storeReference, testNames, plannerIdentity, plannerEvidence, amendmentCriterionIndex);
     }
 
     private void AppendContradictoryRecordAdvisoryIfNeeded(Goal goal, HumanInputRequest request) =>
@@ -1954,6 +1849,13 @@ public sealed partial class AgentOrchestratorKernel
     private void RestoreTaskAfterSuppressedAnsweredInput(Goal goal, TaskId? taskId,
         HumanInputRequest request, int? completedRound, string? workerResultLogReference)
     {
+        if (request.Kind == HumanWaitKind.PlannerBriefAmendment && taskId is not null)
+        {
+            HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
+            RestoreTaskAfterHumanInput(goal, goal.FindTask(taskId));
+            RefreshGoalStatus(goal);
+            return;
+        }
         HumanInputSuppression.RestoreTaskAfterSuppressedAnsweredInput(_eventWriter, goal, taskId, request,
             completedRound, workerResultLogReference, (g, t, k, message) => Append(g, t, k, message));
         RefreshGoalStatus(goal);
@@ -1996,8 +1898,10 @@ public sealed partial class AgentOrchestratorKernel
         string answer,
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
-        bool supersedeSiblings = true)
-        => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false);
+        bool supersedeSiblings = true,
+        PlannerBriefAmendmentDisposition? amendmentDisposition = null)
+        => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false,
+            amendmentDisposition: amendmentDisposition);
 
     internal void SubmitHumanInputCore(
         HumanInputRequestId requestId,
@@ -2005,11 +1909,13 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string>? gatedDeliverableIds,
         HumanInputAnswerOrigin origin,
         bool supersedeSiblings,
-        bool isAutoDefaulted, Func<int, bool>? hasCurrentSelectorlessGateReceipt = null)
+        bool isAutoDefaulted, Func<int, bool>? hasCurrentSelectorlessGateReceipt = null,
+        PlannerBriefAmendmentDisposition? amendmentDisposition = null)
     {
         lock (_humanInputRequestLock)
         {
             var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
+            ValidateAmendmentDisposition(request, amendmentDisposition);
             var goal = GetGoal(request.GoalId);
             if (!PlannerHumanInputAnswerAuthorization.IsAuthorized(request, goal, origin, supersedeSiblings, isAutoDefaulted, hasCurrentSelectorlessGateReceipt))
                 throw new UnauthorizedAccessException("Typed Planner human-input evidence requires an authorized explicit Operator answer.");
@@ -2023,7 +1929,7 @@ public sealed partial class AgentOrchestratorKernel
                 gatedDeliverableIds,
                 origin,
                 briefVersion: goal.AuthoritativeBrief.Version,
-                isAutoDefaulted: isAutoDefaulted);
+                isAutoDefaulted: isAutoDefaulted, amendmentDisposition: amendmentDisposition);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
             var siblingCount = HumanInputSubmission.CompleteSiblings(
@@ -2080,7 +1986,8 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         HumanInputRequestId requestId,
         string replacementAnswer,
-        HumanInputAnswerOrigin origin)
+        HumanInputAnswerOrigin origin,
+        PlannerBriefAmendmentDisposition? amendmentDisposition = null)
     {
         lock (_humanInputRequestLock)
         {
@@ -2091,6 +1998,7 @@ public sealed partial class AgentOrchestratorKernel
                     $"Human input request '{requestId}' was not found on goal '{goal.Id.Value}'.");
             }
 
+            ValidateAmendmentDisposition(request, amendmentDisposition);
             var previousAnswer = request.AuthoritativeAnswer
                 ?? throw new InvalidOperationException(
                     $"Human input request '{requestId}' has no answered clarification to supersede.");
@@ -2133,7 +2041,7 @@ public sealed partial class AgentOrchestratorKernel
                 replacementAnswer,
                 supersededAt,
                 origin,
-                goal.AuthoritativeBrief.Version);
+                goal.AuthoritativeBrief.Version, amendmentDisposition);
             var resolvedRequests = matchingRequests.Where(candidate => !candidate.IsCompleted).ToArray();
             foreach (var related in resolvedRequests)
             {
@@ -2147,6 +2055,10 @@ public sealed partial class AgentOrchestratorKernel
             var affectedTasks = resolvedRequests
                 .Where(candidate => candidate.TaskId is not null)
                 .Select(candidate => candidate.TaskId!)
+                .Concat(request.Amendment is not null && !request.AmendmentReplanRouted && request.TaskId is not null &&
+                    goal.FindTask(request.TaskId).Status == WorkTaskStatus.WaitingForHuman &&
+                    (goal.FindTask(request.TaskId).LatestRetryAt is not { } retryAt || request.RequestedAt >= retryAt)
+                    ? [request.TaskId] : [])
                 .Concat(thresholdAffectedTaskIds)
                 .Distinct()
                 .Select(goal.FindTask)
@@ -2271,6 +2183,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
     {
+        if (RouteAnsweredPlannerBriefAmendment(goal, task, out var amendmentPending) || amendmentPending) return;
         if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task) && task.LastProcess is not { IsRunning: true })
         {
             task.ClearLatestVerification();
@@ -2299,6 +2212,39 @@ public sealed partial class AgentOrchestratorKernel
             ? $"Human input resolved; returned task to Assigned for redispatch; abandoned unstarted dispatch {refusedDispatch.LinkedDispatchAt:O} whose start retry admission refused."
             : $"Human input resolved; restored task status to {restoredStatus}.";
         Append(goal, task.Id, ProgressKind.TaskUpdated, message);
+    }
+
+    private static void ValidateAmendmentDisposition(HumanInputRequest request, PlannerBriefAmendmentDisposition? disposition)
+    {
+        if (disposition is not null && (request.Amendment is null || request.Kind != HumanWaitKind.PlannerBriefAmendment))
+            throw new ArgumentException("--amendment requires a request carrying a Planner brief amendment payload.");
+        if (disposition is not null && disposition != PlannerBriefAmendmentDisposition.Decline)
+            throw new ArgumentException("--amendment accepts only decline.");
+    }
+
+    private bool RouteAnsweredPlannerBriefAmendment(Goal goal, TaskSpec task, out bool pending)
+    {
+        var decision = PlannerBriefAmendmentRouting.Evaluate(goal, task, _humanInputRequests.Values);
+        pending = decision is { Replan: false };
+        if (decision is not { Replan: true }) return false;
+        TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, task.SetStatus(WorkTaskStatus.Failed), TaskStatusTransitionRecorder.GoalLifecycleReplanBriefAmendment);
+        RetryTaskCore(goal.Id, task.Id, decision.RetryMessage(goal), RetryCause.ContractClarification,
+            invalidateDownstream: true, retryRoundKind: null, authoritativeRetryFeedback: true);
+        decision.Request.MarkAmendmentReplanRouted();
+        return true;
+    }
+
+    public PlannerBriefAmendmentRevisionPendingHold? GetPlannerBriefAmendmentRevisionPending(GoalId goalId)
+    {
+        lock (_humanInputRequestLock)
+        {
+            var goal = GetGoal(goalId);
+            if (goal.IsTerminal || goal.Status == GoalStatus.Parked) return null;
+            foreach (var task in goal.Tasks)
+                if (PlannerBriefAmendmentRouting.Evaluate(goal, task, _humanInputRequests.Values) is { Replan: false } decision)
+                    return decision.Hold(goal, task);
+            return null;
+        }
     }
 
     public void DismissHumanInput(HumanInputRequestId requestId)

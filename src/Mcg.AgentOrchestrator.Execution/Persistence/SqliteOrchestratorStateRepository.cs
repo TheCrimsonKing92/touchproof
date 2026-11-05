@@ -920,7 +920,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 continue;
             }
 
-            var winner = existing.IsCompleted
+            var newerAmendmentAnswer = request.Kind == HumanWaitKind.PlannerBriefAmendment && request.Amendment is not null &&
+                (request.AnswerHistory?.Count ?? 0) > (existing.AnswerHistory?.Count ?? 0);
+            var winner = newerAmendmentAnswer ? request : existing.IsCompleted
                 ? existing
                 : request.IsCompleted || request.SuppressionCount > existing.SuppressionCount
                     ? request
@@ -934,6 +936,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             merged[mergeId] = winner with
             {
                 Id = mergeId,
+                AmendmentReplanRouted = request.AmendmentReplanRouted || existing.AmendmentReplanRouted,
                 SuppressionCount = suppressionWinner.SuppressionCount,
                 SuppressionAnswerRevision = suppressionWinner.SuppressionAnswerRevision,
                 SuppressionRevision = suppressionWinner.SuppressionRevision
@@ -962,7 +965,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             .ToArray();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.WaitingForHuman))
         {
-            if (!openRequests.Any(request => string.Equals(request.TaskId, task.Id, StringComparison.Ordinal)))
+            if (!openRequests.Any(request => string.Equals(request.TaskId, task.Id, StringComparison.Ordinal)) &&
+                !humanInputRequests.Any(request => request.TaskId == task.Id &&
+                    task.RequiredRole == AgentRole.Planner && request.Kind == HumanWaitKind.PlannerBriefAmendment &&
+                    request.Amendment is not null && !request.AmendmentReplanRouted && request.IsCompleted && !request.WasDismissed &&
+                    request.AnswerHistory?.Any(answer => !answer.IsRetracted) == true &&
+                    (task.LatestRetryAt is null || request.RequestedAt >= task.LatestRetryAt)))
             {
                 throw new InvalidOperationException(
                     $"Goal '{ShortGoalId(goal.Id)}' task '{task.Id[..Math.Min(8, task.Id.Length)]}' " +

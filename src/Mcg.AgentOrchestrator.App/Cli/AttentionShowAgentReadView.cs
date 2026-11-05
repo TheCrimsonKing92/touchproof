@@ -10,9 +10,10 @@ internal static class AttentionShowAgentReadView
 {
     internal static string Render(string? goalId, IReadOnlyList<HumanInputRequest> waits,
         IReadOnlyList<CollaborationItem> items, Func<CollaborationItem, string?> clarificationId,
-        TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null, OwnerDecisionRead? decisions = null) =>
+        TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null, OwnerDecisionRead? decisions = null,
+        IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
-            PostLandingFollowUpAttention.WithRows(EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(WithDecisions(new Dictionary<string, object?>
+            PostLandingFollowUpAttention.WithRows(EnvironmentHoldAttentionView.WithRows(AttentionAgentReadView.WithPostLandingDuties(WithDecisions(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
                 ["goalId"] = goalId,
                 ["waits"] = waits.Select(wait => new
@@ -66,7 +67,7 @@ internal static class AttentionShowAgentReadView
                         resolvingVerb = hold.ResolvingVerb,
                         nextAction = hold.NextAction
                     }).ToArray()
-            }, decisions), AttentionAgentReadView.DutyRows(null,
+            }, amendmentHolds), decisions), AttentionAgentReadView.DutyRows(null,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)), waits,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray()),

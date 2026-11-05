@@ -35,7 +35,7 @@ internal sealed class JunitCommandAcceptanceCheck(
             ArgumentException or InvalidOperationException or NotSupportedException)
         {
             return Task.FromResult(new AcceptanceCheckResult(check.Name, false, null,
-                $"JUnit environment contract could not be loaded: {exception.Message}", Advisory: check.Advisory));
+                new JunitCommandEnvironmentDiagnostics(check).Detail($"JUnit environment contract could not be loaded: {exception.Message}"), Advisory: check.Advisory));
         }
 
         return RunOwnedAsync(check, worktreePath, owner, invocation, contract, timeProvider, executableResolver,
@@ -65,6 +65,7 @@ internal sealed class JunitCommandAcceptanceCheck(
         using var ownerLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, owner.CancellationToken);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ownerLifetime.Token, deadline.Token);
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
+        var privacy = new JunitCommandEnvironmentDiagnostics(check);
         var stderr = new List<string>();
         var records = new List<TestResult>();
         string[] paths = [];
@@ -169,6 +170,26 @@ internal sealed class JunitCommandAcceptanceCheck(
                 return lastProcess;
             }
         }
+        catch (OperationCanceledException exception) when (
+            exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false ||
+            (ownerLifetime.IsCancellationRequested && exception.Data.Contains("AcceptanceCancellationCleanupRan")))
+        {
+            // A generic Cancelled result would discard the cleanup failure before the verifier
+            // throws its boundary cancellation. Publish only owned-process evidence, never the
+            // original exception/inner exception, which may contain check-local input values.
+            var message = exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false
+                ? "JUnit cancellation could not confirm owned process-tree exit; "
+                : "JUnit invocation cancelled; ";
+            var failure = new OperationCanceledException(message +
+                $"process_id={exception.Data["AcceptanceCancellationProcessId"]}; " +
+                $"remaining_process_ids={exception.Data["AcceptanceCancellationRemainingProcessIds"]}; " +
+                $"cleanup_failure={exception.Data["AcceptanceCancellationCleanupFailure"]}.", cancellationToken);
+            foreach (var key in new[] { "AcceptanceCancellationTreeExitConfirmed", "AcceptanceCancellationProcessId",
+                "AcceptanceCancellationRemainingProcessIds", "AcceptanceCancellationCleanupFailure",
+                "AcceptanceCancellationCleanupRan", "AcceptanceCancellationCleanupSkippedReason" })
+                if (exception.Data.Contains(key)) failure.Data[key] = exception.Data[key];
+            throw failure;
+        }
         catch (OperationCanceledException)
         {
             if (!Expired()) diagnostics.Add(new(CrosswalkDiagnosticCategory.Cancelled, "JUnit invocation cancelled."));
@@ -176,6 +197,12 @@ internal sealed class JunitCommandAcceptanceCheck(
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             diagnostics.Add(new(exitCode is null ? CrosswalkDiagnosticCategory.StartFailed : CrosswalkDiagnosticCategory.ReceiptFailure, exception.Message));
+        }
+        catch (InvalidOperationException) when (privacy.Enabled)
+        {
+            // Owned-launch/apparatus faults must remain loud engine failures. Do not retain an inner
+            // exception: its message and nested launch evidence can contain configured input values.
+            throw new InvalidOperationException(privacy.Detail(""));
         }
         return Finish();
 
@@ -191,20 +218,24 @@ internal sealed class JunitCommandAcceptanceCheck(
         AcceptanceCheckResult Finish()
         {
             Expired();
+            var publishedDiagnostics = diagnostics.Select(item => item with { Detail = privacy.Detail(item.Detail) }).ToArray();
             var passed = diagnostics.Count == 0 && paths.Length > 0;
-            return new(check.Name, passed, exitCode, passed ? null : string.Join("; ", diagnostics.Select(item => $"{item.Category}: {item.Detail}")),
+            return new(check.Name, passed, exitCode, passed ? null : string.Join("; ", publishedDiagnostics.Select(item => $"{item.Category}: {item.Detail}")),
                 ArtifactsPath: paths.FirstOrDefault() is { } path ? Path.GetDirectoryName(path) : null,
                 DurationMilliseconds: (long)timeProvider.GetElapsedTime(started).TotalMilliseconds,
                 ResultSummary: $"junit-command: results={records.Count}", Advisory: check.Advisory,
                 TestResultAttemptId: owner.RunId, TestResultRunOrdinal: invocation.Ordinal,
                 FailureClassification: passed ? null : $"junit-command-{diagnostics.FirstOrDefault()?.Category}",
+                // These identities are gate inputs. Keep their exact values so distinct fixture
+                // configurations cannot collapse into the same failure identity; rendered
+                // diagnostics are suppressed separately above.
                 FailingTestIdentities: records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => record.Id).ToArray(),
                 ExecutedTestCount: records.Count(record => record.Status is TestResultStatus.Passed or TestResultStatus.Failed or TestResultStatus.Error),
-                DiscoveredTestCount: records.Count, ProcessStderr: string.Concat(stderr), ProcessStderrPath: lastProcess?.StderrPath,
+                DiscoveredTestCount: records.Count, ProcessStderr: privacy.Detail(string.Concat(stderr)), ProcessStderrPath: privacy.Enabled ? null : lastProcess?.StderrPath,
                 GateHeartbeatPath: heartbeatPath, ChildProcessId: lastProcess?.ChildProcessId, ChildProcessStartedAt: lastProcess?.ChildProcessStartedAt,
                 SkippedTestIdentities: records.Where(record => record.Status == TestResultStatus.Skipped).Select(record => record.Id).ToArray())
             {
-                NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray(), CohortEvidence = cohortEvidence,
+                NormalizedTestResultPaths = paths, CrosswalkDiagnostics = publishedDiagnostics, CohortEvidence = cohortEvidence,
                 CrosswalkExecutablePath = executable?.Path, CrosswalkExecutableSha256 = executable?.Sha256
             };
         }
