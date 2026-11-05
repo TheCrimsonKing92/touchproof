@@ -12,15 +12,25 @@ internal static class OwnerConsoleGateFormatter
         return $"[{new string('#', cells)}{new string('-', 10 - cells)}] estimate {(int)Math.Floor(fraction * 100)}%  {Remaining(gate.RemainingSeconds)} left";
     }
 
-    internal static string StatusSegment(OwnerConsoleGateProgress gate)
+    internal static string StatusSegment(OwnerConsoleGateProgress gate, bool compact = false)
     {
-        if (gate.ConcurrentRuns is { Count: > 1 } runs) return string.Join('\n', runs.Select(RunLine));
-        if (!gate.Live) return gate.Participation is { } participation ? "gate: " + participation + Identity(gate) :
+        if (gate.ConcurrentRuns is { Count: > 1 } runs)
+            return compact ? $"gate: {runs.Count} live {StatusRun(runs[0], true)}" + (runs.Any(run => run.Failing) && !runs[0].Failing ? " FAILING" : "") :
+                $"gate: {runs.Count} live: " + string.Join("; ", runs.Select(run => StatusRun(run, false)));
+        if (!gate.Live) return gate.Participation is { } participation ? "gate: " + participation :
             "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
-        var members = string.Join("+", gate.Members.Take(3).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
-        if (gate.Members.Count > 3) members += "+" + (gate.Members.Count - 3);
-        var count = OwnerConsoleGateCount.Of(gate);
-        return $"gate: {gate.Kind} {members} {CountText(gate)} {(gate.Failing ? "FAILING" : gate.HasEta ? Remaining(gate.RemainingSeconds) : "ETA unknown")}" + Identity(gate);
+        return "gate: " + StatusRun(gate, compact);
+    }
+
+    private static string StatusRun(OwnerConsoleGateProgress gate, bool compact)
+    {
+        var limit = compact ? 1 : 3;
+        var members = string.Join("+", gate.Members.Take(limit).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
+        if (gate.Members.Count > limit) members += "+" + (gate.Members.Count - limit);
+        var progress = gate.ScheduleKnown ? " " + CountText(gate) : "";
+        var state = gate.Failing ? "FAILING" : gate.HasEta ? Remaining(gate.RemainingSeconds) :
+            (compact ? "" : "running ") + $"{(int)gate.Elapsed.TotalMinutes}m";
+        return $"{gate.Kind} {members}{progress} {state}";
     }
 
     internal static string RunLine(OwnerConsoleGateProgress gate) =>

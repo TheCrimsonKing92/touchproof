@@ -150,7 +150,10 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                 ExecutionOf(item).Equals(currentAttempt, StringComparison.OrdinalIgnoreCase));
             var planPath = planEvent is not null ? planEvent.Get("heartbeat") : gate.Events
                 .Select(item => item.Get("heartbeat"))
-                .Where(path => AttemptFromHeartbeat(path).Equals(currentAttempt, StringComparison.OrdinalIgnoreCase))
+                // Conductor attempts use a slot index, while standalone attempts use
+                // "gate". The recorded execution owns the artifact; do not reparse it.
+                .Where(path => currentAttempt.Length > 0 && path.Split(['/', '\\']).Last()
+                    .StartsWith(currentAttempt + ".", StringComparison.OrdinalIgnoreCase))
                 .Select(path => OwnerConsoleGateLanePlanReader.ArtifactPath(path, currentAttempt))
                 .LastOrDefault(path => path is not null);
             var plan = planPath is null ? null : planReader?.Read(planPath, currentAttempt);
