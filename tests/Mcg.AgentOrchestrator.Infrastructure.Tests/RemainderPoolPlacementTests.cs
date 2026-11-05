@@ -73,7 +73,9 @@ public sealed class RemainderPoolPlacementTests
         var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
         var filters = names.Select(name => Assert.Single(lanes, lane => lane.Name == name).Filter).ToArray();
         // SHA-256 of UTF-8, LF-joined partition filters captured at pre-change HEAD 95d379cb4185.
-        Assert.Equal("D587C2991DFFC97C3F0F78D96910590D8E11D58C1B34725CE832B919CD9ED01F",
+        // Goal c02ea6c7 adds only FullyQualifiedName~WorkerBuildRequestStructuralFailureTests and
+        // FullyQualifiedName~WorkerBuildRequestStructuralIntegrationTests to Remainder balance C.
+        Assert.Equal("763509EA66ED54C6EC79FAEFBA15FADFD5F214A4C03919373A9E2C894C94E218",
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', filters)))));
         AssertHostIntegrationExcluded(filters[^1]);
     }
