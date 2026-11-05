@@ -33,6 +33,10 @@ public sealed class DispatchStartPolicyTests
             DispatchStartAction.Escalate, 9, "dispatch-start-failed", "No assigned dispatch candidates"];
         yield return [new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Deferred", StartOutcomeReason = "Spec refinement pending" },
             DispatchStartAction.Hold, 10, "start-deferred", "Spec refinement pending"];
+        yield return [new DispatchStartFacts("goal-123") { WorkspacePreparationLeaseUnavailableMessage = "Recovery owner unavailable." },
+            DispatchStartAction.Hold, 11, "workspace-preparation-lease-unavailable", "Recovery owner unavailable."];
+        yield return [new DispatchStartFacts("goal-123") { WorkspacePreparationFailureMessage = "Goal worktree recovery refused: partial directory remains." },
+            DispatchStartAction.Escalate, 12, "workspace-preparation-failed", "Goal worktree recovery refused: partial directory remains."];
         yield return [new DispatchStartFacts("goal-123"), DispatchStartAction.Proceed, 0, "proceed", "Dispatch start may proceed."];
         yield return [new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Started" },
             DispatchStartAction.Proceed, 0, "proceed", "Dispatch start may proceed."];
@@ -63,6 +67,8 @@ public sealed class DispatchStartPolicyTests
         var facts = new DispatchStartFacts("goal-123")
         {
             UnreconciledTaskIdPrefix = "abcdef12", LeaseRecoveryStatus = "held",
+            WorkspacePreparationLeaseUnavailableMessage = "Recovery owner unavailable",
+            WorkspacePreparationFailureMessage = "Recovery refused",
             ConcurrentLeaseRefusal = "refused", IntegrationCanDispatch = "refused",
             IntegrationMessage = "Integration refused", ReadOnlyIntegrationHoldReason = "Read-only held",
             StartOutcomeCategory = "EmptyBatch", ReadinessVerdict = "deferred", ReadinessReason = "Cooldown",
@@ -70,6 +76,10 @@ public sealed class DispatchStartPolicyTests
         };
         Assert.Equal(1, DispatchStartPolicy.Evaluate(facts).DiscriminatingRung);
         facts = facts with { UnreconciledTaskIdPrefix = "" };
+        Assert.Equal(11, DispatchStartPolicy.Evaluate(facts).DiscriminatingRung);
+        facts = facts with { WorkspacePreparationLeaseUnavailableMessage = "" };
+        Assert.Equal(12, DispatchStartPolicy.Evaluate(facts).DiscriminatingRung);
+        facts = facts with { WorkspacePreparationFailureMessage = "" };
         Assert.Equal(2, DispatchStartPolicy.Evaluate(facts).DiscriminatingRung);
         facts = facts with { LeaseRecoveryStatus = "" };
         Assert.Equal(3, DispatchStartPolicy.Evaluate(facts).DiscriminatingRung);
@@ -94,7 +104,8 @@ public sealed class DispatchStartPolicyTests
             "goalId", "unreconciledTaskIdPrefix", "leaseRecoveryStatus", "concurrentLeaseRefusal",
             "integrationCanDispatch", "integrationMessage", "readOnlyIntegrationHoldReason",
             "startOutcomeCategory", "startOutcomeReason", "readinessVerdict", "readinessReason",
-            "cancelledPredecessorBlocker", "assignedTasksBlockedReason"
+            "cancelledPredecessorBlocker", "assignedTasksBlockedReason",
+            "workspacePreparationLeaseUnavailableMessage", "workspacePreparationFailureMessage"
         }, facts.Select(fact => fact.Name));
         Assert.Equal("goal-123", facts[0].Value);
         Assert.All(facts.Skip(1), fact => Assert.Equal("", fact.Value));
@@ -104,6 +115,20 @@ public sealed class DispatchStartPolicyTests
             Assert.Equal(facts[index].Name, restored[index].Name);
             Assert.Equal(facts[index].Value, restored[index].Value);
         }
+    }
+
+    [Xunit.Fact]
+    public void LegacyRecordedFacts_ReplayWithoutWorkspacePreparationObservations()
+    {
+        var legacy = new DispatchStartFacts("goal-123") { ConcurrentLeaseRefusal = "refused" }
+            .ToRecordedFacts().Where(fact => !fact.Name.StartsWith("workspacePreparation", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(13, legacy.Length);
+
+        var restored = DispatchStartFacts.FromRecordedFacts(legacy);
+
+        Assert.Equal("", restored.WorkspacePreparationLeaseUnavailableMessage);
+        Assert.Equal("", restored.WorkspacePreparationFailureMessage);
+        Assert.Equal(3, DispatchStartPolicy.Evaluate(restored).DiscriminatingRung);
     }
 
     [Xunit.Fact]

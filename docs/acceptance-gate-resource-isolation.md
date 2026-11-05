@@ -226,3 +226,39 @@ limits comparability. Delivery requires a demonstrable reduction in the affected
 5% above is the number that must improve; the removed attributes are not themselves the result. The
 focused receipt at 4a96f18f (121/121 over the caller-correction, host-capacity and landing-lock classes)
 is focused evidence of those classes only and contributes nothing to this criterion.
+
+## 2026-11-04: Remainder joins the balanced pool
+
+The shipped pool now has eight lanes and explicitly lists `Remainder` in
+`poolEligibleLaneNames`. This is the smallest mechanism that preserves the raw filter contract:
+removing Remainder's `Category!=HostIntegration` clause would also remove it from the local
+Remainder partition, whose runner reads the manifest lane filters directly. Explicit eligibility
+leaves those filters, focused evidence, membership diagnostics and owner console inputs unchanged.
+Structural coverage continues using the expanded lanes and the existing scanner complement.
+
+Eligibility cannot override resource keys, owned collections or build-system requirements, and
+each eligible lane's trait exclusions must already be supplied by the pool. `IsConstrained` is
+unchanged. Isolated process spawning A and B and Remainder merge train and ratchet remain
+standalone. Every generated pool lane and the residual still exclude HostIntegration; resource
+keys, the five-attempt history window and residual behavior are unchanged.
+
+The objective's measurements at main `f0959b4a3` motivate this change: gate attempt
+`fc422919-0-20261104191831468` took 1,668 s, with Remainder running from about 41 s to 1,604 s
+after every other lane had finished. Its median rose from 680 s before 2026-10-29 to 1,527 s
+since 2026-11-04 05:45Z, while its test count grew from roughly 15,400 to 19,700 and summed
+test time roughly doubled. The attempt recorded 1,598 s holding three host-capacity slots,
+189 s waiting, and 15,725 test-seconds (effective parallelism about ten). Its manifest estimate
+of 415.6 s understates the observed roughly 1,560 s span. These are supplied measurements,
+not a new controlled experiment or proof of a contention mechanism.
+
+The one-time coverage identity change from Remainder joining the pool is expected.
+`ResolveIdentity` still flattens the pool: changing only `laneCount` leaves its coverage lanes
+unchanged, although the effective acceptance plan hash includes pool settings and changes.
+The new layout takes effect in gates after adoption; this goal's gate uses the conductor's
+current engine. Acceptance owns execution of the committed placement and identity regressions.
+
+After adoption, the operator compares five home gates with the preceding five for gate wall,
+longest lane, and local versus remote lane counts. The expected long pole is Isolated process
+spawning B or a Balanced lane at roughly 1,000-1,100 s; this remains an unverified expectation.
+If gates get slower or host pressure rises, revert only the manifest pool settings: remove
+`poolEligibleLaneNames` and restore `laneCount` to four.

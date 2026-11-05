@@ -89,8 +89,10 @@ public static partial class GoalWorktrees
     }
 
 
-    private static GitCli.GitResult AddWorktree(string executionDirectory, string path, string branch, bool branchExists)
+    private static GitCli.GitResult AddWorktree(string executionDirectory, string path, string branch, bool branchExists, bool recoverStaleRegistration = false)
     {
+        if (recoverStaleRegistration)
+            return GitCli.Run(executionDirectory, "worktree", "add", "--force", "--", path, branch);
         return branchExists
             ? GitCli.Run(executionDirectory, "worktree", "add", path, branch)
             : GitCli.Run(executionDirectory, "worktree", "add", path, "-b", branch);

@@ -40,12 +40,12 @@ public sealed class GuidanceTextBudgetTests
         new("requirements/Tester/Simple", 3521, () => Requirements(AgentRole.Tester, TaskComplexity.Simple)),
         // Tester Complex requirements add the evidence-bound premise-invalid stop instruction (120 chars).
         new("requirements/Tester/Complex", 5673, () => Requirements(AgentRole.Tester, TaskComplexity.Complex)),
-        // Reviewer Auto requirements are loaded in every Reviewer brief with automatic complexity.
-        new("requirements/Reviewer/Auto", 4601, () => Requirements(AgentRole.Reviewer, TaskComplexity.Auto)),
-        // Reviewer Simple requirements are loaded in every simple Reviewer brief.
-        new("requirements/Reviewer/Simple", 4601, () => Requirements(AgentRole.Reviewer, TaskComplexity.Simple)),
-        // Reviewer Complex requirements are loaded in every complex Reviewer brief.
-        new("requirements/Reviewer/Complex", 5671, () => Requirements(AgentRole.Reviewer, TaskComplexity.Complex)),
+        // Receipt-aware re-raise guidance adds 222 normalized chars to every Auto Reviewer brief.
+        new("requirements/Reviewer/Auto", 4823, () => Requirements(AgentRole.Reviewer, TaskComplexity.Auto)),
+        // Receipt-aware re-raise guidance adds 222 normalized chars to every Simple Reviewer brief.
+        new("requirements/Reviewer/Simple", 4823, () => Requirements(AgentRole.Reviewer, TaskComplexity.Simple)),
+        // Receipt-aware re-raise guidance adds 222 normalized chars to every Complex Reviewer brief.
+        new("requirements/Reviewer/Complex", 5893, () => Requirements(AgentRole.Reviewer, TaskComplexity.Complex)),
         // Explicit post-landing operator-check guidance adds 168 chars over the 4403 gate-owned evidence ceiling.
         // needed-as-string clarification adds 71 chars.
         // Typed brief-amendment schema and ruling/re-emission guidance add 339 chars; measured total is 4981.
@@ -133,11 +133,11 @@ public sealed class GuidanceTextBudgetTests
     public void RequirementCaps_Source_PreservesValuesAsIntegerLiterals()
     {
         var source = ReadRepositoryFile("src/Mcg.AgentOrchestrator.Core/Application/SdlcRolePromptRequirements.cs");
-        Assert.Matches(@"internal const int ReviewerComplexRequirementsMaxChars = 5723;", source);
-        Assert.Matches(@"internal const int ReviewerCompactRequirementsMaxChars = 4632;", source);
+        Assert.Matches(@"internal const int ReviewerComplexRequirementsMaxChars = 5946;", source);
+        Assert.Matches(@"internal const int ReviewerCompactRequirementsMaxChars = 4855;", source);
         Assert.Matches(@"internal const int TesterCompactRequirementsMaxChars = 3882;", source);
-        Assert.Equal(5723, SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars);
-        Assert.Equal(4632, SdlcRolePromptRequirements.ReviewerCompactRequirementsMaxChars);
+        Assert.Equal(5946, SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars);
+        Assert.Equal(4855, SdlcRolePromptRequirements.ReviewerCompactRequirementsMaxChars);
         Assert.Equal(3882, SdlcRolePromptRequirements.TesterCompactRequirementsMaxChars);
     }
 

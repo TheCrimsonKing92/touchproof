@@ -37,7 +37,8 @@ internal static class OwnerActivityDetailPresentation
             "phrase" => field with { Value = summary }, "why" => field with { Value = why },
             "next" => field with { Value = next }, "act" => field with { Value = act }, _ => field
         })] };
-        var values = fields.Fields.ToList();
+        var values = fields.Fields.Where(field => !string.IsNullOrWhiteSpace(field.Value) &&
+            !(field.Key == "detail" && events.Count == 1 && field.Value == (events[0].Evidence?.Original ?? events[0].Detail))).ToList();
         var lines = new List<string>();
         var keys = new Dictionary<int, string>();
         Add("What happened", summary, "phrase");
@@ -55,37 +56,69 @@ internal static class OwnerActivityDetailPresentation
             var source = events[i];
             var prefix = $"event/{i}/";
             if (events.Count > 1) { lines.Add(""); lines.Add($"Event {i + 1}"); }
-            Diagnostic(new(prefix + "goal", "Goal ID", source.GoalId));
-            Diagnostic(new(prefix + "timestamp", "Timestamp", source.Timestamp.ToString("O")));
-            foreach (var field in source.Evidence?.Fields ?? []) Diagnostic(field with { Key = prefix + field.Key });
-            foreach (var field in parsed[i].Fields) Diagnostic(field with { Key = prefix + field.Key });
+            var section = events.Count > 1 ? $"Original event {i + 1}" : "Original event";
+            var parts = OwnerGoalProgressDetail.Fields(source);
+            if (source.GoalProgress is null && parts.Count == 0) Diagnostic(new(prefix + "goal", "Goal ID", source.GoalId), section);
+            Diagnostic(new(prefix + "timestamp", "Timestamp", source.Timestamp.ToString("O")), section);
+            foreach (var field in source.Evidence?.Fields ?? []) Diagnostic(field with { Key = prefix + field.Key }, section);
+            foreach (var field in parsed[i].Fields) Diagnostic(field with { Key = prefix + field.Key }, section);
             var original = source.Evidence?.Original ?? source.Detail;
             var originalKey = prefix + "original";
-            values.Add(new(originalKey, events.Count > 1 ? $"Original event {i + 1}" : "Original event", original));
-            if (!parsed[i].Complete && original.Length > 0)
+            if (source.GoalProgress is not null || parts.Count > 0)
             {
-                lines.Add(""); lines.Add(events.Count > 1 ? $"Original event {i + 1}" : "Original event");
-                Add("Source", original, originalKey);
+                lines.Add(""); lines.Add(section);
+                foreach (var field in parts)
+                {
+                    Original(field with { Key = prefix + field.Key });
+                }
+                Original(new(originalKey, "Raw event", original));
+            }
+            else
+            {
+                Store(new(originalKey, section, original), section);
+                if (!parsed[i].Complete && original.Length > 0)
+                {
+                    lines.Add(""); lines.Add(section);
+                    Add("Source", original, originalKey);
+                }
+            }
+
+            void Original(OwnerConsoleField field)
+            {
+                if (Store(field, section)) Add(field.Label, field.Value!, field.Key);
             }
         }
         if (additional is not null)
             foreach (var field in additional.Fields)
             {
                 var key = "resolution/" + field.Key;
-                values.Add(field with { Key = key });
-                if (field.Available && (field.Key != "evidence" || field.Value!.Length > 0)) Add(field.Label, field.Value!, key);
+                if (Store(field with { Key = key }, "Resolution")) Add(field.Label, field.Value!, key);
             }
         fields = fields with { Fields = [.. values] };
-        var structured = new OwnerConsoleStructuredText(fields, FieldKeys: keys, ContinuationIndent: 4);
+        var structured = new OwnerConsoleStructuredText(fields, FieldKeys: keys, ContinuationIndent: 4,
+            FooterHint: "F2 fields  Ctrl+C copy field");
         return (string.Join("\n", lines), fields, structured);
 
-        void Diagnostic(OwnerConsoleField field)
+        void Diagnostic(OwnerConsoleField field, string section)
         {
+            if (Store(field, section)) Add(field.Label, field.Value!, field.Key);
+        }
+        bool Store(OwnerConsoleField field, string section)
+        {
+            if (string.IsNullOrWhiteSpace(field.Value) || values.Any(existing => existing.Key == field.Key)) return false;
+            if (values.Any(existing => existing.Label == field.Label))
+            {
+                var label = section + ": " + field.Label;
+                var occurrence = 2;
+                field = field with { Label = label };
+                while (values.Any(existing => existing.Label == field.Label)) field = field with { Label = label + " " + occurrence++ };
+            }
             values.Add(field);
-            if (field.Available) Add(field.Label, field.Value!, field.Key);
+            return true;
         }
         void Add(string label, string value, string key)
         {
+            if (string.IsNullOrWhiteSpace(value)) return;
             var paragraphs = value.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             for (var line = 0; line < paragraphs.Length; line++)
             {

@@ -20,5 +20,7 @@ internal sealed class OwnerConsoleBoardSectionOrder(ImmutableArray<OwnerConsoleD
 
     internal int DecisionCount(IEnumerable<OwnerConsoleBoardRow> rows) => rows
         .Where(row => !row.IsForeign && !row.IsDiagnostic && !row.Dimmed)
-        .Sum(row => _goalDecisions[row.GoalId].Count());
+        .Select(row => row.GoalId)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Sum(goalId => _goalDecisions[goalId].Count());
 }
