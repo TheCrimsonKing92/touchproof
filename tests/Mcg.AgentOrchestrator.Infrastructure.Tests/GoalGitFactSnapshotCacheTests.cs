@@ -58,7 +58,7 @@ public sealed class GoalGitFactSnapshotCacheTests
                 break;
         }
         fixture.Build(cache);
-        Assert.Equal(8, fixture.Commands.Count);
+        Assert.Equal(6, fixture.Commands.Count);
     }
 
     [Xunit.Fact]
@@ -79,12 +79,12 @@ public sealed class GoalGitFactSnapshotCacheTests
         for (var hit = 0; hit < 20; hit++)
         {
             fixture.Build(cache);
-            Assert.Equal(4, fixture.Commands.Count);
+            Assert.Equal(3, fixture.Commands.Count);
         }
         fixture.Build(cache);
-        Assert.Equal(8, fixture.Commands.Count);
+        Assert.Equal(6, fixture.Commands.Count);
         fixture.Build(cache);
-        Assert.Equal(8, fixture.Commands.Count);
+        Assert.Equal(6, fixture.Commands.Count);
     }
 
     [Xunit.Fact]
@@ -106,9 +106,8 @@ public sealed class GoalGitFactSnapshotCacheTests
 
     [Xunit.Theory]
     [Xunit.InlineData(MetadataFixture.TipsCommand, 1)]
-    [Xunit.InlineData(MetadataFixture.MergedCommand, 4)]
-    [Xunit.InlineData(MetadataFixture.WorktreeCommand, 4)]
-    [Xunit.InlineData(MetadataFixture.MainCommand, 4)]
+    [Xunit.InlineData(MetadataFixture.MergedCommand, 3)]
+    [Xunit.InlineData(MetadataFixture.WorktreeCommand, 3)]
     public void FailedEvidenceIsNeverStored(string failedCommand, int commandsPerBuild)
     {
         using var fixture = new MetadataFixture { FailedCommand = failedCommand };
@@ -118,9 +117,9 @@ public sealed class GoalGitFactSnapshotCacheTests
         Assert.Equal(2 * commandsPerBuild, fixture.Commands.Count);
         fixture.FailedCommand = null;
         Assert.True(fixture.Build(cache).IsAvailable);
-        Assert.Equal(2 * commandsPerBuild + 4, fixture.Commands.Count);
+        Assert.Equal(2 * commandsPerBuild + 3, fixture.Commands.Count);
         fixture.Build(cache);
-        Assert.Equal(2 * commandsPerBuild + 4, fixture.Commands.Count);
+        Assert.Equal(2 * commandsPerBuild + 3, fixture.Commands.Count);
     }
 
     [Xunit.Fact]
@@ -145,7 +144,7 @@ public sealed class GoalGitFactSnapshotCacheTests
         File.Delete(fixture.PathFor("HEAD"));
         fixture.Build(cache);
         fixture.Build(cache);
-        Assert.Equal(12, fixture.Commands.Count);
+        Assert.Equal(9, fixture.Commands.Count);
     }
 
     [Xunit.Fact]
@@ -176,10 +175,10 @@ public sealed class GoalGitFactSnapshotCacheTests
         first.Build(cache);
         Assert.Equal(first.Read(), second.Read());
         second.Build(cache);
-        Assert.Equal(4, second.Commands.Count);
+        Assert.Equal(3, second.Commands.Count);
         GoalGitFactIndex.Build(second.Root, "alternate", second.RunGit, snapshotCache: cache);
-        Assert.Equal(8, second.Commands.Count);
-        Assert.Equal("rev-parse --verify refs/heads/alternate", second.Commands[^1]);
+        Assert.Equal(6, second.Commands.Count);
+        Assert.DoesNotContain(second.Commands, command => command.StartsWith("rev-parse ", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -206,7 +205,7 @@ public sealed class GoalGitFactSnapshotCacheTests
         Assert.Equal(GoalBranchContentState.Inconclusive, secondReuse.BuildGoalBranchFacts(fixture.Goal).ContentState);
         Assert.Equal(1, currentRunnerCalls);
         Assert.Equal(2, fixture.Commands.Count(command => command.StartsWith("cherry ", StringComparison.Ordinal)));
-        Assert.Equal(4, fixture.Commands.Count(command => MetadataFixture.IndexCommands.Contains(command)));
+        Assert.Equal(3, fixture.Commands.Count(command => MetadataFixture.IndexCommands.Contains(command)));
     }
 
     [Xunit.Fact]
@@ -220,6 +219,6 @@ public sealed class GoalGitFactSnapshotCacheTests
         Assert.True(first.BuildGoalBranchFacts(fixture.Goal).HasRegisteredWorktree);
         Assert.True(reused.BuildGoalBranchFacts(fixture.Goal).HasRegisteredWorktree);
         Assert.Equal(first.BuildGoalEvidenceKey(fixture.Goal), reused.BuildGoalEvidenceKey(fixture.Goal));
-        Assert.Equal(4, fixture.Commands.Count(command => MetadataFixture.IndexCommands.Contains(command)));
+        Assert.Equal(3, fixture.Commands.Count(command => MetadataFixture.IndexCommands.Contains(command)));
     }
 }

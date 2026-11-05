@@ -52,7 +52,8 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
             observable.Select(goal => goal.Id.Value).ToArray(), kernel.Goals, activeGoalIds);
         observable = observable.Where(goal => groupedIds.Contains(goal.Id.Value)).ToArray();
         var projections = observable.ToDictionary(goal => goal.Id,
-            goal => PassedCohortReceiptPartnerRelease.ProjectReceiptCandidate(driver, goal, policy, kernel));
+            goal => GroupedAdmissionLandingHold.Apply(driver.ProjectCachedGateReadyCandidate(goal, policy),
+                kernel.GetPendingHumanInput(goal.Id), goal));
         var receiptObservations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, projections[goal.Id])).ToArray();
         var observations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
@@ -68,10 +69,10 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
             PassedCohortReceiptApprovalHold.Decision? hold;
             try
             {
-                var denylist = LandingExecutor.LoadLandingDenylist(driver.ExecutionDirectory, receipt.Identity.ObservedMainRevision).Denylist;
+                var denylist = driver.ApprovalHoldCache.LoadDenylist(driver.ExecutionDirectory, receipt.Identity.ObservedMainRevision);
                 var decisions = CollaborationItemStore.ForDirectory(OrchestratorWorkspace.ForDirectory(driver.ExecutionDirectory).OrchestratorDirectory);
                 hold = PassedCohortReceiptApprovalHold.Evaluate(receipt, goals, projections, eligibleIds,
-                    driver.HasFinalizedCohortLanding, member => LandingDenylistOwnerGate.Evaluate(
+                    driver.HasFinalizedCohortLanding, member => driver.ApprovalHoldCache.Evaluate(
                         driver.ExecutionDirectory, denylist, decisions, member.GoalId.Value,
                         receipt.Identity.ObservedMainRevision, member.CandidateRevision, member.LandingPaths));
             }

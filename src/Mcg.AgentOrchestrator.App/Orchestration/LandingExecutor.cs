@@ -420,10 +420,7 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
-        RecordSuccessfulPromotion(workspace, kernel, [(goal.Id, evidenceCandidateSha!)], boundMainRevision!,
-            candidateRevision!, GoalPromotionFact.SoloProvenance, promotionClock);
-        DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
-
+        string? checkoutFailure = null;
         if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
             RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
@@ -436,15 +433,22 @@ internal static partial class LandingExecutor
                 candidateRevision!);
             if (synchronizeWorktree.ExitCode != 0)
             {
-                throw new InvalidOperationException($"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
+                checkoutFailure = $"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}";
             }
         }
+
+        RecordSuccessfulPromotion(workspace, kernel, [(goal.Id, evidenceCandidateSha!)], boundMainRevision!,
+            candidateRevision!, GoalPromotionFact.SoloProvenance, promotionClock);
+        DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+        // Preserve promotion evidence even when the synchronization attempt itself failed.
+        if (checkoutFailure is not null) throw new InvalidOperationException(checkoutFailure);
 
         eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch,
             BuildLandingAdmission(landingDenylist, candidateRevision!, denylistApproval));
         OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
         StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
-        var openChecks = PostLandingOperatorCheck.DescribeOpen(kernel.GetPendingHumanInput(goal.Id));
+        var openChecks = PostLandingOperatorCheck.DescribeOpen(
+            kernel.GetPendingHumanInput(goal.Id), kernel.GetGoal(goal.Id).UnpublishedPostLandingDuties);
         var postLandingMessage = openChecks is null ? string.Empty : "Landed with " + openChecks;
         if (openChecks is not null)
             kernel.RecordGoalPolicyDecision(goal.Id, postLandingMessage);
@@ -969,9 +973,7 @@ internal static partial class LandingExecutor
                     : AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}; {rollbackDetail}.");
         }
-        RecordSuccessfulPromotion(workspace, kernel,
-            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
-            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.CohortProvenance, promotionClock);
+        string? checkoutFailure = null;
         if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
             RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
@@ -980,10 +982,14 @@ internal static partial class LandingExecutor
                 "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
             if (refreshCheckout.ExitCode != 0)
             {
-                throw new InvalidOperationException(
-                    $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}");
+                checkoutFailure = $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}";
             }
         }
+
+        RecordSuccessfulPromotion(workspace, kernel,
+            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
+            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.CohortProvenance, promotionClock);
+        if (checkoutFailure is not null) throw new InvalidOperationException(checkoutFailure);
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
         foreach (var goal in goals)
@@ -1117,6 +1123,12 @@ internal static partial class LandingExecutor
     private static IReadOnlyList<string> ResolveRecoveredChangedFiles(
         string executionDirectory,
         string? boundMainRevision,
+        string candidateRevision) =>
+        TryResolveRecoveredChangedFiles(executionDirectory, boundMainRevision, candidateRevision) ?? [];
+
+    internal static IReadOnlyList<string>? TryResolveRecoveredChangedFiles(
+        string executionDirectory,
+        string? boundMainRevision,
         string candidateRevision)
     {
         var baseline = string.IsNullOrWhiteSpace(boundMainRevision)
@@ -1125,7 +1137,7 @@ internal static partial class LandingExecutor
         var diff = RunGit(executionDirectory, "diff", "--name-only", baseline, candidateRevision);
         if (!diff.Succeeded)
         {
-            return [];
+            return null;
         }
 
         return diff.Output

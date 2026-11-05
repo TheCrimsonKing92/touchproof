@@ -185,6 +185,10 @@ public sealed class Goal
         _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding &&
             item.State != CriterionEvidenceState.Satisfied && item.State != CriterionEvidenceState.Repaired).ToArray();
 
+    public IReadOnlyList<CriterionEvidenceObligation> UnpublishedPostLandingDuties =>
+        OutstandingPostLandingDuties.Where(item => item.Publication is null &&
+            !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) && IsCurrentCriterionEvidenceObligation(item)).ToArray();
+
     private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
         !_effectiveAcceptanceCriteriaCorrections.Any(correction =>
             correction.IsWaiver && string.Equals(
@@ -858,11 +862,12 @@ public sealed class Goal
             item.Publication is null && IsCurrentCriterionEvidenceObligation(item) &&
             _refinedSpecVersions.Any(version => version.Version == item.CriterionVersion &&
                 version.RecordedAt <= publication.PromotedAt)).ToArray();
-        if (eligible.Any(item => item.ExpectedCandidateSha is not null &&
-            !string.Equals(item.ExpectedCandidateSha, publication.CandidateRevision, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Publication does not match the declared duty's candidate.");
         foreach (var duty in eligible)
         {
+            // Publication cannot attest to a different candidate than the duty declares.
+            if (duty.ExpectedCandidateSha is not null &&
+                !string.Equals(duty.ExpectedCandidateSha, publication.CandidateRevision, StringComparison.OrdinalIgnoreCase))
+                continue;
             var index = _criterionEvidenceObligations.FindIndex(item => item.Id == duty.Id);
             _criterionEvidenceObligations[index] = duty with
             {

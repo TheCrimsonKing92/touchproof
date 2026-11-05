@@ -24,7 +24,7 @@ internal static class AcceptanceWorkspaceIntegrityPreparer
         AcceptanceGateIntegrityNormalizer.Normalize(workspacePath, integrityLabeler);
 
         DispatchProcessHost.ProtectWorkspaceBoundary(workspacePath, integrityLabeler);
-        DispatchProcessHost.ProtectGitMetadata(workspacePath, integrityLabeler);
+        DispatchProcessHost.ProtectGitMetadata(workspacePath, integrityLabeler, GitRevisionReader.ResolveCommonDirectoryOrNull);
     }
 
     private sealed class RestoreAction(Action restore) : IDisposable

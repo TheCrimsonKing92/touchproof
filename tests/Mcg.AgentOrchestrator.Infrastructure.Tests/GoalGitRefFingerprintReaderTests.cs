@@ -141,11 +141,10 @@ public sealed class GoalGitRefFingerprintReaderTests
     // Shared only by this slice's three test classes; never consults a real repository.
     internal sealed class MetadataFixture : IDisposable
     {
-        internal const string TipsCommand = "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/";
+        internal const string TipsCommand = "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main";
         internal const string MergedCommand = "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/";
         internal const string WorktreeCommand = "worktree list --porcelain";
-        internal const string MainCommand = "rev-parse --verify refs/heads/main";
-        internal static readonly string[] IndexCommands = [TipsCommand, MergedCommand, WorktreeCommand, MainCommand];
+        internal static readonly string[] IndexCommands = [TipsCommand, MergedCommand, WorktreeCommand];
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), $"mcg-git-facts-{Guid.NewGuid():N}");
         internal AgentOrchestratorKernel Kernel { get; }
         internal Goal Goal => Kernel.GetGoal(GoalId);
@@ -204,7 +203,8 @@ public sealed class GoalGitRefFingerprintReaderTests
                 return new(1, string.Empty, "fact command failed");
             return command switch
             {
-                TipsCommand => new(0, string.Join("\n", Tips.Select(tip => $"{tip.Key} {tip.Value}")), string.Empty),
+                _ when args[0] == "for-each-ref" && args.Any(arg => arg.Contains("%(objectname)", StringComparison.Ordinal)) =>
+                    new(0, string.Join("\n", Tips.Select(tip => $"{tip.Key} {tip.Value}")) + $"\n{args[^1]["refs/heads/".Length..]} {MainSha}\n", string.Empty),
                 MergedCommand => new(0, MergedOutput, string.Empty),
                 WorktreeCommand => new(0, WorktreeOutput, string.Empty),
                 _ when args[0] == "rev-parse" => new(0, MainSha + "\n", string.Empty),

@@ -5,6 +5,21 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
+    private IEnumerable<(ConductorLandingReceipt Receipt, bool ChangedFilesAvailable)> RecoverSweepLandingReceipts(
+        TerminalGoalSweepResult? sweepResult, IReadOnlyCollection<GoalId> terminalizedGoalIds)
+    {
+        foreach (var recovered in sweepResult?.Goals ?? [])
+        {
+            if (recovered.Reconciliation is not { } reconciliation ||
+                !terminalizedGoalIds.Contains(recovered.GoalId) ||
+                _landingRelaunchDecisions.Contains(recovered.GoalId.Value)) continue;
+            var changedFiles = _workspace is null ? null : LandingExecutor.TryResolveRecoveredChangedFiles(
+                _workspace.ExecutionDirectory, null, reconciliation.IntegrateSha);
+            yield return (new ConductorLandingReceipt(recovered.GoalId.Value, changedFiles ?? [], reconciliation.IntegrateSha),
+                changedFiles is not null);
+        }
+    }
+
     private static IReadOnlyCollection<GoalId> PersistSweepTerminalizations(
         TerminalGoalSweepResult? sweepResult,
         AgentOrchestratorKernel kernel,

@@ -109,7 +109,7 @@ public sealed class StaticDelegateSeamGuardTests
             calls.Add(command);
             return Success(command switch
             {
-                "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/" => "goal/example branch-sha\n",
+                "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main" => "goal/example branch-sha\nmain main-sha\n",
                 "rev-parse --verify refs/heads/main" => "main-sha\n",
                 _ => string.Empty
             });
@@ -119,10 +119,9 @@ public sealed class StaticDelegateSeamGuardTests
 
         Assert.Equal(new[]
         {
-            "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/",
+            "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main",
             "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/",
-            "worktree list --porcelain",
-            "rev-parse --verify refs/heads/main"
+            "worktree list --porcelain"
         }, calls);
         Assert.True(index.IsAvailable);
         Assert.True(index.HasGoalBranch("goal/example"));

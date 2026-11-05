@@ -26,7 +26,7 @@ internal sealed partial class ConductorDriver
         try
         {
             if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) != GoalLifecycleState.Verified) return null;
-            var probe = PreLandingMergeConflictProbe(goal);
+            var probe = MergeConflictCache.GetOrProbe(() => PreLandingMergeConflictKeyReader?.Invoke(goal), () => PreLandingMergeConflictProbe(goal));
             if (probe.Outcome == AdditiveConflictProbeOutcome.Indeterminate)
                 Console.WriteLine($"PRE_LANDING_CONFLICT_PROBE goal={goal.Id.Value[..8]} result=indeterminate reason={probe.Reason}");
             if (probe.Outcome != AdditiveConflictProbeOutcome.Unresolvable ||

@@ -789,6 +789,7 @@ internal sealed partial class ConductorDriver
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
         _rebaseOntoMain = goal => RatchetConflictDispatchIntegration.MergeMainBeforeLanding(kernel, dir, goal, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
+        PreLandingMergeConflictKeyReader = goal => PreLandingMergeConflictProbeCache.ReadKey(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
         _recheckPreLandingRebaseConflict = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
@@ -899,8 +900,7 @@ internal sealed partial class ConductorDriver
             return result;
         };
 
-        _classifyChangeRisk = goal =>
-            _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
+        _classifyChangeRisk = goal => _changeRiskMemo.Classify(dir, workspace.IntegrationBranch, GoalWorktrees.BranchName(goal.Id));
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
