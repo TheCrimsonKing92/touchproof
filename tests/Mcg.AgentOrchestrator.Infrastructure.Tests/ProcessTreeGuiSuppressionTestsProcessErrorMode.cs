@@ -58,7 +58,7 @@ public sealed class ProcessTreeGuiSuppressionTestsProcessErrorMode
                 using var launch = OwnedProcessGroup.StartSuspended(start);
                 launch.Resume();
                 Assert.True(launch.WaitForOwnedExit(TimeSpan.FromSeconds(60)), "Mode probe did not exit its owned job.");
-                Assert.Equal(0, launch.Process.ExitCode);
+                Assert.Equal(0, launch.TryReadOwnedExitCode());
             }
             else
             {

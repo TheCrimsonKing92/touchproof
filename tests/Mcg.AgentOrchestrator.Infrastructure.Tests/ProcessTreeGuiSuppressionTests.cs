@@ -380,7 +380,7 @@ public sealed class ProcessTreeGuiSuppressionTests
         Assert.Matches(
             @"StartSuspendedInJobWithStandardHandles\([^)]*\)\s*=>\s*StartSuspendedInJobCore\(",
             ownedProcessGroup);
-        Assert.Contains("using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(requestOwnConsole);", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Contains("using (var suppression = ProcessTreeGuiSuppression.PrepareSuppressedChildSpawn(requestOwnConsole, requiresLaunchLock, errorModeAccess))", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Contains(
             "process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);",

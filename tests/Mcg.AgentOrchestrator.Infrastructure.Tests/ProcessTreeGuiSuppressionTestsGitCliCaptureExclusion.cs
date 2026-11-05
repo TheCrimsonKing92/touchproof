@@ -48,22 +48,20 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
                 else
                 {
                     // Deliberately bypass the policy to prove the exclusive-open oracle detects capture.
-                    var start = new ProcessStartInfo("git")
+                    var result = InfrastructureTestSupport.RunGitProbe(root, args, startProcess: child =>
                     {
-                        UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root,
-                        RedirectStandardOutput = true, RedirectStandardError = true
-                    };
-                    foreach (var arg in args) start.ArgumentList.Add(arg);
-                    GitCli.ApplyLaunchSettings(start, readCommand: true);
-                    using var child = Process.Start(start)!;
-                    var stdout = child.StandardOutput.ReadToEndAsync();
-                    var stderr = child.StandardError.ReadToEndAsync();
-                    children[index] = child;
-                    launched.Signal();
-                    attempts.Signal();
-                    Assert.True(child.WaitForExit(600_000), "Negative-control git child did not exit after release.");
-                    Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(60)), "Git output drains did not finish.");
-                    Assert.Equal(0, child.ExitCode);
+                        ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(child.StartInfo, root);
+                        GitCli.ApplyLaunchSettings(child.StartInfo, readCommand: true);
+                        var didStart = child.Start();
+                        if (didStart)
+                        {
+                            children[index] = child;
+                            launched.Signal();
+                            attempts.Signal();
+                        }
+                        return didStart;
+                    });
+                    Assert.True(result.Succeeded, result.ToString());
                 }
             }
             catch (Exception ex) { failures.Enqueue(ex); }
