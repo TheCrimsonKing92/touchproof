@@ -78,7 +78,7 @@ public sealed class ConductorStatusOwnerDirectivesTests
         var after = Status(fixture.Workspace, json: true);
         Assert.Equal(before, after);
         using var document = JsonDocument.Parse(after);
-        Assert.Equal(["conductor", "since", "supervisorBuild", "generation", "latestTick", "goals",
+        Assert.Equal(["conductor", "since", "supervisorBuild", "loopBuild", "generation", "latestTick", "goals",
             "mostRecentLanding", "workerAdoption", "pendingIntents", "providerHolds"],
             document.RootElement.GetProperty("payload").EnumerateObject().Select(p => p.Name).ToArray());
         Assert.Equal(hashes, Hashes(fixture.Workspace.RootDirectory));

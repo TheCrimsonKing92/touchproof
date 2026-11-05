@@ -31,7 +31,7 @@ internal static class ConductorStatusSnapshotReader
 
     internal static ConductorStatusSnapshot Read(OrchestratorWorkspace workspace, int? owner,
         DateTimeOffset bootTime, Func<string?>? mainCommit = null, ConductorLockOwnership? ownership = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null, bool? fleetSummaryExpected = null)
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
@@ -50,7 +50,12 @@ internal static class ConductorStatusSnapshotReader
 
         var build = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "supervisor-build");
         var buildCommit = ReadBuildCommit(build?.Detail);
-        var generation = ReadGeneration(buildCommit, mainCommit);
+        var loopBuild = ReadLoopBuild(events, workspace.ConductEventsLogPath, buildCommit);
+        var generation = loopBuild.Commit is null && loopBuild.Source.StartsWith("ACTIVATION_", StringComparison.Ordinal)
+            ? new ConductorStatusSnapshot.GenerationObservation("loop-unavailable", null, null)
+            : ReadGeneration(loopBuild.Commit, mainCommit);
+        var lateFleetAdoption = (fleetSummaryExpected ?? OrchestratorHome.ResolveForProcess().IsHome(workspace))
+            ? ReadLateFleetAdoption(events, workspace.ConductEventsLogPath, now ?? DateTimeOffset.UtcNow) : null;
         var tick = LatestTick(events, workspace.RunEventStorePath);
 
         ConductorStatusSnapshot.GoalsObservation goalSnapshot;
@@ -88,7 +93,7 @@ internal static class ConductorStatusSnapshotReader
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
             landing,
             ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds,
-            ReadSupervisorJob(build?.Detail));
+            ReadSupervisorJob(build?.Detail), loopBuild, lateFleetAdoption);
     }
 
     private static ConductorStatusSnapshot.AdoptionObservation? ReadAdoption(string path)
@@ -180,6 +185,75 @@ internal static class ConductorStatusSnapshotReader
         {
             return new("unavailable", null, []);
         }
+    }
+
+    // Preserve the supervisor reader's source precedence and MaxBy baseline, then use append order
+    // for activation decisions. A readiness event never establishes the loop's build.
+    private static ConductorStatusSnapshot.LoopBuildObservation ReadLoopBuild(
+        IReadOnlyList<Event> live, string path, string? supervisorCommit)
+    {
+        foreach (var source in EventSources(live, path))
+        {
+            var baseline = source.Where(item => item.Kind == "supervisor-build").MaxBy(item => item.At);
+            for (var index = source.Count - 1; index >= 0; index--)
+            {
+                var item = source[index];
+                if (ReferenceEquals(item, baseline))
+                    return new(supervisorCommit, "supervisor");
+                if (item.Kind != "loop-handoff") continue;
+                var head = EventHead(item.Detail);
+                var key = head switch
+                {
+                    "ACTIVATION_ADOPTED" => "adoptedCommit",
+                    "ACTIVATION_REVERTED" => "restoredCommit",
+                    "ACTIVATION_SUPPRESSED" => "currentCommit",
+                    _ => null
+                };
+                if (key is not null) return new(ReadToken(item.Detail, key), head);
+            }
+        }
+        return new(supervisorCommit, string.IsNullOrWhiteSpace(supervisorCommit) ? "unavailable" : "supervisor");
+    }
+
+    private static ConductorStatusSnapshot.LateFleetAdoptionObservation? ReadLateFleetAdoption(
+        IReadOnlyList<Event> live, string path, DateTimeOffset now)
+    {
+        var summarized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in EventSources(live, path))
+            for (var index = source.Count - 1; index >= 0; index--)
+            {
+                var item = source[index];
+                if (item.Kind != "loop-handoff") continue;
+                switch (EventHead(item.Detail))
+                {
+                    case "FLEET_BUILD_ADOPTED":
+                        if (ReadToken(item.Detail, "commit") is { } completed) summarized.Add(completed);
+                        break;
+                    case "ACTIVATION_ADOPTED":
+                        var commit = ReadToken(item.Detail, "adoptedCommit");
+                        var elapsed = now - item.At;
+                        return commit is not null && !summarized.Contains(commit) && elapsed > TimeSpan.FromMinutes(15)
+                            ? new(commit, item.At, elapsed) : null;
+                }
+            }
+        return null;
+    }
+
+    private static IEnumerable<IReadOnlyList<Event>> EventSources(IReadOnlyList<Event> live, string path)
+    {
+        yield return live;
+        foreach (var rotated in RotatedGenerations(path)) yield return ReadRotatedEvents(rotated);
+    }
+
+    private static string EventHead(string detail) =>
+        detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+
+    private static string? ReadToken(string detail, string key)
+    {
+        var token = detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(value => value.StartsWith(key + "=", StringComparison.Ordinal));
+        var value = token?[(key.Length + 1)..].Trim();
+        return string.IsNullOrEmpty(value) || value.Equals("none", StringComparison.OrdinalIgnoreCase) ? null : value;
     }
 
     private static ConductorStatusSnapshot.GenerationObservation ReadGeneration(string? buildCommit,
