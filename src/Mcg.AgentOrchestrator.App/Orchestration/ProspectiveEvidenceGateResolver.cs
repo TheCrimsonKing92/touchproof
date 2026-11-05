@@ -15,10 +15,16 @@ internal static class ProspectiveEvidenceGateResolver
         string orchestratorDirectory,
         string? candidateBranchHeadSha)
     {
-        var waits = kernel.GetPendingHumanInput(goal.Id)
+        var pendingWaits = kernel.GetPendingHumanInput(goal.Id);
+        var waits = pendingWaits
             .Where(GroupedAdmissionLandingHold.IsGateSatisfiable)
             .ToArray();
-        if (waits.Length == 0) return new([], []);
+        var selectorlessWaits = pendingWaits.Where(wait =>
+            wait.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+            GateTestObligation.IsAcceptanceGateOwner(wait.EvidenceOwner) &&
+            wait.PlannerEvidence?.Availability == "post-implementation" &&
+            wait.TestNames is null or { Count: 0 }).ToArray();
+        if (waits.Length == 0 && selectorlessWaits.Length == 0) return new([], []);
 
         var attempts = ReadAttempts(orchestratorDirectory, goal.Id, candidateBranchHeadSha);
         var resolved = new List<HumanInputRequestId>();
@@ -99,6 +105,27 @@ internal static class ProspectiveEvidenceGateResolver
                     unresolved[index] = new(wait.Id, [], $"{exception.GetType().Name}: {exception.Message}");
                 }
                 break;
+            }
+        }
+        // Selectorless waits consume a full-gate receipt, independently of named TRX rows.
+        // Keep them out of the grouped named-test fallback above.
+        foreach (var wait in selectorlessWaits)
+        {
+            var attempt = attempts.FirstOrDefault(item => item.BriefVersion == goal.AuthoritativeBrief.Version);
+            if (attempt is null) continue;
+            try
+            {
+                kernel.SubmitHumanInput(wait.Id,
+                    $"Satisfied by gate attempt {attempt.Id} for candidate {candidateBranchHeadSha}; TRX {string.Join(", ", attempt.Paths)}; selectorless full-gate receipt.",
+                    // Revalidate the cited receipt under the submission guard using its current brief.
+                    hasCurrentSelectorlessGateReceipt: briefVersion =>
+                        ReadAttempts(orchestratorDirectory, goal.Id, candidateBranchHeadSha)
+                            .Any(current => current.Id == attempt.Id && current.BriefVersion == briefVersion));
+                resolved.Add(wait.Id);
+            }
+            catch (Exception exception)
+            {
+                unresolved.Add(new(wait.Id, [], $"{exception.GetType().Name}: {exception.Message}"));
             }
         }
         return new(resolved, unresolved);
