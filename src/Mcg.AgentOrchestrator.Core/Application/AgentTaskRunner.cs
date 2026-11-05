@@ -143,12 +143,17 @@ public sealed class AgentTaskRunner
             }
             if (blocked) return new AgentTaskRunResult(goal, task, execution);
             humanInputQuestion = null;
+            humanInputDirective = new(null, null);
         }
         var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
         var completedRound = goal.Timeline.Count(evt =>
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
         var workerResultReference =
             $"api-run:{resolvedModel.ProviderName}/{resolvedModel.ModelName}:completed-at={execution.CompletedAt:O}";
+        if (humanInputDirective.Directives.Count > 1 &&
+            PlannerAmendmentBatchRecorder.Record(_kernel, goal, task, humanInputDirective.Directives,
+                output, hasCompleteWorkerResult, completedRound, workerResultReference))
+            return new AgentTaskRunResult(goal, task, execution);
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;
