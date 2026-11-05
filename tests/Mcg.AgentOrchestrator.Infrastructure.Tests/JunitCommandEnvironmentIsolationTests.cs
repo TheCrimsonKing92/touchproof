@@ -84,9 +84,10 @@ public sealed class JunitCommandEnvironmentIsolationTests
             if (cancel)
             {
                 lifetime.Cancel();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(120)));
+                var cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => run.WaitAsync(TimeSpan.FromSeconds(120)));
                 // Assert at the cancellation boundary, before teardown's waits can hide live holders.
-                gate.AssertExited();
+                gate.AssertExited(cancellation.Message);
                 if (OperatingSystem.IsWindows())
                 {
                     var snapshot = ProcessCommandLines.Snapshot();
@@ -185,7 +186,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
-        internal void AssertExited()
+        internal void AssertExited(string cancellationDetail)
         {
             Assert.NotNull(_child);
             _childExitObserved = _child.HasExited;
@@ -195,7 +196,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 _launcherExitObserved = _launcher.HasExited;
             }
             Assert.True(_childExitObserved && (!OperatingSystem.IsWindows() || _launcherExitObserved),
-                $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}");
+                $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}; cancellation={cancellationDetail}");
         }
         internal async Task WaitForExit()
         {

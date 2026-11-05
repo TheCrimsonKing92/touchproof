@@ -228,23 +228,8 @@ internal sealed class RegisteredOwnedProcess : IDisposable
             throw new InvalidOperationException("Cannot terminate an owned tree after its registration was released.");
 
         using var deadline = new CancellationTokenSource(timeout);
-        if (OperatingSystem.IsWindows())
-        {
-            // Retain a duplicate job handle across Kill: an empty job proves that every
-            // descendant exited, including descendants created after cancellation began.
-            var treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out var remaining);
-            try
-            {
-                await WaitForExitAsync(deadline.Token).ConfigureAwait(false);
-                return (treeExited, remaining);
-            }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
-            {
-                return (false, Process.HasExited ? remaining : remaining.Append(_processId).Distinct().ToArray());
-            }
-        }
-
-        // On Unix retain handles to the current group members before requesting termination.
+        // Pin current members before termination on both platforms. Job occupancy and the
+        // launcher's exit alone must not replace observing the known children's exit handles.
         // Never re-open a PID after the kill, when it might identify an unrelated process.
         var members = new List<Process>();
         try
@@ -258,23 +243,41 @@ internal sealed class RegisteredOwnedProcess : IDisposable
                 {
                     member = System.Diagnostics.Process.GetProcessById(processId);
                     _ = member.SafeHandle;
+                    // A member can exit and its PID can be reused between enumeration and
+                    // handle acquisition. Only retain handles still belonging to this job.
+                    if (OperatingSystem.IsWindows() && !_registration.Group.Contains(member.SafeHandle))
+                    {
+                        member.Dispose();
+                        continue;
+                    }
                     members.Add(member);
                 }
                 catch (ArgumentException) { member?.Dispose(); } // Already exited.
                 catch (InvalidOperationException) { member?.Dispose(); } // Exited before handle acquisition.
             }
-            Kill(entireProcessTree: true);
+            var treeExited = true;
+            IReadOnlyList<int> remainingInJob = [];
+            if (OperatingSystem.IsWindows())
+            {
+                // Reuse job termination and its bounded ActiveProcesses==0 check. This also
+                // covers descendants created after the handle snapshot above.
+                treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out remainingInJob);
+            }
+            else
+            {
+                Kill(entireProcessTree: true);
+            }
             try
             {
                 await Task.WhenAll(members.Select(member => member.WaitForExitAsync(deadline.Token))
                     .Append(WaitForExitAsync(deadline.Token))).ConfigureAwait(false);
-                return (true, []);
+                return (treeExited, remainingInJob);
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
                 var remaining = members.Where(member => !member.HasExited).Select(member => member.Id).ToList();
                 if (!Process.HasExited) remaining.Add(_processId);
-                return (false, remaining);
+                return (false, remaining.Concat(remainingInJob).Distinct().ToArray());
             }
         }
         finally

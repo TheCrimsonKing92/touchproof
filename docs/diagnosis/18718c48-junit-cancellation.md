@@ -34,8 +34,9 @@ undetermined; the teardown summary does not prove which cancellation boundary ra
   into the outer caller-cancellation catch at 378-388, which passes the same local
   `process` to `AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync` at 385.
   The helper calls `RegisteredOwnedProcess.KillTreeAndWaitForExitAsync` at line 15.
-  `WorkerProcessJobs.cs:225-244` terminates/confirms the Windows job and awaits the
-  launcher's native exit handle. No alternate invoker or process object was found.
+  The inspected `WorkerProcessJobs.cs:225-244` terminated/confirmed the Windows job
+  and awaited only the launcher's native exit handle. No alternate invoker or
+  process object was found.
 - Cleanup failure metadata survives through `JunitCommandAcceptanceCheck.cs:173-186`.
   Successful cancellation metadata is consumed by the catch at 188-191, followed
   by the verifier's boundary cancellation at 1589/1609. Therefore a generic final
@@ -43,8 +44,8 @@ undetermined; the teardown summary does not prove which cancellation boundary ra
 
 These are static call-path findings, not a receipt that this path executed in the
 failed gate. The fixture's pipe blocks until release, but source inspection does
-not establish that this wait prevents Windows job termination. No such claim or
-speculative production fix is made.
+not establish that this wait prevents Windows job termination. No such claim
+or production change was made in that diagnostic revision.
 
 ## Bounded correction and remaining evidence
 
@@ -60,3 +61,33 @@ a ready-event failure, cancellation wait timeout, live-process assertion, and
 cleanup exception. Also select `AcceptanceProcessRunnerTests` to retain the direct
 owned-launch cancellation control. Developer-side test execution is prohibited by
 `current-task.md`; a build is not behavioral proof of cancellation cleanup.
+
+## Current bounded revision
+
+The current typed retry feedback names gate `18718c48-0-20261105092617486`
+at candidate `9623342a0534352c1228bbfd2645b9414e35fc9b`, Balanced 2, and the
+same cancellation case. Its reported assertion is "Cancellation returned before
+all fixture processes exited", with launcher PID 60632 exit observed true and
+child PID 1636 exit observed false on the first run and rerun. This package
+contains that feedback, but no original executed-count receipt or full
+cancellation exception for this run. The precise runtime mechanism remains
+undetermined; Developer test execution is prohibited.
+
+The source establishes a narrower gap: the Windows branch waited on the root
+process handle, whereas the Unix branch pinned and awaited the observed children
+as well. `RegisteredOwnedProcess.KillTreeAndWaitForExitAsync` now applies that
+handle wait to Windows too, verifies each acquired child's membership in the
+owned job before retaining it, and disposes every pinned handle after the bounded
+wait. It still invokes the existing job termination/empty-accounting operation
+for descendants created after the snapshot. That operation now checks the return
+from explicit termination through its retained job handle. Unconfirmed exits
+remain failures with the union of live observed children, root and job members.
+
+Hypothesis for Acceptance: waiting for observed child handles in addition to job
+occupancy closes the reported cancellation boundary. This is not a proven account
+of why that gate returned early. Execute
+`JunitCommandEnvironmentIsolationTests.FailureOrCancellation_LeavesParentEnvironmentUnchanged(cancel: True)`
+in its normal Balanced shard, plus `AcceptanceProcessRunnerTests`. The original
+pre-cleanup assertion is retained and now includes the captured cancellation
+message, allowing the next receipt to distinguish a reported job-cleanup failure
+from a child surviving a confirmed cleanup. A build proves compilation only.

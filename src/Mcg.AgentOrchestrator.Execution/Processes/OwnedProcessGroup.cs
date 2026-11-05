@@ -43,11 +43,14 @@ internal sealed class OwnedProcessGroup : IDisposable
         if (!TryDuplicateAccountingHandle(out var observer)) { Kill(); return false; }
         using (observer)
         {
-            Kill();
+            // Terminate through the retained job handle explicitly. Closing our original
+            // handle cannot be the termination signal while accounting observers retain it.
+            var terminationRequested = WindowsJob.TryTerminate(observer);
+            Dispose();
             var exited = WaitForJobExit(observer, timeout);
             if (!exited)
                 WindowsJob.TryGetActiveProcessIds(observer, out remainingProcessIds);
-            return exited;
+            return terminationRequested && exited;
         }
     }
 
