@@ -46,10 +46,13 @@ internal static class PlannerAmendmentBatchRecorder
         // An answered replay can restore Assigned after an open sibling held the task.
         // Reconcile only after recording every sibling, retaining suppression failures.
         var pending = kernel.GetPendingBlockingHumanInput(goal.Id).FirstOrDefault(item => item.TaskId == task.Id);
-        if (pending is not null)
+        // Answered amendments can still await brief revision after the final request closes.
+        var revisionPending = kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id)?.TaskId == task.Id;
+        if (pending is not null || revisionPending)
         {
-            if (task.Status is not (WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed))
-                kernel.HoldTaskForExistingHumanInput(goal, task.Id, pending.Kind);
+            if (task.Status != WorkTaskStatus.Failed &&
+                (task.Status != WorkTaskStatus.WaitingForHuman || goal.Status != GoalStatus.WaitingForHuman))
+                kernel.HoldTaskForExistingHumanInput(goal, task.Id, pending?.Kind ?? HumanWaitKind.PlannerBriefAmendment);
             return true;
         }
         return hold;
