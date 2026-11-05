@@ -382,20 +382,8 @@ internal static class AcceptanceCheckProcessInvoker
             // the finally block drains captures and releases process custody.
             if (process is not null && !registrationReleased && !processDisposed)
             {
-                exception.Data["AcceptanceCancellationProcessId"] = process.Id;
-                try
-                {
-                    var termination = await process.KillTreeAndWaitForExitAsync(CaptureDrainTimeout).ConfigureAwait(false);
-                    exception.Data["AcceptanceCancellationTreeExitConfirmed"] = termination.ExitConfirmed;
-                    if (!termination.ExitConfirmed)
-                        exception.Data["AcceptanceCancellationRemainingProcessIds"] = string.Join(",", termination.RemainingProcessIds);
-                }
-                catch (Exception cleanupException)
-                {
-                    // Preserve caller cancellation; report only the failure type, never command inputs.
-                    exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
-                    exception.Data["AcceptanceCancellationCleanupFailure"] = cleanupException.GetType().Name;
-                }
+                await AcceptanceProcessCancellationCleanup.StopOwnedTreeAsync(
+                    process, exception, CaptureDrainTimeout).ConfigureAwait(false);
             }
             throw;
         }
