@@ -1,0 +1,41 @@
+{
+  "task_failure": {
+    "GoalId": "fd7ee5fb17d24753a4f5537278799fe6",
+    "TaskId": "2bda31d51cf743dda91891b183641743",
+    "Kind": "TaskFailed",
+    "Message": "DISPATCH_REJECTED role=Developer task=2bda31d51cf743dda91891b183641743 worktree=\"C:\\\\Users\\\\miles\\\\vcs\\\\mcg-agent-orchestrator\\\\.orchestrator-worktrees\\\\fd7ee5fb\" dispatched_at=2026-11-04T08:35:01.1819368+00:00 baseline_head=cf4b9c145ade6ce2ab70a43ddb46e5bc710d6f19 post_dispatch_commits=0 changed_paths=none tests_status=Deferred blockers=None verification_recognized=false reason=verification-pattern-unmatched detail=\"deferred — `GoalWorktreeRecoveryRefusalTests`, `ConductorMissingWorktreeRecoveryTests` (Acceptance-owned execution). matched no accepted verification pattern\"",
+    "OccurredAt": "2026-11-04T08:37:23.9887096+00:00",
+    "RequeueSkipped": null,
+    "OperatorGates": null,
+    "OperatorIntentApplied": null,
+    "HumanInputSuperseded": null,
+    "TickOutcome": null
+  },
+  "latest_matching_escalation": {
+    "GoalId": "fd7ee5fb17d24753a4f5537278799fe6",
+    "TaskId": null,
+    "Kind": "GoalPolicyDecision",
+    "Message": "Batch loop tick 1: escalated at Failed — Goal is in Failed state; TaskFailed: DISPATCH_REJECTED role=Developer task=2bda31d51cf743dda91891b183641743 worktree=\"C:\\\\Users\\\\miles\\\\vcs\\\\mcg-agent-orchestrator\\\\.orchestrator-worktrees\\\\fd7ee5fb\" dispatched_at=2026-11-04T08:35:01.1819368+00:00 baseline_head=cf4b9c145ade6ce2ab70a43ddb46e5bc710d6f19 post_dispatch_commits=0 changed_paths=none tests_status=Deferred blockers=None verification_recognized=false reason=verification-pattern-unmatched detail=\"deferred — `GoalWorktreeRecoveryRefusalTests`, `ConductorMissingWorktreeRecoveryTests` (Acceptance-owned execution). matched no accepted verification pattern\"; operator action required",
+    "OccurredAt": "2026-11-04T16:11:50.3499436+00:00",
+    "RequeueSkipped": null,
+    "OperatorGates": null,
+    "OperatorIntentApplied": null,
+    "HumanInputSuperseded": null,
+    "TickOutcome": {
+      "OutcomeKind": "Escalated",
+      "LifecycleState": "Failed",
+      "EscalationKind": "Unspecified",
+      "Decision": {
+        "Stage": "failed-goal-recovery",
+        "Action": "Escalate",
+        "Rung": 9,
+        "DiscriminatingEvidence": "failed-terminal-fallthrough",
+        "Reason": "Goal is in Failed state; TaskFailed: DISPATCH_REJECTED role=Developer task=2bda31d51cf743dda91891b183641743 worktree=\"C:\\\\Users\\\\miles\\\\vcs\\\\mcg-agent-orchestrator\\\\.orchestrator-worktrees\\\\fd7ee5fb\" dispatched_at=2026-11-04T08:35:01.1819368+00:00 baseline_head=cf4b9c145ade6ce2ab70a43ddb46e5bc710d6f19 post_dispatch_commits=0 changed_paths=none tests_status=Deferred blockers=None verification_recognized=false reason=verification-pattern-unmatched detail=\"deferred — `GoalWorktreeRecoveryRefusalTests`, `ConductorMissingWorktreeRecoveryTests` (Acceptance-owned execution). matched no accepted verification pattern\"; operator action required",
+        "Facts": [
+          { "Name": "goalId", "Value": "fd7ee5fb17d24753a4f5537278799fe6" },
+          { "Name": "contextVersion", "Value": "fd7ee5fb17d24753a4f5537278799fe6|Active|Failed|2|0|160|GoalPolicyDecision|639294035382493627|f248eecee1fc40b990dd1ab3d6d03408:Completed:0:0:process:36904:639293707390612566:639293711732969277;2bda31d51cf743dda91891b183641743:Failed:0:0:process:41104:639293781139679203:639293782421422740;019a79b92812408eb626627c3bfc88ca:Assigned:0:0:unobserved-attempt:none;d8c8569d11b641a68cce2639ca371d82:Assigned:0:0:unobserved-attempt:none" }
+        ]
+      }
+    }
+  }
+}

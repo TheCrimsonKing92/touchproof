@@ -64,6 +64,37 @@ internal static class GateStatsReader
         return observations;
     }
 
+    // Reuse the same identity and run-ordinal parsing without discarding unreadable evidence.
+    internal static IReadOnlyList<LaneRun> ReadAttemptRuns(string prefix, ICollection<string> problems)
+    {
+        var runs = new List<LaneRun>();
+        try
+        {
+            foreach (var path in Directory.GetFiles(Path.GetDirectoryName(prefix)!, Path.GetFileName(prefix) + ".*.trx"))
+            {
+                var match = AttemptFile.Match(Path.GetFileName(path));
+                if (!match.Success || match.Groups["attempt"].Value != Path.GetFileName(prefix)) continue;
+                var lane = match.Groups["lane"].Value;
+                var suffix = RunSuffix.Match(lane);
+                var run = 0;
+                if (suffix.Success && !int.TryParse(suffix.Groups["run"].Value, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out run))
+                {
+                    problems.Add($"{Path.GetFileName(path)}: invalid run ordinal");
+                    continue;
+                }
+                var results = ReadTrx(path);
+                if (results is null) problems.Add($"{Path.GetFileName(path)}: malformed or unreadable TRX");
+                else runs.Add(new(suffix.Success ? suffix.Groups["lane"].Value : lane, run, results));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            problems.Add($"{Path.GetFileName(prefix)} TRX discovery: {ex.GetType().Name}");
+        }
+        return runs.OrderBy(run => run.Lane, StringComparer.Ordinal).ThenBy(run => run.Run).ToArray();
+    }
+
     internal static IReadOnlyList<GateAttempt> ReadGateAttempts(string directory, string? lane, int last, out int skipped)
     {
         var groups = DiscoverAttempts(directory, lane, last, out skipped);

@@ -9,6 +9,87 @@ public sealed class AcceptanceVerificationSummaryTransportTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void MissingReceipt_NativeOwnership_SurvivesSavedSummaryReload(bool owned)
+    {
+        var native = new AcceptanceVerificationResult(false, false, 1, "baseline failed")
+            { AttemptId = "attempt", RequiresSoloFailureReceipt = owned };
+        var summary = AcceptanceVerificationSummary.FromVerification(native, [], ["solo tests"], "candidate", "main",
+            null, null, null);
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(summary))!;
+
+        Assert.Null(restored.SoloFailureReceipt);
+        Assert.Equal(owned, restored.RequiresSoloFailureReceipt);
+        Assert.Equal("attempt", restored.AttemptId);
+    }
+
+    [Fact]
+    public void RecordCopyDerivesRequiredAndAdvisoryFailuresFromReplacementChecks()
+    {
+        var original = new AcceptanceVerificationSummary(false,
+            [new("old required", false, 1, null), new("old advisory", false, 1, null, Advisory: true)]);
+        var required = new AcceptanceCheckResult("new required", false, 1, null);
+        var advisory = new AcceptanceCheckResult("new advisory", false, 1, null, Advisory: true);
+        var copy = original with { UnmetCriteria = [required, advisory, new("passed", true, 0, null)] };
+
+        Assert.Same(required, Assert.Single(copy.RequiredUnmetCriteria));
+        Assert.Same(advisory, Assert.Single(copy.AdvisoryUnmetCriteria));
+        Assert.Equal("old required", Assert.Single(original.RequiredUnmetCriteria).Name);
+        Assert.Equal("old advisory", Assert.Single(original.AdvisoryUnmetCriteria).Name);
+    }
+
+    [Fact]
+    public void SoloReceiptSurvivesNativeConversionNormalizationAndSerialization()
+    {
+        var receipt = new SoloAcceptanceFailureReceipt(1, "goal", "attempt", "candidate", "tree", "main", "baseline",
+            "root", new("proof.json", "digest"));
+        var native = new AcceptanceVerificationResult(false, false, 1, "failure")
+            { AttemptId = "attempt", SoloFailureReceipt = receipt };
+        var summary = AcceptanceVerificationSummary.FromVerification(native, [], ["solo tests"], "candidate", "main",
+            ["candidate.trx"], [new("solo tests", AcceptanceFailureOrigin.Introduced, "baseline proof")], null);
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(summary);
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(normalized))!;
+        Assert.Equal(receipt, restored.SoloFailureReceipt);
+        Assert.True(restored.RequiresSoloFailureReceipt);
+        Assert.Equal("attempt", restored.AttemptId);
+        Assert.Single(restored.RequiredUnmetCriteria);
+        Assert.Equal(new[] { "solo tests" }, restored.FailedChecks);
+    }
+
+    [Fact]
+    public void LostSoloReceiptRetainsEvidenceObligationAcrossSavedSummaryReload()
+    {
+        var receipt = new SoloAcceptanceFailureReceipt(1, "goal", "attempt", "candidate", "tree", "main", "baseline",
+            "root", new("proof.json", "digest"));
+        var native = new AcceptanceVerificationResult(false, false, 1, "failure")
+            { AttemptId = "attempt", SoloFailureReceipt = receipt };
+        var summary = AcceptanceVerificationSummary.FromVerification(native, [], ["solo tests"], "candidate", "main",
+            null, [new("solo tests", AcceptanceFailureOrigin.Introduced, "baseline proof")], null);
+        var lostReceipt = summary with { SoloFailureReceipt = null };
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(JsonSerializer.Serialize(lostReceipt))!;
+
+        Assert.Null(restored.SoloFailureReceipt);
+        Assert.True(restored.RequiresSoloFailureReceipt);
+        Assert.Equal("attempt", restored.AttemptId);
+    }
+
+    [Fact]
+    public void OlderSummaryWithAttemptAndAttributionDoesNotDeclareSoloEvidence()
+    {
+        const string saved = """
+            {"Passed":false,"UnmetCriteria":[],"AttemptId":"background-attempt",
+             "CheckAttributions":[{"CheckName":"tests","Origin":0,"Evidence":"main green"}]}
+            """;
+        var restored = JsonSerializer.Deserialize<AcceptanceVerificationSummary>(saved)!;
+
+        Assert.Equal("background-attempt", restored.AttemptId);
+        Assert.Single(restored.CheckAttributions!);
+        Assert.Null(restored.SoloFailureReceipt);
+        Assert.False(restored.RequiresSoloFailureReceipt);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void Native_checks_SerializationPreservesAllNamesInReceiptOrder(bool passed)
     {
         var checks = new[]

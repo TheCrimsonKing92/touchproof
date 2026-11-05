@@ -101,14 +101,14 @@ public sealed class OwnerConsoleActivityOutcomeTests
         await scene.View.HandleKeyAsync(Key.Enter);
         var dialog = Assert.Single(scene.Dialogs.Messages);
         Assert.Equal("What this means", dialog.Title);
-        var parts = dialog.Text.Split('\n');
+        var parts = dialog.Text.Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(4, parts.Length);
         Assert.Equal("What happened: " + Assert.Single(scene.View.ActivityLines), parts[0]);
-        Assert.StartsWith("Why: ", parts[1]);
-        Assert.StartsWith("What happens next: ", parts[2]);
-        Assert.StartsWith("Do you need to act: ", parts[3]);
+        Assert.StartsWith("Reason: ", parts[1]);
+        Assert.StartsWith("Next step: ", parts[2]);
+        Assert.StartsWith("Owner action: ", parts[3]);
         Assert.Contains("No.", parts[3]);
-        Assert.Equal(1, dialog.Text.Split("11111111", StringSplitOptions.None).Length - 1);
+        Assert.Contains("Goal ID: 11111111", dialog.Text);
         const string noQuestion = "No owner question is listed in DECISIONS for this event";
         Assert.Equal(1, dialog.Text.Split(noQuestion, StringSplitOptions.None).Length - 1);
         Assert.Contains(noQuestion, parts[3]);
@@ -126,9 +126,9 @@ public sealed class OwnerConsoleActivityOutcomeTests
         var item = Assert.Single(model.Activity);
         var decision = Assert.Single(model.Decisions);
         var text = OwnerActivityNarrator.Explain(item, model.Decisions);
-        Assert.Contains($"Do you need to act: Yes. Open DECISIONS row [{decision.Number}] 11111111 HumanInput: Continue?", text);
-        Assert.Contains("What happens next: still waiting on you. Work waits for your answer.", text);
-        Assert.Contains("Why: Continue?", text);
+        Assert.Contains($"Owner action: Yes. Open DECISIONS row [{decision.Number}] 11111111 HumanInput: Continue?", text);
+        Assert.Contains("Next step: still waiting on you. Work waits for your answer.", text);
+        Assert.Contains("Reason: Continue?", text);
     }
 
     [Fact]
@@ -140,9 +140,9 @@ public sealed class OwnerConsoleActivityOutcomeTests
             Resolution: new(time.AddSeconds(5), Actor: "author"));
         var text = OwnerActivityNarrator.Explain(item);
         Assert.Equal(1, text.Split("11111111", StringSplitOptions.None).Length - 1);
-        Assert.Contains("Why: needs a rebase", text);
-        Assert.Contains($"What happens next: resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author. Work can continue.", text);
-        Assert.Contains($"Do you need to act: No. Resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author.", text);
+        Assert.Contains("Reason: needs a rebase", text);
+        Assert.Contains($"Next step: resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author. Work can continue.", text);
+        Assert.Contains($"Owner action: No. Resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author.", text);
     }
 
     [Fact]

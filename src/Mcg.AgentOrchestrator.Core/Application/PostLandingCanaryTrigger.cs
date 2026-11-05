@@ -184,6 +184,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOccupancyHeartbeat",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SoloAcceptanceFailureEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchetPreflight",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SshRemoteLaneExecutor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StateEffectProposals",

@@ -22,6 +22,19 @@ internal sealed class CandidateFailureRerunner(
 
 internal static class AcceptanceFailureAttributionPlanner
 {
+    internal static AcceptanceCheckResult Unattributed(
+        AcceptanceCheckResult check,
+        IReadOnlyList<string> identities,
+        string evidence) => check with
+    {
+        FailingTestAttributions = identities
+            .Select(identity => new AcceptanceTestFailureAttribution(
+                identity,
+                AcceptanceTestFailureOrigin.Unattributed,
+                evidence))
+            .ToArray()
+    };
+
     internal const int MaxCandidateRerunIdentities = 10;
 
     internal sealed record CandidateSelectionPlan(
@@ -234,7 +247,9 @@ internal static class AcceptanceFailureAttributionPlanner
                     ? AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline
                     : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
                 ExecutedTestCount: absent ? 0 : null,
-                TestProjectPath: candidateCheck.Project));
+                TestProjectPath: candidateCheck.Project,
+                BaselineSourceAbsence: absent && candidateCheck.FocusedEvidenceTokens.Count == 1
+                    ? new(baselineSha, candidateCheck.FocusedEvidenceTokens[0].Value) : null));
         }
 
         return new BaselineSourceSelectionPlan(executable, classified);
