@@ -204,3 +204,33 @@ exception and distinguish membership failures, cancellation-cleanup failures,
 and passing cancellation boundaries. A membership failure after this correction
 rejects the hypothesis that containment alone is sufficient. Build evidence
 proves compilation, not repair of that boundary.
+
+## Installed-shell correction after containment remained red
+
+Typed retry feedback `finding-evidence-8cc010c9e9be58424f2bed84` binds both
+failure/cancellation rows to candidate `54f86771ad97d75b9edab3a94788c8cf47f146b7`.
+Both failed "Fixture processes must belong to the owned job before cancellation".
+The reported child image was the WindowsApps PowerShell 7.6.9 package executable;
+each job contained only its `cmd.exe` launcher. The fixture and contained launch
+path are unchanged at dispatch HEAD `93e5ec6d`. This feedback rejects containment
+alone as a sufficient correction; it does not establish the runtime escape mechanism.
+The current package supplies these assertions but no raw executed-count receipt
+for this candidate, and Developer test execution is prohibited.
+
+The fixture still selected the first existing `pwsh.exe` on PATH, bypassing the
+shared resolver's WindowsApps exclusion. It now uses `TestPowerShell.Executable`.
+`TestPowerShellResolutionTests.EveryPwshFixtureUsesARealInstalledShell` includes
+this fixture in its absolute, existing, non-WindowsApps path checks. The gated
+ownership assertion also requires the pinned child's image to match the selected
+shell, so runtime redirection cannot silently defeat that selection. Membership
+and immediate exit assertions remain in place. No production termination code
+or cancellation deadline changes in this revision.
+
+A read-only Claude Opus cross-family review supported the correction and suggested
+the child-image assertion. The remaining hypothesis is that selecting the installed
+shell restores the controlled fixture's membership. Acceptance must execute
+`TestPowerShellResolutionTests`, `JunitCommandEnvironmentIsolationTests` (including
+at least five cancellation rows), `JunitCommandEnvironmentDiagnosticTests`, and
+`AcceptanceProcessRunnerTests.Caller_cancellation_at_final_heartbeat_keeps_custody_until_cleanup`.
+Retain full exceptions and distinguish image/membership failures, cleanup failures,
+and passing cancellation boundaries. A successful build proves compilation only.

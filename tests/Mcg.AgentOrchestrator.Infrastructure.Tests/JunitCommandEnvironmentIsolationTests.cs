@@ -79,7 +79,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
         try
         {
             await gate.Ready();
-            gate.AssertOwned();
+            gate.AssertOwned(fixture.Shell);
             Assert.Equal(JunitCommandEnvironmentFixture.Literal, JunitCommandEnvironmentFixture.ObservedValue(fixture.CommandObservation));
             Assert.Equal(before, Environment.GetEnvironmentVariable(variable));
             if (cancel)
@@ -191,11 +191,13 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
-        internal void AssertOwned()
+        internal void AssertOwned(string shell)
         {
             if (!OperatingSystem.IsWindows()) return;
             Assert.NotNull(_child);
             Assert.NotNull(_launcher);
+            // Prove cmd launched the selected installed binary without package/alias redirection.
+            Assert.Equal(Path.GetFullPath(shell), _child.MainModule?.FileName, ignoreCase: true);
             // Query only the registered launcher's job while both pinned processes are
             // blocked on this gate. Parentage alone does not prove job membership.
             var inspected = WorkerProcessJobs.TryGetActiveProcessIds(_launcher.Id, out var members);

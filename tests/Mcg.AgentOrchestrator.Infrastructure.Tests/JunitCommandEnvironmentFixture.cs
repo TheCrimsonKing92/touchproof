@@ -21,9 +21,9 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         int exitCode = 0, bool failParser = false, string? diagnostic = null)
     {
         Variable = variable;
-        Shell = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
-            .Where(path => path.Length > 0).Select(path => Path.Combine(path.Trim('"'), OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh"))
-            .FirstOrDefault(File.Exists) ?? throw new InvalidOperationException("Required pwsh fixture executable is missing.");
+        // Use the shared installed-shell resolver, including its WindowsApps exclusion.
+        // A PATH-selected package host is not the controlled child this fixture requires.
+        Shell = TestPowerShell.Executable;
         Root = CreateManifestWorkspace("{\"checks\":[],\"environmentContract\":{\"version\":1,\"tools\":[]}}");
         Directory.CreateDirectory(Path.Combine(Root, ".git"));
         Directory.CreateDirectory(Path.Combine(ProjectRoot, "fixtures"));
