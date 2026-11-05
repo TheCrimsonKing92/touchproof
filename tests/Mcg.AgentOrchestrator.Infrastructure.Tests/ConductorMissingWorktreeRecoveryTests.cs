@@ -259,8 +259,64 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         Assert.True(File.Exists(Path.Combine(f.Path, "unique-goal.txt")));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, true)]
+    public void RecoveryRefusalCarriesPolicyDecisionBeforeAnyDispatch(bool leaseUnavailable, bool recordedDispatch)
+    {
+        using var f = new MissingFixture();
+        if (recordedDispatch)
+            f.Kernel.RecordTaskDispatch(f.Goal.Id, f.Goal.Tasks.Single().Id,
+                new("codex-cli", "fixture", f.Path, DateTimeOffset.UtcNow));
+        var prepared = false;
+        const string reason = "Fixture workspace preparation refusal.";
+        var driver = Driver(f, f.Coordinator(), _ =>
+        {
+            prepared = true;
+            return DispatchStartOutcome.Started();
+        }, _ => throw new InvalidOperationException("Integration must not run after recovery refusal."),
+            _ =>
+            {
+                if (leaseUnavailable) throw new ConductorDriver.EvidenceMutationLeaseUnavailableException(reason);
+                throw new InvalidOperationException(reason);
+            });
+
+        var result = driver.AdvanceOnce(f.Goal, ConductorAutonomyPolicy.Permissive);
+
+        PolicyDecisionRecord? recordedDecision;
+        if (leaseUnavailable)
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Equal(reason, held.Reason);
+            recordedDecision = held.Decision;
+        }
+        else
+        {
+            var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+            Assert.Equal(reason, escalated.Reason);
+            recordedDecision = escalated.Decision;
+        }
+        var decision = Assert.IsType<PolicyDecisionRecord>(recordedDecision);
+        Assert.Equal("dispatch-start", decision.Stage);
+        Assert.Equal(leaseUnavailable ? "Hold" : "Escalate", decision.Action);
+        Assert.Equal(leaseUnavailable ? 11 : 12, decision.Rung);
+        Assert.Equal(leaseUnavailable ? "workspace-preparation-lease-unavailable" : "workspace-preparation-failed",
+            decision.DiscriminatingEvidence);
+        Assert.Equal(reason, decision.Reason);
+        var replay = DispatchStartPolicy.Evaluate(DispatchStartFacts.FromRecordedFacts(decision.Facts));
+        Assert.Equal(decision.Action, replay.Action.ToString());
+        Assert.Equal(reason, replay.Reason);
+        Assert.False(prepared);
+        Assert.False(Directory.Exists(f.Path));
+        Assert.Equal(f.Tip, RunGitOutput(f.Repo, "rev-parse", $"refs/heads/{f.Branch}").Trim());
+        Assert.Null(f.Goal.Tasks.Single().LastProcess);
+    }
+
     private static ConductorDriver Driver(MissingFixture f, GoalEvidenceOperationCoordinator coordinator,
-        Func<Goal, DispatchStartOutcome> prepare, Func<Goal, DeveloperBranchIntegrationResult> integrate) => new(
+        Func<Goal, DispatchStartOutcome> prepare, Func<Goal, DeveloperBranchIntegrationResult> integrate,
+        Func<Goal, GoalEvidenceOperationScope?>? recover = null) => new(
         getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
         getRunningPaidWorkerCount: () => 0, createWorkspace: _ => throw new InvalidOperationException("unexpected creation"),
         dispatchAndStart: prepare, startRecordedDispatches: prepare, buildServerShutdown: null,
@@ -272,8 +328,8 @@ public sealed class ConductorMissingWorktreeRecoveryTests : GoalWorktreeRecovery
         record: _ => { }, cleanup: _ => throw new InvalidOperationException("unexpected cleanup"),
         writeEscalation: (_, _, _) => { }, classifyChangeRisk: _ => null,
         integrateMainBeforeDeveloperDispatch: integrate,
-        prepareMissingWorkspace: goal => ConductorMissingWorktreeRecovery.Prepare(f.Repo, goal, coordinator,
-            () => f.Kernel.Goals.ToArray(), _ => false));
+        prepareMissingWorkspace: recover ?? (goal => ConductorMissingWorktreeRecovery.Prepare(f.Repo, goal, coordinator,
+            () => f.Kernel.Goals.ToArray(), _ => false)));
 
     private sealed class FixtureLabeler(bool fail = false) : IWorkerIntegrityLabeler
     {
