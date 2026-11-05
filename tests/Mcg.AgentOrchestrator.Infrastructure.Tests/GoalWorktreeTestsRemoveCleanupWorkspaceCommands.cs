@@ -651,10 +651,12 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
         }
     }
 
-    // Conductor workspace creation retries worktree-add after clearing an orphan directory.
-    // That deletion is cleanup, so it must run through the conductor's own cleanup owner.
-    [Xunit.Fact(DisplayName = "Conductor_workspace_create_clears_an_orphan_through_its_cleanup_owner")]
-    public void ConductorWorkspaceCreateClearsAnOrphanThroughItsCleanupOwner()
+    // Automatic conductor preparation preserves partial directories. Explicit CLI cleanup
+    // remains covered separately by CliWorktreeCreationUsesItsContextToClearAnOrphan.
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ConductorWorkspaceCreate_PartialDirectory_RefusesWithoutCleanup(bool branchExists)
     {
         var repo = CreateSeededRepository();
         try
@@ -662,14 +664,18 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal(
-                "Conductor orphan clearing",
+                "Conductor partial workspace preservation",
                 [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var tip = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            if (branchExists) RunGit(repo, "branch", branch);
+            var registrations = RunGitOutput(repo, "worktree", "list", "--porcelain");
             var orphanPath = GoalWorktrees.WorktreePath(repo, goal.Id);
             Directory.CreateDirectory(orphanPath);
-            File.WriteAllText(
-                Path.Combine(orphanPath, "orphan.txt"),
-                "left by an interrupted conductor workspace creation");
+            var sentinel = Path.Combine(orphanPath, "orphan.txt");
+            const string contents = "left by an interrupted conductor workspace creation";
+            File.WriteAllText(sentinel, contents);
             var clearedPaths = new List<string>();
             var cleanupHooks = CreateIsolatedCleanupContext(repo).Hooks with
             {
@@ -687,13 +693,30 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
                 WorkerProfileCatalog.Default(),
                 cleanupHooks: cleanupHooks);
 
-            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
 
-            var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
-            Assert.Equal(GoalLifecycleState.Created, executed.FromState);
-            Assert.Equal(orphanPath, Assert.Single(clearedPaths));
-            Assert.False(File.Exists(Path.Combine(orphanPath, "orphan.txt")));
-            Assert.Equal(orphanPath, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.StartsWith("Goal worktree recovery refused:", failure.Message);
+            if (branchExists) Assert.Contains("incomplete, partial or locked", failure.Message);
+            Assert.Empty(clearedPaths);
+            Assert.Equal(contents, File.ReadAllText(sentinel));
+            Assert.Equal(sentinel, Assert.Single(Directory.EnumerateFileSystemEntries(orphanPath)));
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(registrations, RunGitOutput(repo, "worktree", "list", "--porcelain"));
+            Assert.Equal(tip, RunGitOutput(repo, "rev-parse", "HEAD").Trim());
+            Assert.Equal(branchExists, BranchExists(repo, branch));
+            if (branchExists) Assert.Equal(tip, RunGitOutput(repo, "rev-parse", branch).Trim());
+            var receipt = Assert.Single(GoalOperationJournal.ReadStrict(repo, goal.Id).Entries.Where(entry =>
+                entry.Operation == ConductorMissingWorktreeRecovery.Operation));
+            Assert.Equal(GoalOperationStatus.Failed, receipt.Status);
+            Assert.Contains($"goal={goal.Id.Value} path={orphanPath} branch={branch}", receipt.Detail);
+            Assert.Contains($"preserved_tip={(branchExists ? tip : "unavailable")}", receipt.Detail);
+            Assert.Contains($"observation={failure.Message["Goal worktree recovery refused: ".Length..]}", receipt.Detail);
+            Assert.DoesNotContain(GoalOperationJournal.ReadStrict(repo, goal.Id).Entries, entry =>
+                entry.Operation == "conductor:workspace-create" && entry.Status == GoalOperationStatus.Completed);
+            var task = Assert.Single(goal.Tasks);
+            Assert.Null(task.LastDispatch);
+            Assert.Null(task.LastProcess);
         }
         finally
         {
