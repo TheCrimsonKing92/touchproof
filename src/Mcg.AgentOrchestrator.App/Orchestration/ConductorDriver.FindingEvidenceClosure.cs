@@ -11,7 +11,8 @@ internal sealed partial class ConductorDriver
         string candidateSha,
         IReadOnlyList<ReviewFinding> findings,
         IReadOnlyList<string> receiptIds,
-        string summary)
+        string summary,
+        ConductorAutonomyPolicy? policy = null)
     {
         FindingReceiptClosureDiagnosis? diagnosis = null;
         if (task.RequiredRole == AgentRole.Tester &&
@@ -23,6 +24,9 @@ internal sealed partial class ConductorDriver
         }
 
         var receiptTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
+        if (policy is not null &&
+            ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, receiptTask, policy, out var reviewerDecision))
+            return reviewerDecision;
         var openFindings = ReviewFindings.GetOpenBlockingFindings(
             receiptTask.LastVerification?.MergedReviewFindings ?? findings,
             goal.EffectiveAcceptanceCriteriaCorrections);

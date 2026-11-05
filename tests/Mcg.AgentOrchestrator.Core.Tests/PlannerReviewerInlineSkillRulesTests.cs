@@ -16,7 +16,8 @@ public sealed class PlannerReviewerInlineSkillRulesTests
         "- Treat `Completed` status and worker prose as claims: check each claimed file, commit, command, and test against `git diff main...HEAD` and the repository.",
         "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.",
         "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.",
-        "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed."
+        "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.",
+        "- Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings."
     ];
 
     [Xunit.Fact]
