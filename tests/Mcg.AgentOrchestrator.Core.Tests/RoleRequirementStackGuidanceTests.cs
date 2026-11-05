@@ -4,6 +4,17 @@ using Xunit;
 // Parallel-safe: pure transformations and in-memory kernels with a fixed clock.
 public sealed class RoleRequirementStackGuidanceTests
 {
+    [Theory]
+    [InlineData(TaskComplexity.Simple)]
+    [InlineData(TaskComplexity.Complex)]
+    public void ReviewerRequirements_ReRaisedFinding_NamesRemainingChange(TaskComplexity complexity)
+    {
+        var requirements = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer, complexity);
+        Assert.Contains("Inspect delivered receipts before re-raising a stable finding", requirements);
+        Assert.Contains("remaining source/test change, missing scenario and current anchor", requirements);
+        Assert.Contains("Passing classes alone never close source or coverage findings", requirements);
+    }
+
     private const string SimpleDescription = "Update the label.";
     private const string ComplexDescription =
         "Design and implement a production multi-tenant architecture with end-to-end distributed integration and horizontal scaling.";

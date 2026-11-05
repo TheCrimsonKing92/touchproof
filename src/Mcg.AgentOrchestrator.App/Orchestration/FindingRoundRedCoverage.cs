@@ -32,7 +32,7 @@ internal static class FindingRoundRedCoverage
         string candidateSha, string fingerprint, string basis,
         Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> recordDispositions,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> recordOutcome,
-        Action<GoalId, TaskId, string> recordRequest)
+        Action<GoalId, TaskId, string> recordRequest, ConductorAutonomyPolicy? policy = null)
     {
         var coverage = Evaluate(pending, task, goal.Timeline, candidateSha, fingerprint, basis, receipt);
         coverage.RecordSkips(goal, task, candidateSha, fingerprint, basis, recordDispositions, recordOutcome, recordRequest);
@@ -44,7 +44,7 @@ internal static class FindingRoundRedCoverage
                 runnable.Findings.Concat(plan.CoveredFindings).Concat(coverage.Findings).DistinctBy(finding => finding.StableId).ToArray(),
                 plan.CoveredReceiptIds.Concat(coverage.ReceiptIds).Append(receipt.ReceiptId).Distinct(StringComparer.Ordinal).ToArray(),
                 "Focused evidence completed and its receipt was attached to the requesting finding." +
-                (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence);
+                (plan.RedCovered.Count == 0 ? "" : " " + plan.CoveredEvidence) + "; " + coverage.Evidence, policy);
     }
 
     internal static Coverage Evaluate(
