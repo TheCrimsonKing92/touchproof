@@ -77,7 +77,10 @@ internal static class RemoteFirstFocusedEvidence
                         : UnavailableRemoteLaneExecutor.Instance);
                 var interval = overrides.RemoteLanePollInterval is { } value && value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(1);
                 coordinator = new(configuration, identity, worktreePath, prefix, executor, clock, interval, null,
-                    claimClass: RemoteExecutorClaimClass.FocusedEvidence);
+                    claimClass: RemoteExecutorClaimClass.FocusedEvidence)
+                {
+                    TestSettings = owner.Settings.DeclaredTestSettings
+                };
                 // Initiate all claims in cost order before remote work can release any capacity.
                 var claimed = new List<(Run Run, RemoteLaneExecutorEntry Entry)>();
                 var waiting = new List<(Run Run, string InitialReason, Task<(RemoteLaneExecutorEntry? Entry, FocusedEvidenceExecutorWaitRecord Record)> Wait)>();

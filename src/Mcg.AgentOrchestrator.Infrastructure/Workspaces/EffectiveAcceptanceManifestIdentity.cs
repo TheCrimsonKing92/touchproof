@@ -81,6 +81,8 @@ internal static class EffectiveAcceptanceManifestIdentity
             }
         };
         var canonicalJson = JsonSerializer.Serialize(canonicalPlan);
+        if (settings.DeclaredTestSettings.Count > 0)
+            canonicalJson += "\n" + JsonSerializer.Serialize(settings.DeclaredTestSettings);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
         return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
     }

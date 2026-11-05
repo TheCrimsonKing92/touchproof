@@ -179,7 +179,7 @@ public static class AcceptanceHermeticEnvironment
     }
 
     internal static bool IsHermeticVerificationEnvironmentVariable(string name,
-        IReadOnlyList<DeclaredToolHome>? toolHomes = null) =>
+        IReadOnlyList<DeclaredToolHome>? toolHomes = null, IEnumerable<string>? declaredTestSettingNames = null) =>
         IsInheritedHermeticVerificationEnvironmentVariable(name) ||
         name.Equals("HOME", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("USERPROFILE", StringComparison.OrdinalIgnoreCase) ||
@@ -205,7 +205,8 @@ public static class AcceptanceHermeticEnvironment
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase) || GoToolCacheEnvironment.IsVariable(name) ||
-        DeclaredToolHomeEnvironment.Declares(name, toolHomes);
+        DeclaredToolHomeEnvironment.Declares(name, toolHomes) ||
+        (declaredTestSettingNames?.Contains(name, StringComparer.Ordinal) ?? false);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
         IsHermeticSystemLocationVariable(name) ||

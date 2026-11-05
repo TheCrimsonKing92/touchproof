@@ -16,7 +16,8 @@ param(
     # The host's lane budget minus the preamble allowance (job field testHostTimeoutSeconds, goal e4b96116). A job
     # without the field (shadow or focused evidence, or an older host) gets 2100 s, matching the 40 min host lane budget;
     # the test runner's own 780 s default killed 27 laptop lanes with no TRX before 2026-10-17.
-    [int]$TestHostTimeoutSeconds = 0
+    [int]$TestHostTimeoutSeconds = 0,
+    [System.Collections.IDictionary]$TestSettings = @{}
 )
 $ErrorActionPreference = 'Stop'
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -54,7 +55,7 @@ function Write-FileRetrying([string]$path, [string]$text) {
 function Write-Status([string]$state, [hashtable]$extra = @{}) {
     $record = [ordered]@{ sha = $Sha; lane = $Lane; project = $Project; filter = $Filter; state = $state; host = $env:COMPUTERNAME; utc = [DateTime]::UtcNow.ToString('o')
         attemptId = $AttemptId; executorId = $ExecutorId; filterHash = $FilterHash; mainSha = $MainSha; manifestIdentity = $ManifestIdentity
-        commitSha = $script:observedCommit; treeSha = $script:observedTree }
+        commitSha = $script:observedCommit; treeSha = $script:observedTree; testSettings = $TestSettings }
     foreach ($key in $extra.Keys) { $record[$key] = $extra[$key] }
     Write-FileRetrying $status ($record | ConvertTo-Json -Compress)
 }
@@ -127,7 +128,13 @@ try {
         $filterFile = Join-Path $out 'filter.txt'
         [IO.File]::WriteAllText($filterFile, $Filter, [Text.UTF8Encoding]::new($false))
         $phaseStart = [DateTime]::UtcNow
-        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -FilterFile $filterFile -NoBuild -ResultsRoot $results @timeoutArgs *>&1 |
+        $settingsArgs = @{}
+        if ($TestSettings.Count -gt 0) {
+            $settingsFile = Join-Path $out 'test-settings.json'
+            Write-FileRetrying $settingsFile ($TestSettings | ConvertTo-Json -Compress)
+            $settingsArgs['TestSettingsFile'] = $settingsFile
+        }
+        & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-TestSummary.ps1') -Target $Project -FilterFile $filterFile -NoBuild -ResultsRoot $results @timeoutArgs @settingsArgs *>&1 |
             Tee-Object -FilePath (Join-Path $out 'runner.log') | Out-Null
         $exit = $LASTEXITCODE
         $phases.testSeconds = Get-PhaseSeconds $phaseStart

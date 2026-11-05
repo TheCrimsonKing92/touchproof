@@ -1,5 +1,23 @@
 # Acceptance gate resource isolation
 
+## Declared test settings
+
+The optional top-level `testSettings` object in `config/acceptance-manifest.json` supplies literal
+name/value pairs to gate test lanes, focused checks and reruns after their environments are sealed.
+For example, `"testSettings": { "MCG_TEST_HOST_CAPACITY_SLOTS": "6" }` fixes the test host slot budget.
+The shipped manifest declares none, preserving the default slot budget and fixture timeouts.
+Names must match `^MCG_TEST_[A-Z0-9_]+$` exactly; duplicates, lane-owned names (including
+`MCG_TEST_SLOT_TIMING_FILE`) and the operator-only `MCG_TEST_INPUT_` namespace are rejected.
+Values must be non-empty strings without NUL, CR or LF; they are passed without normalization.
+Manifest values override child overrides for those names. Ambient test settings are never inherited.
+
+The lane plan records the complete settings map, including an empty object when none are declared.
+Remote jobs carry the same snapshot through the executor's sealed runner and echo it in status.
+A missing or different echo for declared settings causes `BindingMismatchTestSettings` and local
+fallback. After adopting this engine change, redeploy executor tools before the first experiment;
+the goal's own gate still uses its conductor's current engine. Confirm the landed remote status
+echo and slot-timing records before comparing experiments.
+
 `exclusiveResourceKeys` in `config/acceptance-manifest.json` are admission constraints for shards in one
 `GoalAcceptanceVerifier` invocation. They do not coordinate simultaneous goal gates and therefore cannot
 make a host-global resource safe. A host-global resource must have its own cross-process lease or be moved

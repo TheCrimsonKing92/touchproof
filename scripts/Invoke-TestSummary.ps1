@@ -34,6 +34,7 @@ param(
     [string]$DotnetPath = 'dotnet',
     [string]$AcceptanceAttributionReplayInput,
     [string[]]$TestInput = @(),
+    [string]$TestSettingsFile,
     [switch]$AllowBreakaway,
     [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
 )
@@ -120,6 +121,7 @@ $run = Invoke-MtpTestRun `
     -DotnetPath $DotnetPath `
     -AcceptanceAttributionReplayInput $AcceptanceAttributionReplayInput `
     -TestInput $TestInput `
+    -TestSettingsFile $TestSettingsFile `
     -AllowBreakaway:$AllowBreakaway `
     -TestHostTimeoutSeconds $TestHostTimeoutSeconds
 Complete-MtpInvocation $run

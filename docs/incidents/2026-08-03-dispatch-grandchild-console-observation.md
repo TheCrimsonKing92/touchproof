@@ -34,7 +34,7 @@ Win32 code and full command line, so the test never waits for a process that did
 - The probe sets a self-identifying console title, appends the same identity to
   `grandchild-reap-probe.log`, and guards its stdout identity write.
 - Start-gate, launch-result, probe-exit, reap, and teardown waits default to 30 seconds through the
-  `MCG_GRANDCHILD_REAP_FIXTURE_TIMEOUT_SECONDS` override; CPU accounting retains its pre-existing
+  `MCG_TEST_GRANDCHILD_REAP_FIXTURE_TIMEOUT_SECONDS` override; CPU accounting retains its pre-existing
   five-second bound. Every expiry reports the resource whose wait expired.
 - Teardown kills the recorded pid, terminates the owned process group, kills any `pwsh` whose
   command line references the unique fixture root, and asserts that the scoped match set is empty.
