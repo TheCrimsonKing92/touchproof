@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 // Parallel-safe: owned dictionaries/files and child environments; no parent environment mutation.
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderC")]
 public sealed class GateDeclaredTestSettingsTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("declared-settings-").FullName;
