@@ -74,7 +74,7 @@ public sealed class ConductorBatchLoopTestsMergeEvidenceRelaunch(ITestOutputHelp
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Sink_ThenMergeEvidenceSweep_HandlesGoalOnlyOnce()
     {
