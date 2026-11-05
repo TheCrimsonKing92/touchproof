@@ -144,14 +144,14 @@ public sealed class WorkerBuildRequestStructuralFailureTests
     }
 
     [Fact]
-    public async Task TimeoutUsesSharedBoundAndLateWorkCannotPublishPass()
+    public async Task TimeoutUsesWorkerBoundAndLateWorkCannotPublishPass()
     {
         using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        fixture.Time.TimerScheduled = due => { if (due == BoundedStructuralPreflight.DefaultBound) timer.TrySetResult(); };
+        fixture.Time.TimerScheduled = due => { if (due == WorkerBuildStructuralPreflight.EvaluationBound) timer.TrySetResult(); };
         var running = fixture.RunHelper(structuralEvaluator: () =>
         {
             entered.SetResult();
@@ -166,10 +166,10 @@ public sealed class WorkerBuildRequestStructuralFailureTests
         {
             await Task.WhenAll(entered.Task, timer.Task).WaitAsync(TimeSpan.FromMinutes(3));
             fixture.AssertSlotsFree();
-            fixture.Time.Advance(BoundedStructuralPreflight.DefaultBound);
+            fixture.Time.Advance(WorkerBuildStructuralPreflight.EvaluationBound);
             var invocation = await running.WaitAsync(TimeSpan.FromMinutes(3));
             AssertUnavailable(fixture, invocation);
-            Assert.Contains("exceeded 10000 ms bound", invocation.StructuralCheck!.Diagnostic);
+            Assert.Contains("exceeded 30000 ms bound", invocation.StructuralCheck!.Diagnostic);
             var version = invocation.Version;
             release.Set();
             await finished.Task.WaitAsync(TimeSpan.FromMinutes(3));

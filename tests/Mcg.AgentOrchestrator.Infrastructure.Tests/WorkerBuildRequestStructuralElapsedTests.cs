@@ -41,7 +41,7 @@ public sealed class WorkerBuildRequestStructuralElapsedTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var timer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        fixture.Time.TimerScheduled = due => { if (due == BoundedStructuralPreflight.DefaultBound) timer.TrySetResult(); };
+        fixture.Time.TimerScheduled = due => { if (due == WorkerBuildStructuralPreflight.EvaluationBound) timer.TrySetResult(); };
         var running = fixture.RunHelper(structuralEvaluator: () =>
         {
             entered.SetResult();
@@ -57,16 +57,18 @@ public sealed class WorkerBuildRequestStructuralElapsedTests
         {
             // These waits detect a missing event; only the injected clock decides timeout.
             await Task.WhenAll(entered.Task, timer.Task).WaitAsync(TimeSpan.FromMinutes(3));
-            fixture.Time.Advance(BoundedStructuralPreflight.DefaultBound);
+            fixture.Time.Advance(WorkerBuildStructuralPreflight.EvaluationBound);
             var invocation = await running.WaitAsync(TimeSpan.FromMinutes(3));
             Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
             Assert.Equal(WorkerBuildStructuralStatus.Unavailable, invocation.StructuralCheck!.Status);
-            Assert.Equal(BoundedStructuralPreflight.DefaultBound.TotalMilliseconds,
+            Assert.Equal(30000, WorkerBuildStructuralPreflight.EvaluationBound.TotalMilliseconds);
+            Assert.Equal(10000, BoundedStructuralPreflight.DefaultBound.TotalMilliseconds);
+            Assert.Equal(WorkerBuildStructuralPreflight.EvaluationBound.TotalMilliseconds,
                 invocation.StructuralCheck.ElapsedMilliseconds);
-            Assert.Contains("exceeded 10000 ms bound", invocation.StructuralCheck.Diagnostic);
+            Assert.Contains("exceeded 30000 ms bound", invocation.StructuralCheck.Diagnostic);
             Assert.Equal(invocation.StructuralCheck.ElapsedMilliseconds,
                 Assert.Single(fixture.Responses).StructuralElapsedMilliseconds);
-            Assert.Contains("structural_elapsed_ms=10000", File.ReadAllText(Path.Combine(fixture.Root, "worker.out.log")));
+            Assert.Contains("structural_elapsed_ms=30000", File.ReadAllText(Path.Combine(fixture.Root, "worker.out.log")));
         }
         finally
         {

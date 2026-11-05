@@ -9,6 +9,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference reference,
     Func<DeveloperCompletionStructuralFindings>? evaluate = null, TimeProvider? time = null)
 {
+    // Cold unbounded run at 88da88ef8 (2026-11-05): 16,996 ms total, 11,464 ms
+    // test-class scan. Keep 13,004 ms headroom without assuming parallel speedup.
+    // This is specific to worker builds; the conductor's synchronous bound is separate.
+    internal static readonly TimeSpan EvaluationBound = TimeSpan.FromSeconds(30);
+
     internal static WorkerBuildStructuralPolicy CapturePolicy(TaskDispatchRecord dispatch,
         string? projectHomeDirectory, string integrationBranch)
     {
@@ -92,7 +97,7 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
                         ? DeveloperCompletionStructuralPreflight.Evaluate(invocation.WorktreeRoot, policy.ProjectHomeDirectory,
                             policy.BaselineRevision ?? policy.IntegrationBranch)
                         : evaluate();
-                }, cancellationToken: lifetime, time: clock);
+                }, bound: EvaluationBound, cancellationToken: lifetime, time: clock);
             }
             finally { elapsedMilliseconds = clock.GetElapsedTime(started).TotalMilliseconds; }
             lifetime.ThrowIfCancellationRequested();
@@ -115,7 +120,7 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             return Unavailable(invocation, policyDigest, error is TimeoutException
-                ? $"Structural evaluation exceeded {BoundedStructuralPreflight.DefaultBound.TotalMilliseconds:0} ms bound."
+                ? $"Structural evaluation exceeded {EvaluationBound.TotalMilliseconds:0} ms bound."
                 : $"{error.GetType().Name}: {error.Message}", elapsedMilliseconds);
         }
     }

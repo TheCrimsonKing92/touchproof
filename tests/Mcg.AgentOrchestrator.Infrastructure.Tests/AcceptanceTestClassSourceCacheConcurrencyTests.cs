@@ -6,6 +6,76 @@ using FileExtract = Mcg.AgentOrchestrator.Infrastructure.AcceptanceTestClassSour
 public sealed class AcceptanceTestClassSourceCacheConcurrencyTests
 {
     [Fact]
+    public async Task ColdFiles_OverlapWithinFourParsers_AndKeepInputOrder()
+    {
+        using var tree = new TestTree();
+        var (root, paths) = tree.WriteRoot("cold", 8);
+        var cache = new AcceptanceTestClassSourceCache();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var started = 0;
+        var active = 0;
+        var maximum = 0;
+        var running = Task.Run(() => cache.Extract(root, paths, path =>
+        {
+            var concurrent = Interlocked.Increment(ref active);
+            int observed;
+            do { observed = Volatile.Read(ref maximum); }
+            while (concurrent > observed && Interlocked.CompareExchange(ref maximum, concurrent, observed) != observed);
+            if (Interlocked.Increment(ref started) == 4) entered.SetResult();
+            try
+            {
+                Assert.True(release.Wait(TestHangGuard.HangSafetyBound), "Cold parser release did not arrive.");
+                return Extract(path);
+            }
+            finally { Interlocked.Decrement(ref active); }
+        }));
+        try
+        {
+            await TestHangGuard.WaitAsync(entered.Task, "four cold parsers entered before any was released");
+            Assert.Equal(4, Volatile.Read(ref active));
+        }
+        finally
+        {
+            release.Set();
+            await TestHangGuard.WaitAsync(running, "all cold parses completed after release");
+        }
+
+        var result = await running;
+        Assert.Equal(4, maximum);
+        Assert.Equal(paths, result.SelectMany(item => item.Constants).Select(item => item.Key));
+        Assert.Equal(paths.Length, cache.ParsedFileCount);
+        var warm = cache.Extract(root, paths, _ => throw new InvalidOperationException("Unchanged file was reparsed."));
+        Assert.Equal(result.ToArray(), warm.ToArray());
+        Assert.All(paths, path => Assert.Equal(1, cache.ParseCountForTests(root, path)));
+    }
+
+    [Fact]
+    public void ParseFailures_PreserveFirstInputException_AndDoNotPublishPartialCache()
+    {
+        using var tree = new TestTree();
+        var (root, paths) = tree.WriteRoot("failure", 3);
+        var cache = new AcceptanceTestClassSourceCache();
+        cache.Extract(root, paths, Extract);
+        File.AppendAllText(paths[0], "// changed");
+        File.AppendAllText(paths[2], "// changed");
+        var expected = new IOException("first input could not be read");
+        var actual = Assert.Throws<IOException>(() => cache.Extract(root, paths, path =>
+        {
+            if (path == paths[0]) throw expected;
+            throw new InvalidDataException("later input could not be parsed");
+        }));
+
+        Assert.Same(expected, actual);
+        Assert.All(paths, path => Assert.Equal(1, cache.ParseCountForTests(root, path)));
+        var recovered = cache.Extract(root, paths, Extract);
+        Assert.Equal(paths, recovered.SelectMany(item => item.Constants).Select(item => item.Key));
+        Assert.Equal(2, cache.ParseCountForTests(root, paths[0]));
+        Assert.Equal(1, cache.ParseCountForTests(root, paths[1]));
+        Assert.Equal(2, cache.ParseCountForTests(root, paths[2]));
+    }
+
+    [Fact]
     public async Task DifferentRoots_BlockedExtract_DoesNotBlockOtherRoot()
     {
         using var tree = new TestTree();
