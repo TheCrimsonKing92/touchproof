@@ -156,7 +156,10 @@ public sealed class AcceptanceProcessRunnerTests
                     {
                         cleanup.Add(observation);
                         if (observation.Stage != "heartbeat-final") return;
-                        Assert.True(observation.RegistryActive);
+                        // The durable SQLite registry is optional. Custody is the live owned
+                        // job and native handle, even when this test host has no registry.
+                        Assert.True(observation.JobActive);
+                        if (OperatingSystem.IsWindows()) Assert.True(observation.NativeHandleOpen);
                         finalHeartbeatObserved = true;
                         cancellation.Cancel();
                         cancellation.Token.ThrowIfCancellationRequested();
@@ -170,6 +173,7 @@ public sealed class AcceptanceProcessRunnerTests
             var disposed = Assert.Single(cleanup, observation => observation.Stage == "owned-child-disposed");
             Assert.True(disposed.ProcessDisposed);
             Assert.False(disposed.RegistryActive);
+            Assert.False(disposed.JobActive);
             Assert.False(disposed.NativeHandleOpen);
         }
         finally

@@ -126,3 +126,40 @@ Acceptance owns these executable checks and their negative controls:
 - Rerun `JunitCommandEnvironmentIsolationTests`, including the original cancellation
   boundary assertion, and `JunitCommandEnvironmentDiagnosticTests`. Build success
   does not prove the failed boundary has been repaired.
+
+## Bounded revision for receipt finding-evidence-6ee0d0fa5cafece1a84ff18a
+
+The typed retry feedback binds two failures to candidate
+`dc41c11fbf465a3735e153238a37ffe1d6add106`. The relevant source was unchanged at
+dispatch HEAD `8beaa1a8028617294ee505beca0c07b693269795`.
+
+`AcceptanceProcessRunnerTests.Caller_cancellation_at_final_heartbeat_keeps_custody_until_cleanup`
+failed at `Assert.True(observation.RegistryActive)` before injecting cancellation.
+`HasActiveRegistryEntryForTests` queries the optional SQLite registry, whereas
+`HasActiveJobForTests` queries the owned-job registration. The test now requires
+the latter and the retained Windows native handle, then verifies job release after
+cleanup. It does not configure or mutate the shared optional registry.
+
+The same receipt reports that
+`JunitCommandEnvironmentIsolationTests.FailureOrCancellation_LeavesParentEnvironmentUnchanged(cancel: True)`
+observed child PID 39788 alive after cleanup reported `TreeExitConfirmed=True` for
+launcher PID 48784. It does not report whether that child belonged to the owned
+job. The runtime mechanism remains undetermined. No additional production
+termination change is justified by this receipt alone.
+
+The cancellation fixture now asserts that both pinned processes belong to the
+launcher's registered job before cancellation, retaining that member list in
+boundary diagnostics. The existing immediate exit assertion is unchanged.
+Only after that assertion and invocation drain does teardown release a surviving
+gated child, preserving the first failure while avoiding an indefinitely blocked
+fixture process.
+
+Acceptance must execute both named cases and retain the complete exception,
+including `owned_job_members_before_cancellation`. A precondition failure proves
+missing membership at the ready event; a passing precondition followed by the
+original exit failure localizes the remaining defect to termination/exit
+observation. Neither result alone establishes why membership or termination
+failed. Developer test execution remains prohibited, and the supplied package
+does not contain a full executed-count receipt admitting a local reproduction.
+This is a test correction and diagnostic revision, not a completed repair of
+the surviving-child failure.

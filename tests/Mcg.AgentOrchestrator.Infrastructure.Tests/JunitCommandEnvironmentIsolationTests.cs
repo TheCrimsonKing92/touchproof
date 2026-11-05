@@ -83,6 +83,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
             Assert.Equal(before, Environment.GetEnvironmentVariable(variable));
             if (cancel)
             {
+                gate.AssertOwned();
                 lifetime.Cancel();
                 var cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(
                     () => run.WaitAsync(TimeSpan.FromSeconds(120)));
@@ -118,6 +119,9 @@ public sealed class JunitCommandEnvironmentIsolationTests
             var cleanupFailures = new List<Exception>();
             await CaptureCleanup(() => { lifetime.Cancel(); return Task.CompletedTask; });
             await CaptureCleanup(() => Drain(run));
+            // After the boundary assertion, release a surviving gated child so a failed
+            // cancellation does not leave it blocked indefinitely or mask the first failure.
+            await CaptureCleanup(gate.ReleaseSurvivor);
             await CaptureCleanup(gate.WaitForExit);
             await CaptureCleanup(() => { fixture.Dispose(); return Task.CompletedTask; });
             if (cleanupFailures.Count > 0)
@@ -150,6 +154,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
         private string _launcherIdentity = "launcher=unobserved";
         private bool _childExitObserved;
         private bool _launcherExitObserved;
+        private string _ownedMembers = "unobserved";
         internal ChildGate()
         {
             _pipe = new(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -186,6 +191,25 @@ public sealed class JunitCommandEnvironmentIsolationTests
             catch (TimeoutException) { throw new TimeoutException("Fixture child did not signal its ready event."); }
         }
         internal Task Release() => (_writer ?? throw new InvalidOperationException("Child ready event missing.")).WriteLineAsync("release");
+        internal void AssertOwned()
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            Assert.NotNull(_child);
+            Assert.NotNull(_launcher);
+            // Query only the registered launcher's job while both pinned processes are
+            // blocked on this gate. Parentage alone does not prove job membership.
+            var inspected = WorkerProcessJobs.TryGetActiveProcessIds(_launcher.Id, out var members);
+            _ownedMembers = inspected ? string.Join(",", members.Order()) : "inspection-failed";
+            Assert.True(inspected, $"Cannot inspect the fixture's owned job: {DescribeProcesses()}");
+            Assert.True(members.Contains(_launcher.Id) && members.Contains(_child.Id),
+                $"Fixture processes must belong to the owned job before cancellation: {DescribeProcesses()}");
+        }
+        internal async Task ReleaseSurvivor()
+        {
+            if (_child is null || _child.HasExited || _writer is null) return;
+            try { await Release().WaitAsync(TimeSpan.FromSeconds(120)); }
+            catch (IOException) when (_child.HasExited) { } // Termination closed the pipe during release.
+        }
         internal void AssertExited(OperationCanceledException cancellation)
         {
             var cleanupRan = cancellation.Data["AcceptanceCancellationCleanupRan"] is true;
@@ -240,7 +264,8 @@ public sealed class JunitCommandEnvironmentIsolationTests
         }
         internal string DescribeProcesses() =>
             $"{_childIdentity} child_exit_observed={_childExitObserved} child_handle_released={_child is null}; " +
-            $"{_launcherIdentity} launcher_exit_observed={_launcherExitObserved} launcher_handle_released={_launcher is null}";
+            $"{_launcherIdentity} launcher_exit_observed={_launcherExitObserved} launcher_handle_released={_launcher is null}; " +
+            $"owned_job_members_before_cancellation={_ownedMembers}";
 
         private static string DescribeIdentity(Process process, string role) =>
             $"{role}_pid={process.Id} {role}_start_utc_ticks={process.StartTime.ToUniversalTime().Ticks} {role}_image={process.ProcessName}";
