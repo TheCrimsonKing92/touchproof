@@ -173,6 +173,85 @@ internal sealed class GitRevisionReader : IDisposable
         return false;
     }
 
+    // No cache: both metadata and the effective Git environment belong to this invocation.
+    internal static string? ResolveCommonDirectoryOrNull(
+        string worktree, IReadOnlyDictionary<string, string>? environmentOverrides)
+    {
+        var effective = new Dictionary<string, string>(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            effective[(string)entry.Key] = (string)entry.Value!;
+        if (environmentOverrides is not null)
+            foreach (var entry in environmentOverrides) effective[entry.Key] = entry.Value;
+        return ResolveCommonDirectoryFromEnvironment(worktree, effective);
+    }
+
+    internal static string? ResolveCommonDirectoryFromEnvironment(
+        string worktree, IReadOnlyDictionary<string, string> effectiveEnvironment)
+    {
+        try
+        {
+            foreach (var name in effectiveEnvironment.Keys)
+            {
+                var canonical = OperatingSystem.IsWindows() ? name.ToUpperInvariant() : name;
+                if (canonical.StartsWith("GIT_", StringComparison.Ordinal) && canonical is not (
+                    "GIT_AUTHOR_NAME" or "GIT_AUTHOR_EMAIL" or "GIT_AUTHOR_DATE" or
+                    "GIT_COMMITTER_NAME" or "GIT_COMMITTER_EMAIL" or "GIT_COMMITTER_DATE" or
+                    "GIT_CONFIG_NOSYSTEM" or "GIT_CONFIG_GLOBAL" or "GIT_TERMINAL_PROMPT")) return null;
+            }
+
+            // Require a checkout-local entry, never infer a root from an enclosing repository.
+            var root = Path.GetFullPath(worktree);
+            var entry = Path.Combine(root, ".git");
+            if (!WorkTreeMetadataEntryExists(entry) ||
+                !TryConfirmWorkTree(worktree, name => effectiveEnvironment.GetValueOrDefault(name))) return null;
+
+            var gitDirectory = Directory.Exists(entry) ? entry : null;
+            if (gitDirectory is null)
+            {
+                var pointer = ReadBranchMetadataLine(entry);
+                if (pointer is null || !pointer.StartsWith("gitdir: ", StringComparison.Ordinal)) return null;
+                gitDirectory = ResolveOrdinaryMetadataDirectory(pointer[8..], root);
+            }
+            if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return null;
+
+            var commonDirectory = gitDirectory;
+            var commonPath = Path.Combine(gitDirectory, "commondir");
+            if (WorkTreeMetadataEntryExists(commonPath))
+            {
+                if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return null;
+                var common = ReadBranchMetadataLine(commonPath);
+                if (common is null) return null;
+                commonDirectory = ResolveOrdinaryMetadataDirectory(common, gitDirectory);
+                if (commonDirectory is null) return null;
+            }
+            if (!HasOrdinaryDirectoryPath(Path.Combine(commonDirectory, "objects")) ||
+                !HasOrdinaryDirectoryPath(Path.Combine(commonDirectory, "refs")) ||
+                !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return null;
+            return commonDirectory;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveOrdinaryMetadataDirectory(string path, string baseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path != path.Trim() || path.Any(char.IsControl)) return null;
+        // Inspect each component before normalization can erase a junction followed by '..'.
+        if (Path.IsPathRooted(path) && !Path.IsPathFullyQualified(path)) return null;
+        var current = Path.IsPathFullyQualified(path) ? Path.GetPathRoot(path)! : baseDirectory;
+        var suffix = Path.IsPathFullyQualified(path) ? path[current.Length..] : path;
+        foreach (var component in suffix.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.GetFullPath(component, current);
+            if (!HasOrdinaryDirectoryPath(current)) return null;
+        }
+        return Path.GetFullPath(current);
+    }
+
     internal static bool TryResolveRootGitDirectory(string directory, out string gitDirectory)
         => TryResolveRootGitDirectory(directory, out gitDirectory, Environment.GetEnvironmentVariable);
 
