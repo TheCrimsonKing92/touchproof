@@ -68,11 +68,27 @@ internal sealed class ConductEventFileSource(string path, TimeProvider clock) : 
                 root.GetProperty("timestamp").GetDateTimeOffset(),
                 root.GetProperty("eventKind").GetString() ?? string.Empty,
                 root.TryGetProperty("goalId", out var goalId) ? goalId.GetString() : null,
-                root.TryGetProperty("detail", out var detail) ? detail.GetString() ?? string.Empty : string.Empty);
+                root.TryGetProperty("detail", out var detail) ? detail.GetString() ?? string.Empty : string.Empty,
+                GoalProgress: ReadGoalProgress(root));
             return true;
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         { return false; }
+    }
+
+    private static GoalProgressEventFields? ReadGoalProgress(JsonElement root)
+    {
+        if (!root.TryGetProperty("goalProgress", out var value) || value.ValueKind != JsonValueKind.Object) return null;
+        try
+        {
+            var fields = value.Deserialize<GoalProgressEventFields>(JsonSerializerOptions.Web);
+            if (fields is null || (fields.GoalId is null && fields.Result is null && fields.State is null &&
+                fields.Slot is null && fields.Reason is null && fields.Decision is null && fields.Failure is null)) return null;
+            if (fields.Failure is { } failure && (failure.Evidence is null || failure.Evidence.Any(entry => entry is null))) return null;
+            if (fields.Decision is { } decision && (decision.Facts is null || decision.Facts.Any(fact => fact is null))) return null;
+            return fields;
+        }
+        catch (JsonException) { return null; } // An optional payload must never discard the original event.
     }
 
     private static DateTimeOffset? ReadLastTimestamp(string file)

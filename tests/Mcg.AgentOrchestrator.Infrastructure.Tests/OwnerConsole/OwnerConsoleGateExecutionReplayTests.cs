@@ -471,6 +471,7 @@ public sealed class OwnerConsoleGateExecutionReplayTests
         Assert.Equal(independent, Assert.Single(gate.OtherLiveGates!).ExecutionId);
         Assert.Equal(Current, gate.ForExecution(Current)!.ExecutionId);
         Assert.Equal(independent, gate.ForExecution(independent)!.ExecutionId);
-        Assert.Equal("unresolved", gate.ForMember(Survivor)!.Kind);
+        Assert.Equal("concurrent", gate.ForMember(Survivor)!.Kind);
+        Assert.Equal(2, gate.ForMember(Survivor)!.ConcurrentRuns!.Count);
     }
 }

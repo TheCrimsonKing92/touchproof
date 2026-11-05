@@ -12,14 +12,14 @@ public sealed class MtpManagedFilterDiscoveryTests
         Assert.NotEmpty(classA);
         Assert.NotEmpty(classB);
 
-        var union = DiscoverManagedTests(TranslateMtpFilter(
+        var union = DiscoverManagedTests(MtpManagedFilterDiscoveryResultFile.TranslateMtpFilter(
             "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting|FullyQualifiedName~MtpNoBuildReceiptIdentityTests"));
         Assert.Equal(
             classA.Keys.Union(classB.Keys).Order(StringComparer.Ordinal),
             union.Keys.Order(StringComparer.Ordinal));
 
         var matchingMethods = DiscoverManagedTests("--filter-method", "*StaleTesterFinding*");
-        var intersection = DiscoverManagedTests(TranslateMtpFilter(
+        var intersection = DiscoverManagedTests(MtpManagedFilterDiscoveryResultFile.TranslateMtpFilter(
             "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting&Name~StaleTesterFinding"));
         Assert.Equal(
             classA.Keys.Intersect(matchingMethods.Keys).Order(StringComparer.Ordinal),
@@ -68,6 +68,7 @@ public sealed class MtpManagedFilterDiscoveryTests
         var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
         var escapedManifest = manifestPath.Replace("'", "''", StringComparison.Ordinal);
         var escapedExtras = JsonSerializer.Serialize(extraFilters).Replace("'", "''", StringComparison.Ordinal);
+        using var resultFile = MtpManagedFilterDiscoveryResultFile.Create();
         var command = $"Import-Module '{module}' -Force; " +
             $"$manifest = Get-Content -LiteralPath '{escapedManifest}' -Raw | ConvertFrom-Json; " +
             $"$extras = ConvertFrom-Json -InputObject '{escapedExtras}'; " +
@@ -75,11 +76,12 @@ public sealed class MtpManagedFilterDiscoveryTests
             "@($manifest.engine.localTestPartitions | ForEach-Object { @($_.additionalFilters) }) + $extras; " +
             "$result = @($filters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { " +
             "[ordered]@{ filter = $_; args = @(ConvertTo-MtpFilterArguments -Filter $_) } }); " +
-            "ConvertTo-Json -InputObject $result -Depth 4 -Compress";
+            "$json = ConvertTo-Json -InputObject $result -Depth 4 -Compress; " +
+            resultFile.WriteJsonStatement("$json");
         var result = RunPowerShellCommand(root, command);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
-        using var translated = JsonDocument.Parse(result.Stdout.Trim());
+        using var translated = resultFile.Read(result);
         Assert.Equal(configuredCount + extraFilters.Length, translated.RootElement.GetArrayLength());
         var cases = translated.RootElement.EnumerateArray()
             .Select(item => (

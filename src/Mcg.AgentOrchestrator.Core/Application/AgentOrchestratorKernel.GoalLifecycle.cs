@@ -1509,7 +1509,8 @@ public sealed partial class AgentOrchestratorKernel
         WorkTaskStatus status,
         string message,
         string? observedCandidate = null,
-        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator,
+        ProgressFailurePayload? failure = null)
     {
         if (status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
         {
@@ -1530,7 +1531,7 @@ public sealed partial class AgentOrchestratorKernel
         };
 
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, kind, message, correctionSource);
-        Append(goal, taskId, kind, message);
+        Append(goal, taskId, kind, message, failure: failure);
         if (status is WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)
         {
             ReconcileRetainedDownstreamTasks(

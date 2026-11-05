@@ -16,6 +16,8 @@ internal static class OwnerConsoleStageDescriber
         if (key.Rank is OwnerConsoleAttention.GateRunning or OwnerConsoleAttention.WaitingForGate &&
             gate?.ForMember(goal.Id.Value) is { } live)
         {
+            if (live.ConcurrentRuns is { Count: > 1 } runs)
+                return string.Join('\n', runs.Select(run => "in gate: " + OwnerConsoleGateFormatter.RunLine(run)));
             var count = OwnerConsoleGateCount.Of(live);
             if (!live.Live && live.Participation is not null) return "gate: " + live.Participation + OwnerConsoleGateFormatter.Identity(live);
             if (live.Failing) return OwnerConsoleGateBoardStatus.Failing(count);

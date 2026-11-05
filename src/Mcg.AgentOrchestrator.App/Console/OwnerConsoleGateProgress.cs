@@ -33,7 +33,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
     string? Participation = null,
     IReadOnlyDictionary<string, OwnerConsoleGateProgress>? MemberViews = null,
     IReadOnlyList<OwnerConsoleGateProgress>? Executions = null,
-    bool? EtaAvailable = null, DateTimeOffset? AdmittedAt = null)
+    bool? EtaAvailable = null, DateTimeOffset? AdmittedAt = null,
+    IReadOnlyList<OwnerConsoleGateProgress>? ConcurrentRuns = null)
 {
     internal bool ScheduleKnown => LanePlanAvailable != false;
     internal bool HasEta => EtaAvailable ?? ScheduleKnown;

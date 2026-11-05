@@ -25,6 +25,7 @@ internal static class OperatorIntentGoalApplication
         IReadOnlySet<string>? intentIds = null)
     {
         var result = intents.ExecutePending(kernel, goal, intentIds);
+        goal = kernel.GetGoal(goal.Id);
         var lines = new List<string>();
         if (result.MutatedGoalState && goal.Status != GoalStatus.Completed)
         {

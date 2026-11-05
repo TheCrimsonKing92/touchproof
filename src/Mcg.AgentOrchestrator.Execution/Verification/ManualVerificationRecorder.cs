@@ -8,15 +8,17 @@ public static class ManualVerificationRecorder
         bool passed,
         string note,
         string workingDirectory,
-        DateTimeOffset completedAt)
+        DateTimeOffset completedAt,
+        bool preserveNote = false)
     {
         if (string.IsNullOrWhiteSpace(note))
         {
             throw new ArgumentException("Manual verification note cannot be empty.", nameof(note));
         }
 
-        var standardOutput = passed ? note.Trim() : string.Empty;
-        var standardError = passed ? string.Empty : note.Trim();
+        var resolvedNote = preserveNote ? note : note.Trim();
+        var standardOutput = passed ? resolvedNote : string.Empty;
+        var standardError = passed ? string.Empty : resolvedNote;
         return new TaskVerificationRecord(
             passed ? "manual-verification passed" : "manual-verification failed",
             workingDirectory,

@@ -90,7 +90,8 @@ public sealed class OwnerActivityDetailDialogTests
         dialog.Layout(new Size(columns, 24));
         AssertLayout(dialog, detail.Text, dialog.Body.Viewport.Width);
         var writes = new List<string>();
-        foreach (var key in new[] { "event/0/value", "event/0/empty", "event/0/original" })
+        Assert.DoesNotContain(detail.Fields.Fields, field => field.Key == "event/0/empty");
+        foreach (var key in new[] { "event/0/value", "event/0/original" })
         {
             var sourceLine = detail.Structured.FieldKeys!.Last(pair => pair.Value == key).Key;
             dialog.Page.Select(dialog.Page.SourceLines.ToList().FindLastIndex(line => line == sourceLine));
@@ -103,7 +104,7 @@ public sealed class OwnerActivityDetailDialogTests
             dialog.HandleKey(OwnerConsoleBindings.OpenFields);
             dialog.FieldsRequested -= Open;
         }
-        Assert.Equal([value, "", raw], writes);
+        Assert.Equal([value, raw], writes);
     }
 
     private static void AssertLayout(OwnerConsoleTextDialog dialog, string text, int width)
