@@ -242,26 +242,11 @@ internal static class AcceptanceCheckProcessInvoker
             {
                 await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException exception)
+            catch (OperationCanceledException)
             {
                 laneStall?.Complete();
                 if (cancellationToken.IsCancellationRequested)
                 {
-                    try
-                    {
-                        var termination = await process.KillTreeAndWaitForExitAsync(CaptureDrainTimeout).ConfigureAwait(false);
-                        if (!termination.ExitConfirmed)
-                        {
-                            exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
-                            exception.Data["AcceptanceCancellationRemainingProcessIds"] = string.Join(",", termination.RemainingProcessIds);
-                        }
-                    }
-                    catch (Exception cleanupException)
-                    {
-                        // Preserve caller cancellation; report only the failure type, never command inputs.
-                        exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
-                        exception.Data["AcceptanceCancellationCleanupFailure"] = cleanupException.GetType().Name;
-                    }
                     throw;
                 }
 
@@ -389,6 +374,30 @@ internal static class AcceptanceCheckProcessInvoker
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
                 LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
             { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath };
+        }
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancellation can interrupt capture connection (before WaitForExitAsync), too.
+            // Retain registration and handles until the entire owned tree is stopped, before
+            // the finally block drains captures and releases process custody.
+            if (process is not null && !registrationReleased && !processDisposed)
+            {
+                exception.Data["AcceptanceCancellationProcessId"] = process.Id;
+                try
+                {
+                    var termination = await process.KillTreeAndWaitForExitAsync(CaptureDrainTimeout).ConfigureAwait(false);
+                    exception.Data["AcceptanceCancellationTreeExitConfirmed"] = termination.ExitConfirmed;
+                    if (!termination.ExitConfirmed)
+                        exception.Data["AcceptanceCancellationRemainingProcessIds"] = string.Join(",", termination.RemainingProcessIds);
+                }
+                catch (Exception cleanupException)
+                {
+                    // Preserve caller cancellation; report only the failure type, never command inputs.
+                    exception.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
+                    exception.Data["AcceptanceCancellationCleanupFailure"] = cleanupException.GetType().Name;
+                }
+            }
+            throw;
         }
         finally
         {

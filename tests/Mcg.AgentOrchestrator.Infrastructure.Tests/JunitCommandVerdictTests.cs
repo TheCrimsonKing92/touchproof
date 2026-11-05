@@ -63,4 +63,35 @@ public sealed class JunitCommandVerdictTests
         Assert.Contains(check.CrosswalkDiagnostics!, diagnostic => diagnostic.Category == CrosswalkDiagnosticCategory.Timeout);
         Assert.Empty(fixture.ParsedReports);
     }
+
+    [Fact]
+    public async Task UnconfirmedCancellationExit_SurfacesProcessEvidenceWithoutInputValues()
+    {
+        using var fixture = new JunitCommandFixture();
+        const string secret = "private fixture input";
+        var original = new OperationCanceledException(secret, new IOException(secret));
+        original.Data["AcceptanceCancellationTreeExitConfirmed"] = false;
+        original.Data["AcceptanceCancellationProcessId"] = 101;
+        original.Data["AcceptanceCancellationRemainingProcessIds"] = "101,102";
+        original.Data["AcceptanceCancellationCleanupFailure"] = "Win32Exception";
+        original.Data["unrelated"] = secret;
+        fixture.WriteReports = () => throw original;
+        var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = fixture.Check.Name, Type = fixture.Check.Type, Command = fixture.Check.Command,
+            Reports = fixture.Check.Reports, Environment = new Dictionary<string, string> { ["FIXTURE_INPUT"] = secret }
+        };
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.RunAsync(check));
+
+        Assert.Single(fixture.Calls); // The command ran; the parser must never run after cancellation.
+        Assert.False(Assert.IsType<bool>(exception.Data["AcceptanceCancellationTreeExitConfirmed"]));
+        Assert.Equal(101, exception.Data["AcceptanceCancellationProcessId"]);
+        Assert.Equal("101,102", exception.Data["AcceptanceCancellationRemainingProcessIds"]);
+        Assert.Equal("Win32Exception", exception.Data["AcceptanceCancellationCleanupFailure"]);
+        Assert.Contains("remaining_process_ids=101,102", exception.Message);
+        Assert.False(exception.Data.Contains("unrelated"));
+        Assert.Null(exception.InnerException);
+        Assert.DoesNotContain(secret, exception.ToString());
+    }
 }

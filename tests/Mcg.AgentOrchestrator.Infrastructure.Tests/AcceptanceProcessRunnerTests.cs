@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each case owns its working directory, child and uniquely named capture files.
@@ -93,6 +94,43 @@ public sealed class AcceptanceProcessRunnerTests
         finally
         {
             DeleteCaptureFiles(result);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task Caller_cancellation_before_exit_wait_confirms_owned_tree_exit()
+    {
+        var root = Directory.CreateTempSubdirectory("mcg-acceptance-runner-cancel-").FullName;
+        using var cancellation = new CancellationTokenSource(TestHangGuard.HangSafetyBound);
+        Process? launcher = null;
+        try
+        {
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                AcceptanceProcessRunner.RunProcessForTestsAsync(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        "$gate = [System.Threading.ManualResetEvent]::new($false); " +
+                        "try { [void]$gate.WaitOne() } finally { $gate.Dispose() }"],
+                    root, CommandHangFailsafe, cancellationToken: cancellation.Token,
+                    cleanupObserver: observation =>
+                    {
+                        if (observation.Stage != "started") return;
+                        // Interrupt the real launch before capture startup/exit wait. Pin the
+                        // handle while owned so the assertion cannot observe a recycled PID.
+                        launcher = Process.GetProcessById(observation.ProcessId);
+                        _ = launcher.SafeHandle;
+                        cancellation.Cancel();
+                        cancellation.Token.ThrowIfCancellationRequested();
+                    }));
+
+            Assert.NotNull(launcher);
+            Assert.True(Assert.IsType<bool>(exception.Data["AcceptanceCancellationTreeExitConfirmed"]));
+            Assert.Equal(launcher.Id, exception.Data["AcceptanceCancellationProcessId"]);
+            Assert.True(launcher.HasExited, "Caller cancellation returned before the owned launcher exited.");
+        }
+        finally
+        {
+            launcher?.Dispose();
             Directory.Delete(root, recursive: true);
         }
     }

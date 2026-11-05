@@ -170,6 +170,21 @@ internal sealed class JunitCommandAcceptanceCheck(
                 return lastProcess;
             }
         }
+        catch (OperationCanceledException exception) when (exception.Data["AcceptanceCancellationTreeExitConfirmed"] is false)
+        {
+            // A generic Cancelled result would discard the cleanup failure before the verifier
+            // throws its boundary cancellation. Publish only owned-process evidence, never the
+            // original exception/inner exception, which may contain check-local input values.
+            var failure = new OperationCanceledException(
+                $"JUnit cancellation could not confirm owned process-tree exit; " +
+                $"process_id={exception.Data["AcceptanceCancellationProcessId"]}; " +
+                $"remaining_process_ids={exception.Data["AcceptanceCancellationRemainingProcessIds"]}; " +
+                $"cleanup_failure={exception.Data["AcceptanceCancellationCleanupFailure"]}.", cancellationToken);
+            foreach (var key in new[] { "AcceptanceCancellationTreeExitConfirmed", "AcceptanceCancellationProcessId",
+                "AcceptanceCancellationRemainingProcessIds", "AcceptanceCancellationCleanupFailure" })
+                if (exception.Data.Contains(key)) failure.Data[key] = exception.Data[key];
+            throw failure;
+        }
         catch (OperationCanceledException)
         {
             if (!Expired()) diagnostics.Add(new(CrosswalkDiagnosticCategory.Cancelled, "JUnit invocation cancelled."));

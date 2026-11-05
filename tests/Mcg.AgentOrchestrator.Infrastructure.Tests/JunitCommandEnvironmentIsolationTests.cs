@@ -83,8 +83,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
             if (cancel)
             {
                 lifetime.Cancel();
-                var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(120)));
-                Assert.False(exception.Data.Contains("AcceptanceCancellationTreeExitConfirmed"));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(120)));
                 // Assert at the cancellation boundary, before teardown's waits can hide live holders.
                 gate.AssertExited();
                 if (OperatingSystem.IsWindows())
