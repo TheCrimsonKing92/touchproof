@@ -748,6 +748,16 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         {
             AddAcceptanceManifest(repo);
             AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 2));
+            // Ejecting the oversized member must restore a compliant guarded file,
+            // otherwise the shorter train correctly fails for missing source too.
+            var guardedPath = Path.Combine(repo, "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(guardedPath)!);
+            File.WriteAllText(guardedPath, "one\ntwo");
+            RunGit(repo, "add", "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs");
+            RunGit(repo, "commit", "-m", "Seed compliant guarded source");
+            var baseline = SourceSizeRatchetPreflight.Evaluate(repo);
+            Assert.True(baseline.EvaluationComplete);
+            Assert.Empty(baseline.Violations);
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First ratchet train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second ratchet train member", repo);
@@ -757,6 +767,9 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 firstGoal.Id,
                 "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs",
                 "one\ntwo\nthree");
+            var breach = Assert.Single(SourceSizeRatchetPreflight.Evaluate(
+                GoalWorktrees.TryResolve(repo, firstGoal.Id)!).Violations);
+            Assert.Equal(3, breach.ActualLineCount);
             _ = CreateWorktreeCandidate(
                 repo,
                 secondGoal.Id,

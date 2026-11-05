@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class WorkerBuildInvocationOperations(string statePath, string executionDirectory,
     DotnetBuildStorageRoot? storageRoot = null,
     Func<WorkerBuildProcess, bool>? isHostAlive = null,
-    Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? digestGitRunner = null) : IWorkerBuildInvocationOperations
+    Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? digestGitRunner = null,
+    string? projectHomeDirectory = null, string integrationBranch = TrunkBranchName.Default) : IWorkerBuildInvocationOperations
 {
     internal const string OperationName = "dispatch:worker-build";
     private readonly SqliteOrchestratorStateRepository _repository = new(statePath);
@@ -19,7 +20,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
             throw new InvalidOperationException("Host build enrollment requires dispatch-pinned project scope.");
         kernel.RecordWorkerBuildProtocol(goalId, taskId, 1);
         return new(statePath, executionDirectory, goalId.Value, taskId.Value, task.LastDispatch.DispatchedAt,
-            BuildWorkerDispatchId(goalId, taskId, task.LastDispatch), StorageRoot: storageRoot?.RootPath);
+            BuildWorkerDispatchId(goalId, taskId, task.LastDispatch), StorageRoot: storageRoot?.RootPath,
+            StructuralPolicy: WorkerBuildStructuralPreflight.CapturePolicy(task.LastDispatch, projectHomeDirectory, integrationBranch));
     }
 
     // Provider sessions are learned from live heartbeats after enrollment. They are

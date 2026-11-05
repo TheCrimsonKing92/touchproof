@@ -26,7 +26,8 @@ public sealed record WorkerBuildInvocation(
     IReadOnlyList<WorkerBuildObservation> Observations,
     IReadOnlyList<WorkerBuildProcess>? Children = null, string? LeaseOwner = null,
     WorkerBuildOutcome? Outcome = null, int? CompilerExitCode = null,
-    bool Consumed = false, bool CustodyReleased = false, string Diagnostic = "")
+    bool Consumed = false, bool CustodyReleased = false, string Diagnostic = "",
+    WorkerBuildStructuralCheck? StructuralCheck = null, WorkerBuildStructuralPolicy? StructuralPolicy = null)
 {
     public bool IsTerminal => Outcome is not null;
     public WorkerBuildPhase Phase => Observations[^1].Phase;
@@ -36,7 +37,7 @@ public sealed record WorkerBuildInvocation(
         DispatchId == other.DispatchId && WorktreeRoot == other.WorktreeRoot && TreeDigest == other.TreeDigest &&
         ScopeIdentity == other.ScopeIdentity && Projects.SequenceEqual(other.Projects) &&
         Configuration == other.Configuration && Deadline == other.Deadline && Host == other.Host && Worker == other.Worker &&
-        AdmissionStorePath == other.AdmissionStorePath && AdmissionVersion == other.AdmissionVersion;
+        AdmissionStorePath == other.AdmissionStorePath && AdmissionVersion == other.AdmissionVersion && StructuralPolicy == other.StructuralPolicy;
 
     public void RequireSuccessor(WorkerBuildInvocation next)
     {
@@ -48,6 +49,7 @@ public sealed record WorkerBuildInvocation(
             (Children?.Count ?? 0) > (next.Children?.Count ?? 0) ||
             LeaseOwner is not null && LeaseOwner != next.LeaseOwner ||
             Outcome is not null && (Outcome != next.Outcome || CompilerExitCode != next.CompilerExitCode) ||
+            StructuralCheck is not null && StructuralCheck != next.StructuralCheck ||
             Consumed && !next.Consumed || CustodyReleased && !next.CustodyReleased ||
             next.Consumed && !next.IsTerminal)
             throw new InvalidOperationException("Worker build invocation cannot replace identity or move backwards.");
@@ -61,6 +63,8 @@ public sealed record WorkerBuildInvocation(
             string.IsNullOrWhiteSpace(ScopeIdentity) || children > Projects.Count || started > children ||
             (Phase == WorkerBuildPhase.Completed) != IsTerminal || CustodyReleased && !IsTerminal ||
             Consumed && (!IsTerminal || !CustodyReleased) ||
+            StructuralCheck is not null && (!IsTerminal || !StructuralCheck.IsBoundTo(this) ||
+                StructuralCheck.ProjectHomeDirectory != StructuralPolicy?.ProjectHomeDirectory) ||
             Outcome == WorkerBuildOutcome.Success && (children != Projects.Count || started != children || CompilerExitCode != 0) ||
             Outcome == WorkerBuildOutcome.CompilerFailure && (started == 0 || CompilerExitCode is null or 0) ||
             Outcome == WorkerBuildOutcome.TimeoutAfterStart && started == 0 ||

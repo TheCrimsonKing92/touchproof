@@ -22,10 +22,12 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal readonly DotnetBuildStorageRoot Storage;
     internal readonly FixtureTime Time = new();
     internal readonly List<WorkerBuildInvocation> Observed = [];
+    internal readonly List<WorkerBuildResponse> Responses = [];
     internal readonly CancellationTokenSource Lifetime = new();
     private readonly bool _lowIntegrity;
     private readonly bool _compilerFailure;
     private readonly CompilerMode _compilerMode;
+    private readonly IReadOnlyList<string> _fakeCompilerProjects;
     private SafeFileHandle? _workerGroupObserver;
     internal WorkerBuildRequestChannel? Channel;
     internal OwnedProcessGroup.SuspendedProcessStart? Worker;
@@ -37,11 +39,13 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
         bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false,
-        CompilerMode compilerMode = CompilerMode.Real)
+        CompilerMode compilerMode = CompilerMode.Real, Action<string>? seedRepository = null,
+        string? projectHomeDirectory = null, IReadOnlyList<string>? fakeCompilerProjects = null)
     {
         _lowIntegrity = lowIntegrity;
         _compilerFailure = compilerFailure;
         _compilerMode = compilerMode;
+        _fakeCompilerProjects = fakeCompilerProjects ?? [Project];
         RepositoryRoot = Path.Combine(Root, "repository");
         try
         {
@@ -68,6 +72,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
                     "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
                 File.WriteAllText(Path.Combine(RepositoryRoot, OtherSource), "public sealed class Other { }");
             }
+            seedRepository?.Invoke(RepositoryRoot);
             Git("init", "-b", "main");
             Git("config", "user.email", "worker-build@fixture.invalid");
             Git("config", "user.name", "Worker build fixture");
@@ -113,7 +118,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
             _ = StateDbMigrations.EnsureUpToDate(StatePath);
             Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
-            Operations = new(StatePath, reportWorkerResult ? RepositoryRoot : Root, Storage);
+            Operations = new(StatePath, reportWorkerResult ? RepositoryRoot : Root, Storage,
+                projectHomeDirectory: projectHomeDirectory);
             var prepared = Operations.Prepare(Kernel, GoalId, TaskId);
             using var host = Process.GetCurrentProcess();
             var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);
@@ -136,16 +142,17 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         }
     }
 
-    internal WorkerBuildRequestHost Host(Action<WorkerBuildInvocation>? observe = null) => new(Reference, Time,
+    internal WorkerBuildRequestHost Host(Action<WorkerBuildInvocation>? observe = null,
+        Func<DeveloperCompletionStructuralFindings>? structuralEvaluator = null) => new(Reference, Time,
         TimeSpan.FromMinutes(5), invocation => { lock (Observed) Observed.Add(invocation); observe?.Invoke(invocation); }, Storage,
-        launchOverride: LaunchOverride);
+        launchOverride: LaunchOverride, structuralEvaluator: structuralEvaluator);
 
     internal Func<string, ProcessStartInfo, ProcessStartInfo>? LaunchOverride =>
         _compilerMode == CompilerMode.Real ? null : FakeCompilerStartInfo;
 
     private ProcessStartInfo FakeCompilerStartInfo(string project, ProcessStartInfo compiler)
     {
-        Assert.Equal(Project, project);
+        Assert.Contains(project, _fakeCompilerProjects);
         var info = new ProcessStartInfo(WorkerShell.Executable)
         {
             UseShellExecute = false,
@@ -170,9 +177,11 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             _compilerMode == CompilerMode.Real ? "dotnet" : Path.GetFileNameWithoutExtension(WorkerShell.Executable),
             Path.GetFileNameWithoutExtension(child.ImagePath), ignoreCase: true));
 
-    internal async Task<WorkerBuildInvocation> RunHelper(Action<WorkerBuildInvocation>? observe = null, bool assertAdapterExit = true)
+    internal async Task<WorkerBuildInvocation> RunHelper(Action<WorkerBuildInvocation>? observe = null, bool assertAdapterExit = true,
+        string? command = null, Func<DeveloperCompletionStructuralFindings>? structuralEvaluator = null,
+        IWorkerBuildRequestService? service = null)
     {
-        Channel = new WorkerBuildRequestChannel(RepositoryRoot, Host(observe));
+        Channel = new WorkerBuildRequestChannel(RepositoryRoot, new RecordingService(service ?? Host(observe, structuralEvaluator), Responses));
         var helper = Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1");
         var start = new ProcessStartInfo(WorkerShell.Executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = RepositoryRoot };
         var workerTemp = Path.Combine(Root, "worker-temp");
@@ -180,7 +189,9 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         start.Environment["TEMP"] = workerTemp;
         start.Environment["TMP"] = workerTemp;
         if (_lowIntegrity) Assert.True(new IcaclsIntegrityLabeler().SetIntegrity(workerTemp, "(OI)(CI)L", recursive: true));
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", helper, Project }) start.ArgumentList.Add(arg);
+        var arguments = command is null ? new[] { "-NoProfile", "-NonInteractive", "-File", helper, Project }
+            : new[] { "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(command)) };
+        foreach (var arg in arguments) start.ArgumentList.Add(arg);
         Worker = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(start, Path.Combine(Root, "worker.out.log"), Path.Combine(Root, "worker.err.log"));
         if (!Worker.Group.TryDuplicateAccountingHandle(out _workerGroupObserver))
             throw new InvalidOperationException("Worker fixture could not retain its owned job observer before resume.");
@@ -191,13 +202,48 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         await Worker.WaitForOwnedExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromMinutes(4));
         Channel.Dispose();
         Channel = null;
-        var invocation = Assert.Single(Operations.Load(GoalId.Value).GetTask(GoalId, TaskId).WorkerBuildInvocations);
-        if (assertAdapterExit) Assert.Equal(invocation.Outcome == WorkerBuildOutcome.Success ? 0 : 1, Worker.TryReadOwnedExitCode());
+        var invocations = Operations.Load(GoalId.Value).GetTask(GoalId, TaskId).WorkerBuildInvocations;
+        Assert.True(invocations.Count > 0, DescribeHostBuildDiagnostics());
+        var invocation = command is null ? Assert.Single(invocations) : invocations[^1];
+        if (assertAdapterExit) Assert.Equal(Responses[^1].ExitCode, Worker.TryReadOwnedExitCode());
         AssertCompilerImages(invocation);
         return invocation;
     }
 
+    private sealed record RecordingService(IWorkerBuildRequestService Inner, List<WorkerBuildResponse> Responses) : IWorkerBuildRequestService
+    {
+        public async Task<WorkerBuildResponse> ExecuteAsync(WorkerBuildRequest request, WorkerBuildProcess worker, CancellationToken lifetime)
+        {
+            var response = await Inner.ExecuteAsync(request, worker, lifetime);
+            Responses.Add(response);
+            return response;
+        }
+    }
+
     internal WorkerBuildConsumption Consume() => Operations.Consume(Kernel, GoalId, TaskId, [Source], [Source]);
+
+    internal static void SeedSizePolicy(string root, bool aggregate = false)
+    {
+        var path = Path.Combine(root, SourceSizeRatchet.SourcePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        if (aggregate)
+            File.WriteAllText(Path.Combine(root, Source), "public sealed partial class Feature { }");
+        File.WriteAllText(path, $"new SourceSizeCeiling(\"{Source}\", {(aggregate ? 100 : 1)})\n" +
+            (aggregate ? "new SourceClassCeiling(\"Feature\", 1, 1)\n" : ""));
+    }
+
+    internal void AssertSlotsFree()
+    {
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(GoalId, "structural-capacity-probe",
+            storageRoot: Storage, repositoryRoot: RepositoryRoot);
+        var first = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment, TimeSpan.Zero, CancellationToken.None));
+        using var firstLease = first.Lease;
+        var second = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment, TimeSpan.Zero, CancellationToken.None));
+        using var secondLease = second.Lease;
+        Assert.NotEqual(first.Lease.Environment.BuildPermitIndex, second.Lease.Environment.BuildPermitIndex);
+    }
     internal void Save() => new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
 
     // Copy bounded, attributable diagnostics into the test receipt before successful custody
@@ -345,8 +391,13 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         private readonly ManualStewardTimeProvider _timers = new();
         private DateTimeOffset _now = DateTimeOffset.UtcNow;
         public override DateTimeOffset GetUtcNow() => _now;
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
-            _timers.CreateTimer(callback, state, dueTime, period);
+        internal Action<TimeSpan>? TimerScheduled;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _timers.CreateTimer(callback, state, dueTime, period);
+            TimerScheduled?.Invoke(dueTime);
+            return timer;
+        }
         internal void Advance(TimeSpan by) { _now += by; _timers.Advance(by); }
     }
 }

@@ -1,5 +1,5 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -7,105 +7,70 @@ internal static class SourceSizeRatchetPreflight
 {
     internal const string CheckName = "source size ratchet preflight";
 
-    private static readonly Regex CeilingPattern = new(
-        "new\\s+SourceSizeCeiling\\(\\s*\"(?<path>[^\"]+)\"\\s*,\\s*(?<ceiling>\\d+)\\s*\\)",
-        RegexOptions.CultureInvariant);
+    internal static IReadOnlyList<SourceClassCeiling> TryReadClassAuthority(string worktreeRoot) =>
+        ReadAuthority(worktreeRoot)?.Classes ?? [];
 
-    private static readonly Regex ClassCeilingPattern = new(
-        "new\\s+SourceClassCeiling\\(\\s*\"(?<name>[^\"]+)\"\\s*,\\s*(?<total>\\d+)\\s*,\\s*(?<count>\\d+)\\s*\\)",
-        RegexOptions.CultureInvariant);
+    internal static IReadOnlyList<SourceSizeCeiling>? TryReadAuthority(string worktreeRoot) =>
+        ReadAuthority(worktreeRoot) is { Files.Count: > 0 } authority ? authority.Files : null;
 
-    internal static IReadOnlyList<SourceClassCeiling> TryReadClassAuthority(string worktreeRoot)
+    // Read membership and values together: comments are not rows, and unsupported
+    // expressions make the authority incomplete instead of silently dropping a limit.
+    private static Authority? ReadAuthority(string root)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
-        var authorityPath = Path.Combine(
-            worktreeRoot,
-            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
         try
         {
-            if (!File.Exists(authorityPath))
+            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, SourceSizeRatchet.SourcePath))).GetRoot();
+            var files = new List<SourceSizeCeiling>();
+            var classes = new List<SourceClassCeiling>();
+            var complete = true;
+            foreach (var row in syntax.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
             {
-                return [];
+                var type = row.Type.ToString().Split('.').Last();
+                if (type is not (nameof(SourceSizeCeiling) or nameof(SourceClassCeiling))) continue;
+                var arguments = row.ArgumentList?.Arguments.Select(a => a.Expression).ToArray() ?? [];
+                var values = arguments.OfType<LiteralExpressionSyntax>().Select(a => a.Token.Value).ToArray();
+                if (values.Length != arguments.Length || values.Length != (type == nameof(SourceSizeCeiling) ? 2 : 3) ||
+                    values[0] is not string name || values[1] is not int maximum ||
+                    (values.Length == 3 && values[2] is not int))
+                {
+                    complete = false;
+                    continue;
+                }
+                if (type == nameof(SourceSizeCeiling)) files.Add(new(name, maximum));
+                else classes.Add(new(name, maximum, (int)values[2]!));
             }
-
-            return ClassCeilingPattern.Matches(File.ReadAllText(authorityPath))
-                .Select(match => new SourceClassCeiling(
-                    match.Groups["name"].Value,
-                    int.Parse(match.Groups["total"].Value, CultureInfo.InvariantCulture),
-                    int.Parse(match.Groups["count"].Value, CultureInfo.InvariantCulture)))
-                .ToArray();
+            return new(files, classes, complete);
         }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or FormatException or OverflowException)
-        {
-            return [];
-        }
-    }
-
-    internal static IReadOnlyList<SourceSizeCeiling>? TryReadAuthority(string worktreeRoot)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
-        var authorityPath = Path.Combine(
-            worktreeRoot,
-            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
-        try
-        {
-            if (!File.Exists(authorityPath))
-            {
-                return null;
-            }
-
-            var ceilings = CeilingPattern.Matches(File.ReadAllText(authorityPath))
-                .Select(match => new SourceSizeCeiling(
-                    match.Groups["path"].Value,
-                    int.Parse(match.Groups["ceiling"].Value, CultureInfo.InvariantCulture)))
-                .ToArray();
-            return ceilings.Length == 0 ? null : ceilings;
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or FormatException or OverflowException)
-        {
-            return null;
-        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
 
     internal static SourceSizeRatchetPreflightResult Evaluate(
-        string worktreeRoot,
-        Func<string, IEnumerable<string>>? readLines = null)
+        string worktreeRoot, Func<string, IEnumerable<string>>? readLines = null)
     {
-        var ceilings = TryReadAuthority(worktreeRoot);
-        if (ceilings is null)
-        {
+        var authority = ReadAuthority(worktreeRoot);
+        if (authority is null || authority.Files.Count == 0)
             return SourceSizeRatchetPreflightResult.Declined;
-        }
 
-        var violations = SourceSizeRatchet.Evaluate(worktreeRoot, ceilings, readLines)
-            .Concat(SourceSizeRatchet.EvaluateClasses(worktreeRoot, TryReadClassAuthority(worktreeRoot), readLines))
-            .ToArray();
-        var blockingViolations = violations
-            .Where(violation => violation.ActualLineCount is not null)
-            .ToArray();
-        return new SourceSizeRatchetPreflightResult(
-            blockingViolations.Length > 0,
-            string.Join(Environment.NewLine, blockingViolations.Select(violation => violation.Message)),
-            violations);
+        var violations = SourceSizeRatchet.Evaluate(worktreeRoot, authority.Files, readLines)
+            .Concat(SourceSizeRatchet.EvaluateClasses(worktreeRoot, authority.Classes, readLines)).ToArray();
+        var blocking = violations.Where(v => v.Kind != SourceSizeViolationKind.Unavailable).ToArray();
+        return new(blocking.Length > 0, string.Join(Environment.NewLine, blocking.Select(v => v.Message)), violations,
+            EvaluationComplete: authority.Complete && violations.All(v => v.Kind != SourceSizeViolationKind.Unavailable));
     }
 
-    internal static IReadOnlyList<string> BlockingViolationMessages(
-        SourceSizeRatchetPreflightResult result)
+    internal static IReadOnlyList<string> BlockingViolationMessages(SourceSizeRatchetPreflightResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        return result.Violations
-            .Where(violation => violation.ActualLineCount is not null)
-            .Select(violation => violation.Message)
-            .ToArray();
+        return result.Violations.Where(v => v.Kind != SourceSizeViolationKind.Unavailable).Select(v => v.Message).ToArray();
     }
+
+    private sealed record Authority(IReadOnlyList<SourceSizeCeiling> Files, IReadOnlyList<SourceClassCeiling> Classes, bool Complete);
 }
 
 internal sealed record SourceSizeRatchetPreflightResult(
-    bool HasBlockingViolation,
-    string Message,
-    IReadOnlyList<SourceSizeViolation> Violations)
+    bool HasBlockingViolation, string Message, IReadOnlyList<SourceSizeViolation> Violations,
+    bool EvaluationComplete = true, bool AuthorityAvailable = true)
 {
-    internal static SourceSizeRatchetPreflightResult Declined { get; } = new(false, string.Empty, []);
+    internal static SourceSizeRatchetPreflightResult Declined { get; } = new(false, string.Empty, [], false, false);
 }

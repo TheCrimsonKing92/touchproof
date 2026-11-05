@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: reads the checked-in manifest and modifies only in-memory lane copies.
@@ -35,8 +36,15 @@ public sealed class RemainderBalanceCLaneMoveTests
         "AttributedFailureAutoRoute",
         "AgentRosterReload"
     ];
+    // Owner-approved membership, answer 7964d7b6f16b4a2ab51c4c0d6fa814fd.
+    private static readonly string[] ApprovedStructuralClassNames =
+    [
+        "WorkerBuildRequestStructuralFailureTests",
+        "WorkerBuildRequestStructuralIntegrationTests"
+    ];
     private static readonly string[] MovedClassNames =
     [
+        .. ApprovedStructuralClassNames,
         "WorkerBuildRequestScopeBindingTests",
         "WorkerBuildRequestScopeOwnershipTests",
         "WorkerBuildRequestIntegrationTests",
@@ -128,6 +136,22 @@ public sealed class RemainderBalanceCLaneMoveTests
     }
 
     [Fact]
+    public void ApprovedStructuralMembership_DeclaresIntentToCollisionGuard()
+    {
+        var loaded = LoadLanes();
+        var explicitFilters = string.Concat(ApprovedStructuralClassNames.Select(name => $"|FullyQualifiedName~{name}"));
+        var baseline = loaded.Select(lane => lane.Name == BalanceC
+            ? lane with { Filter = lane.Filter.Replace(explicitFilters, "", StringComparison.Ordinal) }
+            : lane).ToArray();
+        var classes = ApprovedStructuralClassNames.Select(name => new AcceptanceTestClassDescriptor(name, null)).ToArray();
+        var diff = string.Join(Environment.NewLine, ApprovedStructuralClassNames.Select(name => $"+public sealed class {name}"));
+
+        Assert.Equal(ApprovedStructuralClassNames.Order(),
+            LaneSubstringCollisionCheck.Find(baseline, baseline, classes, diff).Select(v => v.ClassFullName).Order());
+        Assert.Empty(LaneSubstringCollisionCheck.Find(baseline, loaded, classes, diff));
+    }
+
+    [Fact]
     public void NegativeControls_DetectDoubleAndMissingMembership()
     {
         var loaded = LoadLanes();
@@ -163,7 +187,8 @@ public sealed class RemainderBalanceCLaneMoveTests
         Assert.Empty(balanceC.ExclusiveResourceKeys);
         Assert.Empty(balanceC.OwnedCollections);
         Assert.Equal(415.6, Assert.Single(lanes, lane => lane.Name == Remainder).EstimatedSerialSeconds);
-        Assert.Equal(string.Join("|", Substrings.Select(substring => $"FullyQualifiedName~{substring}")),
+        Assert.Equal(string.Join("|", Substrings.Select(substring => $"FullyQualifiedName~{substring}")
+                .Concat(ApprovedStructuralClassNames.Select(name => $"FullyQualifiedName~{name}"))),
             balanceC.Filter);
 
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
