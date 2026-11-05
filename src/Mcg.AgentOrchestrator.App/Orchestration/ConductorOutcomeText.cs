@@ -17,19 +17,28 @@ internal static class ConductorOutcomeText
     internal static string BuildTerminalEscalationReason(
         Goal goal, GoalLifecycleState state, Func<string, string> trim)
     {
+        var latestTaskFailure = LatestTaskFailure(goal, state);
+        return latestTaskFailure is null
+            ? $"Goal is in {state} state; operator action required"
+            : $"Goal is in {state} state; TaskFailed: {trim(latestTaskFailure.Message)}; operator action required";
+    }
+
+    internal static ProgressFailurePayload? TerminalFailure(Goal goal, GoalLifecycleState state) =>
+        LatestTaskFailure(goal, state) is { } failure
+            ? failure.Failure ?? new(failure.Kind.ToString(), null, []) : null;
+
+    private static ProgressEvent? LatestTaskFailure(Goal goal, GoalLifecycleState state)
+    {
         var failedTaskIds = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Failed)
             .Select(task => task.Id)
             .ToHashSet();
-        var latestTaskFailure = state == GoalLifecycleState.Failed &&
-                                goal.Status is not (GoalStatus.Cancelled or GoalStatus.Superseded)
+        return state == GoalLifecycleState.Failed &&
+               goal.Status is not (GoalStatus.Cancelled or GoalStatus.Superseded)
             ? goal.Timeline.LastOrDefault(item =>
                 item.Kind == ProgressKind.TaskFailed &&
                 item.TaskId is { } taskId &&
                 failedTaskIds.Contains(taskId))
             : null;
-        return latestTaskFailure is null
-            ? $"Goal is in {state} state; operator action required"
-            : $"Goal is in {state} state; TaskFailed: {trim(latestTaskFailure.Message)}; operator action required";
     }
 }
