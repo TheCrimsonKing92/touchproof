@@ -1,7 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Parallel-safe: immutable manifest/source/history reads; no shared state is changed.
 public sealed class RemainderPoolPlacementTests
@@ -61,23 +61,85 @@ public sealed class RemainderPoolPlacementTests
     public void LocalPartition_RemainderKeepsPreChangeFiltersAndHostExclusion()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
-        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "config", "acceptance-manifest.json")));
-        var engine = manifest.RootElement.GetProperty("engine");
-        var partition = Assert.Single(engine.GetProperty("localTestPartitions").EnumerateArray(),
-            item => item.GetProperty("name").GetString() == "Remainder");
-        var names = partition.GetProperty("laneNames").EnumerateArray().Select(item => item.GetString()!).ToArray();
-        Assert.Equal(["Remainder balance A", "Remainder balance B", "Remainder balance C", "Remainder balance D",
-            "Isolated process spawning A", "Isolated process spawning B", "Remainder merge train and ratchet", "Remainder"], names);
-        Assert.False(partition.TryGetProperty("additionalFilters", out _));
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        var names = ReadRemainderPartitionNames(root);
+        string[] requiredNames = ["Isolated process spawning A", "Isolated process spawning B",
+            "Remainder merge train and ratchet", "Remainder"];
+        foreach (var name in requiredNames)
+            Assert.Contains(name, names);
+        Assert.Empty(names.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1));
+
         // MtpTestRunner resolves these raw filters, independently of balancedLanePool.
-        var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
-        var filters = names.Select(name => Assert.Single(lanes, lane => lane.Name == name).Filter).ToArray();
-        // SHA-256 of UTF-8, LF-joined partition filters captured at pre-change HEAD 95d379cb4185.
-        // Goal c02ea6c7 adds only FullyQualifiedName~WorkerBuildRequestStructuralFailureTests and
-        // FullyQualifiedName~WorkerBuildRequestStructuralIntegrationTests to Remainder balance C.
-        Assert.Equal("763509EA66ED54C6EC79FAEFBA15FADFD5F214A4C03919373A9E2C894C94E218",
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', filters)))));
-        AssertHostIntegrationExcluded(filters[^1]);
+        var lanes = ResolvePartitionLanes(settings, names);
+        AssertRemainderCoverage(RemainderTargets(root, settings), lanes);
+        AssertHostIntegrationExcluded(Assert.Single(lanes, lane => lane.Name == "Remainder").Filter);
+
+        var balanceLanes = lanes.Where(lane => lane.Name.StartsWith("Remainder balance", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(balanceLanes);
+        var hostClasses = AcceptanceTestClassSourceScanner.ScanSources(root)
+            .Where(DeclaresHostIntegrationTrait).ToArray();
+        Assert.NotEmpty(hostClasses);
+        foreach (var source in hostClasses)
+            Assert.Empty(AcceptanceLaneMembership.LanesIncluding(balanceLanes, source.FullName));
+    }
+
+    [Fact]
+    public void LocalPartition_BalanceLaneTermAddition_KeepsCoverage()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        var names = ReadRemainderPartitionNames(root);
+        var lanes = ResolvePartitionLanes(settings, names);
+        var targets = RemainderTargets(root, settings);
+        var balance = lanes.First(lane => lane.Name.StartsWith("Remainder balance", StringComparison.Ordinal));
+        var addedClass = targets.First(name => AcceptanceLaneMembership.LanesIncluding([balance], name).Count == 0);
+        var originalFilter = balance.Filter;
+        var expanded = balance with { Filter = originalFilter + "|FullyQualifiedName~" + addedClass };
+        var copy = JsonSerializer.SerializeToNode(settings)!;
+        copy[nameof(AcceptanceGateEngineSettings.InfrastructureTestLanes)] = JsonSerializer.SerializeToNode(
+            settings.InfrastructureTestLanes.Select(lane => lane.Name == balance.Name ? expanded : lane));
+        var candidate = copy.Deserialize<AcceptanceGateEngineSettings>()!;
+        var candidateLanes = ResolvePartitionLanes(candidate, names);
+
+        Assert.NotEqual(originalFilter, Assert.Single(candidateLanes, lane => lane.Name == balance.Name).Filter);
+        Assert.NotEmpty(AcceptanceLaneMembership.LanesIncluding([expanded], addedClass));
+        Assert.Equal(originalFilter, Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == balance.Name).Filter);
+        AssertRemainderCoverage(targets, candidateLanes);
+    }
+
+    [Fact]
+    public void LocalPartition_RemovingSoleCoveringLane_ReportsUncoveredClass()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        var lanes = ResolvePartitionLanes(settings, ReadRemainderPartitionNames(root));
+        var targets = RemainderTargets(root, settings);
+        AssertRemainderCoverage(targets, lanes);
+        var witness = targets.FirstOrDefault(name => AcceptanceLaneMembership.LanesIncluding(lanes, name).Count == 1);
+        Assert.True(witness is not null, "No scanned Remainder class has a sole covering partition lane.");
+        var owner = Assert.Single(AcceptanceLaneMembership.LanesIncluding(lanes, witness!));
+        var reduced = lanes.Where(lane => lane.Name != owner.Name).ToArray();
+
+        // Exercise coverage independently: removing a required lane must fail for the uncovered class.
+        var failure = Assert.Throws<Xunit.Sdk.EmptyException>(() => AssertRemainderCoverage(targets, reduced));
+        Assert.Contains(witness!, failure.Message);
+    }
+
+    [Fact]
+    public void LocalPartition_ComplementWithoutHostExclusion_IsRejected()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var settings = AcceptanceGateEngineSettings.Load(root);
+        var remainder = Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == "Remainder");
+        AssertHostIntegrationExcluded(remainder.Filter);
+        var candidate = remainder with
+        {
+            Filter = string.Join('&', remainder.Filter.Split('&').Where(term =>
+                !term.Trim().Equals("Category!=HostIntegration", StringComparison.OrdinalIgnoreCase)))
+        };
+
+        Assert.NotEqual(remainder.Filter, candidate.Filter);
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertHostIntegrationExcluded(candidate.Filter));
     }
 
     [Fact]
@@ -99,6 +161,41 @@ public sealed class RemainderPoolPlacementTests
         Assert.Single(identity.Lanes, lane => lane.Name.StartsWith(settings.BalancedLanePool.LaneNamePrefix + " ",
             StringComparison.Ordinal));
     }
+
+    private static string[] ReadRemainderPartitionNames(string root)
+    {
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "config", "acceptance-manifest.json")));
+        var partition = Assert.Single(manifest.RootElement.GetProperty("engine").GetProperty("localTestPartitions").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "Remainder");
+        Assert.False(partition.TryGetProperty("additionalFilters", out _));
+        return partition.GetProperty("laneNames").EnumerateArray().Select(item => item.GetString()!).ToArray();
+    }
+
+    private static AcceptanceTestLane[] ResolvePartitionLanes(AcceptanceGateEngineSettings settings, string[] names) =>
+        names.Select(name => Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == name)).ToArray();
+
+    private static string[] RemainderTargets(string root, AcceptanceGateEngineSettings settings)
+    {
+        var remainder = Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == "Remainder");
+        var targets = AcceptanceTestClassSourceScanner.Scan(root)
+            .Where(item => AcceptanceLaneMembership.LanesIncluding([remainder], item.FullName).Count > 0)
+            .Select(item => item.FullName).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        Assert.NotEmpty(targets);
+        return targets;
+    }
+
+    private static void AssertRemainderCoverage(IReadOnlyList<string> targets, IReadOnlyList<AcceptanceTestLane> lanes)
+    {
+        var uncovered = targets.Where(name => AcceptanceLaneMembership.LanesIncluding(lanes, name).Count == 0).ToArray();
+        Assert.Empty(uncovered);
+    }
+
+    private static bool DeclaresHostIntegrationTrait(AcceptanceTestClassSource source) =>
+        CSharpSyntaxTree.ParseText(source.SourceText).GetRoot().DescendantNodes().OfType<AttributeSyntax>()
+            .Any(attribute => attribute.Name.ToString().Split('.').Last() is "Trait" or "TraitAttribute" &&
+                attribute.ArgumentList?.Arguments is { Count: 2 } arguments &&
+                arguments[0].Expression is LiteralExpressionSyntax category && category.Token.ValueText == "Category" &&
+                arguments[1].Expression is LiteralExpressionSyntax value && value.Token.ValueText == "HostIntegration");
 
     private static void AssertHostIntegrationExcluded(string filter) =>
         Assert.True(AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(
