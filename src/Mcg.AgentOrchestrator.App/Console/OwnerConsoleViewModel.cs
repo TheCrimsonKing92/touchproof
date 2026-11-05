@@ -52,7 +52,7 @@ internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string
     string Why = "The reason was not recorded.", string Next = "Work continues.", string Act = "No action is needed.",
     string? Subject = null, string? OwnerQuestionId = null, OwnerActivityResolution? Resolution = null,
     OwnerConsoleLineSpans? Spans = null, string? GoalId = null, string? Question = null,
-    IReadOnlyList<string>? GoalPrefixes = null)
+    IReadOnlyList<string>? GoalPrefixes = null, IReadOnlyList<OwnerConductEvent>? Evidence = null)
 {
     internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create($"{Timestamp:O}/{Kind}/{GoalId ?? GoalPrefix}/{Detail}",
         new("goal", "Goal ID", GoalId), new("timestamp", "Timestamp", Timestamp.ToString("O")),

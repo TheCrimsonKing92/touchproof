@@ -45,7 +45,10 @@ public sealed partial record AcceptanceCheckResult(
     int? ChildProcessId = null,
     DateTimeOffset? ChildProcessStartedAt = null,
     IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null,
+    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null);
+
+public sealed record AcceptanceBaselineSourceAbsence(string BaselineSha, string Selector);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -829,6 +832,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             failureAttributionRequests[index] = (check, manifestCheck);
         }
 
+        var soloFailure = new SoloAcceptanceFailureCapture(executionOwner.Identity);
         var attributedChecks = await AttachTestFailureAttributionsBatchAsync(
             failureAttributionRequests,
             engineSettings,
@@ -838,7 +842,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease,
             cancellationToken,
             failureAttributionBudget,
-            changedFiles).ConfigureAwait(false);
+            changedFiles,
+            soloFailure).ConfigureAwait(false);
         for (var index = 0; index < attributedChecks.Count; index++)
         {
             checks[index] = attributedChecks[index];
@@ -850,7 +855,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
-        var verification = new AcceptanceVerificationResult(
+        var verification = soloFailure.AttachTo(new AcceptanceVerificationResult(
             Passed: failedCheck is null,
             Skipped: false,
             ExitCode: failedCheck?.ExitCode ?? 0,
@@ -861,13 +866,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Checks: checks,
             TestResultPaths: testResultPaths)
         {
-            AttemptId = executionOwner.Identity.AttemptId,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
                 (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase) ||
                  check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))).Select(check => check.Name).ToArray()
-        };
+        });
         if (verification.Passed)
         {
             AcceptanceLaneDurationStore.Flush();
@@ -941,7 +945,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
         AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null,
-        IReadOnlyList<string>? changedFiles = null)
+        IReadOnlyList<string>? changedFiles = null,
+        SoloAcceptanceFailureCapture? soloFailure = null)
     {
         invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
             MaxFailureAttributionFocusedEvidenceIdentities);
@@ -979,7 +984,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 !manifestCheck.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(manifestCheck.Project))
             {
-                results[index] = Unattributed(
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     check,
                     identities,
                     "acceptance check has no exact dotnet-test project mapping");
@@ -992,7 +997,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (selectors.Any(selector => selector.Length == 0 ||
                     !Regex.IsMatch(selector, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
             {
-                results[index] = Unattributed(
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     check,
                     identities,
                     "failing test identity cannot be represented by an exact focused selector");
@@ -1003,7 +1008,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ProjectLabel(manifestCheck.Project), selectors, engineSettings, worktreePath);
             if (!selectionPlan.Succeeded)
             {
-                results[index] = Unattributed(check, identities, selectionPlan.FailureEvidence!);
+                results[index] = AcceptanceFailureAttributionPlanner.Unattributed(check, identities, selectionPlan.FailureEvidence!);
                 continue;
             }
 
@@ -1015,6 +1020,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             return results;
         }
+
+        soloFailure?.MarkAttributionPrepared();
 
         var focusedChecks = prepared
             .SelectMany(item => item.SelectionPlan.Checks)
@@ -1055,7 +1062,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var item in prepared)
             {
-                results[item.Index] = Unattributed(
+                results[item.Index] = AcceptanceFailureAttributionPlanner.Unattributed(
                     item.Check,
                     item.IdentitySelection.All,
                     $"focused baseline execution failed: {ex.GetType().Name}");
@@ -1081,20 +1088,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId, stableSlotIndex, stableSlotLease, changedFiles, invocationBudget,
             cancellationToken).ConfigureAwait(false);
 
+        soloFailure?.Capture(results, baseline, prepared.SelectMany(item =>
+            item.IdentitySelection.Selected.Select(identity => new SoloAcceptanceCheckBinding(item.Check.Name,
+                identity, item.SelectionPlan.CheckNamesBySelector[AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity)]))).ToArray());
         return results;
-
-        static AcceptanceCheckResult Unattributed(
-            AcceptanceCheckResult check,
-            IReadOnlyList<string> identities,
-            string evidence) => check with
-        {
-            FailingTestAttributions = identities
-                .Select(identity => new AcceptanceTestFailureAttribution(
-                    identity,
-                    AcceptanceTestFailureOrigin.Unattributed,
-                    evidence))
-                .ToArray()
-        };
     }
 
     internal static AcceptanceCheckResult AttachFailureCauseEvidence(AcceptanceCheckResult check) =>
@@ -1195,7 +1192,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             SelectBaselineFocusedChecks, CombineFindingBaselineArm, _storageRoot,
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
-            partitionCandidateOnlySelections);
+            partitionCandidateOnlySelections,
+            classifyMissingSelectionsAsAbsent && _executionContext is not null
+                ? Path.Combine(_executionContext.ResultsPrefix, "solo-baseline") : null);
     }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(

@@ -11,8 +11,12 @@ internal sealed class OwnerConsoleTextPage
     private IReadOnlyList<int> _choiceLines;
     private int _width;
     private int _height;
+    private int _anchorSource;
+    private int _anchorOffset;
     internal IReadOnlyList<string> Lines { get; private set; } = [];
     internal IReadOnlyList<int> SourceLines { get; private set; } = [];
+    internal IReadOnlyList<int> SourceOffsets { get; private set; } = [];
+    internal int ContinuationIndent { get; set; }
     internal IReadOnlyList<string> Visible => Lines.Skip(Offset).Take(_height).ToArray();
     internal int Offset { get; private set; }
     internal OwnerConsoleOverflow Overflow => OwnerConsoleOverflow.Of(Lines.Count, Offset, _height);
@@ -27,32 +31,40 @@ internal sealed class OwnerConsoleTextPage
         width = Math.Max(2, width);
         _width = width;
         _height = Math.Max(1, height);
+        var selectedSource = _anchorSource;
+        var selectedOffset = _anchorOffset;
         var lines = new List<string>();
         var sources = new List<int>();
+        var offsets = new List<int>();
         var source = 0;
         foreach (var paragraph in _text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
         {
-            var buffer = new StringBuilder();
-            var cells = 0;
-            foreach (var rune in paragraph.EnumerateRunes())
+            var start = 0;
+            do
             {
-                var size = rune.GetColumns();
-                if (cells + size > width && buffer.Length > 0)
+                var indent = start == 0 ? 0 : Math.Min(ContinuationIndent, width - 2);
+                var cells = indent;
+                var length = 0;
+                var space = 0;
+                foreach (var rune in paragraph.AsSpan(start).EnumerateRunes())
                 {
-                    var buffered = buffer.ToString();
-                    var split = buffered.LastIndexOf(' ') + 1;
-                    if (split == 0) split = buffered.Length;
-                    lines.Add(buffered[..split]); sources.Add(source);
-                    buffer.Clear(); buffer.Append(buffered[split..]);
-                    cells = buffer.ToString().GetColumns();
+                    if (cells + rune.GetColumns() > width) break;
+                    cells += rune.GetColumns();
+                    length += rune.Utf16SequenceLength;
+                    if (rune.Value == ' ') space = length;
                 }
-                buffer.Append(rune);
-                cells += size;
-            }
-            lines.Add(buffer.ToString()); sources.Add(source++);
+                if (start + length < paragraph.Length && space > 0) length = space;
+                lines.Add(new string(' ', indent) + paragraph.Substring(start, length));
+                sources.Add(source); offsets.Add(start);
+                start += length;
+            } while (start < paragraph.Length);
+            source++;
         }
-        Lines = lines; SourceLines = sources;
-        Select(Selected);
+        Lines = lines; SourceLines = sources; SourceOffsets = offsets;
+        var selected = sources.FindLastIndex(index => index == selectedSource);
+        while (selected > 0 && offsets[selected] > selectedOffset && sources[selected - 1] == selectedSource) selected--;
+        Select(Math.Max(0, selected));
+        _anchorSource = selectedSource; _anchorOffset = selectedOffset;
     }
 
     internal void Replace(string text, IReadOnlyList<int>? choiceLines = null)
@@ -67,6 +79,8 @@ internal sealed class OwnerConsoleTextPage
     internal void Select(int row)
     {
         Selected = Math.Clamp(row, 0, Math.Max(0, Lines.Count - 1));
+        _anchorSource = SourceLines.Count > 0 ? SourceLines[Selected] : 0;
+        _anchorOffset = SourceOffsets.Count > 0 ? SourceOffsets[Selected] : 0;
         if (Selected < Offset) Offset = Selected;
         if (Selected >= Offset + _height) Offset = Selected - _height + 1;
         Offset = Math.Clamp(Offset, 0, Math.Max(0, Lines.Count - _height));

@@ -1,0 +1,26 @@
+# Activity detail candidate check
+
+Criterion 3 is operator owned, required **before landing**. Automated execution and this visual receipt are still pending after Developer's build. Use the App DLL built from the candidate under review; record its full path, SHA-256, candidate revision and dirty-tree identity alongside the screenshots. Do not substitute the main runtime.
+
+The durable input is `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestData/Fixtures/activity-detail-dispatch-rejected.json`. It retains both operator-supplied records from goal `fd7ee5fb17d24753a4f5537278799fe6`, task `2bda31d51cf743dda91891b183641743`. The original screenshot was a local operator capture and is not kept in the repository. Its displayed 10:11:58 Central time is distinct from both persisted event timestamps; no missing observation metadata is reconstructed.
+
+In an interactive PowerShell terminal at the candidate worktree, set `$candidateAppDll` to the full prebuilt candidate `Mcg.AgentOrchestrator.App.dll` path from the build output/receipt. The replay preparer resolves that path and emits concrete repository/state paths and hashes. It creates a new temporary workspace and writes only an isolated conduct log; it does not read live stores or run workers.
+
+```powershell
+$candidateAppDll = "$env:USERPROFILE/AppData/LocalLow/mcg-dotnet-isolated/goals/<goal-prefix>/artifacts/bin/Mcg.AgentOrchestrator.App/debug/Mcg.AgentOrchestrator.App.dll"
+$replay = .\scripts\Invoke-RepoScript.ps1 scripts/Prepare-ActivityDetailReplay.ps1 -AppDll $candidateAppDll | ConvertFrom-Json
+$replay
+.\scripts\Invoke-RepoScript.ps1 scripts/Invoke-OrchestratorCommand.ps1 -AppDll $replay.AppDll -RepositoryRoot $replay.RepositoryRoot -ExpectedStateDirectory $replay.ExpectedStateDirectory -DisposableFixture console
+```
+
+Use a fresh terminal without inherited repository/project/tenant selectors if binding validation reports a conflicting inherited selector; retain the explicit replay binding. The replay receipt is retained at `$replay.RepositoryRoot/replay-receipt.json`. This is explicitly **synthetic conduct framing** of the exact TaskFailed and policy-message payloads, preserving the original goal IDs and persisted timestamps. It does not assert that the screenshot's observation timestamp or workflow state was replayed. No state database or conductor is needed. Both rows are visible in ACTIVITY; the later row is the persisted escalation, the earlier row is TaskFailed's exact message. Goal names fall back to the recorded ID because the replay supplies no invented title.
+
+1. Retain the original screenshot as the before evidence. In the candidate console, Tab to ACTIVITY, select each retained row, Enter to open **What this means**. Capture the candidate identity and selected event with each after screenshot.
+2. At 60, 100 and 160 terminal columns (and the owner's usual wide layout), check blank lines between Reason, Next step, Owner action and Diagnostics. Every diagnostic has a colon followed by whitespace; long values continue on indented rows. The summary says completion was rejected. It does not assert incorrect code or a started retry. The payload appears once as individual diagnostic fields.
+3. Scroll with arrows/PgUp/PgDn to the end of the quoted detail. Select its continuation, resize narrow → wide → narrow and press F2. The same logical field remains selected. Copy and compare the **entire** value, including quotes and escapes, to the fixture's text-derived representation.
+4. In F2, individually copy goal/task IDs, timestamp, worktree, dispatched_at, baseline_head and detail. The worktree includes its recorded enclosing quotes and doubled separators; the SHA has all 40 characters. Copy `event/0/original` and compare it to that record's complete Message. Display indentation must never enter copied text.
+5. Check F2 Up/Down navigation, Esc close, return focus, repeated opening, Enter/Close and Escape in the detail page. Retain both visual and successful clipboard-comparison evidence with runtime hash, fixture hash and event identity. Supply the candidate-bound receipt to the pending operator evidence request before landing.
+
+Acceptance executes `OwnerActivityDiagnosticParserTests`, `OwnerActivityDetailProjectionTests`, `OwnerActivityDetailDialogTests` in `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OwnerConsole/Mcg.AgentOrchestrator.Infrastructure.OwnerConsole.Tests.csproj`, and the existing Activity, lifecycle, escalation, text-page/overflow and field-copy regressions named in Developer's result. Root narrator/goal-list tests remain in the root Infrastructure test project. The new parser/controller/layout assertions target source-value loss, duplicated payloads, guessed boundaries and visual-index selection drift; Developer is prohibited from executing the test host, so RED/GREEN receipts belong to Acceptance. Reviewer audits the dedicated collaborators and confirms no source-size ceiling was raised and the full-screen view was untouched.
+
+If a live conduct escalation contains an already sanitized/truncated reason, the detail retains that exact text in Original event. It does not reverse underscores or reconstruct a missing tail. The separate TaskFailed lifecycle record retains its original message and fields; each record keeps its own timestamp and provenance.

@@ -459,16 +459,7 @@ internal sealed partial class ConductorDriver
                     ? AcceptanceFailureClassifications.InheritedBaselineApparatus
                     : AcceptanceFailureClassifications.GateEnvironmentInterference
                 : null);
-        return new AcceptanceVerificationSummary(
-            false,
-            [check],
-            acceptance.FailureDetail,
-            acceptance.FailedChecks,
-            acceptance.BranchHeadSha,
-            acceptance.MainHeadSha,
-            acceptance.TestResultPaths,
-            acceptance.CheckAttributions,
-            acceptance.BaselineAttestation, acceptance.AttemptId);
+        return acceptance with { UnmetCriteria = [check] };
     }
 
     internal static AcceptanceVerificationSummary ClassifyInheritedBaselineApparatus(
@@ -494,16 +485,7 @@ internal sealed partial class ConductorDriver
                 }
                 : check)
             .ToArray();
-        return new AcceptanceVerificationSummary(
-            acceptance.Passed,
-            classifiedChecks,
-            acceptance.FailureDetail,
-            acceptance.FailedChecks,
-            acceptance.BranchHeadSha,
-            acceptance.MainHeadSha,
-            acceptance.TestResultPaths,
-            attributions,
-            acceptance.BaselineAttestation, acceptance.AttemptId);
+        return acceptance with { UnmetCriteria = classifiedChecks };
     }
 
     internal static bool IsEnvironmentalApparatusAcceptanceRun(AcceptanceVerificationSummary acceptance)
