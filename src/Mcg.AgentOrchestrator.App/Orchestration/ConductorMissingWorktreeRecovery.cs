@@ -7,6 +7,29 @@ internal static class ConductorMissingWorktreeRecovery
 {
     internal const string Operation = "conductor:workspace-recovery";
 
+    internal static bool TryPrepareForDispatch(
+        Goal goal, Func<Goal, GoalEvidenceOperationScope?>? prepare, DispatchStartFacts facts,
+        out GoalEvidenceOperationScope? ownership, out DispatchStartFacts failure)
+    {
+        ownership = null;
+        failure = facts;
+        try
+        {
+            ownership = prepare?.Invoke(goal);
+            return true;
+        }
+        catch (ConductorDriver.EvidenceMutationLeaseUnavailableException ex)
+        {
+            failure = facts with { WorkspacePreparationLeaseUnavailableMessage = ex.Message };
+            return false;
+        }
+        catch (Exception ex)
+        {
+            failure = facts with { WorkspacePreparationFailureMessage = ex.Message };
+            return false;
+        }
+    }
+
     // The returned lease is retained by the preparation caller, including normal integration,
     // candidate refresh, context/sandbox generation and the critical dispatch checkpoint.
     internal static GoalEvidenceOperationScope? Prepare(

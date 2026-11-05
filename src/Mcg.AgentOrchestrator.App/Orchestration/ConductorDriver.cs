@@ -1542,17 +1542,10 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState, startDecision.Reason) { Decision = startDecision.ToRecord() });
         }
 
-        GoalEvidenceOperationScope? workspaceOwnership;
-        try { workspaceOwnership = _prepareMissingWorkspace?.Invoke(goal); }
-        catch (EvidenceMutationLeaseUnavailableException ex)
+        if (!ConductorMissingWorktreeRecovery.TryPrepareForDispatch(
+            goal, _prepareMissingWorkspace, startFacts, out var workspaceOwnership, out var preparationFailure))
         {
-            return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts with
-                { WorkspacePreparationLeaseUnavailableMessage = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts with
-                { WorkspacePreparationFailureMessage = ex.Message });
+            return DispatchStartResult(goal, goalPrefix, policy, fromState, preparationFailure);
         }
         using var retainedWorkspaceOwnership = workspaceOwnership;
         if (EnvironmentGate?.Check(goal, policy, fromState) is { } environmentHold) return environmentHold;
