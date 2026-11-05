@@ -74,6 +74,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         dialog.Structured = fields;
         int? selected = null;
         dialog.ChoiceAccepted += choice => { selected = choice; app.RequestStop(dialog); };
+        dialog.CloseRequested += () => app.RequestStop(dialog);
         var close = new Button { Text = "Close", IsDefault = true };
         close.Accepting += (_, args) => { args.Handled = true; app.RequestStop(dialog); };
         dialog.AddButton(close);
@@ -146,7 +147,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
             else if (dialog.Body.HasFocus) dialog.HandleKey(key);
         }
         dialog.ChoiceAccepted += async index => await ActAsync(() => goal.OpenResolutionAsync(index));
-        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields); dialog.Body.SetFocus(); }
+        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields, dialog.SelectedFieldKey); dialog.Body.SetFocus(); }
         dialog.FieldsRequested += Fields;
         goal.Changed += Refresh; goal.CloseRequested += Close;
         goal.Start(action => { if (app.Initialized) app.Invoke(action); else action(); });
@@ -165,7 +166,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
 
     private void Run(OwnerConsoleTextDialog dialog)
     {
-        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields); dialog.Body.SetFocus(); }
+        void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields, dialog.SelectedFieldKey); dialog.Body.SetFocus(); }
         dialog.FieldsRequested += Fields;
         void Handle(object? sender, Key key)
         { if (app.TopRunnableView == dialog) dialog.HandleFocusedKey(key); }

@@ -50,7 +50,10 @@ internal sealed partial class GoalDispatchOperations
             intentStore.RecordSuppression(reference, $"selection:{goal.Id.Value}:{taskId}:{reference.Version}");
         }
         excludedTaskIds = (excludedTaskIds ?? new HashSet<TaskId>())
-            .Concat(heldTaskIds.Select(id => new TaskId(id))).ToHashSet();
+            .Concat(heldTaskIds.Select(id => new TaskId(id)))
+            .Concat(goal.Tasks.Where(HasUncertainSoloCorrectionStart).Select(task => task.Id)).ToHashSet();
+        foreach (var task in goal.Tasks.Where(HasUncertainSoloCorrectionStart))
+            kernel.RecordTaskNote(goal.Id, task.Id, "Solo correction start was durably claimed; reconciliation is required before another launch.");
         var offlineAssignments = OfflineAssignedAgentRedelegation.Apply(kernel, goal, agents,
             goal.Tasks.Where(DispatchReadinessRules.IsSubscriptionStartCandidate)
                 // Local and provider-inherited cooldowns belong to guarded substitution below.
@@ -284,6 +287,12 @@ internal sealed partial class GoalDispatchOperations
                 continue;
             }
             var task = goal.Tasks.Single(task => task.Id == item.TaskId);
+            if (HasUncertainSoloCorrectionStart(task))
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id,
+                    "Solo correction start was durably claimed; reconciliation is required before another launch."));
+                continue;
+            }
             var laneBlocker = DeveloperTestLaneBlocker(goal, workspace, [task.Id]);
             if (laneBlocker is not null)
             {
@@ -392,8 +401,7 @@ internal sealed partial class GoalDispatchOperations
             var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
-            var requiresDurableStartClaim = task.LatestRetryAt is not null &&
-                task.LastDispatch?.PaidRoute == PaidRouteClassification.Paid;
+            var requiresDurableStartClaim = RequiresDurableAdmissionSnapshotReplacement(task);
             if (requiresDurableStartClaim &&
                 (startReceipt is null || string.IsNullOrWhiteSpace(startReceipt.ReservationOwnerId)))
             {
@@ -574,8 +582,18 @@ internal sealed partial class GoalDispatchOperations
             $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
     }
 
-    private static bool RequiresDurableAdmissionSnapshotReplacement(TaskSpec task) =>
-        task.LastDispatch is { PaidRoute: PaidRouteClassification.Paid } && task.LatestRetryAt is not null;
+    internal static bool RequiresDurableAdmissionSnapshotReplacement(TaskSpec task) =>
+        task.LatestRetryAt is not null &&
+        (task.LastDispatch is { PaidRoute: PaidRouteClassification.Paid } || IsSoloCorrection(task));
+
+    private static bool IsSoloCorrection(TaskSpec task) => task.PendingRetryCause == RetryCause.NewTestFinding &&
+        task.CriterionRetryFeedback.Any(line => line.StartsWith("ATTRIBUTED_FAILURE_ROUTE source=solo ", StringComparison.Ordinal));
+
+    internal static bool HasUncertainSoloCorrectionStart(TaskSpec task) => IsSoloCorrection(task) &&
+        task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) &&
+        task.RetryAdmissionHistory.Any(receipt => receipt.LinkedDispatchAt >= task.LatestRetryAt &&
+            receipt.WorkerStartClaimedAt is not null &&
+            (receipt.WorkerStartedAt is null || task.LastProcess is null));
 
     private bool HasRecoverablePreparedReservation(TaskSpec task)
     {

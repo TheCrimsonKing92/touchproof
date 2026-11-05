@@ -25,11 +25,12 @@ public sealed class OwnerQuestionResolutionDialogTests
         await view.HandleKeyAsync(Key.Enter);
         Assert.Contains("11111111", Assert.Single(view.ActivityLines));
         var text = Assert.Single(scene.Dialogs.Texts).Text;
-        Assert.Contains("Goal: 11111111 " + scene.Goal.Objective, text);
+        Assert.Contains("Goal ID: " + scene.Goal.Id.Value, text);
+        Assert.Contains("Goal title: " + scene.Goal.Objective, text);
         Assert.Contains("spec clarification before Planner dispatch", text);
-        Assert.Contains(question, text);
+        Assert.Contains(question.Replace("\n", "\n    "), text);
         Assert.Contains("the Author at " + Scene.Local(Scene.At), text);
-        Assert.Contains(answer, text);
+        Assert.Contains(answer.Replace("\n", "\n    "), text);
         Assert.Contains("docs/decision.md", text);
         Assert.Contains("receipt:42", text);
         Assert.Contains("Planner started at " + Scene.Local(Scene.At.AddSeconds(20)), text);
@@ -45,7 +46,7 @@ public sealed class OwnerQuestionResolutionDialogTests
         await scene.Controller.ShowActivityMeaningAsync(scene.Activity(request.Id.Value, request.Question, request.AnsweredAt!.Value));
         var text = Assert.Single(scene.Dialogs.Texts).Text;
         Assert.Contains("Dismissed", text);
-        Assert.Contains("11111111 " + scene.Goal.Objective, text);
+        Assert.Contains("Goal title: " + scene.Goal.Objective, text);
         Assert.Contains("Planner clarification on task " + OwnerConsoleViewModelBuilder.Prefix(scene.Goal.Tasks[0].Id.Value), text);
         Assert.DoesNotContain("Answer:", text);
         Assert.DoesNotContain("Evidence:", text);

@@ -69,7 +69,8 @@ internal interface IGoalEventTail
     IReadOnlyList<string> ReadLast(string goalId, int count);
 }
 
-internal sealed record OwnerConductEvent(DateTimeOffset Timestamp, string EventKind, string? GoalId, string Detail);
+internal sealed record OwnerConductEvent(DateTimeOffset Timestamp, string EventKind, string? GoalId, string Detail,
+    OwnerActivityDetailEvidence? Evidence = null);
 
 internal enum OwnerQuestionKind { Clarification, HumanInput, StewardHold, ExperimentReading, Onboarding, PassedGateHold }
 

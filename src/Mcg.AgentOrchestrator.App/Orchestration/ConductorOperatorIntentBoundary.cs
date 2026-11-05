@@ -135,6 +135,7 @@ internal static class ConductorOperatorIntentBoundary
 
                 var application = OperatorIntentGoalApplication.ApplyPending(
                     kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, ids);
+                goal = kernel.GetGoal(goalId);
                 result.Lines.AddRange(application.Lines);
                 if (application.Result.MutatedGoalState || application.Result.RejectedAdjudication)
                     result.ChangedGoalIds.Add(goalId);
