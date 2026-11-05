@@ -39,23 +39,25 @@ internal sealed class AcceptanceTestClassSourceCache
         {
             WorktreeEntry? previous;
             lock (_sync) _worktrees.TryGetValue(root, out previous);
+            var parsed = new CachedFile[paths.Count];
+            var errors = new System.Runtime.ExceptionServices.ExceptionDispatchInfo?[paths.Count];
+            // Cold scans dominate Developer preflight. Parse independent files concurrently,
+            // but retain enumeration order for cross-file resolution and deterministic errors.
+            Parallel.For(0, paths.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, index =>
+            {
+                try { parsed[index] = ReadFile(paths[index], previous, extractFile); }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    errors[index] = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error);
+                }
+            });
+            foreach (var error in errors) error?.Throw();
             var files = new Dictionary<string, CachedFile>(StringComparer.Ordinal);
             var extracts = new AcceptanceTestClassSourceScanner.FileExtract[paths.Count];
             for (var index = 0; index < paths.Count; index++)
             {
                 var path = Path.GetFullPath(paths[index]);
-                // Stat before reading: never associate old contents with a later write's metadata.
-                var info = new FileInfo(path);
-                var length = info.Length;
-                var lastWriteUtc = info.LastWriteTimeUtc;
-                CachedFile? cached = null;
-                previous?.Files.TryGetValue(path, out cached);
-                if (cached is null || cached.Length != length || cached.LastWriteUtc != lastWriteUtc)
-                {
-                    var extract = extractFile(path);
-                    Interlocked.Increment(ref _parsedFileCount);
-                    cached = new CachedFile(length, lastWriteUtc, extract, (cached?.Parses ?? 0) + 1);
-                }
+                var cached = parsed[index];
                 files.Add(path, cached);
                 extracts[index] = cached.Extract;
             }
@@ -75,6 +77,23 @@ internal sealed class AcceptanceTestClassSourceCache
             }
             return extracts;
         }
+    }
+
+    private CachedFile ReadFile(string inputPath, WorktreeEntry? previous,
+        Func<string, AcceptanceTestClassSourceScanner.FileExtract> extractFile)
+    {
+        var path = Path.GetFullPath(inputPath);
+        // Stat before reading: never associate old contents with a later write's metadata.
+        var info = new FileInfo(path);
+        var length = info.Length;
+        var lastWriteUtc = info.LastWriteTimeUtc;
+        CachedFile? cached = null;
+        previous?.Files.TryGetValue(path, out cached);
+        if (cached is not null && cached.Length == length && cached.LastWriteUtc == lastWriteUtc)
+            return cached;
+        var extract = extractFile(path);
+        Interlocked.Increment(ref _parsedFileCount);
+        return new CachedFile(length, lastWriteUtc, extract, (cached?.Parses ?? 0) + 1);
     }
 
     internal void Forget(string worktreePath)
