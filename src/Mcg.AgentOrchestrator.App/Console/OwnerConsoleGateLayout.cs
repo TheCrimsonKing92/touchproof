@@ -13,7 +13,16 @@ internal static class OwnerConsoleGateLayout
         width = Math.Max(1, width);
         if (gate is null) return [Fit("gate: unavailable", width)];
         var lines = new List<string>();
-        if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
+        if (gate.ConcurrentRuns is { Count: > 1 } runs)
+        {
+            lines.Add($"GATE {runs.Count} live executions");
+            foreach (var run in runs)
+            {
+                if (fields is not null) fields[lines.Count] = run.FieldSnapshot();
+                lines.Add(OwnerConsoleGateFormatter.RunLine(run));
+            }
+        }
+        else if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
         else
         {
             var observed = OwnerConsoleGateConfirmation.Attach(gate.Lanes);
