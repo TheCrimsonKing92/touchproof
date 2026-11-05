@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class LandingRelaunchDecisions(
     bool selfRelaunchEnabled,
     bool selfRelaunchAvailable,
-    PostLandingCanaryCoordinator? canary)
+    Func<ConductorLandingReceipt, Task<PostLandingCanaryDisposition>>? launchCanary)
 {
     private readonly HashSet<string> _handledGoals = new(StringComparer.Ordinal);
 
@@ -39,6 +39,6 @@ internal sealed class LandingRelaunchDecisions(
             emit($"LOOP_RELAUNCH_NOT_REQUIRED tick={tick} goal={receipt.GoalId} " +
                 $"changedFiles={receipt.ChangedFiles.Count} classification={reason}");
         }
-        if (canary is not null) trackCanary(canary.LaunchLandingAsync(receipt));
+        if (launchCanary is not null) trackCanary(launchCanary(receipt));
     }
 }

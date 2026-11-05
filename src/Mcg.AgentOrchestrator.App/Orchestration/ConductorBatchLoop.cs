@@ -177,7 +177,7 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
-        _landingRelaunchDecisions = new(selfRelaunchEnabled, _selfRelaunch is not null, _postLandingCanary);
+        _landingRelaunchDecisions = new(selfRelaunchEnabled, _selfRelaunch is not null, _postLandingCanary is null ? null : receipt => _postLandingCanary.LaunchLandingAsync(receipt));
         _loadTrxCoherenceVerdicts = loadTrxCoherenceVerdicts ?? (directory =>
         {
             if (workspace is null) return;
