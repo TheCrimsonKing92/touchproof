@@ -22,7 +22,7 @@ internal static class PlannerAmendmentBatchRecorder
         int completedRound, string? workerResultReference)
     {
         var hasBlocker = WorkerResultBlockers.TryFindBlocker(output, out var blocker);
-        var hold = workerResultPresent;
+        var hold = workerResultPresent || directives.Any(item => item.Kind == HumanWaitKind.PlannerBriefAmendment);
         foreach (var directive in directives)
         {
             var question = directive.Question;

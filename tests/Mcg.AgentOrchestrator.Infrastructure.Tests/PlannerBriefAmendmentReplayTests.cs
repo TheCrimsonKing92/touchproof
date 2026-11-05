@@ -4,6 +4,61 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: the captured dispatch and prepared prompt use a case-owned temporary tree.
 public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact]
+    public void Answered_replay_without_worker_result_keeps_revision_pending()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement after the rulings.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Keep two answered amendments held until brief revision", [planner, developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["Preserve the first behavior.", "Preserve the second behavior."],
+            VerificationClass.TestVerifiable, [], []));
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        const string output = """
+            PLANNER_BRIEF_AMENDMENT: {"criterion_index":1,"defect":"First criterion contradicts a regression.","evidence":"seed.txt:1","proposed_text":"Preserve the first behavior."}
+            PLANNER_BRIEF_AMENDMENT: {"criterion_index":2,"defect":"Second criterion contradicts a regression.","evidence":"seed.txt:1","proposed_text":"Preserve the second behavior."}
+            """;
+        // No process or filesystem boundary: replay retained driver completion evidence directly.
+        const string workingDirectory = @"C:\fixture";
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, planner.Id,
+            new TaskDispatchRecord("planner-worker", "planner.exe", workingDirectory, now));
+        var original = new TaskVerificationRecord("planner.exe", workingDirectory, 0, output, string.Empty,
+            now, WorkerResultPresent: false);
+        kernel.RecordDispatchExecutionResult(goal.Id, planner.Id, original);
+        var requests = kernel.GetPendingBlockingHumanInput(goal.Id);
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(new[] { 1, 2 }, requests.Select(item => item.Amendment!.CriterionIndex).Order());
+        Assert.False(planner.LastVerification!.WorkerResultPresent);
+        Assert.Equal(2, planner.LastVerification.PlannerEvidenceBatch!.Directives.Count);
+        Assert.Null(planner.LastVerification.PlannerEvidenceBatch.Directive);
+
+        foreach (var request in requests)
+            kernel.SubmitHumanInput(request.Id, "Accept the proposed text; revise the brief.");
+        Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
+        Assert.All(requests, item =>
+        {
+            Assert.True(item.IsCompleted);
+            Assert.False(item.AmendmentReplanRouted);
+        });
+        var hold = kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id);
+        Assert.NotNull(hold);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+
+        kernel.RecordDispatchExecutionResult(goal.Id, planner.Id,
+            original with { CompletedAt = now.AddSeconds(1) });
+
+        Assert.Equal(2, planner.VerificationHistory.Count);
+        Assert.False(planner.LastVerification!.WorkerResultPresent);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Equal(hold, kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id));
+        Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
+        Assert.Equal(2, goal.Timeline.Count(item => item.Kind == ProgressKind.HumanInputRequested));
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(1)]
     [Xunit.InlineData(2)]
