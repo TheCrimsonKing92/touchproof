@@ -221,11 +221,14 @@ internal sealed class JunitCommandAcceptanceCheck(
                 ResultSummary: $"junit-command: results={records.Count}", Advisory: check.Advisory,
                 TestResultAttemptId: owner.RunId, TestResultRunOrdinal: invocation.Ordinal,
                 FailureClassification: passed ? null : $"junit-command-{diagnostics.FirstOrDefault()?.Category}",
-                FailingTestIdentities: records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => privacy.Identity(record.Id)).ToArray(),
+                // These identities are gate inputs. Keep their exact values so distinct fixture
+                // configurations cannot collapse into the same failure identity; rendered
+                // diagnostics are suppressed separately above.
+                FailingTestIdentities: records.Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(record => record.Id).ToArray(),
                 ExecutedTestCount: records.Count(record => record.Status is TestResultStatus.Passed or TestResultStatus.Failed or TestResultStatus.Error),
                 DiscoveredTestCount: records.Count, ProcessStderr: privacy.Detail(string.Concat(stderr)), ProcessStderrPath: privacy.Enabled ? null : lastProcess?.StderrPath,
                 GateHeartbeatPath: heartbeatPath, ChildProcessId: lastProcess?.ChildProcessId, ChildProcessStartedAt: lastProcess?.ChildProcessStartedAt,
-                SkippedTestIdentities: records.Where(record => record.Status == TestResultStatus.Skipped).Select(record => privacy.Identity(record.Id)).ToArray())
+                SkippedTestIdentities: records.Where(record => record.Status == TestResultStatus.Skipped).Select(record => record.Id).ToArray())
             {
                 NormalizedTestResultPaths = paths, CrosswalkDiagnostics = publishedDiagnostics, CohortEvidence = cohortEvidence,
                 CrosswalkExecutablePath = executable?.Path, CrosswalkExecutableSha256 = executable?.Sha256
