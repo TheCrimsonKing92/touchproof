@@ -33,7 +33,7 @@ public sealed class ConductorDriverTestsCancelledReviewerBlocker
         var decision = Assert.IsType<PolicyDecisionRecord>(escalated.Decision);
         Assert.Equal("dispatch-start", decision.Stage);
         Assert.Equal(7, decision.Rung);
-        Assert.Equal(13, decision.Facts.Count);
+        Assert.Equal(15, decision.Facts.Count);
         var blocker = Assert.Single(decision.Facts, fact => fact.Name == "cancelledPredecessorBlocker").Value;
         Assert.Contains(reviewer.Id.Value, blocker, StringComparison.Ordinal);
         Assert.Contains("route --cause", blocker, StringComparison.Ordinal);
