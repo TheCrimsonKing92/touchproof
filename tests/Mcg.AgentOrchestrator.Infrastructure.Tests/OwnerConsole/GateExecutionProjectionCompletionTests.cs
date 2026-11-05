@@ -139,6 +139,78 @@ public sealed class GateExecutionProjectionCompletionTests
         Assert.Contains("1 in gate", section.Header.Title);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CompletedTrainClearsUnresolvedChildrenAndShowsFinishedBoardRows(bool outerAttemptField, bool lateChild)
+    {
+        using var fixture = new OwnerConsoleGateExecutionReplayFixture();
+        var events = Incident().Append(
+            Run(-400, "second-train-child", TrainOuter, Trio, "verification-check", "merge-train")).ToArray();
+        var before = fixture.Build(events);
+        var unresolved = before.Executions!.Where(run => run.OuterAttemptId == TrainOuter).ToArray();
+        Assert.Equal(2, unresolved.Length);
+        Assert.All(unresolved, run =>
+        {
+            Assert.False(run.Live);
+            Assert.Equal("current execution unresolved", run.Participation);
+        });
+        foreach (var member in Trio.Split(','))
+            Assert.Equal("current execution unresolved", before.ForMember(member)!.Participation);
+
+        var identityField = outerAttemptField ? "outer_attempt" : "attempt";
+        events = events.Append(Event(-300,
+            $"ACCEPTANCE_COHORT_CHILD_COMPLETED kind=train {identityField}={TrainOuter} members={Trio} result=completed")).ToArray();
+        if (lateChild)
+            events = [.. events,
+                Run(-200, "late-train-child", TrainOuter, Trio, "execution-admitted", "merge-train"),
+                Run(-100, TrainExecution, TrainOuter, Trio, "verification-check", "merge-train")];
+
+        var completed = fixture.Build(events);
+        var children = completed.Executions!.Where(run => run.OuterAttemptId == TrainOuter).ToArray();
+        Assert.Equal(lateChild ? 3 : 2, children.Length);
+        Assert.All(children, run =>
+        {
+            Assert.False(run.Live);
+            Assert.Equal("outer attempt completed", run.Participation);
+        });
+        Assert.DoesNotContain(completed.Executions!, run => run.Live);
+        foreach (var member in Trio.Split(','))
+        {
+            var selected = Assert.IsType<OwnerConsoleGateProgress>(completed.ForMember(member));
+            Assert.False(selected.Live);
+            Assert.Equal("train", selected.Kind);
+            Assert.Equal("outer attempt completed", selected.Participation);
+        }
+
+        var clock = new OwnerConsoleTestClock { Now = Now };
+        var harness = new OwnerConsoleHarness(clock);
+        foreach (var member in Trio.Split(',')) harness.AddGoal(member, "Finished train member", AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = GoalStatus.Verified,
+                Tasks = goal.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray(),
+                Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "state changed", Now)]
+            }).ToArray()
+        });
+        var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions,
+            harness.Liveness, new Epics(), clock, gateProgress: _ => completed);
+        var model = await builder.BuildBoardAsync();
+        Assert.Equal(3, model.Board.Length);
+        foreach (var member in Trio.Split(','))
+        {
+            var row = Assert.Single(model.Board, row => row.GoalId == member);
+            Assert.Equal("Verified", row.State);
+            Assert.StartsWith("gate: outer attempt completed [", row.Stage);
+            Assert.DoesNotContain("unresolved", row.Stage);
+        }
+    }
+
     [Fact]
     public void UnidentifiedExecutionProgressStaysIndependentOfIdentifiedRuns()
     {

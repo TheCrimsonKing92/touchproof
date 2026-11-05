@@ -83,7 +83,11 @@ internal sealed partial record OwnerConsoleGateProgress
                 {
                     completedOwners.Add(outer);
                     lastEnd = item.Event.Timestamp;
-                    foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer)) child.Live = false;
+                    foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer))
+                    {
+                        child.Live = false;
+                        child.Participation = "outer attempt completed";
+                    }
                 }
                 continue; // Outer ownership never asserts execution participation.
             }
@@ -115,7 +119,7 @@ internal sealed partial record OwnerConsoleGateProgress
                     gate.Participation = "participation unresolved after ejection";
                 }
                 gates[key] = gate;
-                if (outer.Length > 0 && execution.Length > 0)
+                if (outer.Length > 0 && execution.Length > 0 && !completedOwners.Contains(outer))
                     foreach (var previous in gates.Values.Where(previous => previous != gate && previous.OuterAttemptId == outer))
                     {
                         previous.Live = false;
