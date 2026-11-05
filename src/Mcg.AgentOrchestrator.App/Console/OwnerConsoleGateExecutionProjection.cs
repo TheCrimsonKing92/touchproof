@@ -19,6 +19,13 @@ internal sealed partial record OwnerConsoleGateProgress
         var gates = new Dictionary<string, Gate>(StringComparer.OrdinalIgnoreCase);
         var owners = new Dictionary<string, Observation>(StringComparer.Ordinal);
         var completedOwners = new HashSet<string>(StringComparer.Ordinal);
+        // Keep legacy membership-only replay, but never turn cohort ownership/
+        // admission diagnostics into an independent execution when the stream
+        // carries execution identities. Members are not an identity link.
+        var hasExecutionEvidence = parsed.Any(item =>
+            (item.Event.EventKind == "gate-progress" || item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal) ||
+             item.Event.Detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal)) &&
+            item.Get("scope") != "attribution" && item.Get("phase") != "gate-phase-breakdown" && ExecutionOf(item).Length > 0);
         ejections = [];
         lastEnd = null;
         foreach (var item in parsed)
@@ -76,11 +83,15 @@ internal sealed partial record OwnerConsoleGateProgress
                 {
                     completedOwners.Add(outer);
                     lastEnd = item.Event.Timestamp;
-                    foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer)) child.Live = false;
+                    foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer))
+                    {
+                        child.Live = false;
+                        child.Participation = "outer attempt completed";
+                    }
                 }
                 continue; // Outer ownership never asserts execution participation.
             }
-            if (cohort && members.Length == 0) continue;
+            if (cohort && (members.Length == 0 || execution.Length == 0 && hasExecutionEvidence)) continue;
             if (members.Length == 0 && goal.Length > 0 && goal != "unknown") members = [goal];
             if (members.Length == 0) continue;
             var key = execution.Length > 0 ? "execution:" + execution : "unresolved:" +
@@ -108,7 +119,7 @@ internal sealed partial record OwnerConsoleGateProgress
                     gate.Participation = "participation unresolved after ejection";
                 }
                 gates[key] = gate;
-                if (outer.Length > 0 && execution.Length > 0)
+                if (outer.Length > 0 && execution.Length > 0 && !completedOwners.Contains(outer))
                     foreach (var previous in gates.Values.Where(previous => previous != gate && previous.OuterAttemptId == outer))
                     {
                         previous.Live = false;
@@ -217,8 +228,10 @@ internal sealed partial record OwnerConsoleGateProgress
             if (unlinkedEjection is not null)
                 live = live.Where(gate => gate.AdmittedAt > unlinkedEjection.At).ToArray();
             if (live.Length > 1)
-                views[member] = Idle() with { Kind = "unresolved", Members = [new(member, "")],
-                    Participation = "multiple independent executions; select an execution", LanePlanAvailable = false, EtaAvailable = false };
+                views[member] = Idle() with { Kind = "concurrent", Members = [new(member, "")],
+                    Participation = $"{live.Length} live executions", ConcurrentRuns = live
+                        .OrderBy(gate => gate.ExecutionId, StringComparer.Ordinal).ThenBy(gate => gate.OuterAttemptId, StringComparer.Ordinal).ToArray(),
+                    LanePlanAvailable = false, EtaAvailable = false };
             else if (live.Length == 1) views[member] = live[0];
             else if (dispositions.Count > 0) views[member] = dispositions.LastOrDefault(gate =>
                 gate.Participation == "ejected / awaiting survivor") ?? dispositions.Last();
