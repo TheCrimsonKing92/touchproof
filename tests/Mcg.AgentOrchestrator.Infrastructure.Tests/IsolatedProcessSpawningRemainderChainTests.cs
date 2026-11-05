@@ -37,7 +37,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning),
         typeof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning),
         typeof(RemoteFirstFocusedEvidenceExecutorWaitTests),
-        typeof(FocusedEvidenceTraitExcludedSelectionTests)
+        typeof(FocusedEvidenceTraitExcludedSelectionTests),
+        typeof(GateDeclaredTestSettingsTests)
     ];
 
     // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
@@ -147,6 +148,15 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     // Sum of all 16 passing cases; a single gate sample, not a five-gate mean.
     private const double TraitExcludedSelectionGateSeconds = 3.326;
 
+    // Focused acceptance evidence on candidate 069be68599253c8b83c4c228724e9247d6f1e54f:
+    // attempt 94985898-0-20261105022935993-bfd7dfce9d144e87ba26ca0582191b98,
+    // 94985898-pre-review-20261105022939330-e80464c05a154c5890617b4c14e502e1-candidate.
+    // reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-acceptanceownerprotectedfingerpr-5f4bde8a9bcec04c.trx
+    // SHA256 2F0E33AB6A3FA3F9B304A0E5C9BE39596D20EFD8276C981BD549FC08807D466E.
+    // Sum of all 46 passing cases; the class is unchanged at 8a1c6718. The later native gate
+    // stopped before this class ran, so this is a focused sample, not a native-gate mean.
+    private const double DeclaredTestSettingsFocusedSeconds = 24.6910828;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
@@ -155,6 +165,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         .Append(new(nameof(RemoteFirstFocusedEvidenceNormalizedResultTests), NormalizedResultGateSeconds))
         .Append(new(nameof(RemoteFirstFocusedEvidenceExecutorWaitTests), ExecutorWaitGateSeconds))
         .Append(new(nameof(FocusedEvidenceTraitExcludedSelectionTests), TraitExcludedSelectionGateSeconds))
+        .Append(new(nameof(GateDeclaredTestSettingsTests), DeclaredTestSettingsFocusedSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -239,8 +250,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection],
-            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds - 1e-7,
-            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + 1e-7);
+            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds - 1e-7,
+            129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
     }

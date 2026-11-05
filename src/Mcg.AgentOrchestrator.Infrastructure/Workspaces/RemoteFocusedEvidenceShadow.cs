@@ -67,7 +67,10 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                         overrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                     : UnavailableRemoteLaneExecutor.Instance);
             shadow._coordinator = new(configuration, identity, worktreePath, prefix, shadow._executor,
-                shadow._clock, shadow._pollInterval, null, claimClass: RemoteExecutorClaimClass.Shadow);
+                shadow._clock, shadow._pollInterval, null, claimClass: RemoteExecutorClaimClass.Shadow)
+            {
+                TestSettings = owner.Settings.DeclaredTestSettings
+            };
             var eligibility = FocusedEvidenceRemoteEligibility.Create(worktreePath, configuration.MachineLocalResourceKeys);
             foreach (var check in checks)
             {

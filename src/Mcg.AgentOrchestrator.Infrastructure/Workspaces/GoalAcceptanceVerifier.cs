@@ -641,7 +641,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
-                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray()),
+                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray(), engineSettings.DeclaredTestSettings),
             AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)

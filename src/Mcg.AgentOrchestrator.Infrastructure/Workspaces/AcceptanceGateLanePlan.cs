@@ -7,6 +7,7 @@ internal sealed record AcceptanceGateLanePlan(string SchemaVersion, string Attem
     IReadOnlyList<string> Scheduled, IReadOnlyList<AcceptanceGateLaneSkip> Skipped,
     AcceptanceBalancedLaneLayout? BalancedLayout = null)
 {
+    public IReadOnlyDictionary<string, string> TestSettings { get; init; } = AcceptanceDeclaredTestSettings.Empty;
     internal const string CurrentSchemaVersion = "gate-lane-plan.v1";
     internal const string ArtifactSuffix = ".lane-plan.json";
     internal static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

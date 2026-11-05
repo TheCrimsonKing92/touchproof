@@ -18,6 +18,11 @@ try {
         & (Join-Path $RunRoot 'tools\Invoke-ExecutorBuildCheck.ps1') -JobPath $JobPath -RunRoot $RunRoot
     }
     else {
+        if ($job.PSObject.Properties['testSettings']) {
+            $settings = @{}
+            foreach ($property in $job.testSettings.PSObject.Properties) { $settings.Add($property.Name, $property.Value) }
+            $echo['TestSettings'] = $settings
+        }
         & (Join-Path $RunRoot 'tools\Invoke-ExecutorLane.ps1') -Sha $job.sha -Project $job.project -Filter $job.filter -Lane $job.lane -RunRoot $RunRoot @echo
     }
 }

@@ -15,27 +15,32 @@ internal static class AcceptanceShellProcessStartInfo
         out string? resolvedCommandPath) =>
         Build(arguments, workingDirectory, stdoutRedirectTarget, stderrRedirectTarget,
             forceUtf8ConsoleOutput,
-            environment =>
-            {
-                AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
-                    environment, workingDirectory, request.HeartbeatContext?.BuildEnvironmentRoot,
-                    request.EngineSettings?.DeclaredToolHomes);
-                if (string.IsNullOrWhiteSpace(request.GateInvocationId))
-                    TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
-                else
-                    TempRootApparatusLossReceiptStore.ApplyScope(environment, request.GateInvocationId, request.ApparatusReceiptPath);
-                if (LaneSlotTimingReader.PathForArguments(arguments, workingDirectory) is { } timingPath)
-                    environment[LaneSlotTimingReader.VariableName] = timingPath;
-                if (request.ChildEnvironmentOverrides is { } overrides)
-                {
-                    foreach (var pair in overrides)
-                    {
-                        if (pair.Value is null) environment.Remove(pair.Key);
-                        else environment[pair.Key] = pair.Value;
-                    }
-                }
-            },
+            environment => ConfigureCheckEnvironment(environment, arguments, workingDirectory, request),
             request.ResolveBareCommand, out resolvedCommandPath);
+
+    internal static void ConfigureCheckEnvironment(IDictionary<string, string?> environment,
+        string[] arguments, string workingDirectory, AcceptanceProcessRequest request)
+    {
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
+            environment, workingDirectory, request.HeartbeatContext?.BuildEnvironmentRoot,
+            request.EngineSettings?.DeclaredToolHomes);
+        if (string.IsNullOrWhiteSpace(request.GateInvocationId))
+            TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+        else
+            TempRootApparatusLossReceiptStore.ApplyScope(environment, request.GateInvocationId, request.ApparatusReceiptPath);
+        var timingPath = LaneSlotTimingReader.PathForArguments(arguments, workingDirectory);
+        if (timingPath is not null) environment[LaneSlotTimingReader.VariableName] = timingPath;
+        if (request.ChildEnvironmentOverrides is { } overrides)
+        {
+            foreach (var pair in overrides)
+            {
+                if (pair.Value is null) environment.Remove(pair.Key);
+                else environment[pair.Key] = pair.Value;
+            }
+        }
+        if (timingPath is not null)
+            AcceptanceDeclaredTestSettings.Apply(environment, request.EngineSettings?.DeclaredTestSettings);
+    }
 
     private static string BuildShellCommand(string[] arguments, Func<string, string> quote) =>
         string.Join(' ', arguments.Select(quote));

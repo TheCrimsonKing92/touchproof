@@ -2806,7 +2806,7 @@ public sealed class DispatchProcessHostTests
     private static TimeSpan GetGrandchildReapFixtureTimeout()
     {
         const int defaultTimeoutSeconds = 30;
-        var configured = Environment.GetEnvironmentVariable("MCG_GRANDCHILD_REAP_FIXTURE_TIMEOUT_SECONDS");
+        var configured = Environment.GetEnvironmentVariable("MCG_TEST_GRANDCHILD_REAP_FIXTURE_TIMEOUT_SECONDS");
         return int.TryParse(configured, out var seconds) && seconds > 0
             ? TimeSpan.FromSeconds(seconds)
             : TimeSpan.FromSeconds(defaultTimeoutSeconds);
