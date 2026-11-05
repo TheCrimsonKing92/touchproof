@@ -46,7 +46,8 @@ public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
             var pending = kernel.GetPendingHumanInput(goal.Id);
             Assert.Equal(2, pending.Count);
             Assert.Equal(2, kernel.GetPendingBlockingHumanInput(goal.Id).Count);
-            Assert.All(pending, item => Assert.Equal(HumanWaitKind.SpecClarification, item.Kind));
+            Assert.All(pending, item => Assert.Equal(HumanWaitKind.PlannerBriefAmendment, item.Kind));
+            Assert.Equal(new[] { 1, 2 }, pending.Select(item => item.Amendment!.CriterionIndex).Order());
             Assert.Equal(2, pending.Select(item => item.QuestionFingerprint).Distinct().Count());
             Assert.Contains(pending, item => item.Question.Contains("criterion 1", StringComparison.Ordinal));
             Assert.Contains(pending, item => item.Question.Contains("criterion 2", StringComparison.Ordinal));
@@ -60,7 +61,8 @@ public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
 
             var answered = pending.Single(item => item.Question.Contains($"criterion {answeredCriterion}", StringComparison.Ordinal));
             var sibling = pending.Single(item => item.Id != answered.Id);
-            kernel.SubmitHumanInput(answered.Id, "Preserve the behavior and narrow this criterion.");
+            kernel.SubmitHumanInput(answered.Id, "Preserve the behavior and narrow this criterion.",
+                amendmentDisposition: PlannerBriefAmendmentDisposition.Decline);
             Assert.Equal(sibling.Id, Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id)).Id);
             Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
 
@@ -72,7 +74,8 @@ public sealed class PlannerBriefAmendmentReplayTests : WorkerDispatchTestSupport
             Assert.NotEqual(GoalStatus.Failed, goal.Status);
             Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed);
             Assert.Equal(2, goal.Timeline.Count(item => item.Kind == ProgressKind.HumanInputRequested));
-            kernel.SubmitHumanInput(sibling.Id, "Preserve the other behavior too.");
+            kernel.SubmitHumanInput(sibling.Id, "Preserve the other behavior too.",
+                amendmentDisposition: PlannerBriefAmendmentDisposition.Decline);
             Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
             Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
         }

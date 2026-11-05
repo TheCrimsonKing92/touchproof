@@ -201,7 +201,8 @@ public sealed class PlannerBriefAmendmentRequestTests
         Xunit.Assert.Equal(fingerprint, directive.QuestionFingerprint);
         Xunit.Assert.Equal(fingerprint, directive.BlockerFingerprint);
         Xunit.Assert.Same(directive, result.Directive);
-        Xunit.Assert.Equal(HumanWaitKind.SpecClarification, directive.Kind);
+        Xunit.Assert.Equal(HumanWaitKind.PlannerBriefAmendment, directive.Kind);
+        Xunit.Assert.Equal(1, directive.AmendmentCriterionIndex);
         Xunit.Assert.Equal(0, result.EvidenceLineCount);
         Xunit.Assert.False(result.IsMalformed, result.Diagnostic);
     }
@@ -222,7 +223,8 @@ public sealed class PlannerBriefAmendmentRequestTests
         var pending = kernel.GetPendingBlockingHumanInput(goal.Id);
         Xunit.Assert.Equal(2, pending.Count);
         Xunit.Assert.Equal(2, pending.Select(item => item.QuestionFingerprint).Distinct().Count());
-        Xunit.Assert.All(pending, item => Xunit.Assert.Equal(HumanWaitKind.SpecClarification, item.Kind));
+        Xunit.Assert.All(pending, item => Xunit.Assert.Equal(HumanWaitKind.PlannerBriefAmendment, item.Kind));
+        Xunit.Assert.Equal(new[] { 1, 2 }, pending.Select(item => item.Amendment!.CriterionIndex).Order());
         Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
         Xunit.Assert.NotEqual(GoalStatus.Failed, goal.Status);
     }
@@ -232,6 +234,36 @@ public sealed class PlannerBriefAmendmentRequestTests
         public string ProviderName => "OpenAI";
         public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(new ModelResponse(output, new ModelUsage(1, 1), "stop"));
+    }
+
+    [Xunit.Fact]
+    public void Legacy_amendment_replay_keeps_unanswered_sibling_waiting()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Replay retained amendment directives", [planner]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var output = Amendment() + "\n" + Amendment("criterion_index", "2");
+        // Retained results from before typed amendments carry SpecClarification directives.
+        var directives = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner).Directives
+            .Select(item => item with { Kind = HumanWaitKind.SpecClarification, AmendmentCriterionIndex = null })
+            .ToArray();
+        Xunit.Assert.True(PlannerAmendmentBatchRecorder.Record(kernel, goal, planner, directives,
+            output, workerResultPresent: true, completedRound: 1, workerResultReference: "original-round"));
+        var requests = kernel.GetPendingBlockingHumanInput(goal.Id);
+        Xunit.Assert.Equal(2, requests.Count);
+        var answered = requests.Single(item => item.Question.Contains("criterion 2", StringComparison.Ordinal));
+        var sibling = requests.Single(item => item.Id != answered.Id);
+        kernel.SubmitHumanInput(answered.Id, "Keep the criterion unchanged.");
+
+        Xunit.Assert.True(PlannerAmendmentBatchRecorder.Record(kernel, goal, planner, directives,
+            output, workerResultPresent: true, completedRound: 2, workerResultReference: "replayed-round"));
+
+        Xunit.Assert.Equal(sibling.Id, Xunit.Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id)).Id);
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Xunit.Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed);
+        Xunit.Assert.Equal(2, goal.Timeline.Count(item => item.Kind == ProgressKind.HumanInputRequested));
     }
 
     [Xunit.Theory]
