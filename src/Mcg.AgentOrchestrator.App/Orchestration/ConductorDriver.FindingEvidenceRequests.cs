@@ -46,9 +46,9 @@ internal sealed partial class ConductorDriver
                     FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
                     SourceReceiptIds: receipts.Select(receipt => receipt.ReceiptId).ToArray(),
                     ExecutionBasisIdentity: executionBasisIdentity)]);
-            ReattachCoverageReusableGreenFindingEvidence(goal, requestingTask,
+            FindingEvidenceCoverageReattachment.Reattach(goal, requestingTask,
                 ReviewFindingConvergence.ResolveMergedFinding(mergedFindings, round, finding.StableId) ?? finding,
-                receipts, identity, reason);
+                receipts, identity, reason, _recordFindingEvidenceOutcome, _recordFindingEvidenceRequest);
         }
 
         if (ReviewerPassingFindingEvidenceRouter.TryObserve(this, goal, requestingTask, policy,

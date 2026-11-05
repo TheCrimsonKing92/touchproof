@@ -233,46 +233,6 @@ internal sealed partial class ConductorDriver
             $"finding_id={finding.StableId}; candidate_sha={receipt.CandidateSha}; receipt_id={receipt.ReceiptId}");
     }
 
-    private void ReattachCoverageReusableGreenFindingEvidence(
-        Goal goal,
-        TaskSpec requestingTask,
-        ReviewFinding finding,
-        IReadOnlyList<FindingEvidenceReceipt> receipts,
-        string requestedIdentity,
-        string coverageReason)
-    {
-        if (receipts.Count == 0)
-        {
-            throw new InvalidOperationException("Coverage reuse requires at least one authoritative source receipt.");
-        }
-
-        var sourceReceiptIds = receipts.Select(receipt => receipt.ReceiptId).ToArray();
-        var primaryReceipt = receipts[^1];
-        var outcome = new FindingEvidenceOutcome(
-            Honoured: true,
-            ReceiptId: primaryReceipt.ReceiptId,
-            ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
-            RequestedSelectionIdentity: requestedIdentity,
-            DecisionReason: receipts.All(source => source.FindingRoundFingerprint == "pre-tester-deferred")
-                ? "pre-tester-covered" : $"reused-covered-green:{coverageReason}",
-            SourceReceiptIds: sourceReceiptIds);
-        foreach (var receipt in receipts)
-        {
-            _recordFindingEvidenceOutcome(
-                goal.Id, requestingTask.Id, finding.StableId, outcome, receipt);
-            var sourceFindingId = (receipt.RequestDispositions ?? [])
-                .LastOrDefault(existing => existing.Disposition.StartsWith("executed-", StringComparison.Ordinal))
-                ?.FindingStableId ?? "unavailable";
-            _recordFindingEvidenceRequest(
-                goal.Id,
-                requestingTask.Id,
-                $"finding-evidence disposition=reused-covered-green; route=coverage; role={requestingTask.RequiredRole}; " +
-                $"task_id={requestingTask.Id}; finding_id={finding.StableId}; requested_identity={requestedIdentity}; " +
-                $"executed_identity={BuildFindingEvidenceIdentity(receipt.Request)}; source_receipt_id={receipt.ReceiptId}; " +
-                $"source_finding_id={sourceFindingId}; coverage={coverageReason}; candidate_sha={receipt.CandidateSha}");
-        }
-    }
-
     private static bool TryResolveReusableRedFindingEvidenceReceipt(
         TaskSpec requestingTask,
         FindingEvidenceRequest normalizedRequest,
