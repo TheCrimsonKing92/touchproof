@@ -61,12 +61,13 @@ public sealed class AcceptanceBalancedLanePoolMembershipTests
         }
         Assert.NotEmpty(expanded.Layout!.Lanes.SelectMany(lane => lane.Members));
         var constrained = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, classes)
-            .Where(AcceptanceBalancedLaneExpander.IsConstrained).ToArray();
+            .Where(lane => AcceptanceBalancedLaneExpander.IsConstrained(lane) && lane.Name != "Remainder").ToArray();
         Assert.Equal(constrained, expanded.Lanes.Take(constrained.Length));
-        var remainder = Assert.Single(constrained, lane => lane.Name == "Remainder");
+        Assert.DoesNotContain(expanded.Lanes, lane => lane.Name == "Remainder");
+        var remainder = Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == "Remainder");
         Assert.Empty(remainder.ExclusiveResourceKeys);
-        // The restored constrained catch-all still owns new classes under ruling d7eb800a.
-        Assert.Equal(remainder.Name,
+        // New unlisted classes now enter measured balanced placement.
+        Assert.StartsWith(settings.BalancedLanePool!.LaneNamePrefix + " ",
             Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, newClass)).Name);
         Assert.All(expanded.Layout.Lanes.SelectMany(lane => lane.Members),
             name => Assert.Empty(AcceptanceLaneMembership.LanesIncluding(constrained, name)));

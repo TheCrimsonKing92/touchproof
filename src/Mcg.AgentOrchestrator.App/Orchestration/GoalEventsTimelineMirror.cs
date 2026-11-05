@@ -57,7 +57,7 @@ internal static class GoalEventsTimelineMirror
                 writer.AppendTimelineEvent(new ProgressEvent(
                     new GoalId(entry.GoalId), entry.TaskId is null ? null : new TaskId(entry.TaskId),
                     entry.Kind, entry.Message, entry.OccurredAt, entry.RequeueSkipped, entry.OperatorGates,
-                    entry.OperatorIntentApplied, entry.HumanInputSuperseded, entry.TickOutcome));
+                    entry.OperatorIntentApplied, entry.HumanInputSuperseded, entry.TickOutcome, entry.Failure));
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

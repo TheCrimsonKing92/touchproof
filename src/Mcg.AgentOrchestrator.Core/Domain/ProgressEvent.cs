@@ -10,7 +10,23 @@ public sealed record ProgressEvent(
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
     OperatorIntentAppliedPayload? OperatorIntentApplied = null,
     HumanInputSupersededPayload? HumanInputSuperseded = null,
-    ConductorTickOutcomePayload? TickOutcome = null);
+    ConductorTickOutcomePayload? TickOutcome = null,
+    ProgressFailurePayload? Failure = null);
+
+// Facts captured when a failure is recorded, before its diagnostic text is composed.
+public sealed record ProgressFailurePayload(string Kind, string? Rule, IReadOnlyList<ProgressFailureEvidence> Evidence)
+{
+    public bool Equals(ProgressFailurePayload? other) => other is not null &&
+        Kind == other.Kind && Rule == other.Rule && Evidence.SequenceEqual(other.Evidence);
+    public override int GetHashCode()
+    {
+        var hash = new HashCode(); hash.Add(Kind); hash.Add(Rule);
+        foreach (var entry in Evidence) hash.Add(entry);
+        return hash.ToHashCode();
+    }
+}
+
+public sealed record ProgressFailureEvidence(string Name, string Value, string? NextStep = null);
 
 public sealed record ConductorTickOutcomePayload(
     string OutcomeKind,

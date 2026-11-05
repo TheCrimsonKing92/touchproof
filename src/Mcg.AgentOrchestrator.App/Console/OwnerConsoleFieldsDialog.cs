@@ -9,7 +9,7 @@ internal sealed class OwnerConsoleFieldsDialog : Dialog
     private readonly OwnerConsoleClipboard _clipboard;
     internal OwnerConsoleFieldSnapshot Snapshot { get; }
     internal ListView Fields { get; } = new() { Width = Dim.Percent(35), Height = Dim.Fill(3) };
-    internal TextView Value { get; } = new() { X = Pos.Percent(35), Width = Dim.Fill(), Height = Dim.Fill(3), ReadOnly = true };
+    internal TextView Value { get; } = new() { X = Pos.Percent(35), Width = Dim.Fill(), Height = Dim.Fill(3), ReadOnly = true, WordWrap = true };
     private readonly Label _feedback = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
     internal string Feedback => _feedback.Text;
     internal Button CopyButton { get; } = new() { Text = "Copy" };
@@ -18,12 +18,12 @@ internal sealed class OwnerConsoleFieldsDialog : Dialog
 
     internal OwnerConsoleFieldsDialog(OwnerConsoleFieldSnapshot snapshot, OwnerConsoleClipboard clipboard, string? selectedKey = null)
     {
-        Snapshot = snapshot with { Fields = [.. snapshot.Fields] };
+        Snapshot = snapshot with { Fields = [.. snapshot.Fields.Where(field => !string.IsNullOrWhiteSpace(field.Value))] };
         _clipboard = clipboard;
         Title = "Fields (snapshot; reopen to refresh)";
         Width = Dim.Percent(90); Height = Dim.Percent(80);
         Fields.SetSource(new System.Collections.ObjectModel.ObservableCollection<string>(
-            Snapshot.Fields.Select(field => field.Label + (field.Available ? "" : " (unavailable)"))));
+            Snapshot.Fields.Select(field => field.Label)));
         Fields.SelectedItem = Snapshot.Fields.Length == 0 ? null : Math.Max(0,
             Array.FindIndex(Snapshot.Fields.ToArray(), field => field.Key == selectedKey));
         Fields.ValueChanged += SelectionChanged;

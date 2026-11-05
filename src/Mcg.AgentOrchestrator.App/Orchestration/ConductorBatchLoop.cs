@@ -1111,6 +1111,7 @@ internal sealed partial class ConductorBatchLoop
                 }
             });
             var changedGoalLines = new List<string>();
+            var goalProgressFields = new Dictionary<string, GoalProgressEventFields?>();
             var changedGoalIds = ConductorTickStepLedger.Measure("admission-pre-batch", () => new HashSet<GoalId>(unpersistedIntentGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision))));
             var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
             DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)
@@ -1475,6 +1476,8 @@ internal sealed partial class ConductorBatchLoop
                     label,
                     result.Outcome,
                     serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
+                goalProgressFields[goalProgressLine] = GoalProgressEventFields.From(goal.Id.Value,
+                    result.Outcome, serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
                 if (RecordChangedDisposition(
                     goal.Id.Value,
                     goalProgressLine,
@@ -1528,7 +1531,7 @@ internal sealed partial class ConductorBatchLoop
                 EmitProgress($"TICK tick={totalTicks} eligible={eligible.Length}", tickLines);
                 foreach (var line in changedGoalLines)
                 {
-                    EmitProgress(line, tickLines);
+                    EmitProgress(line, tickLines, goalProgressFields.GetValueOrDefault(line));
                 }
 
                 if (parkedExcludedCount > 0)

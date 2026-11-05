@@ -276,7 +276,11 @@ public sealed class PreTesterCliSurfaceWiringTests
         var expanded = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, classes,
             new Dictionary<string, double>(), settings.BalancedLanePool!);
         foreach (var item in classes)
-            Assert.Equal("Remainder", Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName)).Name);
+        {
+            var lane = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName));
+            Assert.True(lane.Name.StartsWith(settings.BalancedLanePool!.LaneNamePrefix + " ", StringComparison.Ordinal) ||
+                lane.Name == settings.BalancedLanePool.ResidualLaneName);
+        }
     }
 
     private static string[] Selections(string request) => request.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
