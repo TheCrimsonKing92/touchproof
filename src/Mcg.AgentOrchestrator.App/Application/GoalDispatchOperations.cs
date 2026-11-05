@@ -823,7 +823,8 @@ internal sealed partial class GoalDispatchOperations
                 : null,
             completionBuildEvidence: new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
-            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
+            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory,
+                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch),
             NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
             DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
                 workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes,

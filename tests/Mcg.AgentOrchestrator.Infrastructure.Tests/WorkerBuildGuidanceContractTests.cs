@@ -6,6 +6,17 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerBuildGuidanceContractTests
 {
+    [Fact]
+    public void SharedGuidanceExplainsSameRoundStructuralRepair()
+    {
+        var guidance = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "docs", "operator-runbook.md"));
+        Assert.Contains("compiler outcome/exit separately from `structural_status`", guidance);
+        Assert.Contains("during the current round", guidance);
+        Assert.Contains("with a fresh request", guidance);
+        Assert.Contains("do not edit unrelated source or repeatedly rebuild", guidance);
+        Assert.Contains("Completion structural preflight remains independent", guidance);
+    }
+
     [Xunit.Fact(DisplayName = "Selected_build_hygiene_skill_defaults_to_worker_build_helper")]
     public void SelectedBuildHygieneSkillDefaultsToWorkerBuildHelper()
     {

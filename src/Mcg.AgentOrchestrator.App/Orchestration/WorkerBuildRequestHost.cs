@@ -17,12 +17,14 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     private readonly Func<int, uint, uint, bool>? _executionQosSetter;
     private readonly TimeSpan? _executionQosInterval;
     private readonly Func<string, ProcessStartInfo, ProcessStartInfo>? _launchOverride;
+    private readonly WorkerBuildStructuralPreflight _structural;
     private readonly List<object> _unresolved = [];
 
     internal WorkerBuildRequestHost(WorkerBuildHostReference reference, TimeProvider? time = null,
         TimeSpan? budget = null, Action<WorkerBuildInvocation>? observe = null, DotnetBuildStorageRoot? storageRoot = null,
         Func<int, uint, uint, bool>? executionQosSetter = null, TimeSpan? executionQosInterval = null,
-        Func<string, ProcessStartInfo, ProcessStartInfo>? launchOverride = null)
+        Func<string, ProcessStartInfo, ProcessStartInfo>? launchOverride = null,
+        Func<DeveloperCompletionStructuralFindings>? structuralEvaluator = null)
     {
         _reference = reference;
         _operations = new(reference.StatePath, reference.ExecutionDirectory);
@@ -34,6 +36,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         _executionQosSetter = executionQosSetter;
         _executionQosInterval = executionQosInterval;
         _launchOverride = launchOverride;
+        _structural = new(reference, structuralEvaluator, _time);
         _storageRoot = storageRoot ?? (reference.StorageRoot is { } root
             ? new DotnetBuildStorageRoot(root) : DotnetBuildStorageLayout.CaptureStorageRoot());
         if (reference.Admission is not { } admission || admission.GoalId != reference.GoalId ||
@@ -61,13 +64,28 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             if (previous.Worker != worker || previous.TreeDigest != digest || previous.ScopeIdentity != scope.Identity ||
                 previous.Configuration != request.Configuration || !previous.Projects.SequenceEqual(scope.Projects))
                 throw new UnauthorizedAccessException("Worker build idempotency key was reused for another payload/candidate.");
-            return new(previous.Id, previous.Outcome, previous.Diagnostic);
+            var evidence = previous.StructuralCheck;
+            if (evidence is null && previous.StructuralPolicy is not null)
+                evidence = _structural.Unavailable(previous, "unavailable", "Structural evaluation was not published by this invocation.");
+            else if (evidence is not null)
+            {
+                try
+                {
+                    if (previous.StructuralPolicy != _reference.StructuralPolicy ||
+                        evidence.ProjectHomeDirectory != _reference.StructuralPolicy?.ProjectHomeDirectory ||
+                        evidence.PolicyDigest != _structural.PolicyDigest(root))
+                        evidence = _structural.Unavailable(previous, evidence.PolicyDigest, "Structural replay policy binding changed.");
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                { evidence = _structural.Unavailable(previous, evidence.PolicyDigest, error.Message); }
+            }
+            return new(previous.Id, previous.Outcome, previous.Diagnostic, previous.CompilerExitCode, evidence);
         }
         var invocation = new WorkerBuildInvocation(Guid.NewGuid().ToString("N"), request.RequestKey,
             _reference.GoalId, _reference.TaskId, _reference.DispatchAt, _reference.DispatchId, root, digest,
             scope.Identity, scope.Projects, request.Configuration, _time.GetUtcNow() + _budget, _host, worker,
             Path.GetFullPath(_reference.Admission!.StorePath), _reference.Admission.Version, 1,
-            [new(WorkerBuildPhase.Requested, _time.GetUtcNow())]);
+            [new(WorkerBuildPhase.Requested, _time.GetUtcNow())], StructuralPolicy: _reference.StructuralPolicy);
         invocation = _operations.Store(invocation, null);
         _observe?.Invoke(invocation);
         GoalEvidenceOperationScope? custody = null;
@@ -82,6 +100,10 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var stopCause = StopCause.LifetimeEnded;
         var exits = new List<int?>();
         var terminalSafe = true;
+        var policyDigest = "unavailable";
+        string? policyError = null;
+        try { policyDigest = _structural.PolicyDigest(root); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { policyError = error.Message; }
         try
         {
             Advance(WorkerBuildPhase.Authorized);
@@ -224,12 +246,27 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             {
                 child?.Dispose();
                 slot?.Dispose();
+                slot = null;
+                compileDeadline.CancelAfter(Timeout.InfiniteTimeSpan);
+                queueDeadline.CancelAfter(Timeout.InfiniteTimeSpan);
+                stop = queueStop;
                 if (invocation.IsTerminal)
                 {
-                    if (invocation.Outcome == WorkerBuildOutcome.Success) custody?.Complete(invocation.Id);
-                    else custody?.Abort(invocation.Id);
-                    custody?.Dispose();
-                    Save(invocation with { CustodyReleased = true });
+                    try
+                    {
+                        var structural = invocation.Outcome != WorkerBuildOutcome.Success
+                            ? _structural.Skipped(invocation, policyDigest, "Structural evaluation skipped after unsuccessful compilation.")
+                            : policyError is not null ? _structural.Unavailable(invocation, policyDigest, policyError)
+                            : _structural.Run(invocation, policyDigest, () => CheckCurrent(), lifetime);
+                        Save(invocation with { StructuralCheck = structural });
+                    }
+                    finally
+                    {
+                        if (invocation.Outcome == WorkerBuildOutcome.Success) custody?.Complete(invocation.Id);
+                        else custody?.Abort(invocation.Id);
+                        custody?.Dispose();
+                        Save(invocation with { CustodyReleased = true });
+                    }
                 }
             }
             else
@@ -240,7 +277,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             }
             // Unknown termination must keep the obligation/custody; no retry or force unlock.
         }
-        return new(invocation.Id, invocation.Outcome, invocation.Diagnostic);
+        return new(invocation.Id, invocation.Outcome, invocation.Diagnostic, invocation.CompilerExitCode, invocation.StructuralCheck);
 
         void Save(WorkerBuildInvocation next)
         {
@@ -315,5 +352,5 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         return info;
     }
 
-    private sealed class WorkerBuildCandidateChangedException : Exception;
+    internal sealed class WorkerBuildCandidateChangedException : Exception;
 }

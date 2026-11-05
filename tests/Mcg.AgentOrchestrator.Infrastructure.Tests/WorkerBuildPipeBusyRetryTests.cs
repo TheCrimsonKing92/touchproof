@@ -40,8 +40,9 @@ public sealed class WorkerBuildPipeBusyRetryTests
 
         var result = await fixture.FinishAsync();
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal($"worker_build_invocation={invocation}; outcome=Success; test host response",
-            Assert.Single(result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)));
+        Assert.Contains($"worker_build_invocation={invocation}; outcome=Success; test host response",
+            result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("structural_status=Unavailable; verification_exit=0; Legacy host response", result.StandardOutput);
         Assert.Single(fixture.Errors, line => line.StartsWith("worker_build_channel_wait ", StringComparison.Ordinal));
         Assert.DoesNotContain("worker_build_channel_busy", result.StandardError);
     }
