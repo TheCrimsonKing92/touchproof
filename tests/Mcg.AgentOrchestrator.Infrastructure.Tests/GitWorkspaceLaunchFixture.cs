@@ -110,7 +110,7 @@ internal sealed class GitWorkspaceLaunchFixture : IDisposable
     internal sealed class Labeler(string? failPath = null) : IWorkerIntegrityLabeler
     {
         internal List<(string Path, string Level, bool Recursive)> Calls { get; } = [];
-        public IntegrityLabelState Query(string path) => new(Exists: true, Low: false, Inheritable: false, Medium: true);
+        public IntegrityLabelState Query(string path) => new(Exists: true, Low: false, Inheritable: true, Medium: true);
         public bool SetIntegrity(string path, string level, bool recursive)
         {
             Calls.Add((Normalize(path), level, recursive));

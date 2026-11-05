@@ -44,8 +44,10 @@ public sealed class MergeTrainWorkspaceRemovalLaunchTests : AcceptanceCohortWork
         finally { DeleteDirectory(repo); }
     }
 
-    [Fact]
-    public void Remove_HandDeletedTrainDirectory_PrunesOnceAndRemovesEntry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Remove_HandDeletedTrainDirectory_PrunesOnlyAfterFailedRemove(bool missingBacklink)
     {
         var repo = CreateAcceptanceCohortRepository();
         try
@@ -61,11 +63,14 @@ public sealed class MergeTrainWorkspaceRemovalLaunchTests : AcceptanceCohortWork
             Directory.Delete(workspace.Path, recursive: true);
             Assert.True(Directory.Exists(admin));
             AssertEntry(repo, workspace.Path, present: true);
+            // Git can successfully remove an already absent checkout. A missing backlink
+            // makes remove fail to find it, leaving a stale admin entry for prune to clean.
+            if (missingBacklink) File.Delete(Path.Combine(admin, "gitdir"));
             using var removal = new Recording();
             GoalWorktrees.RemoveMergeTrainWorkspace(repo, workspace.Path);
-            removal.Close("worktree", "worktree");
+            removal.Close(missingBacklink ? ["worktree", "worktree"] : ["worktree"]);
             Assert.Equal(["worktree", "remove", "--force", workspace.Path], removal.Arguments[0]);
-            Assert.Equal(["worktree", "prune"], removal.Arguments[1]);
+            if (missingBacklink) Assert.Equal(["worktree", "prune"], removal.Arguments[1]);
             Assert.False(Directory.Exists(admin));
             AssertEntry(repo, workspace.Path, present: false);
         }
@@ -73,9 +78,10 @@ public sealed class MergeTrainWorkspaceRemovalLaunchTests : AcceptanceCohortWork
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CohortRemove_PrunesOnlyWhenDirectoryWasAlreadyDeleted(bool deleted)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void CohortRemove_PrunesOnlyAfterFailedRemove(bool deleted, bool missingBacklink)
     {
         using var fixture = new GitWorkspaceLaunchFixture();
         var repo = fixture.CreateRepository();
@@ -84,11 +90,12 @@ public sealed class MergeTrainWorkspaceRemovalLaunchTests : AcceptanceCohortWork
         if (deleted) Directory.Delete(path, recursive: true);
         Assert.True(Directory.Exists(admin));
         AssertEntry(repo, path, present: true);
+        if (missingBacklink) File.Delete(Path.Combine(admin, "gitdir"));
         using var removal = new Recording();
         GoalWorktrees.RemoveAcceptanceCohortWorkspace(repo, path);
-        removal.Close(deleted ? ["worktree", "worktree"] : ["worktree"]);
+        removal.Close(missingBacklink ? ["worktree", "worktree"] : ["worktree"]);
         Assert.Equal(["worktree", "remove", "--force", path], removal.Arguments[0]);
-        if (deleted) Assert.Equal(["worktree", "prune"], removal.Arguments[1]);
+        if (missingBacklink) Assert.Equal(["worktree", "prune"], removal.Arguments[1]);
         Assert.False(Directory.Exists(path));
         Assert.False(Directory.Exists(admin));
         AssertEntry(repo, path, present: false);
