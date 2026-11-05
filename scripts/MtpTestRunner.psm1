@@ -961,16 +961,25 @@ function Read-MtpDeclaredTestSettingsFile {
 
     $settings = [System.Collections.Generic.SortedDictionary[string,string]]::new([StringComparer]::Ordinal)
     if (-not [string]::IsNullOrEmpty($Path)) {
-        $document = [System.Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($Path))
-        try {
-            if ($document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { throw 'Declared test settings must be an object.' }
-            foreach ($property in $document.RootElement.EnumerateObject()) {
-                if ($settings.ContainsKey($property.Name)) { throw "Declared test setting name '$($property.Name)' is duplicated." }
-                if ($property.Value.ValueKind -ne [System.Text.Json.JsonValueKind]::String) { throw "Declared test setting value for '$($property.Name)' must be a string." }
-                $settings.Add($property.Name, $property.Value.GetString())
-            }
+        $json = [IO.File]::ReadAllText($Path)
+        # Use the shell's JSON parser on both Windows PowerShell and pwsh. Newer pwsh versions
+        # need DateKind=String to keep date-shaped setting values literal.
+        $jsonArguments = @{ InputObject = $json; ErrorAction = 'Stop' }
+        if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) { $jsonArguments.DateKind = 'String' }
+        $document = ConvertFrom-Json @jsonArguments
+        if (-not $json.TrimStart().StartsWith('{', [StringComparison]::Ordinal) -or
+            $document -isnot [System.Management.Automation.PSCustomObject]) { throw 'Declared test settings must be an object.' }
+        foreach ($property in $document.PSObject.Properties) {
+            if ($property.Value -isnot [string]) { throw "Declared test setting value for '$($property.Name)' must be a string." }
         }
-        finally { $document.Dispose() }
+        # ConvertFrom-Json collapses duplicate keys. Walk the complete JSON string tokens to
+        # recover every key (including escaped spellings) before accepting the parsed map.
+        foreach ($token in [regex]::Matches($json, '"(?:[^"\\]|\\.)*"')) {
+            if ($json.Substring($token.Index + $token.Length) -notmatch '^\s*:') { continue }
+            $name = (ConvertFrom-Json -InputObject ('{"name":' + $token.Value + '}') -ErrorAction Stop).name
+            if ($settings.ContainsKey($name)) { throw "Declared test setting name '$name' is duplicated." }
+            $settings.Add($name, $document.PSObject.Properties[$name].Value)
+        }
     }
     Assert-MtpDeclaredTestSettings -TestSettings $settings
     return ,$settings

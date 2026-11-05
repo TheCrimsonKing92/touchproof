@@ -181,7 +181,7 @@ public sealed class GateDeclaredTestSettingsTests : IDisposable
         {
             Name = "infrastructure tests: lane", Type = "dotnet-test", Project = InfrastructureTestsProject,
             Arguments = ["--filter", "FullyQualifiedName~Probe"]
-        }, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
+        }, entry, RemoteLaneDeadline.Floor, RemoteLaneDeadline.Floor, default);
         Assert.Same(settings, Assert.Single(executor.Requests).TestSettings);
         Assert.Same(settings, outcome.Request.TestSettings);
         Assert.Null(outcome.Accepted);
@@ -269,6 +269,53 @@ public sealed class GateDeclaredTestSettingsTests : IDisposable
         Assert.Null(probe.RootElement.GetProperty("ambient").GetString());
         Assert.Equal(sandbox.Root, probe.RootElement.GetProperty("repo").GetString());
         Assert.Equal(Path.Combine(sandbox.Root, "profile"), probe.RootElement.GetProperty("profile").GetString());
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"MCG_TEST_HOST_CAPACITY_SLOTS\":\"2026-11-04T01:02:03Z\"}")]
+    [InlineData("""{"MCG_TEST_HOST_CAPACITY_SLOTS":" \"MCG_TEST_OTHER\": \"6\" ","MCG_TEST_OTHER":"value"}""")]
+    public void RemoteSettingsReader_PreservesLiteralStringMapOnWindowsPowerShell(string json)
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        var settingsFile = Path.Combine(sandbox.Root, "settings.json");
+        File.WriteAllText(settingsFile, json);
+        var start = sandbox.SandboxPowerShellStartInfo();
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add($$"""
+            $ErrorActionPreference='Stop'
+            Import-Module '{{Quote(Path.Combine(sandbox.Root, "scripts", "MtpTestRunner.psm1"))}}' -Force
+            & (Get-Module MtpTestRunner) {
+                Read-MtpDeclaredTestSettingsFile -Path '{{Quote(settingsFile)}}' | ConvertTo-Json -Compress
+            }
+            """);
+        var result = MtpTestRunnerScriptTests.Run(start);
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.Equal(JsonSerializer.Deserialize<Dictionary<string, string>>(json),
+            JsonSerializer.Deserialize<Dictionary<string, string>>(result.Stdout.Trim()));
+    }
+
+    [Theory]
+    [InlineData("{\"MCG_TEST_X\":\"6\",\"MCG_TEST_X\":\"7\"}", "MCG_TEST_X")]
+    [InlineData("{\"MCG_TEST_X\":\"6\",\"MCG_TEST_\\u0058\":\"7\"}", "MCG_TEST_X")]
+    [InlineData("{\"MCG_TEST_X\":6}", "MCG_TEST_X")]
+    [InlineData("[{\"MCG_TEST_X\":\"6\"}]", "must be an object")]
+    [InlineData("{\"MCG_TEST_X\":{\"nested\":\"6\"}}", "MCG_TEST_X")]
+    public void RemoteSettingsReader_RejectsMalformedMapOnWindowsPowerShell(string json, string diagnostic)
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        var settingsFile = Path.Combine(sandbox.Root, "settings.json");
+        File.WriteAllText(settingsFile, json);
+        var start = sandbox.SandboxPowerShellStartInfo();
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add($$"""
+            $ErrorActionPreference='Stop'
+            Import-Module '{{Quote(Path.Combine(sandbox.Root, "scripts", "MtpTestRunner.psm1"))}}' -Force
+            & (Get-Module MtpTestRunner) { Read-MtpDeclaredTestSettingsFile -Path '{{Quote(settingsFile)}}' }
+            """);
+        var result = MtpTestRunnerScriptTests.Run(start);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(diagnostic, result.Stdout + result.Stderr);
     }
 
     private string[] Arguments(bool mtp) => mtp
