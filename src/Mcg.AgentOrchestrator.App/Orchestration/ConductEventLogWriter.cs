@@ -70,6 +70,10 @@ internal sealed class ConductEventLogWriter
     }
 
     public void Append(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
+        => AppendGoalProgress(eventKind, goalId, detail, null, timestamp);
+
+    internal void AppendGoalProgress(string eventKind, string? goalId, string detail,
+        GoalProgressEventFields? fields, DateTimeOffset? timestamp = null)
     {
         lock (_lock)
         {
@@ -81,7 +85,7 @@ internal sealed class ConductEventLogWriter
                 _beforeAppendCommit?.Invoke();
                 RotateIfNeeded();
 
-                var line = Serialize(eventKind, goalId, detail, timestamp);
+                var line = Serialize(eventKind, goalId, detail, timestamp, goalProgress: fields);
                 File.AppendAllText(_path, line);
                 _changes.AppendConductLine(line);
             });
@@ -162,14 +166,14 @@ internal sealed class ConductEventLogWriter
     }
 
     private string Serialize(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp,
-        string? eventId = null)
+        string? eventId = null, GoalProgressEventFields? goalProgress = null)
     {
         var record = new ConductEventRecord(
             timestamp ?? _utcNow(),
             eventKind,
             string.IsNullOrWhiteSpace(goalId) ? null : goalId,
             detail,
-            ConductEventOperatorClassifier.Classify(eventKind, detail), eventId);
+            ConductEventOperatorClassifier.Classify(eventKind, detail), eventId, goalProgress);
         return JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
     }
 
@@ -385,7 +389,8 @@ internal sealed record ConductEventRecord(
     string? GoalId,
     string Detail,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Operator = null,
-    [property: JsonPropertyName("event_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EventId = null);
+    [property: JsonPropertyName("event_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EventId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GoalProgressEventFields? GoalProgress = null);
 
 internal sealed record ConductEvidenceLifecycleEvent(
     DateTimeOffset Timestamp,

@@ -18,6 +18,7 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         set
         {
             _structured = value; _fieldsHint.Visible = value is not null; Body.Height = Dim.Fill(value is null ? 1 : 2);
+            _fieldsHint.Text = value?.FooterHint ?? "F2 fields (snapshot)";
             Page.ContinuationIndent = value?.ContinuationIndent ?? 0;
         }
     }

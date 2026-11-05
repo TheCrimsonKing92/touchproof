@@ -5,22 +5,23 @@ using Terminal.Gui.Input;
 public sealed class OwnerConsoleFieldsDialogTests
 {
     [Fact]
-    public void NamedSelectionCopiesUnicodeMultilineWhitespaceAndEmptyExactly()
+    public void NamedSelectionCopiesUnicodeMultilineAndOmitsEmptyFields()
     {
         var copies = new List<string>();
         var snapshot = OwnerConsoleFieldSnapshot.Create("identity",
             new("title", "Title", " 日本語 🦊\nsecond line\t "), new("empty", "Empty", ""), new("missing", "Missing", null));
         using var dialog = new OwnerConsoleFieldsDialog(snapshot, new(value => { copies.Add(value); return true; }));
         Assert.True(dialog.Value.ReadOnly);
+        Assert.True(dialog.Value.WordWrap);
         dialog.HandleKey(OwnerConsoleBindings.CopyField);
         dialog.HandleKey(Key.CursorDown);
         dialog.CopyButton.InvokeCommand(Command.Accept);
         dialog.HandleKey(Key.CursorDown);
         dialog.HandleKey(OwnerConsoleBindings.CopyField);
-        Assert.Equal([" 日本語 🦊\nsecond line\t ", ""], copies);
-        Assert.Contains("unavailable", dialog.Feedback);
-        Assert.Equal("missing", dialog.SelectedField?.Key);
-        Assert.DoesNotContain("Copied", dialog.Feedback);
+        Assert.Equal(Enumerable.Repeat(" 日本語 🦊\nsecond line\t ", 3), copies);
+        Assert.Equal("title", Assert.Single(dialog.Snapshot.Fields).Key);
+        Assert.Equal("title", dialog.SelectedField?.Key);
+        Assert.StartsWith("Copied", dialog.Feedback);
     }
 
     [Theory]

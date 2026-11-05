@@ -59,7 +59,7 @@ internal sealed class OwnerDigestTimelineReader
                             snapshot.TaskId is null ? null : new TaskId(snapshot.TaskId),
                             snapshot.Kind, snapshot.Message, snapshot.OccurredAt, snapshot.RequeueSkipped,
                             snapshot.OperatorGates, snapshot.OperatorIntentApplied, snapshot.HumanInputSuperseded,
-                            snapshot.TickOutcome);
+                            snapshot.TickOutcome, snapshot.Failure);
                         // Latest decisions use window events even when they occur after a landing.
                         if ((landings.TryGetValue(goalId!, out var landing) && evt.OccurredAt <= landing) ||
                             (evt.OccurredAt >= since && evt.OccurredAt < until))
