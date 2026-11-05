@@ -382,10 +382,12 @@ public sealed class ProcessTreeGuiSuppressionTests
             ownedProcessGroup);
         Assert.Contains("using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(requestOwnConsole);", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
-        Assert.Contains(
-            "process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);",
-            gateVerifier,
-            StringComparison.Ordinal);
+        Assert.Matches(
+            @"process = StartAcceptanceProcess\(\s*startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,\s*directStartInfo,",
+            gateVerifier);
+        Assert.Matches(
+            @"return WorkerProcessJobs.StartRegisteredOwnedWithFileCaptureOrThrow\(\s*directStartInfo, stdoutPipePath!, stderrPipePath!,\s*\$""acceptance:\{workingDirectory\}"", registrationIdentityReader, resumeObserver\);",
+            gateVerifier);
         Assert.Contains("return WorkerProcessJobs.StartRegisteredOwnedOrThrow(", gateVerifier, StringComparison.Ordinal);
     }
 
