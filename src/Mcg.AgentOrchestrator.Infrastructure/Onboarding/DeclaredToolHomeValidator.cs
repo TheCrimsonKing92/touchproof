@@ -14,10 +14,7 @@ public static class DeclaredToolHomeValidator
     {
         if (string.IsNullOrEmpty(variable) || !VariablePattern.IsMatch(variable))
             throw new ArgumentException($"Tool-home variable '{variable}' must match ^[A-Z][A-Z0-9_]*$.");
-        if (AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(variable) ||
-            variable.StartsWith("GIT_", StringComparison.Ordinal) ||
-            variable.StartsWith("MCG_", StringComparison.Ordinal) ||
-            WorkerProviderHomeEnvironment.Names.Contains(variable))
+        if (AcceptanceHermeticEnvironment.IsProtectedInputVariable(variable))
             throw new ArgumentException($"Tool-home variable '{variable}' is reserved by the gate or worker environment.");
     }
 

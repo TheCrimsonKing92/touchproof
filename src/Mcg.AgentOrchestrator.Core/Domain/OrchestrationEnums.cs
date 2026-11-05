@@ -73,7 +73,8 @@ public enum HumanWaitKind
     PlannerPrerequisiteEvidence,
     // Evidence that can only be produced after a candidate exists. It remains an acceptance
     // obligation but must not pause planning or implementation.
-    ProspectiveAcceptanceEvidence
+    ProspectiveAcceptanceEvidence,
+    PlannerBriefAmendment
 }
 
 public enum ProgressKind

@@ -9,7 +9,8 @@ internal sealed record AttentionJsonReadContext(
     IReadOnlyList<ProviderUsageHoldRow> ProviderHolds, IReadOnlyList<AttentionGateEvidence> GateEvidence,
     IReadOnlyList<OwnerQuestionHoldBlocker> OwnerQuestions,
     IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null,
-    IReadOnlyCollection<Goal>? Goals = null)
+    IReadOnlyCollection<Goal>? Goals = null,
+    IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? AmendmentHolds = null)
 {
     internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
         OrchestratorWorkspace workspace, DateTimeOffset now, CancellationToken cancellationToken = default)
@@ -100,7 +101,8 @@ internal sealed record AttentionJsonReadContext(
             projection.OwnerQuestions.Where(hold => existingItems is null ||
                 facts.TryGetValue(hold.GoalId, out var owner) && owner.Status is not
                     (GoalStatus.Parked or GoalStatus.Failed or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
-                .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals);
+                .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, kernel.Goals,
+            PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals));
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
@@ -116,7 +118,8 @@ internal sealed record AttentionJsonReadContext(
         kernel.Goals.Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
             .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>().ToArray(),
         kernel.Goals.SelectMany(goal => goal.OutstandingPostLandingDuties
-            .Select(item => new AttentionPostLandingDuty(goal.Id.Value, item))).ToArray(), kernel.Goals);
+            .Select(item => new AttentionPostLandingDuty(goal.Id.Value, item))).ToArray(), kernel.Goals,
+        PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals));
 
     private static OwnerQuestionHoldBlocker ReadOwnerQuestion(AttentionOwnerQuestionEvidence evidence)
     {

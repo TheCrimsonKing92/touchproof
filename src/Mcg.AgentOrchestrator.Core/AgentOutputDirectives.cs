@@ -10,7 +10,8 @@ public sealed record HumanInputDirective(
     string? EvidenceOwner = null,
     PlannerEvidenceStoreReference? StoreReference = null,
     IReadOnlyList<string>? TestNames = null,
-    PlannerEvidencePayload? PlannerEvidence = null);
+    PlannerEvidencePayload? PlannerEvidence = null,
+    int? AmendmentCriterionIndex = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {

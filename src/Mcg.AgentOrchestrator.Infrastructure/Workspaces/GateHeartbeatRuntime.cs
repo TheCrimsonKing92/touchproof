@@ -10,6 +10,7 @@ internal sealed class GateHeartbeatRuntime
     private readonly Action<AcceptanceGateProgress>? _progressSink;
     private readonly TimeSpan _progressInterval;
     private readonly Action<GateHeartbeatSnapshot>? _runningObserver;
+    private readonly bool _suppressDiagnosticCaptures;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastProgressAt;
     private DateTimeOffset _lastProgressEmittedAt = DateTimeOffset.MinValue;
@@ -25,7 +26,8 @@ internal sealed class GateHeartbeatRuntime
         TimeSpan timeout,
         Action<AcceptanceGateProgress>? progressSink = null,
         TimeSpan? progressInterval = null,
-        Action<GateHeartbeatSnapshot>? runningObserver = null)
+        Action<GateHeartbeatSnapshot>? runningObserver = null,
+        bool suppressDiagnosticCaptures = false)
     {
         _context = context;
         _processId = processId;
@@ -35,6 +37,7 @@ internal sealed class GateHeartbeatRuntime
         _progressSink = progressSink;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(30);
         _runningObserver = runningObserver;
+        _suppressDiagnosticCaptures = suppressDiagnosticCaptures;
         _lastProgressAt = _startedAt;
     }
 
@@ -103,10 +106,10 @@ internal sealed class GateHeartbeatRuntime
             stdoutBytes,
             stderrBytes,
             outputBytes,
-            _context.CommandLine,
+            _suppressDiagnosticCaptures ? null : _context.CommandLine,
             exitCode,
-            _stdoutPath,
-            _stderrPath, RunClass: _context.RunClass, RunId: _context.RunId);
+            _suppressDiagnosticCaptures ? null : _stdoutPath,
+            _suppressDiagnosticCaptures ? null : _stderrPath, RunClass: _context.RunClass, RunId: _context.RunId);
     }
 
     private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>

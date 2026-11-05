@@ -128,7 +128,8 @@ public sealed partial class AgentOrchestratorKernel
                 verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole)
             : null;
         if (incomingPlannerBatch is not null &&
-            (incomingPlannerBatch.IsMalformed || incomingPlannerBatch.Directives.Any(item => item.PlannerEvidence is not null)) &&
+            (incomingPlannerBatch.IsMalformed || incomingPlannerBatch.Directives.Any(item => item.PlannerEvidence is not null ||
+                item.Kind == HumanWaitKind.PlannerBriefAmendment)) &&
             verification.DispatchAttemptAt is { } plannerAttemptAt && plannerAttemptAt != task.LastDispatch.DispatchedAt)
         {
             Append(goal, taskId, ProgressKind.TaskNote, "Ignored stale Planner evidence dispatch completion; current attempt is unchanged.");
@@ -299,7 +300,7 @@ public sealed partial class AgentOrchestratorKernel
                     recordDuplicateSuppression: verification.WorkerResultPresent,
                     evidenceOwner: owner,
                     storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                    testNames: testNames);
+                    testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex);
                 if (verification.WorkerResultPresent &&
                     requestResult.WasSuppressedByAnswer &&
                     WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
@@ -313,7 +314,7 @@ public sealed partial class AgentOrchestratorKernel
                         verification.StandardOutputPath);
                 }
                 if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
-                    (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
+                    (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer || kind == HumanWaitKind.PlannerBriefAmendment))
                 {
                     return;
                 }
@@ -2079,6 +2080,8 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
+        if (task.RequiredRole == AgentRole.Planner && task.LastVerification?.PlannerEvidenceBatch?.Directives
+                .Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment) == true) return false;
         if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task)) return false;
         if (task.Status == WorkTaskStatus.Completed ||
             task.LastVerification is not { Succeeded: true } ||

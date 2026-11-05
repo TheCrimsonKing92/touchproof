@@ -29,6 +29,7 @@ public abstract record ConductorAdvanceOutcome
     public sealed record Held(GoalLifecycleState State, string Reason, string? StableIdentity = null) : ConductorAdvanceOutcome
     {
         public UnchangedCandidateHoldReason? TypedReason { get; init; }
+        public PlannerBriefAmendmentRevisionPendingHold? AmendmentRevisionPending { get; init; }
         public ConductorHoldOwner Owner { get; init; } = ConductorHoldOwner.None;
         public PolicyDecisionRecord? Decision { get; init; }
     }

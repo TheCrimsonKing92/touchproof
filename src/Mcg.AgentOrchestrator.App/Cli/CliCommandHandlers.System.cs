@@ -370,6 +370,7 @@ internal static partial class CliCommandHandlers
                     {
                         AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals);
                         var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
+                        environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
@@ -404,6 +405,7 @@ internal static partial class CliCommandHandlers
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
                     PostLandingDutiesTextView.Print([goal]);
                     var environmentHeldForGoal = EnvironmentHoldAttentionView.Print([goal]);
+                    environmentHeldForGoal |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, [goal]);
                     var clarificationIdentityUniverse = AllClarifications(store)
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
@@ -482,6 +484,7 @@ internal static partial class CliCommandHandlers
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
                 EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
+                PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {

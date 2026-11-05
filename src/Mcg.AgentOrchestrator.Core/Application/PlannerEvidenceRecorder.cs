@@ -38,9 +38,13 @@ internal sealed class PlannerEvidenceRecorder(
                 return "Planner evidence belongs to an obsolete dispatch brief; replan against the current brief.";
             if (dispatchBriefVersion is not null && goal.RefinedSpec is null)
                 return "Typed Planner evidence requires authoritative acceptance criteria for range validation; refine the brief and replan.";
+            if (batch.Directives.Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment &&
+                    directive.AmendmentCriterionIndex is not > 0))
+                return "Planner brief amendment requires a positive criterion index.";
             var items = new List<(HumanInputDirective Directive, PlannerEvidenceIdentity? Identity)>();
             foreach (var directive in batch.Directives)
             {
+                if (directive.Kind == HumanWaitKind.PlannerBriefAmendment) continue;
                 if (directive.PlannerEvidence is not { } payload)
                     return "Planner evidence transport is missing a validated payload; replan.";
                 if (goal.RefinedSpec is { } spec && payload.CriterionIndex > spec.AcceptanceCriteria.Count)
@@ -91,8 +95,13 @@ internal sealed class PlannerEvidenceRecorder(
                         plannerIdentity: identity, plannerEvidence: directive.PlannerEvidence);
                 }
             }
-            // Record all siblings first. Answered replays stay answered and cannot reopen a task.
-            blocksActiveWork = kernel.GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id);
+            // Evidence replays stay answered. An amendment batch never authorizes completion.
+            foreach (var amendment in batch.Directives.Where(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment))
+                kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, amendment.Question, kind: amendment.Kind,
+                    questionFingerprint: amendment.QuestionFingerprint, blockerFingerprint: amendment.BlockerFingerprint,
+                    recordDuplicateSuppression: false, amendmentCriterionIndex: amendment.AmendmentCriterionIndex);
+            blocksActiveWork = kernel.GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id) ||
+                batch.Directives.Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment);
         }
         return null;
     }
@@ -111,6 +120,7 @@ internal sealed class PlannerEvidenceRecorder(
         var sources = new List<PlannerCriterionEvidenceSource>();
         foreach (var directive in batch.Directives)
         {
+            if (directive.Kind == HumanWaitKind.PlannerBriefAmendment) continue;
             if (directive.PlannerEvidence is not { } payload || payload.CriterionIndex <= 0 ||
                 string.IsNullOrWhiteSpace(payload.EvidenceKey) || string.IsNullOrWhiteSpace(payload.Needed) ||
                 string.IsNullOrWhiteSpace(payload.Reason) || goal.RefinedSpec is not { } spec ||

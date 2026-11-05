@@ -44,6 +44,7 @@ internal static class CliAttentionShowJsonQueryCommand
             : null;
         Console.WriteLine(AttentionShowAgentReadView.Render(goal?.Id.Value, waits, items,
             item => CliCommandHandlers.IsSpecClarification(item)
-                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time, kernel.Goals, decisions));
+                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time, kernel.Goals, decisions,
+            PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals.Where(candidate => goal is null || candidate.Id == goal.Id))));
     }
 }

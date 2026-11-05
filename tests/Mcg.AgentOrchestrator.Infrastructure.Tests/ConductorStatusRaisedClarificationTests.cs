@@ -153,6 +153,7 @@ public sealed class ConductorStatusRaisedClarificationTests
             "Conductor: stopped",
             "Since: unavailable",
             "Supervisor build: unavailable",
+            "Loop build: unavailable",
             "Generation: unavailable (no supervisor build recorded)",
             "Latest tick: unavailable",
             "Non-terminal goals: 1",

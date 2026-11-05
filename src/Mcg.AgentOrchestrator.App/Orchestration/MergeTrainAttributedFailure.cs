@@ -41,10 +41,7 @@ internal static class MergeTrainAttributedFailure
         {
             if (goal.Status != GoalStatus.Verified)
                 throw new InvalidOperationException("Attributed merge train failure requires a Verified candidate.");
-            recordFailure(goal, classes, member.CandidateRevision, receipt.Identity.ObservedMainRevision,
-                classes.Select(name => new AcceptanceCheckAttribution(name, AcceptanceFailureOrigin.Introduced, reason)).ToArray(), null);
-            if (!routeFailure(goal.Id, reason))
-                throw new InvalidOperationException("Recorded merge train acceptance failure could not route its Verified member.");
+            RecordAndRoute(receipt, member, goal, classes, reason, recordFailure, routeFailure);
         }
 
         // Reproduction records all ejections before routing; pairs retain ordinary fallback.
@@ -54,6 +51,17 @@ internal static class MergeTrainAttributedFailure
             [], $"Dropped after RED receipt {receipt.ReceiptId}.");
         recordEjection(ejection);
         ejections.Add(ejection);
+    }
+
+    internal static void RecordAndRoute(
+        MergeTrainReceipt receipt, MergeTrainMemberBinding member, Goal goal, IReadOnlyList<string> classes, string reason,
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?> recordFailure,
+        Func<GoalId, string, bool> routeFailure)
+    {
+        recordFailure(goal, classes, member.CandidateRevision, receipt.Identity.ObservedMainRevision,
+            classes.Select(name => new AcceptanceCheckAttribution(name, AcceptanceFailureOrigin.Introduced, reason)).ToArray(), null);
+        if (!routeFailure(goal.Id, reason))
+            throw new InvalidOperationException("Recorded merge train acceptance failure could not route its Verified member.");
     }
 
     internal static string BoundMessage(string? message)

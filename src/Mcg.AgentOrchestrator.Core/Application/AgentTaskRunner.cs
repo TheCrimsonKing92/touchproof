@@ -178,7 +178,8 @@ public sealed class AgentTaskRunner
                         accompanyingBlocker),
                 completedRound: hasCompleteWorkerResult ? completedRound : null,
                 workerResultLogReference: workerResultReference,
-                recordDuplicateSuppression: hasCompleteWorkerResult);
+                recordDuplicateSuppression: hasCompleteWorkerResult,
+                amendmentCriterionIndex: humanInputDirective.Directive.AmendmentCriterionIndex);
             if (hasCompleteWorkerResult &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(output, out var blockersStatus) &&
@@ -191,7 +192,8 @@ public sealed class AgentTaskRunner
                     completedRound,
                     workerResultReference);
             }
-            if (hasCompleteWorkerResult || !requestResult.WasSuppressedByAnswer)
+            if (hasCompleteWorkerResult || !requestResult.WasSuppressedByAnswer ||
+                humanInputDirective.Directive.Kind == HumanWaitKind.PlannerBriefAmendment)
             {
                 return new AgentTaskRunResult(goal, task, execution);
             }
