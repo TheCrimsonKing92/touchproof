@@ -12,11 +12,20 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record WorkerBuildHostReference(string StatePath, string ExecutionDirectory,
     string GoalId, string TaskId, DateTimeOffset DispatchAt, string DispatchId,
-    TaskIntentAdmissionReference? Admission = null, string? StorageRoot = null);
+    TaskIntentAdmissionReference? Admission = null, string? StorageRoot = null,
+    WorkerBuildStructuralPolicy? StructuralPolicy = null);
 public sealed record WorkerBuildRequest(int Version, string RequestKey, string[] Projects, string Configuration);
-public sealed record WorkerBuildResponse(string InvocationId, WorkerBuildOutcome? Outcome, string Diagnostic)
+public sealed record WorkerBuildResponse(string InvocationId, WorkerBuildOutcome? Outcome, string Diagnostic,
+    int? CompilerExitCode = null, WorkerBuildStructuralCheck? StructuralCheck = null)
 {
-    public int ExitCode => Outcome == WorkerBuildOutcome.Success ? 0 : 1;
+    private bool HasValidStructuralCheck => StructuralCheck is { IsWellFormed: true } && StructuralCheck.InvocationId == InvocationId;
+    public string StructuralStatus => HasValidStructuralCheck ? StructuralCheck!.Status.ToString() : "Unavailable";
+    public string StructuralDiagnostic => StructuralCheck is null ? "Legacy host response has no structural evidence."
+        : HasValidStructuralCheck ? StructuralCheck.Diagnostic : "Malformed structural evidence in host response.";
+    // Missing legacy evidence preserves compiler compatibility, without claiming a structural pass.
+    public int ExitCode => Outcome == WorkerBuildOutcome.Success &&
+        (StructuralCheck is null || HasValidStructuralCheck &&
+            StructuralCheck!.AllowsVerificationSuccess) ? 0 : 1;
 }
 
 public interface IWorkerBuildRequestService

@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private static readonly TimeSpan DefaultDeveloperCompletionStructuralPreflightBound = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DefaultDeveloperCompletionStructuralPreflightBound = BoundedStructuralPreflight.DefaultBound;
 
     private Func<string, DeveloperCompletionStructuralFindings> _runDeveloperCompletionStructuralPreflight =
         path => DeveloperCompletionStructuralPreflight.Evaluate(path);
@@ -93,15 +93,14 @@ internal sealed partial class ConductorDriver
                 goal, developerTask, testerTask, worktreePath, candidateSha!, goalPrefix, policy, fromState, out result);
         }
 
-        var work = Task.Run(() => _runDeveloperCompletionStructuralPreflight(worktreePath));
         DeveloperCompletionStructuralFindings findings;
         try
         {
-            findings = work.WaitAsync(_developerCompletionStructuralPreflightBound).GetAwaiter().GetResult();
+            findings = BoundedStructuralPreflight.Run(() => _runDeveloperCompletionStructuralPreflight(worktreePath),
+                _developerCompletionStructuralPreflightBound);
         }
         catch (TimeoutException)
         {
-            ObserveAbandonedStructuralPreflight(work);
             _recordTaskNote(goal.Id, developerTask.Id,
                 $"developer-completion structural pre-check skipped: exceeded {_developerCompletionStructuralPreflightBound.TotalMilliseconds:0} ms bound");
             return false;
@@ -138,10 +137,4 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static void ObserveAbandonedStructuralPreflight(Task work) =>
-        _ = work.ContinueWith(
-            static completed => _ = completed.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
 }

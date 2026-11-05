@@ -93,7 +93,28 @@ try {
         if ([string]::IsNullOrWhiteSpace($responseText)) { throw 'Managed worker build host closed without a terminal response.' }
         $response = $responseText | ConvertFrom-Json
         Write-Output "worker_build_invocation=$($response.InvocationId); outcome=$($response.Outcome); $($response.Diagnostic)"
-        exit ([int]$response.ExitCode)
+        $structuralStatus = 'Unavailable'
+        $structuralDiagnostic = 'Legacy host response has no structural evidence.'
+        $compositeExit = [int]$response.ExitCode
+        $compilerExit = 'unavailable'
+        if ($response.PSObject.Properties['CompilerExitCode']) { $compilerExit = $response.CompilerExitCode }
+        if ($response.PSObject.Properties['StructuralCheck'] -and $null -ne $response.StructuralCheck) {
+            $structuralDiagnostic = 'Malformed structural evidence in host response.'
+            $check = $response.StructuralCheck
+            $valid = $response.PSObject.Properties['StructuralStatus'] -and
+                $response.PSObject.Properties['StructuralDiagnostic']
+            foreach ($name in @('InvocationId', 'DispatchId', 'TreeDigest', 'ScopeIdentity', 'PolicyDigest', 'Diagnostic', 'Status')) {
+                if (-not $check.PSObject.Properties[$name] -or [string]::IsNullOrWhiteSpace([string]$check.$name)) { $valid = $false }
+            }
+            if ($valid -and $check.InvocationId -eq $response.InvocationId -and
+                $response.StructuralStatus -in @('Passed', 'Violation', 'Unavailable', 'NotApplicable')) {
+                $structuralStatus = $response.StructuralStatus
+                $structuralDiagnostic = $response.StructuralDiagnostic
+            }
+            if ($structuralStatus -notin @('Passed', 'NotApplicable')) { $compositeExit = 1 }
+        }
+        Write-Output "compiler_exit=$compilerExit; structural_status=$structuralStatus; verification_exit=$compositeExit; $structuralDiagnostic"
+        exit $compositeExit
     }
     finally { $writer.Dispose(); $reader.Dispose() }
 }

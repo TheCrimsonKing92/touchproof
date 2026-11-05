@@ -558,7 +558,7 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
-            new SourceClassCeiling("ConductorDriver", 14276, 70),
+            new SourceClassCeiling("ConductorDriver", 14269, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -828,14 +828,14 @@ internal static class SourceSizeRatchet
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     violations.Add(new SourceSizeViolation(
-                        relativePath, null, 0, BuildUnreadableFileMessage(relativePath, exception)));
+                        relativePath, null, 0, BuildUnreadableFileMessage(relativePath, exception), SourceSizeViolationKind.Unavailable));
                 }
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             violations.Add(new SourceSizeViolation(
-                "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
+                "src/", null, 0, BuildUnreadableFileMessage("src/", exception), SourceSizeViolationKind.Unavailable));
         }
 
         return Enumerable.Range(0, names.Length).Where(index => counts[index] > 0)
@@ -863,16 +863,6 @@ internal static class SourceSizeRatchet
             var sourcePath = Path.Combine(
                 repositoryRoot,
                 ceiling.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(sourcePath))
-            {
-                violations.Add(new SourceSizeViolation(
-                    ceiling.RelativePath,
-                    null,
-                    ceiling.MaximumLineCount,
-                    BuildMissingFileMessage(ceiling.RelativePath)));
-                continue;
-            }
-
             try
             {
                 var actualLineCount = readLines(sourcePath).Count();
@@ -885,13 +875,18 @@ internal static class SourceSizeRatchet
                         BuildOverCeilingMessage(ceiling, actualLineCount)));
                 }
             }
+            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                violations.Add(new SourceSizeViolation(ceiling.RelativePath, null, ceiling.MaximumLineCount,
+                    BuildMissingFileMessage(ceiling.RelativePath), SourceSizeViolationKind.MissingSource));
+            }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 violations.Add(new SourceSizeViolation(
                     ceiling.RelativePath,
                     null,
                     ceiling.MaximumLineCount,
-                    BuildUnreadableFileMessage(ceiling.RelativePath, exception)));
+                    BuildUnreadableFileMessage(ceiling.RelativePath, exception), SourceSizeViolationKind.Unavailable));
             }
         }
 
@@ -1043,10 +1038,13 @@ internal sealed record SourceSizeCeiling(string RelativePath, int MaximumLineCou
 
 internal sealed record SourceClassCeiling(string ClassName, int MaximumTotalLineCount, int MaximumPartialFileCount);
 
+internal enum SourceSizeViolationKind { LimitExceeded, MissingSource, Unavailable }
+
 internal sealed record SourceSizeViolation(
     string RelativePath,
     int? ActualLineCount,
     int MaximumLineCount,
-    string Message);
+    string Message,
+    SourceSizeViolationKind Kind = SourceSizeViolationKind.LimitExceeded);
 
 internal sealed record SourceSizeDocumentationViolation(string Rule, int? LineNumber, string Message);
