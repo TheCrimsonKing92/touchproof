@@ -1999,19 +1999,19 @@ public sealed partial class AgentOrchestratorKernel
         bool supersedeSiblings = true)
         => SubmitHumanInputCore(requestId, answer, gatedDeliverableIds, origin, supersedeSiblings, isAutoDefaulted: false);
 
-    private void SubmitHumanInputCore(
+    internal void SubmitHumanInputCore(
         HumanInputRequestId requestId,
         string answer,
         IReadOnlyList<string>? gatedDeliverableIds,
         HumanInputAnswerOrigin origin,
         bool supersedeSiblings,
-        bool isAutoDefaulted)
+        bool isAutoDefaulted, Func<int, bool>? hasCurrentSelectorlessGateReceipt = null)
     {
         lock (_humanInputRequestLock)
         {
             var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
             var goal = GetGoal(request.GoalId);
-            if (request.PlannerIdentity is not null && origin != HumanInputAnswerOrigin.Operator)
+            if (!PlannerHumanInputAnswerAuthorization.IsAuthorized(request, goal, origin, supersedeSiblings, isAutoDefaulted, hasCurrentSelectorlessGateReceipt))
                 throw new UnauthorizedAccessException("Typed Planner human-input evidence requires an authorized explicit Operator answer.");
             var answeredAt = _clock.UtcNow;
             if (HumanInputSubmission.TryCompleteGateEvidence(request, goal, answer, answeredAt,
