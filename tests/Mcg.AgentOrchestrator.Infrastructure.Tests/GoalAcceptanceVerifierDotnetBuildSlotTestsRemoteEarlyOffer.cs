@@ -57,7 +57,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteEarlyOffer :
         Assert.Equal(baseline.Lanes, early.Lanes);
         Assert.Equal(baseline.LocalStarts, early.LocalStarts);
         Assert.Equal(baseline.Requests, early.Requests);
-        Assert.Equal(baseline.Health, early.Health);
+        if (control == "exclusive")
+        {
+            // Local-bound priority can record the exclusion before the remote acceptance.
+            // Preserve every lane/outcome pair while allowing that independent event order.
+            Assert.Equal(baseline.Health.OrderBy(row => row.Item1).ThenBy(row => row.Item2),
+                early.Health.OrderBy(row => row.Item1).ThenBy(row => row.Item2));
+        }
+        else Assert.Equal(baseline.Health, early.Health);
         Assert.Equal(baseline.Policy, early.Policy);
     }
 
