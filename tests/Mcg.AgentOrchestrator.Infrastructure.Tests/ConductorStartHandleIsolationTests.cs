@@ -109,7 +109,8 @@ public sealed class ConductorStartHandleIsolationTests
         // use the same cleanup path for rollback and normal disposal.
         internal LaunchFixture(Action<LaunchFixture>? afterCallerStarted = null,
             Action<LaunchFixture>? beforeRootRemoval = null,
-            Action<LaunchFixture, Process>? beforeConductorRelease = null)
+            Action<LaunchFixture, Process>? beforeConductorRelease = null,
+            Action<ProcessStartInfo>? configureCallerStart = null)
         {
             this.beforeRootRemoval = beforeRootRemoval;
             this.beforeConductorRelease = beforeConductorRelease;
@@ -141,6 +142,9 @@ public sealed class ConductorStartHandleIsolationTests
                 foreach (var key in new[] { "SystemRoot", "WINDIR", "PATH", "TEMP", "TMP", "USERPROFILE",
                              "LOCALAPPDATA", "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_X86" })
                     if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
+                // Allow diagnostics to supply a caller that fails before publishing
+                // ownership, while retaining the real process/pipe cleanup path.
+                configureCallerStart?.Invoke(start);
                 Caller = Process.Start(start) ?? throw new InvalidOperationException("Caller probe did not start.");
                 _ = Caller.SafeHandle;
                 callerOutput = Caller.StandardOutput.ReadToEndAsync();
@@ -161,7 +165,31 @@ public sealed class ConductorStartHandleIsolationTests
 
         internal Process OpenConductor()
         {
-            using var identity = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "launch-identity.json")));
+            var identityPath = Path.Combine(Root, "launch-identity.json");
+            string identityText;
+            try { identityText = File.ReadAllText(identityPath); }
+            catch (IOException failure) when (failure is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Caller exit already orders publication. A missing record cannot
+                // become available by waiting; preserve the launch failure instead.
+                var exitCode = Caller.HasExited ? Caller.ExitCode.ToString() : "unavailable (caller still running)";
+                var stdout = CaptureCallerOutput(callerOutput);
+                var stderr = CaptureCallerOutput(callerError);
+                var receiptPath = Path.Combine(Root, "launch-receipt.json");
+                string receipt;
+                try { receipt = File.ReadAllText(receiptPath); }
+                catch (Exception receiptFailure) when (receiptFailure is IOException or UnauthorizedAccessException)
+                {
+                    receipt = "unavailable: " + receiptFailure.Message;
+                }
+                throw new InvalidOperationException(
+                    $"Caller did not publish launch-identity.json; expected path: {identityPath}." + Environment.NewLine +
+                    $"Caller exit code: {exitCode}" + Environment.NewLine +
+                    $"Caller stdout: {stdout}" + Environment.NewLine +
+                    $"Caller stderr: {stderr}" + Environment.NewLine +
+                    $"Launch receipt ({receiptPath}): {receipt}", failure);
+            }
+            using var identity = JsonDocument.Parse(identityText);
             var process = Process.GetProcessById(identity.RootElement.GetProperty("pid").GetInt32());
             try
             {
@@ -172,6 +200,13 @@ public sealed class ConductorStartHandleIsolationTests
                 return process;
             }
             catch { process.Dispose(); throw; }
+        }
+
+        private string CaptureCallerOutput(Task<string>? capture)
+        {
+            if (capture is null) return "unavailable (capture not started)";
+            try { return capture.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult(); }
+            catch (Exception failure) { return "unavailable: " + failure.Message; }
         }
 
         public void Dispose()
