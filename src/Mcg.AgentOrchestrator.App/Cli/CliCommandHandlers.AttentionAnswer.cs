@@ -12,9 +12,13 @@ internal static partial class CliCommandHandlers
         var emitAgentReadEnvelope = parts.Any(part => part.Equals("--json", StringComparison.OrdinalIgnoreCase));
         if (emitAgentReadEnvelope)
             parts = parts.Where(part => !part.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var answerParts = WithoutAnswerMetadataFlags(parts);
+        var answerParts = AttentionAnswerMetadata.WithoutAnswerMetadataFlags(parts);
         var route = GetFlagValue(parts, "--route");
         var cause = GetFlagValue(parts, "--cause");
+        var amendmentFlag = GetFlagValue(parts, "--amendment");
+        if (amendmentFlag is not null && !amendmentFlag.Equals("decline", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("--amendment accepts only decline.");
+        var amendmentDisposition = amendmentFlag is null ? (PlannerBriefAmendmentDisposition?)null : PlannerBriefAmendmentDisposition.Decline;
         if (route is null && cause is not null)
             throw new ArgumentException("--cause requires --route developer.");
         if (route is not null)
@@ -95,11 +99,14 @@ internal static partial class CliCommandHandlers
         }
 
     Submit:
+        if (amendmentDisposition is not null && (targetKind != OperatorAnswerTargetKind.HumanInput ||
+            !context.Kernel.HumanInputRequests.Any(request => request.Id.Value == targetId && request.Amendment is not null)))
+            throw new ArgumentException("--amendment requires a request carrying a Planner brief amendment payload.");
         var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(
             parts, CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
         var intentId = Guid.NewGuid().ToString("N");
         var payload = new AnswerOperatorIntentPayload(targetKind, targetId, goal!.Id.Value, answer,
-            attribution.ActorKind, GetAnswerEvidence(parts), GetFlagValue(parts, "--precedent"), route, cause);
+            attribution.ActorKind, AttentionAnswerMetadata.GetAnswerEvidence(parts), GetFlagValue(parts, "--precedent"), route, cause, amendmentDisposition);
         var intent = new OperatorIntentRecord(
             intentId, GetFlagValue(parts, "--idempotency-key") ?? intentId,
             OperatorIntentVerbs.Answer, goal.Id.Value, TaskId: null,
@@ -113,29 +120,4 @@ internal static partial class CliCommandHandlers
         return false;
     }
 
-    private static IReadOnlyList<string> WithoutAnswerMetadataFlags(IReadOnlyList<string> parts)
-    {
-        var filtered = new List<string>();
-        for (var index = 0; index < parts.Count; index++)
-        {
-            if (parts[index] is "--operator-actor" or "--actor-kind" or "--evidence" or
-                "--precedent" or "--idempotency-key" or "--route" or "--cause")
-            {
-                if (++index >= parts.Count)
-                    throw new ArgumentException($"{parts[index - 1]} requires a value.");
-                continue;
-            }
-            filtered.Add(parts[index]);
-        }
-        return filtered;
-    }
-
-    private static IReadOnlyList<string> GetAnswerEvidence(IReadOnlyList<string> parts)
-    {
-        var evidence = new List<string>();
-        for (var index = 0; index < parts.Count - 1; index++)
-            if (parts[index].Equals("--evidence", StringComparison.OrdinalIgnoreCase))
-                evidence.Add(parts[++index]);
-        return evidence;
-    }
 }

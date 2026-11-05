@@ -360,7 +360,9 @@ public sealed record HumanInputRequestSnapshot(
     IReadOnlyList<string>? TestNames = null,
     PlannerEvidenceIdentity? PlannerIdentity = null,
     PlannerEvidencePayload? PlannerEvidence = null,
-    HumanInputBriefSupersession? BriefSupersession = null);
+    HumanInputBriefSupersession? BriefSupersession = null,
+    PlannerBriefAmendmentPayload? Amendment = null,
+    bool AmendmentReplanRouted = false);
 
 public static class VerificationTextBounds
 {

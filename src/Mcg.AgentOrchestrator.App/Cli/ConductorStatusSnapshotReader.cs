@@ -81,7 +81,7 @@ internal static class ConductorStatusSnapshotReader
                     ?? goal.Tasks.FirstOrDefault(item => item.Status == WorkTaskStatus.Pending);
                 return new ConductorStatusSnapshot.GoalObservation(goal.Id.Value, goal.Status.ToString(),
                     task?.RequiredRole.ToString() ?? "none", goal.LandingBlocker,
-                    raised.ByGoal.GetValueOrDefault(goal.Id.Value));
+                    raised.ByGoal.GetValueOrDefault(goal.Id.Value), kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id));
             }).ToArray();
             var pending = goals.SelectMany(goal => kernel.GetPendingHumanInput(goal.Id)).ToArray();
             var clarifications = pending.Count(item => HumanWaitPolicyDefaults.IsSpecClarificationClass(item.Kind));

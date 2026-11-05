@@ -32,7 +32,8 @@ public sealed class HumanInputRequest
         PlannerEvidenceStoreReference? storeReference = null,
         IReadOnlyList<string>? testNames = null,
         PlannerEvidenceIdentity? plannerIdentity = null,
-        PlannerEvidencePayload? plannerEvidence = null)
+        PlannerEvidencePayload? plannerEvidence = null,
+        PlannerBriefAmendmentPayload? amendment = null)
     {
         Id = id;
         GoalId = goalId;
@@ -65,6 +66,7 @@ public sealed class HumanInputRequest
         TestNames = testNames is null ? null : Array.AsReadOnly(testNames.ToArray());
         PlannerIdentity = plannerIdentity;
         PlannerEvidence = plannerEvidence;
+        Amendment = amendment;
     }
 
     public HumanInputRequestId Id { get; }
@@ -105,6 +107,10 @@ public sealed class HumanInputRequest
 
     public PlannerEvidenceIdentity? PlannerIdentity { get; }
     public PlannerEvidencePayload? PlannerEvidence { get; }
+    public PlannerBriefAmendmentPayload? Amendment { get; }
+    public bool AmendmentReplanRouted { get; private set; }
+
+    internal void MarkAmendmentReplanRouted() => AmendmentReplanRouted = true;
 
     public bool IsCurrentForBrief(int briefVersion) => PlannerIdentity is null || PlannerIdentity.BriefVersion == briefVersion;
 
@@ -160,7 +166,8 @@ public sealed class HumanInputRequest
         IReadOnlyList<string>? gatedDeliverableIds = null,
         HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
         int briefVersion = 1,
-        bool isAutoDefaulted = false)
+        bool isAutoDefaulted = false,
+        PlannerBriefAmendmentDisposition? amendmentDisposition = null)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -175,7 +182,8 @@ public sealed class HumanInputRequest
             answeredAt,
             origin,
             BriefVersion: briefVersion,
-            IsAutoDefaulted: isAutoDefaulted));
+            IsAutoDefaulted: isAutoDefaulted,
+            AmendmentDisposition: amendmentDisposition));
         WasDismissed = false;
         ResetSuppressionCountForAnswerRevision();
         foreach (var deliverableId in gatedDeliverableIds ?? [])
@@ -218,7 +226,8 @@ public sealed class HumanInputRequest
         string answer,
         DateTimeOffset answeredAt,
         HumanInputAnswerOrigin origin,
-        int briefVersion = 1)
+        int briefVersion = 1,
+        PlannerBriefAmendmentDisposition? amendmentDisposition = null)
     {
         if (origin != HumanInputAnswerOrigin.Operator)
         {
@@ -244,7 +253,8 @@ public sealed class HumanInputRequest
             answer.Trim(),
             answeredAt,
             origin,
-            BriefVersion: briefVersion);
+            BriefVersion: briefVersion,
+            AmendmentDisposition: amendmentDisposition);
         _answerHistory.Add(replacement);
         ResetSuppressionCountForAnswerRevision();
         return replacement;
@@ -351,7 +361,7 @@ public sealed class HumanInputRequest
             SuppressionRevision,
             EvidenceOwner,
             StoreReference,
-            TestNames, PlannerIdentity, PlannerEvidence, BriefSupersession);
+            TestNames, PlannerIdentity, PlannerEvidence, BriefSupersession, Amendment, AmendmentReplanRouted);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -377,7 +387,7 @@ public sealed class HumanInputRequest
             snapshot.SuppressionRevision,
             snapshot.EvidenceOwner,
             snapshot.StoreReference,
-            snapshot.TestNames, snapshot.PlannerIdentity, snapshot.PlannerEvidence);
+            snapshot.TestNames, snapshot.PlannerIdentity, snapshot.PlannerEvidence, snapshot.Amendment);
 
         if (snapshot.IsCompleted)
         {
@@ -402,6 +412,7 @@ public sealed class HumanInputRequest
             }
         }
 
+        request.AmendmentReplanRouted = snapshot.AmendmentReplanRouted;
         request._operatorGates.Clear();
         request._operatorGates.AddRange(snapshot.OperatorGates ?? []);
 
@@ -464,7 +475,8 @@ public sealed record HumanInputAnswerRecord(
     HumanInputAnswerOrigin Origin = HumanInputAnswerOrigin.Operator,
     string? SupersededByAnswerId = null,
     int? BriefVersion = null,
-    bool IsAutoDefaulted = false)
+    bool IsAutoDefaulted = false,
+    PlannerBriefAmendmentDisposition? AmendmentDisposition = null)
 {
     public bool IsRetracted => SupersededByAnswerId is not null;
 }

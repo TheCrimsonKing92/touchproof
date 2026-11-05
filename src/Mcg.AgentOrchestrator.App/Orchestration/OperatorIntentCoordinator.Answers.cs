@@ -25,6 +25,12 @@ internal sealed partial class OperatorIntentCoordinator
             throw new InvalidOperationException("Answer target belongs to a different goal.");
         if (payload.ActorKind != intent.ActorKind)
             throw new InvalidOperationException("Answer actor kind does not match intent actor kind.");
+        if (payload.AmendmentDisposition is not null &&
+            (payload.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline ||
+             payload.TargetKind != OperatorAnswerTargetKind.HumanInput ||
+             !kernel.HumanInputRequests.Any(request => request.Id.Value == payload.TargetId &&
+                 request.GoalId == goal.Id && request.Amendment is not null)))
+            throw new InvalidOperationException("--amendment requires a request carrying a Planner brief amendment payload and accepts only decline.");
         var decisions = _decisions ?? throw new InvalidOperationException("Answer decision store is not configured.");
         TaskSpec? developer = null;
         AdjudicateOperatorIntentPayload? route = null;
@@ -54,7 +60,7 @@ internal sealed partial class OperatorIntentCoordinator
             try
             {
                 if (replayRequest is { IsCompleted: false })
-                    kernel.SubmitHumanInput(replayRequest.Id, payload.Text);
+                    kernel.SubmitHumanInput(replayRequest.Id, payload.Text, amendmentDisposition: payload.AmendmentDisposition);
                 var effect = decisions.TryApplyDecisionEffectAsync(priorDecision.Request.Id,
                     priorReceipt.Id, priorReceipt.Response.ActionRef, null,
                     $"answered {payload.TargetKind}:{payload.TargetId}", _utcNow()).GetAwaiter().GetResult();
@@ -129,6 +135,14 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new KeyNotFoundException($"Human-input request '{payload.TargetId}' was not found for goal '{goal.Id.Value}'.");
                 if (request.IsCompleted)
                 {
+                    if (payload.AmendmentDisposition == PlannerBriefAmendmentDisposition.Decline &&
+                        request.AuthoritativeAnswer?.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline &&
+                        kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id)?.RequestId == request.Id)
+                    {
+                        kernel.SupersedeHumanInput(goal.Id, request.Id, payload.Text, HumanInputAnswerOrigin.Operator,
+                            payload.AmendmentDisposition);
+                        break;
+                    }
                     if (route is not null)
                     {
                         routeOnly = true;
@@ -141,7 +155,7 @@ internal sealed partial class OperatorIntentCoordinator
                 }
                 if (request.TaskId is { } requestTaskId && !goal.Tasks.Any(task => task.Id == requestTaskId))
                     throw new InvalidOperationException($"Human-input request '{payload.TargetId}' no longer has a waiting task.");
-                try { kernel.SubmitHumanInput(request.Id, payload.Text); }
+                try { kernel.SubmitHumanInput(request.Id, payload.Text, amendmentDisposition: payload.AmendmentDisposition); }
                 catch (Exception ex)
                 {
                     throw new AnswerApplicationRetryException("Human-input resolution could not finish; the intent remains claimed.", ex);

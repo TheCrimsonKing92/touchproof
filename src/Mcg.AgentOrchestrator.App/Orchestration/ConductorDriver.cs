@@ -106,6 +106,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
+    private readonly Func<Goal, PlannerBriefAmendmentRevisionPendingHold?> _getAmendmentRevisionPending;
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     internal readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
@@ -777,6 +778,7 @@ internal sealed partial class ConductorDriver
                 baselineAttestation);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
+        _getAmendmentRevisionPending = goal => kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
@@ -1076,7 +1078,8 @@ internal sealed partial class ConductorDriver
         Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null,
         Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
         AgentOrchestratorKernel? findingStagnationKernel = null,
-        Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null)
+        Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null,
+        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null)
     {
         _prepareMissingWorkspace = prepareMissingWorkspace;
         _findingStagnationKernel = findingStagnationKernel;
@@ -1182,6 +1185,7 @@ internal sealed partial class ConductorDriver
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
+        _getAmendmentRevisionPending = getAmendmentRevisionPending ?? (_ => null);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
@@ -1323,16 +1327,11 @@ internal sealed partial class ConductorDriver
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
+        if (_getAmendmentRevisionPending(goal) is { } amendmentHold)
+            return MakeResult(goalId, goalPrefix, policy, amendmentHold.ToOutcome(state));
         if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
             return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
-        try
-        {
-            _resolveParkedWaitEscalations(goal, state);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"warning: parked-wait landing escalation resolution failed for goal {goalPrefix}: {ex.Message}");
-        }
+        ConductorParkedWaitEscalationResolution.Resolve(_resolveParkedWaitEscalations, goal, state);
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
