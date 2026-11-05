@@ -1242,6 +1242,163 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
     }
 
+    [Xunit.Fact]
+    public async Task ConcurrentShards_LocalBoundShortLane_AdmittedBeforeSecondLongLane()
+    {
+        var longStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (_, acquired) = await RunLocalBoundScenarioAsync(
+            [("LongA", 100, []), ("LongB", 99, []), ("Keyed", 1, ["fixture-local-only"])],
+            async (lane, token) =>
+            {
+                if (lane == "LongA") longStarted.TrySetResult();
+                if (lane == "Keyed")
+                    await longStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+            });
+
+        Assert.True(Array.IndexOf(acquired, "infrastructure tests: Keyed") <
+            Array.IndexOf(acquired, "infrastructure tests: LongB"),
+            "The keyed short lane must acquire its slot before the second long lane.");
+        Assert.Equal("infrastructure tests: Keyed", acquired[0]);
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentShards_LocalBoundSharedKey_NeverOverlaps()
+    {
+        var poolStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = 0;
+        var peak = 0;
+        var entries = 0;
+        var (_, acquired) = await RunLocalBoundScenarioAsync(
+            [("First", 10, ["fixture-local-shared"]), ("Second", 9, ["fixture-local-shared"]), ("Pool", 100, [])],
+            async (lane, token) =>
+            {
+                if (lane == "Pool")
+                {
+                    Assert.Equal(1, Volatile.Read(ref active));
+                    poolStarted.TrySetResult();
+                    return;
+                }
+                var count = Interlocked.Increment(ref active);
+                Interlocked.Increment(ref entries);
+                int observed;
+                do { observed = Volatile.Read(ref peak); }
+                while (count > observed && Interlocked.CompareExchange(ref peak, count, observed) != observed);
+                try
+                {
+                    if (lane == "First")
+                        await poolStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+                    else
+                        Assert.True(firstFinished.Task.IsCompleted, "The shared key was acquired before its first holder finished.");
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref active);
+                    if (lane == "First") firstFinished.TrySetResult();
+                }
+            });
+
+        Assert.Equal(2, entries);
+        Assert.Equal(1, peak);
+        Assert.Equal(0, active);
+        Assert.Equal(3, acquired.Length);
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentShards_OnlyLongLocalBoundLanes_BatchCompletes()
+    {
+        var peersStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = 0;
+        var (result, acquired) = await RunLocalBoundScenarioAsync(
+            [("LongA", 1100, ["fixture:a"]), ("LongB", 1050, ["fixture:b"]), ("LongC", 1000, ["fixture:c"])],
+            async (_, token) =>
+            {
+                if (Interlocked.Increment(ref started) == 2) peersStarted.TrySetResult();
+                await peersStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(3, started);
+        Assert.Equal(["infrastructure tests: LongA", "infrastructure tests: LongB", "infrastructure tests: LongC"], acquired);
+        Assert.Equal(3, result.Checks!.Count(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal)));
+    }
+
+    private async Task<(AcceptanceVerificationResult Result, string[] Acquired)> RunLocalBoundScenarioAsync(
+        (string Name, double Seconds, string[] Keys)[] lanes, Func<string, CancellationToken, Task> execute)
+    {
+        var root = CreateLaneOrderingWorkspace();
+        var goal = new GoalId(Guid.NewGuid().ToString("N"));
+        var acquired = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var outcomes = new System.Collections.Concurrent.ConcurrentQueue<(string Lane, RemoteLaneOutcomeCode Code)>();
+        var executor = new FakeRemoteLaneExecutor();
+        try
+        {
+            var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+            var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!;
+            manifest["engine"]!["infrastructureTestLanes"] = JsonSerializer.SerializeToNode(lanes.Select(lane => new
+            {
+                name = lane.Name, filter = "FullyQualifiedName~" + lane.Name + "Tests",
+                estimatedSerialSeconds = lane.Seconds, exclusiveResourceKeys = lane.Keys
+            }));
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+            var sourceDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+            Directory.CreateDirectory(sourceDirectory);
+            foreach (var lane in lanes)
+                File.WriteAllText(Path.Combine(sourceDirectory, lane.Name + "Tests.cs"),
+                    $"public class {lane.Name}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
+            var configurationPath = Path.Combine(root, "executors.json");
+            // Keyless pool lanes stay local through lane membership; their structural classification is unchanged.
+            File.WriteAllText(configurationPath, JsonSerializer.Serialize(new
+            {
+                executors = new[] { new { id = "fixture-executor", leaseSeconds = 60 } },
+                lanes = lanes.Where(lane => lane.Keys.Length > 0).Select(lane => "infrastructure tests: " + lane.Name)
+            }));
+            SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
+            TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+            TestOverrides.RemoteLaneExecutorConfigurationPathForTests = configurationPath;
+            TestOverrides.RemoteLaneExecutorForTests = executor;
+            TestOverrides.OnRemoteLaneOutcomeForTests = (lane, code) => outcomes.Enqueue((lane, code));
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = acquired.Enqueue;
+
+            async Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string _, CancellationToken token)
+            {
+                if (TryWriteMtpBuildArtifacts(args, "deterministic shard fixture", "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                    return new(0, "Build succeeded.");
+                var lane = lanes.Single(lane => args.Any(argument => argument.Contains(lane.Name + "Tests", StringComparison.Ordinal)));
+                await execute(lane.Name, token);
+                WriteMtpTrx(args, 1, [lane.Name + "Tests.Executes"]);
+                return new(0, "Passed: 1");
+            }
+
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(30));
+            var attempt = Guid.NewGuid().ToString("N");
+            var slot = StableSlotIndex(lease.Environment.ArtifactsPath);
+            await using var owner = new AcceptanceAttemptExecutionOwner(
+                new AcceptanceAttemptIdentity(attempt, goal.Value, root, "candidate-tree", "main-sha", "verifying-commit",
+                    Path.Combine(root, ".orchestrator", "attempts", attempt, "result"), slot, Environment.ProcessId, null),
+                AcceptanceGateEngineSettings.Load(root), CancellationToken.None);
+            var result = await new GoalAcceptanceVerifier(TestOverrides, Runner).RunOwnedAsync(root, goal, null, slot, lease, owner);
+
+            Assert.True(result.Passed);
+            Assert.Equal(lanes.Select(lane => "infrastructure tests: " + lane.Name).Order(), acquired.Order());
+            Assert.Empty(executor.Requests);
+            foreach (var lane in lanes.Where(lane => lane.Keys.Length > 0))
+                Assert.Contains(("infrastructure tests: " + lane.Name, RemoteLaneOutcomeCode.NotEligibleExclusiveResource), outcomes);
+            return (result, acquired.ToArray());
+        }
+        finally
+        {
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.RemoteLaneExecutorConfigurationPathForTests = null;
+            TestOverrides.RemoteLaneExecutorForTests = null;
+            TestOverrides.OnRemoteLaneOutcomeForTests = null;
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = null;
+            ResetPartitionVerdictKeyHooks();
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     private static string CreateLaneOrderingWorkspace(
         string lightFirstFilter = "FullyQualifiedName~LightFirstTests",
         bool failForbiddenPathCheck = false)

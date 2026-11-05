@@ -17,6 +17,7 @@ internal static class ConductorStatusAgentReadView
                         ? new { at = RoundTrip(previous.At), reason = previous.Reason } : null
                 },
                 supervisorBuild = snapshot.SupervisorBuild,
+                loopBuild = new { commit = snapshot.LoopBuild?.Commit, source = snapshot.LoopBuild?.Source ?? "unavailable" },
                 generation = new { state = snapshot.Generation.State, build = snapshot.Generation.Build, main = snapshot.Generation.Main },
                 latestTick = RoundTrip(snapshot.LatestTick),
                 goals = new
