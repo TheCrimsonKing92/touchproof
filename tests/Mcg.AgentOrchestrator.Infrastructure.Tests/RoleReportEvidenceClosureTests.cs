@@ -37,7 +37,7 @@ public sealed class RoleReportEvidenceClosureTests
     [Theory]
     [InlineData("newer-wait", "brief-version-differs")]
     [InlineData("no-classes", "developer-report-missing")]
-    [InlineData("not-report", "not-a-report-criterion")]
+    [InlineData("not-report", "no-executor-closes-report:missing")]
     public void DeferredReport_RevisedBriefMissingPrerequisite_KeepsWait(string failure, string reason)
     {
         var scenario = CreateScenario(
@@ -154,7 +154,7 @@ public sealed class RoleReportEvidenceClosureTests
     [InlineData("missing-report", "developer-report-missing")]
     [InlineData("empty-report", "developer-report-missing")]
     [InlineData("different-set", "developer-report-differs")]
-    [InlineData("not-report", "not-a-report-criterion")]
+    [InlineData("not-report", "no-executor-closes-report:missing")]
     public void DeferredReport_MissingEvidence_KeepsWaitWithReason(string failure, string reason)
     {
         var criterion = failure switch
