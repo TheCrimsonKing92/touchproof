@@ -31,8 +31,8 @@ public sealed class OwnerConsoleFieldResidualTests
         var expectedNext = live ? "still waiting on you. Work waits for your answer." :
             "no longer listed in DECISIONS. This question no longer requires an owner answer.";
         var message = Assert.Single(dialogs.Messages);
-        Assert.Contains("Do you need to act: " + expectedAct, message.Text);
-        Assert.Contains("What happens next: " + expectedNext, message.Text);
+        Assert.Contains("Owner action: " + expectedAct, message.Text);
+        Assert.Contains("Next step: " + expectedNext, message.Text);
         var fields = OpenFields(message, 0);
         Assert.Equal(expectedAct, Copy(fields, "act"));
         Assert.Equal(expectedNext, Copy(fields, "next"));

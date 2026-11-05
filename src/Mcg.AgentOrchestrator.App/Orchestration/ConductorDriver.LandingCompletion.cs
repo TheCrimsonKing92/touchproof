@@ -74,6 +74,32 @@ internal sealed partial class ConductorDriver
             return CreateApparatusCompletionHold(goal, goalPrefix, policy, acceptance, branchHeadSha, mainHeadSha);
         }
 
+        if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
+        {
+            // Prepared solo attribution can prove every failure is inherited. Keep
+            // the existing excluded hold and main-suspect evidence before routing
+            // actionable findings through the solo receipt consumer.
+            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            var attemptedAllFlakyDisposition = false;
+            if (acceptance.RequiredUnmetCriteria.Count > 0 && retryDisposition.ActionableCriteria.Count == 0 &&
+                TryDisposeExcludedAcceptanceFailures(
+                    goal, goalPrefix, policy, acceptance, apparatusRedReading,
+                    ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
+                return excludedResult;
+
+            // Attempt IDs also identify legacy and background completions. Only
+            // producer-owned solo evidence selects this path; keep that obligation
+            // when a captured receipt is subsequently lost during transport.
+            // Preserve the existing apparatus disposition before admitting solo evidence.
+            if (!attemptedAllFlakyDisposition &&
+                TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
+                return soloApparatus;
+
+            // A solo test finding must use the evidence route, never the generic
+            // criterion feedback retry (which cannot establish attribution).
+            return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
+        }
+
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
         {
             var failedChecks = acceptance.FailedChecks ?? [];
@@ -472,7 +498,7 @@ internal sealed partial class ConductorDriver
         var remainingEvidenceEntries = MaxCriterionRetryEvidenceLines;
         foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
-            var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
+            var outputEvidence = AcceptanceRetryOutputEvidence.ExtractConcreteOutputEvidence(criterion).ToArray();
             var allowedFailingIdentities = criterion.FailingTestIdentities?.
                 Where(identity => !string.IsNullOrWhiteSpace(identity))
                 .ToHashSet(StringComparer.Ordinal);
@@ -565,42 +591,6 @@ internal sealed partial class ConductorDriver
 
     private static string FormatFailedCheckEvidence(AcceptanceCheckResult criterion) =>
         $"failed check: {criterion.Name} (exit code {criterion.ExitCode})";
-
-    private static IEnumerable<string> ExtractConcreteOutputEvidence(AcceptanceCheckResult criterion)
-    {
-        foreach (var line in SplitEvidenceLines(criterion.OutputTail))
-        {
-            if (AcceptanceRetryEvidencePattern.IsMatch(line))
-            {
-                yield return line;
-            }
-        }
-    }
-
-    private static string FormatPreReviewBuildDiagnostic(IReadOnlyList<AcceptanceCheckResult> checks)
-    {
-        var failedChecks = checks.Where(check => !check.Passed).ToArray();
-        var lines = failedChecks
-            .Where(check => !string.IsNullOrWhiteSpace(check.OutputTail))
-            .SelectMany(ExtractConcreteOutputEvidence)
-            .Take(5)
-            .ToArray();
-        lines = lines.Length > 0 ? lines : failedChecks
-            .Select(check => check.ResultSummary)
-            .Concat(failedChecks.Select(check => check.OutputTail))
-            .Where(text => !string.IsNullOrWhiteSpace(text))
-            .SelectMany(text => SplitEvidenceLines(text!))
-            .Take(5)
-            .ToArray();
-        var diagnostic = lines.Length == 0 ? "no diagnostic output was captured" : string.Join(" | ", lines);
-        return diagnostic.Length <= 1000 ? diagnostic : $"{diagnostic[..997]}...";
-    }
-
-    private static IEnumerable<string> SplitEvidenceLines(string? text) =>
-        (text ?? string.Empty)
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.TrimEnd())
-            .Where(line => !string.IsNullOrWhiteSpace(line));
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
     {

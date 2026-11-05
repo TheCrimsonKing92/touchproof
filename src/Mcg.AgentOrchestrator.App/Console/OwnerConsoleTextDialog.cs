@@ -9,16 +9,23 @@ internal sealed class OwnerConsoleTextDialog : Dialog
     internal ListView Body { get; } = new() { Width = Dim.Fill(), Height = Dim.Fill(1) };
     internal OwnerConsoleTextPage Page { get; }
     internal event Action<int>? ChoiceAccepted;
+    internal event Action? CloseRequested;
     private OwnerConsoleStructuredText? _structured;
     private readonly Label _fieldsHint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1, Text = "F2 fields (snapshot)", Visible = false };
     internal OwnerConsoleStructuredText? Structured
     {
         get => _structured;
-        set { _structured = value; _fieldsHint.Visible = value is not null; Body.Height = Dim.Fill(value is null ? 1 : 2); }
+        set
+        {
+            _structured = value; _fieldsHint.Visible = value is not null; Body.Height = Dim.Fill(value is null ? 1 : 2);
+            Page.ContinuationIndent = value?.ContinuationIndent ?? 0;
+        }
     }
     internal event Action<OwnerConsoleFieldSnapshot>? FieldsRequested;
     internal OwnerConsoleFieldSnapshot? SelectedFields => Page.SourceLines.Count == 0 ? null :
         Structured?.At(Page.SourceLines[Page.Selected]);
+    internal string? SelectedFieldKey => Page.SourceLines.Count == 0 ? null :
+        Structured?.FieldKeys?.GetValueOrDefault(Page.SourceLines[Page.Selected]);
     private readonly string _baseTitle;
     private readonly OwnerConsoleListRenderer _source = new();
     internal string? TitleStatus { get; set; }
@@ -67,6 +74,8 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         }
         if (key == Key.Enter && Page.Choice is { } choice)
         { ChoiceAccepted?.Invoke(choice); key.Handled = true; return true; }
+        if ((key == Key.Esc || key == Key.Enter) && CloseRequested is not null)
+        { CloseRequested.Invoke(); key.Handled = true; return true; }
         if (!Page.HandleKey(key)) return false;
         Render(); key.Handled = true; return true;
     }
@@ -74,7 +83,7 @@ internal sealed class OwnerConsoleTextDialog : Dialog
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _disposed = true; FieldsRequested = null; ChoiceAccepted = null; }
+        if (disposing) { _disposed = true; FieldsRequested = null; ChoiceAccepted = null; CloseRequested = null; }
         base.Dispose(disposing);
     }
 
