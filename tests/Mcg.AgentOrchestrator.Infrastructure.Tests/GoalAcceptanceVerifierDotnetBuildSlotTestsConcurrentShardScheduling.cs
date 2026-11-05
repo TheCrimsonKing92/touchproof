@@ -57,10 +57,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 lane => Assert.Equal(
                     1,
                     infrastructureCalls.Count(call => HasArgumentPair(call, "--filter", lane.Filter))));
-            Assert.Contains(infrastructureCalls, call =>
-                call.Any(argument =>
-                    argument.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal) &&
-                    argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
+            var poolLanes = lanes.Where(lane =>
+                lane.Name.StartsWith(pool.LaneNamePrefix + " ", StringComparison.Ordinal)).ToArray();
+            Assert.NotEmpty(poolLanes);
+            Assert.All(poolLanes, lane =>
+            {
+                var call = Assert.Single(infrastructureCalls,
+                    call => HasArgumentPair(call, "--filter", lane.Filter));
+                Assert.Contains("Category!=HostIntegration", call[Array.IndexOf(call, "--filter") + 1],
+                    StringComparison.Ordinal);
+            });
+            Assert.DoesNotContain(checks, check => check.Name == "infrastructure tests: Remainder");
             Assert.DoesNotContain(infrastructureCalls, call =>
                 call.Any(argument => argument.Contains("Dashboard", StringComparison.Ordinal)));
         }

@@ -13,10 +13,11 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
             return new(project, new("", "", $"{project} · onboarding · {onboarding.Stack} · {onboarding.Progress}",
                 "onboarding", "", null, "", Dimmed: onboarding.Unavailable is not null)
                 { Project = project, IsDiagnostic = true }, goals);
-        var active = goals.Count(row => !row.Dimmed);
-        var inGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.GateRunning);
-        var waitingForGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate && !row.IsPassedGateHeld);
-        var passedHeld = goals.Count(row => row.IsPassedGateHeld);
+        var distinctGoals = goals.DistinctBy(row => row.GoalId).ToArray();
+        var active = distinctGoals.Count(row => !row.Dimmed);
+        var inGate = distinctGoals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.GateRunning);
+        var waitingForGate = distinctGoals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate && !row.IsPassedGateHeld);
+        var passedHeld = distinctGoals.Count(row => row.IsPassedGateHeld);
         var conductor = !conductorLive ? "stopped" : active > 0 ? "running" : "idle";
         var age = lastLanded is { } at ? OwnerConsoleBoardRenderer.Age(now - at) : "never";
         var parts = new List<string> { project, $"conductor {conductor}", $"{active} active" };

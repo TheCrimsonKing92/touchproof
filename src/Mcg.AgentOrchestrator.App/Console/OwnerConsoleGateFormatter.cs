@@ -14,6 +14,7 @@ internal static class OwnerConsoleGateFormatter
 
     internal static string StatusSegment(OwnerConsoleGateProgress gate)
     {
+        if (gate.ConcurrentRuns is { Count: > 1 } runs) return string.Join('\n', runs.Select(RunLine));
         if (!gate.Live) return gate.Participation is { } participation ? "gate: " + participation + Identity(gate) :
             "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
         var members = string.Join("+", gate.Members.Take(3).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
@@ -21,6 +22,11 @@ internal static class OwnerConsoleGateFormatter
         var count = OwnerConsoleGateCount.Of(gate);
         return $"gate: {gate.Kind} {members} {CountText(gate)} {(gate.Failing ? "FAILING" : gate.HasEta ? Remaining(gate.RemainingSeconds) : "ETA unknown")}" + Identity(gate);
     }
+
+    internal static string RunLine(OwnerConsoleGateProgress gate) =>
+        $"{gate.Kind} {string.Join('+', gate.Members.Select(member => member.Id[..Math.Min(8, member.Id.Length)]))} " +
+        $"{(gate.Failing ? "failing" : "running")} {CountText(gate)} " +
+        (gate.HasEta ? Remaining(gate.RemainingSeconds) + " left" : "ETA unknown") + Identity(gate);
 
     internal static string CountText(OwnerConsoleGateProgress gate)
     {

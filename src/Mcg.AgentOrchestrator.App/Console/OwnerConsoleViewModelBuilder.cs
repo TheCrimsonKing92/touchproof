@@ -110,18 +110,20 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 if (key.Rank == OwnerConsoleAttention.GateRunning && (gate is null || gate.ForMember(goal.Id.Value) is not null) &&
                     gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
-                board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
+                var row = new OwnerConsoleBoardRow(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
                     key.Rank == OwnerConsoleAttention.RecentTerminal, OwnerConsolePriorityText.Column(goal),
                     OwnerConsolePriorityText.Warning(goal, []))
-                    { SortKey = key, StageWithoutQuestion = stage, IsPassedGateHeld = passedHeld });
+                    { SortKey = key, StageWithoutQuestion = stage, IsPassedGateHeld = passedHeld };
+                foreach (var line in stage.Split('\n'))
+                    board.Add(row with { Stage = line, StageWithoutQuestion = line });
             }
         }
         DateTimeOffset? tick = null;
         try { tick = latestTick?.Invoke(); }
         catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }
-        return new(new(liveness.IsRunning(), board.Count(row => !row.Dimmed), 0, 0, null, 0,
+        return new(new(liveness.IsRunning(), board.Where(row => !row.Dimmed).Select(row => row.GoalId).Distinct().Count(), 0, 0, null, 0,
             board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), [], Gate: gate);
     }
 

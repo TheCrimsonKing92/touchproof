@@ -2,9 +2,10 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    public void ReportWorkerTaskProgress(GoalId goalId, TaskId taskId, WorkTaskStatus status, string message) =>
+    public void ReportWorkerTaskProgress(GoalId goalId, TaskId taskId, WorkTaskStatus status, string message,
+        ProgressFailurePayload? failure = null) =>
         ReportTaskProgress(goalId, taskId, status, message,
-            correctionSource: CriteriaCorrectionSource.WorkerResult);
+            correctionSource: CriteriaCorrectionSource.WorkerResult, failure: failure);
 
     public void RecordWorkerResultCriteriaCorrection(GoalId goalId, TaskId taskId, string output) =>
         RecordIgnoredCriteriaCorrection(GetGoal(goalId), taskId, CriteriaCorrectionSource.WorkerResult, output);

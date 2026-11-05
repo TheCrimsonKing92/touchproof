@@ -5,16 +5,16 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorBatchLoop
 {
     // Emit a compact progress line to stdout with immediate flush; optionally accumulate in a list.
-    internal static void EmitProgress(string line, List<string>? accumulator = null)
+    internal static void EmitProgress(string line, List<string>? accumulator = null, GoalProgressEventFields? fields = null)
     {
         var stampedLine = $"{line} ts={DiagnosticUtcNow():O}";
         Console.WriteLine(stampedLine);
         Console.Out.Flush();
         accumulator?.Add(stampedLine);
-        TryAppendConductEvent(line);
+        TryAppendConductEvent(line, fields);
     }
 
-    private static void TryAppendConductEvent(string line)
+    private static void TryAppendConductEvent(string line, GoalProgressEventFields? fields)
     {
         var writer = CurrentConductEventLogWriter.Value;
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
@@ -32,6 +32,10 @@ internal sealed partial class ConductorBatchLoop
                         $"pending=true detail={SanitizeHandoffDetail(line)}");
                     Console.Error.Flush();
                 }
+            }
+            else if (fields is not null)
+            {
+                writer.AppendGoalProgress(kind, goalId, line, fields);
             }
             else
             {

@@ -111,7 +111,9 @@ internal sealed partial class ConductorDriver
             {
                 Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
                 {
-                    Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision)
+                    Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision),
+                    Failure = decision.Reason == facts.TerminalEscalationReason
+                        ? ConductorOutcomeText.TerminalFailure(goal, state) : null
                 }
             };
         }

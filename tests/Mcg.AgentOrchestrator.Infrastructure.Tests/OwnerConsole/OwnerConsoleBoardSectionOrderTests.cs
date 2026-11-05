@@ -68,6 +68,24 @@ public sealed class OwnerConsoleBoardSectionOrderTests
         Assert.Equal(single.Board, OwnerConsoleBoardSection.Arrange(single).Board);
     }
 
+    [Fact]
+    public void Arrange_ConcurrentRunRows_CountsEachGoalsDecisionsOnce()
+    {
+        var shared = Goal("home") with { Stage = "in gate: cohort running 0/1" };
+        var concurrent = shared with { GoalId = shared.GoalId.ToUpperInvariant(), Stage = "in gate: train running 0/2" };
+        var other = Goal("home") with { GoalId = "another-goal" };
+        var model = Model(["home", "empty"],
+            [Header("home"), shared, concurrent, other, Header("empty")],
+            [Decision("q1", shared.GoalId), Decision("q2", shared.GoalId), Decision("q3", other.GoalId)]);
+
+        var arranged = OwnerConsoleBoardSection.Arrange(model);
+        var header = arranged.Board.Single(row => row.Project == "home" && row.IsDiagnostic);
+
+        Assert.Equal(3, header.OwnerDecisions);
+        Assert.EndsWith(" · 3 decisions ──", OwnerConsoleBoardSection.HeaderLine(header));
+        Assert.Equal(new[] { shared, concurrent, other }, arranged.Board.Where(row => !row.IsDiagnostic));
+    }
+
     private static OwnerConsoleBoardRow Header(string project, string state = "stopped") =>
         new("", "", project, state, "", null, "") { Project = project, IsDiagnostic = true };
 

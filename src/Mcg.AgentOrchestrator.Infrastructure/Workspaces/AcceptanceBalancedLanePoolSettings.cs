@@ -9,6 +9,8 @@ internal sealed class AcceptanceBalancedLanePoolSettings
     public double DefaultClassSecondsWhenNoHistory { get; init; } = 1;
     public IReadOnlyList<string> TraitExclusions { get; init; } = [];
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
+    // Named lanes may share the pool's trait guards without losing their raw filter contract.
+    public IReadOnlyList<string> PoolEligibleLaneNames { get; init; } = [];
 
     internal void Validate(IReadOnlyList<AcceptanceTestLane> lanes)
     {
@@ -23,6 +25,22 @@ internal sealed class AcceptanceBalancedLanePoolSettings
             var arguments = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(exclusion).ToArray();
             if (arguments.Length != 2 || arguments[0] != "--filter-not-trait")
                 throw new InvalidDataException("Balanced lane pool trait exclusions must each declare one trait exclusion.");
+        }
+        if (PoolEligibleLaneNames is null || PoolEligibleLaneNames.Any(string.IsNullOrWhiteSpace) ||
+            PoolEligibleLaneNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != PoolEligibleLaneNames.Count)
+            throw new InvalidDataException("Balanced lane pool eligible lane names must be non-empty and unique.");
+        var poolArguments = TraitExclusions.SelectMany(AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter).ToArray();
+        // The packer validates pool settings without a lane catalog; expansion validates the references.
+        foreach (var name in PoolEligibleLaneNames.Where(_ => lanes.Count > 0))
+        {
+            var lane = lanes.SingleOrDefault(lane => lane.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException($"Balanced lane pool eligible lane '{name}' does not exist.");
+            if (lane.ExclusiveResourceKeys.Count > 0 || lane.OwnedCollections.Count > 0 || lane.RequiresBuildSystemChange)
+                throw new InvalidDataException($"Balanced lane pool eligible lane '{name}' has isolation requirements.");
+            var arguments = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
+            if (arguments.Chunk(2).Any(pair => pair[0] == "--filter-not-trait" &&
+                    !AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(poolArguments, pair[1])))
+                throw new InvalidDataException($"Balanced lane pool eligible lane '{name}' has a trait exclusion missing from the pool.");
         }
         if (ExclusiveResourceKeys is null || ExclusiveResourceKeys.Any(string.IsNullOrWhiteSpace) ||
             ExclusiveResourceKeys.Select(key => key.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != ExclusiveResourceKeys.Count)
