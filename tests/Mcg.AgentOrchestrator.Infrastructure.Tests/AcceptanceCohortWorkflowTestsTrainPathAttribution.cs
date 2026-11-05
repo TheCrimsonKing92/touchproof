@@ -74,7 +74,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : Acceptan
         {
             AssertPassingRemainder(train, 2, MergeTrainEjectionReason.RedNewestMember);
             Assert.Empty(AttributionEvents(train.Repo));
-            Assert.All(train.Goals, goal =>
+            Assert.Equal(GoalStatus.AcceptanceFailed, train.Goals[2].Status);
+            Assert.NotNull(train.Goals[2].LatestAcceptanceFailure);
+            Assert.All(train.Goals.Take(2), goal =>
             {
                 Assert.Equal(GoalStatus.Verified, goal.Status);
                 Assert.Null(goal.LatestAcceptanceFailure);

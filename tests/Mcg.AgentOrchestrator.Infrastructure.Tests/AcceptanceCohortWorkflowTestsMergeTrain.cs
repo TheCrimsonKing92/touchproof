@@ -540,8 +540,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                     ExitCode: 0,
                     OutputTail: null,
                     Checks: [new AcceptanceCheckResult("shorter train", true, 0, null)],
-                    TestResultPaths: [WritePassingTrx(repo, "train-two-green.trx")]),
-                FailedVerification(repo, "train-newest-solo-red.trx", "newest solo")
+                    TestResultPaths: [WritePassingTrx(repo, "train-two-green.trx")])
             ]);
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(
@@ -573,29 +572,13 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
                 "tests",
                 "Mcg.AgentOrchestrator.Dashboard.Tests",
                 "RedTrainNewest.cs")));
-            var soloProjection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            Assert.Equal(GoalStatus.AcceptanceFailed, thirdGoal.Status);
+            Assert.IsNotType<GateReadyCandidateProjectionResult.Ready>(
                 driver.ProjectGateReadyCandidate(thirdGoal, ConductorAutonomyPolicy.Permissive));
-            Assert.Equal(
-                ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/RedTrainNewest.cs"],
-                soloProjection.Projection.LandingPaths);
-            var soloResult = driver.RunParallelLandingAcceptance(
-                ConductorParallelAcceptanceCandidate.Create(
-                    thirdGoal,
-                    slotIndex: 0,
-                    soloProjection.Projection.LandingPaths),
-                ConductorAutonomyPolicy.Permissive,
-                stableSlotLease: null,
-                CancellationToken.None,
-                new AcceptanceRunExecutionOptions());
-            Assert.NotNull(soloResult.Acceptance);
-            Assert.False(soloResult.Acceptance!.Passed);
-            Assert.Equal(3, verifier.RunCount);
-            Assert.Equal<GoalId?>([firstGoal.Id, firstGoal.Id, thirdGoal.Id], verifier.GoalIds);
+            Assert.Equal(2, verifier.RunCount);
+            Assert.Equal<GoalId?>([firstGoal.Id, firstGoal.Id], verifier.GoalIds);
             Assert.Equal(3, verifier.ChangedFiles[0].Count);
             Assert.Equal(2, verifier.ChangedFiles[1].Count);
-            Assert.Equal(
-                ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/RedTrainNewest.cs"],
-                verifier.ChangedFiles[2]);
             Assert.False(File.Exists(Path.Combine(
                 repo,
                 "tests",

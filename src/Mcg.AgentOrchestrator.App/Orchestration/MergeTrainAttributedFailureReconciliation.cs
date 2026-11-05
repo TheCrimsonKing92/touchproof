@@ -17,7 +17,7 @@ internal static class MergeTrainAttributedFailureReconciliation
     {
         var changed = new HashSet<GoalId>();
         if (workspace is null || kernel is null || store is null) return changed;
-        Dictionary<string, List<(string TrainId, string Revision, string Detail)>> evidenceByGoal;
+        Dictionary<string, List<(string TrainId, string Revision, string Detail, string Reason)>> evidenceByGoal;
         try { evidenceByGoal = ReadEvidence(workspace); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -32,11 +32,22 @@ internal static class MergeTrainAttributedFailureReconciliation
             {
                 if (!evidenceByGoal.TryGetValue(goal.Id.Value, out var evidence) ||
                     project(goal) is not GateReadyCandidateProjectionResult.Ready ready) continue;
-                foreach (var (trainId, revision, detail) in evidence)
+                foreach (var (trainId, revision, detail, reason) in evidence)
                 {
-                    if (revision != ready.Projection.CandidateRevision) continue;
                     var receipt = store.TryReadReceipt(trainId);
-                    if (receipt is null || WasApplied(goal, receipt.ReceiptId) ||
+                    if (receipt is null || WasApplied(goal, receipt.ReceiptId)) continue;
+                    if (reason == nameof(MergeTrainEjectionReason.RedNewestMember))
+                    {
+                        var dropped = receipt.Identity.Members.SingleOrDefault(member => member.GoalId == goal.Id);
+                        if (dropped is null || dropped.CandidateRevision != ready.Projection.CandidateRevision) continue;
+                        var complete = MergeTrainSurvivorDifferentialFailure.PrepareReconciliation(store, receipt, dropped,
+                            detail, goal, _ => ready, recordFailure, kernel.RouteRecordedAcceptanceFailure);
+                        if (complete is null) continue;
+                        applying = true;
+                        complete();
+                        break;
+                    }
+                    if (revision != ready.Projection.CandidateRevision ||
                         !MergeTrainRedAttribution.IsGenuineTrainRed(receipt) ||
                         MergeTrainReachAttribution.ReadFailingClasses(receipt.GateTestResultPaths) is null) continue;
                     var member = receipt.Identity.Members.SingleOrDefault(member =>
@@ -77,7 +88,7 @@ internal static class MergeTrainAttributedFailureReconciliation
         return changed;
     }
 
-    private static Dictionary<string, List<(string TrainId, string Revision, string Detail)>> ReadEvidence(OrchestratorWorkspace workspace)
+    private static Dictionary<string, List<(string TrainId, string Revision, string Detail, string Reason)>> ReadEvidence(OrchestratorWorkspace workspace)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -89,21 +100,26 @@ internal static class MergeTrainAttributedFailureReconciliation
         // Ejections have no typed read API or receipt foreign key. Bind the existing
         // receipt detail to the implicated identity rather than inferring from exclusion alone.
         command.CommandText = """
-            SELECT DISTINCT i.goal_id, i.train_id, i.candidate_revision, e.detail
+            SELECT DISTINCT i.goal_id, i.train_id, i.candidate_revision, e.detail, e.reason
             FROM merge_train_implicated_candidates i
             JOIN merge_train_receipts r ON r.train_id = i.train_id
             JOIN merge_train_ejections e ON e.goal_id = i.goal_id
                 AND (e.detail = 'Dropped after RED receipt ' || r.receipt_id || '.'
                     OR instr(e.detail, 'Dropped after RED receipt ' || r.receipt_id || '.' || char(10) || 'reproduction=') = 1)
-            WHERE e.reason = 'RedAttributedMember';
+            WHERE e.reason = 'RedAttributedMember'
+            UNION
+            SELECT DISTINCT e.goal_id, r.train_id, '', e.detail, e.reason
+            FROM merge_train_ejections e
+            JOIN merge_train_receipts r ON e.detail = 'Dropped after RED receipt ' || r.receipt_id || '.'
+            WHERE e.reason = 'RedNewestMember';
             """;
-        var evidenceByGoal = new Dictionary<string, List<(string, string, string)>>(StringComparer.Ordinal);
+        var evidenceByGoal = new Dictionary<string, List<(string, string, string, string)>>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
             var goalId = reader.GetString(0);
             if (!evidenceByGoal.TryGetValue(goalId, out var evidence)) evidenceByGoal.Add(goalId, evidence = []);
-            evidence.Add((reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+            evidence.Add((reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
         }
         return evidenceByGoal;
     }
@@ -117,7 +133,7 @@ internal static class MergeTrainAttributedFailureReconciliation
         return eligible.Where(goal => !changed.Contains(goal.Id)).ToArray();
     }
 
-    private static bool WasApplied(Goal goal, string receiptId) => goal.Timeline.Any(record =>
+    internal static bool WasApplied(Goal goal, string receiptId) => goal.Timeline.Any(record =>
         record.Kind == ProgressKind.GoalPolicyDecision &&
         record.Message.StartsWith("merge train RED attributed (", StringComparison.Ordinal) &&
         record.Message.Contains($") receipt {receiptId}:", StringComparison.Ordinal));

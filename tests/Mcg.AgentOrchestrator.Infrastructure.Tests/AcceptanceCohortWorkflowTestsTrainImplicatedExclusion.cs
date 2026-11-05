@@ -20,9 +20,10 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
             var dropped = Assert.Single(scenario.Result.Ejections,
                 item => item.Reason == MergeTrainEjectionReason.RedNewestMember);
             Assert.Equal(scenario.Goals[2].Id, dropped.GoalId);
-            var ejected = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
-                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[2], ConductorAutonomyPolicy.Permissive))
-                .Projection;
+            Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Goals[2].Status);
+            Assert.IsNotType<GateReadyCandidateProjectionResult.Ready>(
+                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[2], ConductorAutonomyPolicy.Permissive));
+            var ejected = scenario.Selection.Members[2];
             Assert.Equal(scenario.Selection.Members[2].CandidateRevision, ejected.CandidateRevision);
             var keys = scenario.Driver.ReadTrainImplicatedMemberKeys();
             Assert.Equal(ConductorAcceptanceCohortAttributedMembers.Key(ejected.GoalId, ejected.CandidateRevision),
@@ -55,10 +56,11 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
         WithTrain(repo => [FailedVerification(repo, "red.trx", "train"), Passing(repo)], scenario =>
         {
             var old = scenario.Selection.Members[2];
-            _ = CreateWorktreeCandidate(scenario.Repo, old.GoalId, old.LandingPaths[0], "revised");
-            var changed = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
-                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[2], ConductorAutonomyPolicy.Permissive))
-                .Projection;
+            var revision = CreateWorktreeCandidate(scenario.Repo, old.GoalId, old.LandingPaths[0], "revised");
+            // Selector exclusion binds to a revision; lifecycle readiness is tested separately.
+            var changed = new GateReadyCandidateProjection(old.GoalId, old.LifecycleState, old.VerificationState,
+                old.ChangeRiskTier, old.AutoPromotionDisposition, old.LandingPaths, old.ResourceKeys,
+                old.MergeEvidence with { BranchRevision = revision });
             Assert.NotEqual(old.CandidateRevision, changed.CandidateRevision);
             var keys = scenario.Driver.ReadTrainImplicatedMemberKeys();
             Assert.Contains(ConductorAcceptanceCohortAttributedMembers.Key(old.GoalId, old.CandidateRevision), keys);
