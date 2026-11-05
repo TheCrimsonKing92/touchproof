@@ -73,7 +73,7 @@ internal sealed class GoalGitFactIndex(
             return FromSnapshot(snapshot, fullExecutionDirectory, gitRunner, branchContentStateCache);
         }
 
-        var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", GoalBranchRefPrefix);
+        var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:lstrip=2) %(objectname)", GoalBranchRefPrefix, $"refs/heads/{integrationBranch}");
         if (branchResult.ExitCode != 0)
         {
             return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null, evidenceAvailable: false, gitRunner, branchContentStateCache);
@@ -81,15 +81,17 @@ internal sealed class GoalGitFactIndex(
 
         var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", GoalBranchRefPrefix);
         var worktreeResult = RunGit(gitRunner, fullExecutionDirectory, "worktree", "list", "--porcelain");
-        var mainResult = RunGit(gitRunner, fullExecutionDirectory, "rev-parse", "--verify", $"refs/heads/{integrationBranch}");
-        var resolvedMainSha = mainResult.ExitCode == 0 && IsSingleToken(mainResult.Output.Trim())
-            ? mainResult.Output.Trim()
-            : null;
+        var branchTips = ParseBranchTips(branchResult.Output);
+        var resolvedMainSha = branchTips.GetValueOrDefault(integrationBranch);
+        var goalTips = branchTips
+            .Where(tip => tip.Key.StartsWith("goal/", StringComparison.Ordinal) &&
+                          !tip.Key.Equals(integrationBranch, StringComparison.Ordinal))
+            .ToFrozenDictionary(StringComparer.Ordinal);
 
         var index = new GoalGitFactIndex(
             fullExecutionDirectory,
             true,
-            ParseBranchTips(branchResult.Output),
+            goalTips,
             mergedResult.ExitCode == 0 ? ParseLines(mergedResult.Output) : EmptySet(),
             worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet(),
             resolvedMainSha,
