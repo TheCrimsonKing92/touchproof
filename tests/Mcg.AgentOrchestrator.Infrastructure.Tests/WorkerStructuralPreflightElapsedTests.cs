@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: fixture-owned repositories, stores, processes and clock; no wall-clock verdicts.
-public sealed class WorkerBuildRequestStructuralElapsedTests
+public sealed class WorkerStructuralPreflightElapsedTests
 {
     [Theory]
     [InlineData(WorkerBuildStructuralStatus.Passed)]

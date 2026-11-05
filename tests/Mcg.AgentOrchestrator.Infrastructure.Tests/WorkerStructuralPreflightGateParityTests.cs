@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each real host request uses a fixture-owned repository, stores and fake compiler.
-public sealed class WorkerBuildRequestStructuralGateParityTests
+public sealed class WorkerStructuralPreflightGateParityTests
 {
     [Fact]
     public async Task RatchetViolation_ReportsExactGateFindings()

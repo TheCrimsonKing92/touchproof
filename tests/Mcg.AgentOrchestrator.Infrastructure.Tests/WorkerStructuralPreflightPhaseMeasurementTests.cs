@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: read-only repository inspection and an invocation-scoped cold parse cache.
 // Durations are diagnostic observations, never correctness thresholds.
-public sealed class WorkerBuildRequestStructuralPhaseMeasurementTests(ITestOutputHelper output)
+public sealed class WorkerStructuralPreflightPhaseMeasurementTests(ITestOutputHelper output)
 {
     [Fact]
     public void CurrentTree_UnboundedEvaluation_RecordsMonotonicPhaseMeasurements()
