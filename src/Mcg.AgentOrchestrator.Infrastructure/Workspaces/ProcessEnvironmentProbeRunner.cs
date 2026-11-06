@@ -42,7 +42,7 @@ public sealed class ProcessEnvironmentProbeRunner : IEnvironmentProbeRunner
                 RedirectStandardError = true, RedirectStandardInput = true, WorkingDirectory = workingDirectory };
             environment.Apply(process.StartInfo);
             foreach (var argument in tool.Arguments) process.StartInfo.ArgumentList.Add(argument);
-            if (!process.Start()) return new(tool, false, null, "Process did not start.", "start-failed");
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) return new(tool, false, null, "Process did not start.", "start-failed");
             process.StandardInput.Close();
             var stdout = Drain(process.StandardOutput);
             var stderr = Drain(process.StandardError);

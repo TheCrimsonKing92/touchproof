@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -87,7 +88,7 @@ internal sealed class DotnetDumpConductorDiagnosticDumpCapture(
             RedirectStandardError = true
         };
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
-        process.Start();
+        ProcessTreeGuiSuppression.StartWithLaunchLock(process);
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

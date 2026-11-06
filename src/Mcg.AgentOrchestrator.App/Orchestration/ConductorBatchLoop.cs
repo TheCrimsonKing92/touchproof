@@ -103,6 +103,8 @@ internal sealed partial class ConductorBatchLoop
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
 
+    private readonly Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? _providerHoldProbe;
+
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
@@ -137,7 +139,8 @@ internal sealed partial class ConductorBatchLoop
         Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null,
         HomeBuildAdoptionDetector? homeBuildAdoption = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
-        Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null)
+        Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null,
+        Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? providerHoldProbe = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -164,6 +167,7 @@ internal sealed partial class ConductorBatchLoop
         _homeBuildRelaunchCoordinator = homeBuildAdoption is not null && homeBuildRelaunch is not null
             ? new HomeBuildRelaunchCoordinator(homeBuildAdoption, homeBuildRelaunch) : null;
         _homeBuildIdleBlockers = homeBuildIdleBlockers;
+        _providerHoldProbe = providerHoldProbe;
         _postLandingCanary = postLandingCanary;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
@@ -1496,6 +1500,13 @@ internal sealed partial class ConductorBatchLoop
             goalWalkClock.Stop(); ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
             ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
+            // Admission runs on this thread. A failed gate read must defer the probe like a live gate.
+            if (_providerHoldProbe is not null && RunJanitorialPhase<int?>(
+                    "count-provider-hold-probe-gates", totalTicks, () => _countLiveGroupedGates()) == 0)
+            {
+                foreach (var id in _providerHoldProbe(kernel, _utcNow())) changedGoalIds.Add(id);
+                ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
+            }
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {
@@ -2156,22 +2167,12 @@ internal sealed partial class ConductorBatchLoop
         return true;
     }
 
-    // Sanitize a detail string for compact line format (no spaces, max 40 chars).
-    private static string Sanitize(string value)
-    {
-        var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
-        return s.Length > 40 ? s[..40] : s;
-    }
+    private static string Sanitize(string value) => ConductorDiagnosticText.Sanitize(value);
 
     private static string SanitizeReceiptToken(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
-    internal static string SanitizeReason(string value)
-    {
-        const int maxReasonLength = 512;
-        var sanitized = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
-        return sanitized.Length > maxReasonLength ? sanitized[..maxReasonLength] : sanitized;
-    }
+    internal static string SanitizeReason(string value) => ConductorDiagnosticText.SanitizeReason(value);
 
     private static string SanitizeHeartbeatDetail(string value) =>
         ConductorHeartbeatDetail.Sanitize(value);
@@ -2254,12 +2255,7 @@ internal sealed partial class ConductorBatchLoop
         return state.Results;
     }
 
-    private static string BoundSingleLine(string value)
-    {
-        const int maxLength = 512;
-        var singleLine = value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');
-        return singleLine.Length > maxLength ? singleLine[..maxLength] : singleLine;
-    }
+    private static string BoundSingleLine(string value) => ConductorDiagnosticText.BoundSingleLine(value);
 
     private static ConductorAdvanceResult EscalateParallelAcceptanceSafely(
         ConductorDriver driver,

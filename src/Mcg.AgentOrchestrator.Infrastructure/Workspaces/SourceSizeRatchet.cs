@@ -214,7 +214,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b guards progressive-review paid restarts through EnvironmentContractGate before steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
             // Goal bc361051: retain typed progress facts in tick-local state and forward them at emission.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2539),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2535),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -599,7 +599,7 @@ internal static class SourceSizeRatchet
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
             // Goal 509d0c91 adds route-only ruling-file validation and captures its text in the existing
             // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
-            new SourceClassCeiling("CliCommandHandlers", 11021, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11017, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -659,7 +659,7 @@ internal static class SourceSizeRatchet
             // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9114, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9112, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -696,7 +696,7 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 exempts the review owner at the existing hold-tracking call;
             // the added comment explains why the tracker still needs the hold record.
             // Goal bc361051: seven wiring lines preserve typed progress facts; no new partial or headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 8974, 55),
+            new SourceClassCeiling("ConductorBatchLoop", 8970, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
