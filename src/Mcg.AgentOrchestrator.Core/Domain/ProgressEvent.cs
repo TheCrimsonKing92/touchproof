@@ -57,7 +57,17 @@ public sealed record OperatorIntentAppliedPayload(
     OperatorActorKind ActorKind = OperatorActorKind.Human,
     string? DecisionId = null,
     string? Outcome = null,
-    RetryRoundKind? RetryRoundKind = null);
+    RetryRoundKind? RetryRoundKind = null,
+    OperatorIntentBlocker? BlockedBy = null);
+
+// The obstruction observed at application time, retained even after it clears.
+public sealed record OperatorIntentBlocker(
+    string TaskId,
+    AgentRole Role,
+    string Reason,
+    int TaskNumber,
+    DateTimeOffset? FailureOccurredAt,
+    DateTimeOffset? LatestRetryAt);
 
 public sealed record TaskRequeueSkippedPayload(
     string TaskId,

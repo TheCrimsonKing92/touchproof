@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Parses only the kernel's dispatch-rejection envelope. Values are source slices,
@@ -20,8 +22,13 @@ internal static class OwnerActivityDiagnosticParser
             if (separator < 0 || !payload[batchPrefix.Length..separator].All(char.IsDigit)) return new(false, []);
             payload = payload[(separator + ": escalated at Failed — ".Length)..];
         }
-        if (payload.StartsWith(policyPrefix, StringComparison.Ordinal) && payload.EndsWith(policySuffix, StringComparison.Ordinal))
-            payload = payload[policyPrefix.Length..^policySuffix.Length];
+        if (payload.StartsWith(policyPrefix, StringComparison.Ordinal))
+        {
+            var pending = payload.IndexOf(policySuffix + ConductorOutcomeText.PendingBlockedIntentClause, StringComparison.Ordinal);
+            if (pending >= 0) payload = payload[..(pending + policySuffix.Length)];
+            if (payload.EndsWith(policySuffix, StringComparison.Ordinal))
+                payload = payload[policyPrefix.Length..^policySuffix.Length];
+        }
         if (!payload.StartsWith(marker, StringComparison.Ordinal)) return new(false, []);
 
         var fields = new List<OwnerConsoleField>();

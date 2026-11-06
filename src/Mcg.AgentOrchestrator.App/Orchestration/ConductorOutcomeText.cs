@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ConductorOutcomeText
 {
+    internal const string PendingBlockedIntentClause = "; pending AppliedBlocked intent ";
+
     internal static string Format(ConductorAdvanceOutcome outcome) => outcome switch
     {
         ConductorAdvanceOutcome.Executed e  => $"executed from {e.FromState} — {e.Description}",
@@ -18,16 +20,24 @@ internal static class ConductorOutcomeText
         Goal goal, GoalLifecycleState state, Func<string, string> trim)
     {
         var latestTaskFailure = LatestTaskFailure(goal, state);
-        return latestTaskFailure is null
+        var reason = latestTaskFailure is null
             ? $"Goal is in {state} state; operator action required"
             : $"Goal is in {state} state; TaskFailed: {trim(latestTaskFailure.Message)}; operator action required";
+        if (state == GoalLifecycleState.Failed &&
+            goal.Status is not (GoalStatus.Cancelled or GoalStatus.Superseded))
+        {
+            foreach (var applied in OperatorIntentEffectCheck.PendingBlocked(goal))
+                reason += $"{PendingBlockedIntentClause}{applied.IntentId} ({applied.Verb} task {applied.TaskId}); " +
+                    OperatorIntentEffectCheck.Describe(applied.BlockedBy!);
+        }
+        return reason;
     }
 
     internal static ProgressFailurePayload? TerminalFailure(Goal goal, GoalLifecycleState state) =>
         LatestTaskFailure(goal, state) is { } failure
             ? failure.Failure ?? new(failure.Kind.ToString(), null, []) : null;
 
-    private static ProgressEvent? LatestTaskFailure(Goal goal, GoalLifecycleState state)
+    internal static ProgressEvent? LatestTaskFailure(Goal goal, GoalLifecycleState state)
     {
         var failedTaskIds = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Failed)
