@@ -918,7 +918,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                     {
                         [Xunit.Fact] public void FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure() { }
                     }
-                    public class ConductorDriverTests { }
+                    public class ConductorDriverTests { [Xunit.Fact] public void ExecutedMember() { } }
                     """);
             },
             executedTestCount: 2,
