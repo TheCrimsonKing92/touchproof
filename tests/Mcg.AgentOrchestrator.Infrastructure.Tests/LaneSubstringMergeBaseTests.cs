@@ -148,6 +148,6 @@ public sealed class LaneSubstringMergeBaseTests
             return result.Output;
         }
 
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
     }
 }
