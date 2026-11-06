@@ -811,7 +811,7 @@ internal sealed class GitRevisionReader : IDisposable
             GitCli.ApplyLaunchSettings(info, readCommand: true);
             var completion = GitCli.ProcessCompletion.Begin(Volatile.Read(ref GitCli.CompletionObserver),
                 "cat-file", TimeProvider.System);
-            var process = HandleListProcessLauncher.Start(info);
+            var process = HandleListProcessLauncher.StartSuppressed(info);
             completion?.Started();
             var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion, completion);
             try
