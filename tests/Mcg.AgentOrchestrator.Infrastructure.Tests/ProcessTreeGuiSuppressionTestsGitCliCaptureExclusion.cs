@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Support = ProcessTreeGuiSuppressionTestsHandleListSupport;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
@@ -31,17 +32,18 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
             var previousObserver = GitCli.StartInfoObserver;
             try
             {
-                GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+                GitCli.StartInfoObserver = start => Support.PinEnvironment(start, root);
                 var alias = "!" + ShellQuote(ProcessTreeGuiSuppressionTestsProcessErrorMode.ProbeExecutable().Replace('\\', '/')) +
                     " --hold-for-event " + ShellQuote(key + $"-ready-{index}") + " " + ShellQuote(releaseName);
                 string[] args = ["-c", "alias.mcg-capture-hold=" + alias, "mcg-capture-hold"];
                 if (sharedPolicy)
                 {
                     var result = GitCli.RunExecutable("git", root, 600_000, args, null,
-                        () => attempts.Signal(), child =>
+                        null, child =>
                         {
-                            children[index] = child;
+                            children[index] = child.AttachProcess();
                             launched.Signal();
+                            attempts.Signal();
                         });
                     Assert.True(result.Succeeded, result.Error);
                 }
@@ -81,7 +83,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
                     Assert.True(attempts.Wait(TimeSpan.FromSeconds(60)),
                         "Git attempts did not reach the native inheritable-handle window.");
                     if (sharedPolicy)
-                        Assert.Equal(count, launched.CurrentCount); // Every git attempt is blocked at the lock.
+                        Assert.Equal(0, launched.CurrentCount); // Handle-list git launches finish creation inside the capture window.
                 }))
             {
                 native.Resume();

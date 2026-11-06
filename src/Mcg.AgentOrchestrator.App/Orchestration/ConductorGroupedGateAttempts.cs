@@ -70,7 +70,7 @@ internal sealed record GroupedGateAttemptOverlap(
 internal sealed class ConductorGroupedGateAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-grouped-gate-attempt";
-    private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
+    private static readonly ConcurrentDictionary<int, HandleListLaunchedProcess> OwnedProcessDrains = new();
     private readonly string _root;
     private readonly string? _stateDirectory;
     private readonly string? _projectName;
@@ -780,11 +780,11 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
 
     private ConductorGroupedGateLaunchResult LaunchOwnedProcess(ConductorGroupedGateAttempt attempt)
     {
-        Process process;
+        HandleListLaunchedProcess process;
         try
         {
             var startInfo = BuildOwnedProcessStartInfo(attempt, _buildStorageRoot);
-            process = ProcessTreeGuiSuppression.Start(startInfo)
+            process = HandleListProcessLauncher.StartSuppressed(startInfo)
                 ?? throw new InvalidOperationException("Failed to start grouped acceptance gate child.");
         }
         catch
@@ -794,7 +794,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             throw;
         }
         var processId = process.Id;
-        var identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity;
+        using var identityProcess = process.AttachProcess();
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(identityProcess).Identity;
         try
         {
             process.StandardInput.Close();

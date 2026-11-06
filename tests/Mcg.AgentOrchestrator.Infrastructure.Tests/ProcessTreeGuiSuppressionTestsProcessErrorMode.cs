@@ -41,12 +41,12 @@ public sealed class ProcessTreeGuiSuppressionTestsProcessErrorMode
         var previousObserver = GitCli.StartInfoObserver;
         try
         {
-            GitCli.StartInfoObserver = start => PinEnvironment(start, root);
+            GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsHandleListSupport.PinEnvironment(start, root);
             var receipt = Path.Combine(root, "mode.txt");
             var start = new ProcessStartInfo(ProbeExecutable()) { UseShellExecute = false, CreateNoWindow = true };
             start.ArgumentList.Add("--report-error-mode");
             start.ArgumentList.Add(receipt);
-            PinEnvironment(start, root);
+            ProcessTreeGuiSuppressionTestsHandleListSupport.PinEnvironment(start, root);
             if (path == "git")
             {
                 var result = GitCli.RunExecutable(start.FileName, root, 60_000,

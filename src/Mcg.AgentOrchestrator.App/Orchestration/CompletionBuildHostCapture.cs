@@ -20,7 +20,7 @@ internal sealed class CompletionBuildHostCapture
     private readonly CancellationTokenSource _reads = new();
     private readonly string _attempt = Guid.NewGuid().ToString("N");
     private readonly List<string> _errors = new();
-    private Process? _process;
+    private HandleListLaunchedProcess? _process;
     private StreamCapture? _stdout;
     private StreamCapture? _stderr;
     private Task<string?>? _completion;
@@ -46,10 +46,15 @@ internal sealed class CompletionBuildHostCapture
 
     internal void Attach(Process process, Func<Process, (TextReader Output, TextReader Error)> readers)
     {
+        Attach(new HandleListLaunchedProcess(process), () => readers(process));
+    }
+
+    internal void Attach(HandleListLaunchedProcess process, Func<(TextReader Output, TextReader Error)> readers)
+    {
         _process = process; // Establish cleanup ownership before any stream accessor can throw.
         _heldPid = process.Id;
         _exit = "unobserved";
-        var pair = readers(process);
+        var pair = readers();
         _stdout = new StreamCapture(pair.Output, _reads.Token);
         _stderr = new StreamCapture(pair.Error, _reads.Token);
     }

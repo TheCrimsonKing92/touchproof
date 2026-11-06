@@ -79,7 +79,7 @@ internal sealed class DotnetDumpConductorDiagnosticDumpCapture(
     private static async Task<int> RunProcessAsync(
         string tool, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        using var process = new Process();
+        using var process = new HandleListLaunchedProcess();
         process.StartInfo = new ProcessStartInfo(tool)
         {
             UseShellExecute = false,
@@ -88,7 +88,7 @@ internal sealed class DotnetDumpConductorDiagnosticDumpCapture(
             RedirectStandardError = true
         };
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
-        ProcessTreeGuiSuppression.StartWithLaunchLock(process);
+        process.Start();
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

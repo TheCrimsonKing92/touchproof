@@ -23,7 +23,7 @@ public sealed class ConductorStartSharedLaunchTypeTests
                     type.FullName.StartsWith(caller.FullName + "/", StringComparison.Ordinal))
                 .SelectMany(type => type.Dependencies.OfType<MethodCallDependency>()).ToArray();
             Assert.Contains(calls, call => call.TargetMember.DeclaringType.FullName ==
-                typeof(WindowsHandleListProcessLauncher).FullName &&
+                typeof(Mcg.AgentOrchestrator.Infrastructure.HandleListProcessLauncher).FullName &&
                 call.TargetMember.Name.StartsWith("Launch(", StringComparison.Ordinal));
         }
     }
@@ -33,9 +33,9 @@ public sealed class ConductorStartSharedLaunchTypeTests
     [InlineData("UpdateProcThreadAttribute")]
     public void NativeLaunchInterop_IsDeclaredOnlyBySharedType(string name)
     {
-        var declarations = typeof(CliConductorCommand).Assembly.GetTypes()
+        var declarations = typeof(Mcg.AgentOrchestrator.Infrastructure.HandleListProcessLauncher).Assembly.GetTypes()
             .SelectMany(type => type.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
             .Where(method => method.Name == name && (method.Attributes & MethodAttributes.PinvokeImpl) != 0).ToArray();
-        Assert.Equal(typeof(WindowsHandleListProcessLauncher), Assert.Single(declarations).DeclaringType);
+        Assert.Equal(typeof(Mcg.AgentOrchestrator.Infrastructure.HandleListProcessLauncher), Assert.Single(declarations).DeclaringType);
     }
 }

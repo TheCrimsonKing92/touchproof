@@ -383,7 +383,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
     internal string? ProjectHomeDirectory { get; set; }
-    private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
+    private static readonly ConcurrentDictionary<int, HandleListLaunchedProcess> OwnedProcessDrains = new();
     internal const int RetainedAttemptCountPerGoal = 20;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
@@ -2779,11 +2779,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        Process process;
+        HandleListLaunchedProcess process;
         try
         {
             var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
-            process = ProcessTreeGuiSuppression.Start(startInfo)
+            process = HandleListProcessLauncher.StartSuppressed(startInfo)
                 ?? throw new InvalidOperationException("failed to start acceptance attempt process");
         }
         catch
@@ -2793,7 +2793,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             throw;
         }
         var processId = process.Id;
-        var identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity;
+        using var identityProcess = process.AttachProcess();
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(identityProcess).Identity;
         try { DetachOwnedProcessStreams(process, launch.Attempt); }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
         {
@@ -2849,7 +2850,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return startInfo;
     }
 
-    private static void DetachOwnedProcessStreams(Process process, ConductorParallelAcceptanceAttempt attempt)
+    private static void DetachOwnedProcessStreams(HandleListLaunchedProcess process, ConductorParallelAcceptanceAttempt attempt)
     {
         var processId = process.Id;
         process.OutputDataReceived += (_, e) =>

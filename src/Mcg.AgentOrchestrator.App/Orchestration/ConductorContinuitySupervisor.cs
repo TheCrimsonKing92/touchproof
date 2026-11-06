@@ -1147,7 +1147,7 @@ internal sealed class SystemConductorSupervisorProcessHost(
         using var stderrWriter = CreateOutputWriter(request.StderrPath);
         var stdoutGate = new object();
         var stderrGate = new object();
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        using var process = new HandleListLaunchedProcess { StartInfo = startInfo, EnableRaisingEvents = true };
         process.OutputDataReceived += (_, eventArgs) =>
         {
             if (eventArgs.Data is not null)
@@ -1179,7 +1179,7 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 }
             }
         };
-        if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+        if (!process.Start())
         {
             throw new InvalidOperationException("Failed to start the supervised conductor process.");
         }

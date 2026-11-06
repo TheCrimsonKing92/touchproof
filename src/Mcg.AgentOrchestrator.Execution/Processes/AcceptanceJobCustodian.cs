@@ -7,14 +7,14 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Startup owns no lasting job handle. The child owns native lifetime custody.
 internal sealed class AcceptanceJobCustodian : IDisposable
 {
-    private readonly Process _process;
+    private readonly HandleListLaunchedProcess _process;
     private readonly AcceptanceJobCustodianProtocol _protocol;
     private readonly AcceptanceJobCustodianBounds _bounds;
     private readonly AcceptanceJobCustodianDiagnostics _diagnostics;
     private readonly Task _drain;
     internal SpawnProcessIdentity Identity { get; }
 
-    private AcceptanceJobCustodian(Process process, AcceptanceJobCustodianProtocol protocol,
+    private AcceptanceJobCustodian(HandleListLaunchedProcess process, AcceptanceJobCustodianProtocol protocol,
         AcceptanceJobCustodianBounds bounds, AcceptanceJobCustodianDiagnostics diagnostics, Task drain)
     {
         _process = process;
@@ -22,7 +22,8 @@ internal sealed class AcceptanceJobCustodian : IDisposable
         _bounds = bounds;
         _diagnostics = diagnostics;
         _drain = drain;
-        Identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity
+        using var identityProcess = process.AttachProcess();
+        Identity = SpawnProcessIdentityReader.ReadForRegistration(identityProcess).Identity
             ?? throw new InvalidOperationException("Acceptance custodian identity is unavailable.");
     }
 
@@ -32,7 +33,7 @@ internal sealed class AcceptanceJobCustodian : IDisposable
     {
         if (settlementPath is not null && File.Exists(settlementPath))
             throw new InvalidOperationException("Acceptance job already has a settlement receipt.");
-        var process = ProcessTreeGuiSuppression.Start(launch.CreateStartInfo())
+        var process = HandleListProcessLauncher.StartSuppressed(launch.CreateStartInfo())
             ?? throw new InvalidOperationException("Acceptance custodian did not start.");
         var diagnostics = new AcceptanceJobCustodianDiagnostics();
         var drain = diagnostics.DrainAsync(process.StandardError);

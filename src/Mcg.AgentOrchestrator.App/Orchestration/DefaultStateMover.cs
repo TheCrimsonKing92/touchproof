@@ -357,7 +357,7 @@ internal sealed class DefaultStateMover
             target.IndexOfAny(['"', '%', '!', '\r', '\n', '&', '|', '<', '>', '^']) >= 0)
             throw new IOException("Junction paths contain unsupported command characters.");
         start.Arguments = $"/d /v:off /c mklink /J \"{path}\" \"{target}\"";
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(start) ?? throw new IOException("Could not start junction creation.");
+        using var process = HandleListProcessLauncher.Start(start) ?? throw new IOException("Could not start junction creation.");
         process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

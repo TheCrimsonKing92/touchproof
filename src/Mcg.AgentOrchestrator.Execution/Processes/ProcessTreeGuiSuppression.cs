@@ -35,7 +35,7 @@ internal static partial class ProcessTreeGuiSuppression
         }
     }
 
-    private static void EnsureLaunchSuppression(LaunchLockEntryPoint entry, ErrorModeAccess access)
+    internal static void EnsureLaunchSuppression(LaunchLockEntryPoint entry, ErrorModeAccess access)
     {
         try
         {
@@ -104,6 +104,14 @@ internal static partial class ProcessTreeGuiSuppression
                         onDispose is null ? 0 : holdEnded - acquiredTimestamp, childCreateTicks);
             }
         }
+    }
+
+    // Native handle-list launches need the same policy, without the legacy inheritance lock or a second sample.
+    internal static ConsoleSpawnScope PrepareConsoleForHandleListSpawn()
+    {
+        if (!OperatingSystem.IsWindows()) return new(false);
+        var policy = ChildConsoleLaunchPolicy.Prepare();
+        return new(policy.ChildCreateNoWindow, policy.ChildCreationFlags);
     }
 
     internal static ConsoleSpawnScope AcquireConsoleForChildSpawn() =>

@@ -22,10 +22,10 @@ public sealed class ForgeProcessRunner : IForgeProcessRunner
         };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         foreach (var pair in environment) start.Environment[pair.Key] = pair.Value;
-        using var process = new Process { StartInfo = start };
+        using var process = new HandleListLaunchedProcess { StartInfo = start };
         try
         {
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) return new(false, -1, "", $"{fileName} did not start");
+            if (!process.Start()) return new(false, -1, "", $"{fileName} did not start");
         }
         catch (Exception exception) when (exception is Win32Exception or IOException)
         {

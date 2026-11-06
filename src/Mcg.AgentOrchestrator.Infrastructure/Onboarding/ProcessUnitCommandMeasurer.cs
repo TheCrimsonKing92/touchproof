@@ -37,11 +37,11 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
             RedirectStandardError = true
         };
         foreach (var token in tokens.Skip(1)) start.ArgumentList.Add(token);
-        using var process = new Process { StartInfo = start };
+        using var process = new HandleListLaunchedProcess { StartInfo = start };
         var clock = Stopwatch.StartNew();
         try
         {
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+            if (!process.Start())
                 return UnitCommandMeasurementResult.Failed($"The {tool} process did not start.");
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
