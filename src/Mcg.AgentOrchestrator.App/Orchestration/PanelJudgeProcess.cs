@@ -14,7 +14,7 @@ internal static class PanelJudgeProcess
     {
         using var deadline = new CancellationTokenSource(request.Timeout ?? ConductorJudgePanelBudgets.JudgeTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, cancellationToken);
-        using var process = new Process { StartInfo = WorkerProcessRunner.BuildPowerShellStartInfo(request.Command, request.WorkingDirectory) };
+        using var process = new HandleListLaunchedProcess { StartInfo = WorkerProcessRunner.BuildPowerShellStartInfo(request.Command, request.WorkingDirectory) };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
         Task? drains = null;
@@ -24,7 +24,7 @@ internal static class PanelJudgeProcess
         using var drainStop = new CancellationTokenSource();
         try
         {
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) throw new InvalidOperationException("Judge process did not start.");
+            if (!process.Start()) throw new InvalidOperationException("Judge process did not start.");
             drains = Task.WhenAll(Capture(process.StandardOutput, stdout, drainStop.Token),
                 Capture(process.StandardError, stderr, drainStop.Token));
             await process.StandardInput.WriteAsync((request.StandardInput ?? "").AsMemory(), linked.Token).ConfigureAwait(false);

@@ -38,7 +38,7 @@ internal sealed class SystemConductorProcessLauncher : IConductorProcessLauncher
         foreach (var argument in request.Arguments) start.ArgumentList.Add(argument);
         foreach (var (key, value) in request.Environment) start.Environment[key] = value;
         foreach (var key in request.EnvironmentVariablesToRemove) start.Environment.Remove(key);
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(start) ?? throw new InvalidOperationException("Could not launch PowerShell.");
+        using var process = HandleListProcessLauncher.Start(start) ?? throw new InvalidOperationException("Could not launch PowerShell.");
         process.StandardInput.Close();
         // The detached child can inherit a pipe handle. Bound reads by the launcher process,
         // never by EOF from its descendants.

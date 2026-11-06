@@ -114,7 +114,7 @@ internal static class AcceptanceLaneClosureHasher
 
     private static string? RunGit(string root, IReadOnlyList<string> arguments)
     {
-        using var process = new Process
+        using var process = new HandleListLaunchedProcess
         {
             StartInfo = new ProcessStartInfo
             {
@@ -128,7 +128,7 @@ internal static class AcceptanceLaneClosureHasher
         };
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
-        if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+        if (!process.Start())
             return null;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

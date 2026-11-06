@@ -868,7 +868,7 @@ internal static partial class ConductorLoopHandoff
                 startInfo.Environment[key] = value;
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = request.WorkingDirectory;
 
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
+        using var process = HandleListProcessLauncher.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
         var pidText = process.StandardOutput.ReadLine();
         // Capture identity while the launcher is still completing its spawn.
         ConductLoopLaunchResult? launched = null;
@@ -903,7 +903,7 @@ internal static partial class ConductorLoopHandoff
             Exception? suppressionFailure = null;
             try
             {
-                suppressionScope = (acquireConsoleSuppression ?? ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn)();
+                suppressionScope = (acquireConsoleSuppression ?? ProcessTreeGuiSuppression.PrepareConsoleForHandleListSpawn)();
             }
             catch (Exception ex)
             {
@@ -937,9 +937,12 @@ internal static partial class ConductorLoopHandoff
 
                 beforeCreateProcess?.Invoke();
                 var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
-                DetachedProcessCreationOutcome CreateNativeProcess(uint flags) =>
-                    WindowsHandleListProcessLauncher.Launch(nativeCommand[0], commandLine, environment,
+                DetachedProcessCreationOutcome CreateNativeProcess(uint flags)
+                {
+                    var result = HandleListProcessLauncher.Launch(nativeCommand[0], commandLine, environment,
                         request.WorkingDirectory, flags, stdoutHandle, stderrHandle);
+                    return new(result.Created, result.ProcessHandle, result.ThreadHandle, result.ProcessId, result.NativeError);
+                }
 
                 DetachedProcessCreationOutcome Attempt(uint flags, string? fallback, out object authority)
                 {

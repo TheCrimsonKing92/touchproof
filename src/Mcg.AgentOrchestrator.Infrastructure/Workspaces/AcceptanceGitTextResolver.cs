@@ -8,7 +8,7 @@ internal static class AcceptanceGitTextResolver
     {
         try
         {
-            using var process = new Process();
+            using var process = new HandleListLaunchedProcess();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = "git",
@@ -23,7 +23,7 @@ internal static class AcceptanceGitTextResolver
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+            if (!process.Start())
             {
                 return null;
             }

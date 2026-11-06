@@ -5,6 +5,8 @@ using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Search all arguments because GitCli prepends its hardening arguments.
+var handleListIndex = Array.IndexOf(args, "--handle-list-probe");
+if (handleListIndex >= 0) return HandleListProbe.Run(args[(handleListIndex + 1)..]);
 var errorModeIndex = Array.IndexOf(args, "--report-error-mode");
 if (errorModeIndex >= 0)
 {

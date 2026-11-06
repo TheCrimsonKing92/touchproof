@@ -3590,7 +3590,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         try
         {
-            using var process = new Process();
+            using var process = new HandleListLaunchedProcess();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = "git",
@@ -3605,7 +3605,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+            if (!process.Start())
             {
                 return null;
             }

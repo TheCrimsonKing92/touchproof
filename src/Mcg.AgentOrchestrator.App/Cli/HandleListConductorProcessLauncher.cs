@@ -27,17 +27,17 @@ internal sealed class HandleListConductorProcessLauncher : IConductorProcessLaun
         {
             stdout = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StdoutPath!);
             stderr = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StderrPath!);
-            using var suppression = ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn();
+            _ = ChildConsoleLaunchPolicy.Prepare();
             // Start must remain detached even when the operator has an attached console.
             // Self-relaunch keeps its existing console policy; only this entry point forces isolation.
             var flags = ConductorLoopHandoff.WindowsSuccessorCreationFlags |
                 (uint)WindowsHandleListProcessLauncher.WindowsCreationFlags.CreateNoWindow;
             var startedAt = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-            var outcome = WindowsHandleListProcessLauncher.Launch(command[0], commandLine,
+            var outcome = HandleListProcessLauncher.Launch(command[0], commandLine,
                 environmentBlock, request.WorkingDirectory, flags, stdout, stderr);
             if (!outcome.Created && DetachedLaunchBreakawayFallback.TryGetRetryFlags(
                     flags, outcome.NativeError, out var retryFlags))
-                outcome = WindowsHandleListProcessLauncher.Launch(command[0], commandLine,
+                outcome = HandleListProcessLauncher.Launch(command[0], commandLine,
                     environmentBlock, request.WorkingDirectory, retryFlags, stdout, stderr);
             if (!outcome.Created) throw new Win32Exception(outcome.NativeError);
             created = true;

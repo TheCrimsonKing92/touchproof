@@ -19,7 +19,7 @@ internal static class NodeDependencyInstallProcess
 
         await using var stdout = new FileStream(stdoutPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
         await using var stderr = new FileStream(stderrPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        using var process = ProcessTreeGuiSuppression.Start(startInfo);
+        using var process = HandleListProcessLauncher.StartSuppressed(startInfo);
         OwnedProcessGroup? group = null;
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         using var drainCancellation = new CancellationTokenSource();
