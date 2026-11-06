@@ -11,7 +11,35 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class HandleListProcessLauncher
 {
     internal const uint Suspended = 4, UnicodeEnvironment = 0x400, ExtendedStartup = 0x80000;
+    internal const uint CreateNoWindow = 0x08000000;
+    private const int UseStdHandles = 0x100, ProcThreadAttributeHandleList = 0x00020002;
     internal readonly record struct Creation(IntPtr ProcessHandle, IntPtr ThreadHandle, int ProcessId);
+    internal readonly record struct LaunchOutcome(bool Created, IntPtr ProcessHandle, IntPtr ThreadHandle, int ProcessId, int NativeError);
+
+    // Detached successors borrow their log handles; ownership stays with the caller.
+    internal static LaunchOutcome Launch(string application, string commandLine, string environment,
+        string workingDirectory, uint creationFlags, IntPtr stdoutHandle, IntPtr stderrHandle)
+    {
+        ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.AcquireConsoleForChildSpawn,
+            ProcessTreeGuiSuppression.ErrorModeAccess.Native);
+        var before = Stopwatch.GetTimestamp();
+        long createTicks = 0;
+        try
+        {
+            var result = Create(application, commandLine, environment, workingDirectory, creationFlags,
+                IntPtr.Zero, stdoutHandle, stderrHandle, [stdoutHandle, stderrHandle], out createTicks);
+            return new(true, result.ProcessHandle, result.ThreadHandle, result.ProcessId, 0);
+        }
+        catch (Win32Exception failure)
+        {
+            return new(false, IntPtr.Zero, IntPtr.Zero, 0, failure.NativeErrorCode);
+        }
+        finally
+        {
+            LaunchLockTelemetry.Record(LaunchLockEntryPoint.AcquireConsoleForChildSpawn, 0,
+                Stopwatch.GetTimestamp() - before, createTicks);
+        }
+    }
 
     // Compatibility for detached-host identity/event consumers, which have no redirected streams.
     internal static Process StartAttached(ProcessStartInfo info)
@@ -80,7 +108,7 @@ internal static class HandleListProcessLauncher
                 {
                     handleValues = Marshal.AllocHGlobal(IntPtr.Size * handles.Length);
                     Marshal.Copy(handles, 0, handleValues, handles.Length);
-                    SetAttribute(attributes, 0x20002, handleValues, handles.Length);
+                    SetAttribute(attributes, ProcThreadAttributeHandleList, handleValues, handles.Length);
                 }
                 if (job is not null)
                 {
@@ -93,7 +121,7 @@ internal static class HandleListProcessLauncher
             var startup = new StartupInfoEx
             {
                 cb = Marshal.SizeOf<StartupInfoEx>(),
-                dwFlags = stdin != IntPtr.Zero || stdout != IntPtr.Zero || stderr != IntPtr.Zero ? 0x100 : 0,
+                dwFlags = stdin != IntPtr.Zero || stdout != IntPtr.Zero || stderr != IntPtr.Zero ? UseStdHandles : 0,
                 hStdInput = stdin, hStdOutput = stdout, hStdError = stderr, lpAttributeList = attributes
             };
             // EXTENDED_STARTUPINFO_PRESENT is valid even with no attributes (owned no-capture path).
@@ -104,8 +132,11 @@ internal static class HandleListProcessLauncher
             int nativeError;
             try
             {
-                created = CreateProcessW(application, buffer, IntPtr.Zero, IntPtr.Zero,
-                    handles.Length > 0, flags | ExtendedStartup, environment, directory, ref startup, out result);
+                created = handles.Length > 0
+                    ? CreateProcessW(application, buffer, IntPtr.Zero, IntPtr.Zero,
+                        bInheritHandles: true, flags | ExtendedStartup, environment, directory, ref startup, out result)
+                    : CreateProcessW(application, buffer, IntPtr.Zero, IntPtr.Zero,
+                        bInheritHandles: false, flags | ExtendedStartup, environment, directory, ref startup, out result);
                 nativeError = created ? 0 : Marshal.GetLastWin32Error();
             }
             finally { createTicks = Stopwatch.GetTimestamp() - before; }
@@ -208,7 +239,7 @@ internal static class HandleListProcessLauncher
     private struct ProcessInformation { internal IntPtr hProcess, hThread; internal uint dwProcessId, dwThreadId; }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(string? application, StringBuilder commandLine, IntPtr processAttributes,
-        IntPtr threadAttributes, bool inheritHandles, uint flags, string environment, string? directory,
+        IntPtr threadAttributes, bool bInheritHandles, uint flags, string environment, string? directory,
         ref StartupInfoEx startup, out ProcessInformation information);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);

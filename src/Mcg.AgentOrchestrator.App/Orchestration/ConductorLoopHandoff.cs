@@ -937,9 +937,12 @@ internal static partial class ConductorLoopHandoff
 
                 beforeCreateProcess?.Invoke();
                 var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
-                DetachedProcessCreationOutcome CreateNativeProcess(uint flags) =>
-                    WindowsHandleListProcessLauncher.Launch(nativeCommand[0], commandLine, environment,
+                DetachedProcessCreationOutcome CreateNativeProcess(uint flags)
+                {
+                    var result = HandleListProcessLauncher.Launch(nativeCommand[0], commandLine, environment,
                         request.WorkingDirectory, flags, stdoutHandle, stderrHandle);
+                    return new(result.Created, result.ProcessHandle, result.ThreadHandle, result.ProcessId, result.NativeError);
+                }
 
                 DetachedProcessCreationOutcome Attempt(uint flags, string? fallback, out object authority)
                 {

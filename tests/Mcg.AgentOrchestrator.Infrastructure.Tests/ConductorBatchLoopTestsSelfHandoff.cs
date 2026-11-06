@@ -979,7 +979,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.DoesNotContain("cmd.exe", commandLine, StringComparison.OrdinalIgnoreCase);
 
         var source = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ConductorLoopHandoff.cs"));
-        var sharedSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Orchestration", "WindowsHandleListProcessLauncher.cs"));
+        var sharedSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Execution", "Processes", "HandleListProcessLauncher.cs"));
         Assert.Contains("CreateBreakawayFromJob", source, StringComparison.Ordinal);
         Assert.Contains("CreateInheritedOutputFile", source, StringComparison.Ordinal);
         Assert.Contains("UseStdHandles", sharedSource, StringComparison.Ordinal);

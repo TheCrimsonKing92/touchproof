@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -13,25 +12,9 @@ internal static class WindowsHandleListProcessLauncher
         string application, string commandLine, string environment, string workingDirectory,
         uint creationFlags, IntPtr stdoutHandle, IntPtr stderrHandle)
     {
-        ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.AcquireConsoleForChildSpawn,
-            ProcessTreeGuiSuppression.ErrorModeAccess.Native);
-        var before = Stopwatch.GetTimestamp();
-        long createTicks = 0;
-        try
-        {
-            var result = HandleListProcessLauncher.Create(application, commandLine, environment,
-                workingDirectory, creationFlags, IntPtr.Zero, stdoutHandle, stderrHandle, [stdoutHandle, stderrHandle], out createTicks);
-            return new DetachedProcessCreationOutcome(true, result.ProcessHandle, result.ThreadHandle, result.ProcessId, 0);
-        }
-        catch (Win32Exception failure)
-        {
-            return new DetachedProcessCreationOutcome(false, IntPtr.Zero, IntPtr.Zero, 0, failure.NativeErrorCode);
-        }
-        finally
-        {
-            var elapsed = Stopwatch.GetTimestamp() - before;
-            LaunchLockTelemetry.Record(LaunchLockEntryPoint.AcquireConsoleForChildSpawn, 0, elapsed, createTicks);
-        }
+        var result = HandleListProcessLauncher.Launch(application, commandLine, environment,
+            workingDirectory, creationFlags, stdoutHandle, stderrHandle);
+        return new(result.Created, result.ProcessHandle, result.ThreadHandle, result.ProcessId, result.NativeError);
     }
 
     internal static string BuildEnvironmentBlock(IReadOnlyDictionary<string, string> values)
@@ -77,7 +60,7 @@ internal static class WindowsHandleListProcessLauncher
         CreateNewProcessGroup = 0x00000200,
         CreateUnicodeEnvironment = 0x00000400,
         CreateBreakawayFromJob = 0x01000000,
-        CreateNoWindow = 0x08000000,
+        CreateNoWindow = HandleListProcessLauncher.CreateNoWindow,
         ExtendedStartupInfoPresent = 0x00080000
     }
 
