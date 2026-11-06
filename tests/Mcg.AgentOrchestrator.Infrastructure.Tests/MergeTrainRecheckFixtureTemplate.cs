@@ -114,6 +114,10 @@ internal static class MergeTrainRecheckFixtureTemplate
             var repo = CreateReducedAcceptanceCohortRepository();
             try
             {
+                // Setup probes exclude global Git config, while product worktree creation
+                // inherits it. Keep both views of tracked bytes identical even when the host
+                // enables autocrlf. This local attributes file is shared by linked worktrees.
+                File.WriteAllText(Path.Combine(repo, ".git", "info", "attributes"), "* -text\n");
                 var seed = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
                 AddAcceptanceManifest(repo);
                 var sharedLines = Enumerable.Range(0, 40).Select(index => $"// line {index}").ToArray();

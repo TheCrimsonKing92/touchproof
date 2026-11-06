@@ -104,6 +104,22 @@ public sealed class MergeTrainRecheckFixtureTemplateTests(ITestOutputHelper outp
                 {
                     var worktree = GoalWorktrees.WorktreePath(copy.Repo, member.GoalId);
                     Assert.Empty(RunGitOutput(worktree, "status", "--porcelain"));
+                    // Product Git inherits host config; fixture probes intentionally exclude it.
+                    // Both newline policies must see the same clean checkout and tracked bytes.
+                    var sharedPath = Path.Combine(worktree, MergeTrainFocusedRecheckTests.SharedPath);
+                    File.Delete(sharedPath);
+                    var checkout = GitCli.Run(worktree, "-c", "core.autocrlf=true", "checkout-index", "--force", "--",
+                        MergeTrainFocusedRecheckTests.SharedPath);
+                    Assert.True(checkout.Succeeded, checkout.Error);
+                    Assert.Empty(RunGitOutput(worktree, "status", "--porcelain"));
+                    foreach (var autoCrlf in new[] { "false", "true" })
+                    {
+                        var status = GitCli.Run(worktree, "-c", "core.autocrlf=" + autoCrlf, "status", "--porcelain");
+                        Assert.True(status.Succeeded, status.Error);
+                        Assert.Empty(status.Output);
+                    }
+                    Assert.Equal(RunGitOutput(worktree, "show", "HEAD:" + MergeTrainFocusedRecheckTests.SharedPath),
+                        File.ReadAllText(sharedPath).Trim());
                     Assert.Equal(member.Revision, RunGitOutput(worktree, "rev-parse", "HEAD").Trim());
                 }
             }

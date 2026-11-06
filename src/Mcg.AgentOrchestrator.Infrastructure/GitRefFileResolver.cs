@@ -22,6 +22,17 @@ internal static class GitRefFileResolver
             if (revision.EndsWith("^{commit}", StringComparison.Ordinal) ||
                 revision.EndsWith("^{tree}", StringComparison.Ordinal))
                 return TryResolveCommitExpression(directory, revision, environment, out objectId);
+            // Raw IDs occur in receipt/tree comparisons too. Reuse the same object, namespace
+            // and replacement proofs as peeling; an arbitrary hex string is never evidence.
+            if (IsBranchObjectId(revision))
+            {
+                if (TryResolveCommitExpression(directory, revision + "^{commit}", environment, out objectId))
+                    return true;
+                if (TryResolveCommitExpression(directory, revision + "^{tree}", environment, out objectId) &&
+                    objectId == revision) return true;
+                objectId = string.Empty;
+                return false;
+            }
             if (!TryLocateRefStore(directory, environment, out var gitDirectory, out var commonDirectory) ||
                 !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out var idLength)) return false;
             var shorthand = revision != "HEAD" && !IsFullBranchRef(revision) ? revision : null;
@@ -105,6 +116,13 @@ internal static class GitRefFileResolver
         else
         {
             if (!TryResolve(directory, basis, out commit, environment)) return false;
+        }
+        // A tree is already peeled. Git accepts <tree-id>^{tree}, which is common when
+        // validating stored train receipts. Never reinterpret a tree as a commit.
+        if (tree && TryReadLooseObject(commonDirectory, commit, "tree", out _))
+        {
+            objectId = commit;
+            return true;
         }
         if (!TryReadLooseObject(commonDirectory, commit, "commit", out var contents)) return false;
         // A valid commit begins with its tree. Do not interpret any other revision syntax.

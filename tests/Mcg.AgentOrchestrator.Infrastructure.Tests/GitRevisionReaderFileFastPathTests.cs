@@ -97,7 +97,9 @@ public sealed class GitRevisionReaderFileFastPathTests
             fixture.Git("init", "--separate-git-dir=" + Path.Combine(fixture.Root, "metadata"));
         var head = GitCli.Run(directory, "rev-parse", "HEAD").Output.Trim();
         foreach (var revision in new[] { "HEAD^{commit}", "HEAD^{tree}", "fixture-main^{commit}",
-            head + "^{commit}", head + "^{tree}" })
+            head, head + "^{commit}", head + "^{tree}",
+            GitCli.Run(directory, "rev-parse", "HEAD^{tree}").Output.Trim(),
+            GitCli.Run(directory, "rev-parse", "HEAD^{tree}").Output.Trim() + "^{tree}" })
         {
             var expected = GitCli.Run(directory, "rev-parse", "--verify", revision);
             Assert.True(expected.Succeeded, expected.Error);

@@ -66,7 +66,8 @@ internal static class GitPathQuery
                 var basis = name switch
                 {
                     "objects" or "info/exclude" => common,
-                    "index" or "HEAD" or "mcg-rematerialization" => git,
+                    "index" or "HEAD" or "mcg-rematerialization" or
+                        "rebase-merge" or "rebase-apply" or "MERGE_HEAD" or "CHERRY_PICK_HEAD" or "REVERT_HEAD" => git,
                     _ => null
                 };
                 if (basis is null) return false;

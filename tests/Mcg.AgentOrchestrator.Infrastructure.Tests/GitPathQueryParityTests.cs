@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 using Fixture = GitRefFileResolverParityTests.Fixture;
 
 // Parallel-safe: checkout/metadata paths and fallback observations belong to each case.
@@ -42,7 +43,9 @@ public sealed class GitPathQueryParityTests
 
         foreach (var form in new[] { new[] { "--show-toplevel" }, ["--git-dir"], ["--git-common-dir"], ["--is-inside-work-tree"],
             ["--git-path", "objects"], ["--git-path", "info/exclude"], ["--git-path", "index"],
-            ["--git-path", "HEAD"], ["--git-path", "mcg-rematerialization"] })
+            ["--git-path", "HEAD"], ["--git-path", "mcg-rematerialization"],
+            ["--git-path", "rebase-merge"], ["--git-path", "rebase-apply"], ["--git-path", "MERGE_HEAD"],
+            ["--git-path", "CHERRY_PICK_HEAD"], ["--git-path", "REVERT_HEAD"] })
         foreach (var absolute in new[] { false, true })
         {
             string[] arguments = absolute ? ["--path-format=absolute", .. form] : form;
@@ -57,6 +60,45 @@ public sealed class GitPathQueryParityTests
             Assert.Equal(expected.ExitCode, actual.ExitCode);
             Assert.False(actual.ProcessStarted);
         }
+    }
+
+    [Fact]
+    public void Materialization_DefaultRunnerAvoidsPathQueryLaunches()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Combine(fixture.Repo, ".git", "info", "attributes"), "* -text\n");
+        File.WriteAllText(Path.Combine(fixture.Repo, "tracked.txt"), "original\n");
+        fixture.Git("add", "tracked.txt");
+        fixture.Git("commit", "-m", "tracked source");
+        File.WriteAllText(Path.Combine(fixture.Repo, "tracked.txt"), "changed content\n");
+        var goal = GoalId.New();
+        var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+        Assert.NotEqual("<unknown>", identity);
+        HostCapacitySlotGitCensus.EnsureInstalled(nameof(GitPathQueryParityTests));
+        (GoalWorktreeRebaseResult Result, int Launches) Validate(Func<string, string[], GitCli.GitResult>? runner)
+        {
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            GoalWorktreeRebaseResult result;
+            HostCapacitySlotGitCensus.GitLaunchDelta? delta;
+            try
+            {
+                result = GoalWorktrees.ValidatePostRebaseMaterialization(
+                    fixture.Repo, "fixture-main", "fixture-main", goal, runner);
+            }
+            finally { delta = window.Close(); }
+            Assert.NotNull(delta);
+            return (result, delta.Launches);
+        }
+        var oracle = Validate((root, arguments) => GitCli.Run(root, arguments));
+        var actual = Validate(null);
+        Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, actual.Result.Status);
+        Assert.Contains("contains no CRLF conversion", actual.Result.Message, StringComparison.Ordinal);
+        Assert.Equal(oracle.Result.Message, actual.Result.Message);
+        Assert.Equal(oracle.Result.Status, actual.Result.Status);
+        Assert.Equal(oracle.Result.RematerializedFiles, actual.Result.RematerializedFiles);
+        // Same failure and unchanged bytes, with the five marker queries and root query eliminated.
+        Assert.Equal(6, oracle.Launches - actual.Launches);
+        Assert.Equal("changed content\n", File.ReadAllText(Path.Combine(fixture.Repo, "tracked.txt")));
     }
 
     [Theory]

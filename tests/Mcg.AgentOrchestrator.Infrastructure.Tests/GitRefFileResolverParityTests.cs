@@ -4,6 +4,41 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GitRefFileResolverParityTests
 {
     [Theory]
+    [InlineData("packed")]
+    [InlineData("replacement")]
+    [InlineData("ambiguous")]
+    [InlineData("missing")]
+    [InlineData("corrupt")]
+    public void UnsupportedRawObjectIds_RetainGitFallback(string shape)
+    {
+        using var fixture = new Fixture();
+        var revision = fixture.Oracle("HEAD");
+        if (shape == "packed") fixture.Git("gc", "--prune=now");
+        else if (shape == "replacement")
+        {
+            fixture.Git("commit", "--allow-empty", "-m", "replacement");
+            fixture.Git("replace", revision, fixture.Oracle("HEAD"));
+        }
+        else if (shape == "ambiguous") fixture.Git("tag", revision);
+        else if (shape == "missing") revision = new string('f', revision.Length);
+        else
+        {
+            var path = Path.Combine(fixture.Repo, ".git", "objects", revision[..2], revision[2..]);
+            File.SetAttributes(path, FileAttributes.Normal);
+            File.WriteAllText(path, "not a compressed Git object");
+        }
+        var expected = GitCli.Run(fixture.Repo, "rev-parse", "--verify", revision);
+        Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, revision, out var fileValue));
+        Assert.Empty(fileValue);
+        using var reader = new GitRevisionReader();
+        var observed = 0;
+        reader.SuccessfulGitRead += _ => observed++;
+        Assert.Equal(expected.Succeeded, reader.TryResolve(fixture.Repo, revision, out var actual));
+        Assert.Equal(expected.Succeeded ? expected.Output.Trim() : string.Empty, actual);
+        Assert.Equal(expected.Succeeded ? 1 : 0, observed);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void AmbiguousBranchShorthand_LeavesTagPrecedenceToGit(bool packed)
