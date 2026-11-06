@@ -25,7 +25,10 @@ public sealed class ConductorConflictIntegrationRecordTests
             entry => entry.Operation == ConductorConflictIntegration.OperationName);
 
         internal Fixture(bool tester = true, IReadOnlyList<ConflictFile>? files = null,
-            Func<string, string?>? objectiveReader = null, bool failBuild = false)
+            Func<string, string?>? objectiveReader = null, bool failBuild = false,
+            Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
+            Func<string, string[], GitCli.GitResult>? restoreGit = null,
+            Func<string, string[], GitCli.GitResult>? mergeGit = null)
         {
             Goal = Kernel.CreateGoal("Keep the goal behavior", tester
                 ? [new(TaskId.New(), "Implement", AgentRole.Developer), new(TaskId.New(), "Verify", AgentRole.Tester)]
@@ -44,8 +47,8 @@ public sealed class ConductorConflictIntegrationRecordTests
             {
                 Assert.Equal(GitFixture.Worktree, path);
                 BuildCalls++;
-                return new(true, failBuild ? 1 : 0, failBuild ? "error CS0103: missing symbol" : "build passed");
-            }, objectiveReader ?? (_ => null));
+                return buildCheck?.Invoke(path) ?? new(true, failBuild ? 1 : 0, failBuild ? "error CS0103: missing symbol" : "build passed");
+            }, objectiveReader ?? (_ => null), restoreGit: restoreGit, mergeGit: mergeGit);
         }
 
         internal TaskSpec Retry(GoalId goalId, TaskId taskId, string note, RetryRoundKind? kind, RetryCause cause)
