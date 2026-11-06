@@ -108,8 +108,7 @@ public sealed class WorkerBuildRequestStructuralIntegrationTests
         var invocation = await fixture.RunHelper(assertAdapterExit: false, command: "$ErrorActionPreference='Stop'; " +
             call + "; if($LASTEXITCODE -ne 0){throw 'initial adapter exit'}; " +
             $"[IO.File]::AppendAllText('{WorkerBuildRequestFixture.Source}', '// changed'); " +
-            "$rejected=$false; try { " + call + " } catch { $rejected=$true }; " +
-            "if(-not $rejected){throw 'replay unexpectedly accepted'}; exit 0", service: service);
+            call + "; if($LASTEXITCODE -ne 1){throw \"replay exit $LASTEXITCODE\"}; exit 0", service: service);
         Assert.Equal(WorkerBuildStructuralStatus.Passed, invocation.StructuralCheck!.Status);
         Assert.Contains("idempotency key was reused for another payload/candidate",
             Assert.IsType<UnauthorizedAccessException>(service.Rejection).Message);
