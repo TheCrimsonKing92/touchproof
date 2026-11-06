@@ -15,6 +15,8 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchSiteCensus
         ["Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs|StartWithLaunchLock|managed"] = new("Legacy ProcessStartInfo test-host compatibility; inherits handles under the legacy lock.", true),
         ["Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs|StartWithLaunchLock|instance"] = new("Legacy Process test-host compatibility; inherits handles under the legacy lock.", true),
         ["Mcg.AgentOrchestrator.Execution/Processes/HandleListLaunchedProcess.cs|Start|legacy"] = new("Non-Windows fallback; never selected on Windows.", false),
+        ["Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs|StartRegisteredOrThrow|legacy"] = new("Non-Windows registered launch delegate; Windows uses the owned handle-list launcher.", false),
+        ["Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs|StartRegisteredOwnedOrThrow|legacy"] = new("Non-Windows owned launch delegate; Windows uses the owned handle-list launcher.", false),
         ["Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs|StartAcceptanceProcess|legacy"] = new("Environment-gated negative control intentionally replays start-then-attach.", true)
     };
 

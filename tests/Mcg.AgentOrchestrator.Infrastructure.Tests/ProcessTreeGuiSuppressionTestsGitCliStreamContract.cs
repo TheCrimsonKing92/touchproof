@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Support = ProcessTreeGuiSuppressionTestsHandleListSupport;
 
@@ -22,7 +23,10 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
             var info = Support.Probe(root, mode);
             if (mode == "echo")
                 foreach (var arg in new[] { "a b", "a\"b", "trailing " + (char)92, "", "λ" }) info.ArgumentList.Add(arg);
-            using var managed = ProcessTreeGuiSuppression.Start(info);
+            // GitCli preserves CreateNoWindow=true. The policy wrapper can instead inherit
+            // a console, changing the probe's default encoding and thus the emitted bytes.
+            using var managed = ProcessTreeGuiSuppression.StartWithLaunchLock(info);
+            Assert.NotNull(managed);
             var output = PipeDrain.Start(managed.StandardOutput, "oracle-out");
             var error = PipeDrain.Start(managed.StandardError, "oracle-err");
             Assert.True(managed.WaitForExit(120_000), "Managed stream oracle did not exit.");
@@ -73,6 +77,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
         var pidFile = Path.Combine(root, "child.pid");
         Process? grandchild = null;
         Process? parent = null;
+        ConductorSupervisorProcessIdentity? parentIdentity = null, grandchildIdentity = null;
         var prior = GitCli.StartInfoObserver;
         try
         {
@@ -83,9 +88,11 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
                 {
                     parent = process.AttachProcess();
                     _ = parent.SafeHandle;
+                    parentIdentity = TestOwnedProcessStop.Identify(parent);
                     Assert.True(ready.WaitOne(TimeSpan.FromSeconds(120)), "Grandchild did not signal that its identity was written.");
                     grandchild = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
                     _ = grandchild.SafeHandle;
+                    grandchildIdentity = TestOwnedProcessStop.Identify(grandchild);
                 });
             Assert.Equal(-1, result.ExitCode);
             Assert.Contains("timed out after", result.Error);
@@ -97,8 +104,10 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
         {
             GitCli.StartInfoObserver = prior;
             release.Set();
+            TestOwnedProcessStop.StopTreeIfSame(parentIdentity);
+            TestOwnedProcessStop.StopTreeIfSame(grandchildIdentity);
             foreach (var process in new[] { parent, grandchild })
-                if (process is not null) { try { if (!process.HasExited) process.Kill(true); } finally { process.Dispose(); } }
+                if (process is not null) process.Dispose();
             Directory.Delete(root, true);
         }
     }

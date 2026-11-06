@@ -43,8 +43,20 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchTelemetryCoverage
                     HandleListProcessLauncher.CommandLine(info), HandleListProcessLauncher.EnvironmentBlock(info.Environment), root,
                     HandleListProcessLauncher.UnicodeEnvironment | ChildConsoleLaunchPolicy.CreateNoWindow, stdout, stderr);
                 Assert.True(outcome.Created, $"App telemetry launch failed: {outcome.NativeError}");
-                WindowsHandleListProcessLauncher.CloseHandle(outcome.ThreadHandle);
-                WindowsHandleListProcessLauncher.CloseHandle(outcome.ProcessHandle);
+                try
+                {
+                    // Keep the native handle held while opening and waiting on the child;
+                    // closing it alone neither waits for exit nor releases its working directory.
+                    using var child = System.Diagnostics.Process.GetProcessById(outcome.ProcessId);
+                    var identity = TestOwnedProcessStop.Identify(child);
+                    try { Assert.True(child.WaitForExit(120_000), "Detached telemetry child did not exit."); }
+                    finally { TestOwnedProcessStop.StopTreeIfSame(identity); }
+                }
+                finally
+                {
+                    WindowsHandleListProcessLauncher.CloseHandle(outcome.ThreadHandle);
+                    WindowsHandleListProcessLauncher.CloseHandle(outcome.ProcessHandle);
+                }
             }
             finally { WindowsHandleListProcessLauncher.CloseHandle(stdout); WindowsHandleListProcessLauncher.CloseHandle(stderr); }
             var snapshot = capture.Snapshot();

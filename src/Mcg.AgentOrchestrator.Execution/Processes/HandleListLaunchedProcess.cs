@@ -169,7 +169,18 @@ internal sealed class HandleListLaunchedProcess : IDisposable
         return CodePagesEncodingProvider.Instance.GetEncoding((int)codePage) ?? Encoding.GetEncoding((int)codePage);
     }
 
-    internal Process AttachProcess() => Process.GetProcessById(Id);
+    internal Process AttachProcess()
+    {
+        var process = Process.GetProcessById(Id);
+        try
+        {
+            // GetProcessById alone retains no handle. Process.ExitCode requires one,
+            // even after WaitForExit succeeds; the native owner keeps this identity alive.
+            _ = process.SafeHandle;
+            return process;
+        }
+        catch { process.Dispose(); throw; }
+    }
     private Process Attached => portable ?? (attached ??= AttachProcess());
     internal bool WaitForExit(int milliseconds)
     {
@@ -222,8 +233,11 @@ internal sealed class HandleListLaunchedProcess : IDisposable
     internal void Kill(bool entireProcessTree = false)
     {
         if (entireProcessTree) Attached.Kill(entireProcessTree: true);
-        else if (!HasExited && !TerminateProcess(SafeHandle, uint.MaxValue) && !HasExited)
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+        else if (!HasExited && !TerminateProcess(SafeHandle, uint.MaxValue))
+        {
+            var failure = new Win32Exception(Marshal.GetLastWin32Error());
+            if (!HasExited) throw failure;
+        }
     }
     public void Dispose()
     {
