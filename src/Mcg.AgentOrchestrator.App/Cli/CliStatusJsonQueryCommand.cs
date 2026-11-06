@@ -16,6 +16,6 @@ internal static class CliStatusJsonQueryCommand
         var (_, goal) = CliStatusQueryCommand.ResolveGoal(stateQueries, args[1]);
         Console.WriteLine(StatusAgentReadView.Render(goal,
             CliCommandHandlers.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath),
-            CliCommandHandlers.ResolveGoalStatusText(workspace, goal), time));
+            CliCommandHandlers.ResolveGoalStatusText(workspace, goal, Console.Error.WriteLine), time));
     }
 }
