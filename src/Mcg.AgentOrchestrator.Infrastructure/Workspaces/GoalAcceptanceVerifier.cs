@@ -3590,8 +3590,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         try
         {
-            using var process = new HandleListLaunchedProcess();
-            process.StartInfo = new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "git",
                 WorkingDirectory = worktreePath,
@@ -3602,13 +3601,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
             foreach (var argument in arguments)
             {
-                process.StartInfo.ArgumentList.Add(argument);
+                startInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start())
-            {
-                return null;
-            }
+            using var process = GitExecutable.Prepare(startInfo)
+                ? HandleListProcessLauncher.StartSuppressed(startInfo)
+                : HandleListProcessLauncher.Start(startInfo);
 
             if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
