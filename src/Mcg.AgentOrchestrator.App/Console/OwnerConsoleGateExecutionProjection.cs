@@ -215,13 +215,16 @@ internal sealed partial record OwnerConsoleGateProgress
     {
         if (item.Event.Detail.Contains("ABANDON", StringComparison.Ordinal)) return "cancelled";
         var outcome = item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal) ? item.Get("result") :
+            item.Get("verdict") is { Length: > 0 } verdict ? verdict :
             item.Get("outcome") is { Length: > 0 } recorded ? recorded : item.Get("result");
+        // Child result describes process completion; only a recorded gate outcome
+        // establishes passed/failed. Unknown or unreadable results stay unknown.
         return outcome switch
         {
             "passed" or "gate-passed" => "passed",
+            "failed" => "failed",
             "aborted" or "cancelled" or "canceled" => "cancelled",
-            "" => null,
-            _ => outcome
+            _ => null
         };
     }
 

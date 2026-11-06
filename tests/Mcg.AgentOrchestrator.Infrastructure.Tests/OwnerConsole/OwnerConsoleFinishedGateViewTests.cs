@@ -88,10 +88,15 @@ public sealed class OwnerConsoleFinishedGateViewTests
 
     [Theory]
     [InlineData("ACCEPTANCE_COHORT_EXIT", "outcome=passed", "passed")]
-    [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "result=failed", "failed")]
+    [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "result=completed verdict=passed", "passed")]
+    [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "result=completed verdict=failed", "failed")]
+    [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "result=completed verdict=unknown", null)]
+    [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "result=completed", null)]
+    [InlineData("ACCEPTANCE_COHORT_RECONCILED_DEAD", "result=none", null)]
+    [InlineData("ACCEPTANCE_COHORT_RECONCILED_DEAD", "result=unreadable error=missing Status", null)]
     [InlineData("ACCEPTANCE_COHORT_ABANDON", "", "cancelled")]
     [InlineData("ACCEPTANCE_COHORT_CHILD_COMPLETED", "", null)]
-    public void OuterCompletion_LateChildKeepsRecordedOutcomeAndFinishTime(
+    public void OuterCompletion_UsesRecordedOutcomeAcrossReplayPaths(
         string receipt, string result, string? outcome)
     {
         using var fixture = new OwnerConsoleGateExecutionReplayFixture();
@@ -101,14 +106,29 @@ public sealed class OwnerConsoleFinishedGateViewTests
             $"members={OwnerConsoleGateExecutionReplayFixture.Survivor} {result}");
         var lateChild = OwnerConsoleGateExecutionReplayFixture.Progress(-30, "late-child",
             "verification-check", "Console");
-        var gate = fixture.Build([completion,
-            OwnerConsoleGateExecutionReplayFixture.OuterEvent(-60), lateChild]).ForExecution("late-child")!;
+        var earlyChild = OwnerConsoleGateExecutionReplayFixture.Progress(-180, "early-child",
+            "verification-check", "Console");
+        var gates = new[]
+        {
+            fixture.Build([earlyChild, completion]).ForExecution("early-child"),
+            fixture.Build([completion,
+                OwnerConsoleGateExecutionReplayFixture.OuterEvent(-60), lateChild]).ForExecution("late-child"),
+            fixture.Build([completion]).ForMember(OwnerConsoleGateExecutionReplayFixture.Survivor)
+        };
 
-        Assert.False(gate.Live);
-        Assert.Equal(completion.Timestamp, gate.FinishedAt);
-        Assert.Equal(outcome, gate.FinalOutcome);
-        AssertFinished(gate, outcome ?? "outer attempt completed", "finished 2m ago");
-        if (outcome is null) Assert.DoesNotContain("passed", OwnerConsoleGateFormatter.StatusSegment(gate));
+        foreach (var projected in gates)
+        {
+            var gate = Assert.IsType<OwnerConsoleGateProgress>(projected);
+            Assert.False(gate.Live);
+            Assert.Equal(completion.Timestamp, gate.FinishedAt);
+            Assert.Equal(outcome, gate.FinalOutcome);
+            AssertFinished(gate, outcome ?? "outer attempt completed", "finished 2m ago");
+            if (outcome is null)
+            {
+                Assert.Equal("gate: outer attempt completed, finished 2m ago",
+                    OwnerConsoleGateFormatter.StatusSegment(gate));
+            }
+        }
     }
 
     [Fact]
