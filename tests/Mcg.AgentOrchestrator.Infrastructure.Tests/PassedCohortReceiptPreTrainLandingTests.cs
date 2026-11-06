@@ -85,6 +85,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             driver.SuccessfulLandingSink = landings.Add;
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");
             BatchTickSummary? observedTick = null;
+            AdmissionFactsTestData.Warm(driver, kernel);
             _ = new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
                 kernel, driver, ConductorAutonomyPolicy.Permissive,
                 Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1,

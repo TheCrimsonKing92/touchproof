@@ -14,9 +14,12 @@ internal static class GroupedAdmissionCandidateProjection
 
     internal static ConductorSpeculativeAcceptanceCandidate[] ProjectAll(
         IEnumerable<Goal> goals, ConductorDriver driver, ConductorAutonomyPolicy policy,
-        AgentOrchestratorKernel kernel, int tick, Action<string> recordProgress)
+        AgentOrchestratorKernel kernel, int tick, Action<string> recordProgress, IEnumerable<Goal>? additionalFactsGoals = null)
     {
-        var candidates = goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+        var observed = goals.ToArray();
+        driver.BeginAdmissionFacts(observed.Concat(additionalFactsGoals ?? []).DistinctBy(goal => goal.Id), kernel);
+        foreach (var line in driver.AdmissionFacts.Reader?.DrainReports() ?? []) recordProgress(line);
+        var candidates = ConductorTickStepLedger.ObserveProjections(observed).Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         GroupedAdmissionOwnerApprovalHold.ReportExclusions(candidates, tick, recordProgress);
         return candidates;

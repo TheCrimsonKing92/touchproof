@@ -12,9 +12,10 @@ public sealed class GroupedAdmissionPrepFactReuseTests(ITestOutputHelper output)
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario();
         using var capacity = PassedCohortReceiptApprovalHoldTests.Scenario.PauseNewGates();
         var before = scenario.Goals.Select(goal => goal.Timeline.Count).ToArray();
-        var first = Admission(scenario.Tick());
+        var first = Admission(scenario.Tick(waitForAdmissionFacts: false));
         Assert.Contains("prep_approval_hold_cache=hits:0,misses:2", first);
-        Assert.True(scenario.Goals.Zip(before).Any(pair => pair.First.Timeline.Count > pair.Second));
+        Assert.Contains("admission_facts=ready:0,pending:2", first);
+        Assert.Equal(before, scenario.Goals.Select(goal => goal.Timeline.Count));
         var second = Admission(scenario.Tick());
         Assert.Matches(@"prep_projection_cache=hits:[1-9]\d*,misses:0(?: |$)", second);
         Assert.Contains("prep_approval_hold_cache=hits:2,misses:0", second);

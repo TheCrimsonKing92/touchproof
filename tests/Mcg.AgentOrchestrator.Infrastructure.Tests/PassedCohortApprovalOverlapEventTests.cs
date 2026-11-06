@@ -26,6 +26,7 @@ public sealed class PassedCohortApprovalOverlapEventTests : AcceptanceCohortWork
         var beforeReceipt = ReceiptState(scenario);
         var observedAt = scenario.Receipt.CompletedAt.AddMilliseconds(42_900);
         var tickCount = 0;
+        scenario.WarmAdmissionFacts();
         new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(scenario.Workspace.ConductEventsLogPath),
             utcNow: () => observedAt).Run(scenario.Kernel, scenario.Driver, ConductorAutonomyPolicy.Permissive,
             Path.Combine(scenario.Repo, "stop-does-not-exist"), maxIterations: 2,
