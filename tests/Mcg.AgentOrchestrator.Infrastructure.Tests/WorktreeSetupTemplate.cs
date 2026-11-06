@@ -50,7 +50,7 @@ public sealed class WorktreeSetupTemplate : IDisposable
             }
             CopyFiles(source, repository);
         }
-        MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
+        if (!OperatingSystem.IsWindows()) MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
     }
 
     internal static void HandBuildTerminalSeed(string repository)
@@ -105,6 +105,8 @@ public sealed class WorktreeSetupTemplate : IDisposable
                 if (File.Exists(destination))
                     File.SetAttributes(destination, File.GetAttributes(destination) & ~FileAttributes.ReadOnly);
                 File.Copy(entry, destination, overwrite: true);
+                File.SetCreationTimeUtc(destination, File.GetCreationTimeUtc(entry));
+                File.SetLastWriteTimeUtc(destination, File.GetLastWriteTimeUtc(entry));
             }
         }
     }

@@ -508,7 +508,9 @@ public static partial class GoalWorktrees
 
     private static bool IsGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
     {
-        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
+        var result = GitPathQuery.Run(executionDirectory,
+            () => GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree"),
+            "--is-inside-work-tree");
         return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 

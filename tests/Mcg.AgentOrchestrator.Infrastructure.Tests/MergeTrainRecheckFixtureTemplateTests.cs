@@ -83,4 +83,35 @@ public sealed class MergeTrainRecheckFixtureTemplateTests(ITestOutputHelper outp
             new(mode, output.WriteLine, probes: () => launches.Count));
         Assert.InRange(launches.Count, 0, 3);
     }
+
+    [Fact]
+    public void WarmCopy_PreservesIndexesWithoutWindowsRefreshLaunch()
+    {
+        var first = MergeTrainRecheckFixtureTemplate.Copy("abandoned");
+        string? secondRoot = null;
+        try
+        {
+            using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+            var before = launches.Count;
+            var second = MergeTrainRecheckFixtureTemplate.Copy("abandoned");
+            secondRoot = second.Repo;
+            Assert.Equal(OperatingSystem.IsWindows() ? 0 : 1, launches.Count - before);
+            foreach (var copy in new[] { first, second })
+            {
+                Assert.Empty(RunGitOutput(copy.Repo, "status", "--porcelain"));
+                Assert.Equal(RunGitOutput(first.Repo, "ls-files", "-s"), RunGitOutput(copy.Repo, "ls-files", "-s"));
+                foreach (var member in copy.History.Members)
+                {
+                    var worktree = GoalWorktrees.WorktreePath(copy.Repo, member.GoalId);
+                    Assert.Empty(RunGitOutput(worktree, "status", "--porcelain"));
+                    Assert.Equal(member.Revision, RunGitOutput(worktree, "rev-parse", "HEAD").Trim());
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(first.Repo);
+            if (secondRoot is not null) DeleteDirectory(secondRoot);
+        }
+    }
 }

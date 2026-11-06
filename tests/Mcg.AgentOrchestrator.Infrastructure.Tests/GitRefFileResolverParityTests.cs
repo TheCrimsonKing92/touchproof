@@ -4,6 +4,60 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GitRefFileResolverParityTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AmbiguousBranchShorthand_LeavesTagPrecedenceToGit(bool packed)
+    {
+        using var fixture = new Fixture();
+        fixture.Git("tag", "-a", "fixture-main", "-m", "old tag");
+        fixture.Git("commit", "--allow-empty", "-m", "branch moves");
+        if (packed) fixture.Git("pack-refs", "--all");
+        Assert.NotEqual(fixture.Oracle("fixture-main"), fixture.Oracle("refs/heads/fixture-main"));
+        Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, "fixture-main", out _));
+        using var reader = new GitRevisionReader();
+        Assert.True(reader.TryResolve(fixture.Repo, "fixture-main", out var actual));
+        Assert.Equal(fixture.Oracle("fixture-main"), actual);
+    }
+
+    [Theory]
+    [InlineData("packed-object")]
+    [InlineData("ambiguous-tag")]
+    [InlineData("packed-ambiguous-tag")]
+    [InlineData("replacement")]
+    [InlineData("tag")]
+    public void UnsupportedCommitExpressions_UseGitAndPreserveItsValue(string shape)
+    {
+        using var fixture = new Fixture();
+        var revision = "fixture-main^{commit}";
+        if (shape == "packed-object") fixture.Git("gc", "--prune=now");
+        else if (shape == "replacement")
+        {
+            var first = fixture.Oracle("HEAD");
+            fixture.Git("commit", "--allow-empty", "-m", "replacement");
+            fixture.Git("replace", first, fixture.Oracle("HEAD"));
+            revision = first + "^{tree}";
+        }
+        else
+        {
+            var tag = shape == "tag" ? "annotated" : "fixture-main";
+            fixture.Git("tag", "-a", tag, "-m", "tag");
+            fixture.Git("commit", "--allow-empty", "-m", "branch advances");
+            if (shape == "packed-ambiguous-tag") fixture.Git("pack-refs", "--all");
+            revision = tag + "^{commit}";
+        }
+        var expected = fixture.Oracle(revision);
+        Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, revision, out var fileValue));
+        Assert.Empty(fileValue);
+        using var reader = new GitRevisionReader();
+        var observed = 0;
+        reader.SuccessfulGitRead += _ => observed++;
+        Assert.True(reader.TryResolve(fixture.Repo, revision, out var actual));
+        Assert.Equal(expected, actual);
+        Assert.Equal(1, observed); // A file miss really traversed the Git path.
+        Assert.Null(reader.GetReader(fixture.Repo));
+    }
+
+    [Theory]
     [InlineData("loose")]
     [InlineData("packed")]
     [InlineData("override")]

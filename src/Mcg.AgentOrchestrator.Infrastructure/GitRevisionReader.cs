@@ -471,7 +471,7 @@ internal sealed class GitRevisionReader : IDisposable
         return gitDirectory;
     }
 
-    private static bool HasOrdinaryDirectoryPath(string directory)
+    internal static bool HasOrdinaryDirectoryPath(string directory)
     {
         for (var current = new DirectoryInfo(directory); current is not null; current = current.Parent)
             if (!current.Exists || (current.Attributes & FileAttributes.ReparsePoint) != 0 ||

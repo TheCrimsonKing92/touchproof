@@ -54,7 +54,16 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
         {
             WorktreeSetupTemplate.HandBuildTerminalSeed(reference);
             template.CopyTerminalSeed(first);
-            template.CopyTerminalSeed(second);
+            var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+            Assert.NotEqual("<unknown>", identity);
+            HostCapacitySlotGitCensus.EnsureInstalled(nameof(WorktreeSetupTemplateEquivalenceTests));
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            HostCapacitySlotGitCensus.GitLaunchDelta? delta;
+            try { template.CopyTerminalSeed(second); }
+            finally { delta = window.Close(); }
+            Assert.NotNull(delta);
+            Assert.Equal(OperatingSystem.IsWindows() ? 0 : 1, delta.Launches);
+            Assert.Equal(delta.Launches, delta.Subcommands.GetValueOrDefault("update-index"));
             AssertEquivalent(reference, first);
             AssertEquivalent(reference, second);
             Assert.Equal(Read(reference, "rev-parse", "HEAD"), Read(first, "rev-parse", "HEAD"));

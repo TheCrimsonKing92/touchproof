@@ -225,10 +225,10 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
     private static void AssertOneReader(string repo, Action check)
     {
         Assert.Null(GitRevisionReader.Shared.GetReader(repo));
-        var expected = Oracle(repo, "HEAD^{commit}");
+        var expected = Oracle(repo, "HEAD~0");
         for (var i = 0; i < GitRevisionReader.DefaultAdmissionReads; i++)
         {
-            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out var actual));
+            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD~0", out var actual));
             Assert.Equal(expected, actual);
             Assert.Null(GitRevisionReader.Shared.GetReader(repo));
         }
@@ -236,7 +236,7 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
         // then prove the routed operations preserve that reader rather than demanding a new one.
         var delta = Observe(() =>
         {
-            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out var actual));
+            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD~0", out var actual));
             Assert.Equal(expected, actual);
             var reader = GitRevisionReader.Shared.GetReader(repo);
             Assert.NotNull(reader);

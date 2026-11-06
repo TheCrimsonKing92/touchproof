@@ -12,7 +12,7 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         using var reader = new GitRevisionReader();
         fixture.Git("commit", "--allow-empty", "-m", "second");
         fixture.Git("tag", "-a", "annotated", "-m", "tag");
-        var revisions = new[] { "HEAD~1", "HEAD^{tree}", "annotated", fixture.Oracle("HEAD")[..12] };
+        var revisions = new[] { "HEAD~1", "HEAD~0", "annotated", fixture.Oracle("HEAD")[..12] };
         var expected = revisions.Select(fixture.Oracle).ToArray();
         var completed = new List<bool>();
         reader.SuccessfulGitRead += _ => completed.Add(reader.GetReader(fixture.Repo) is not null);
@@ -48,11 +48,16 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         for (var i = 0; i < 4; i++)
         {
             Assert.True(reader.TryResolve(fixture.Repo, "HEAD", out _));
+            foreach (var revision in new[] { "fixture-main", "HEAD^{commit}", "HEAD^{tree}" })
+            {
+                Assert.True(reader.TryResolve(fixture.Repo, revision, out _));
+                Assert.Null(reader.GetReader(fixture.Repo));
+            }
             Assert.False(reader.TryResolve(fixture.Repo, "absent", out _));
         }
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out _));
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out _));
         Assert.Null(reader.GetReader(fixture.Repo));
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out _));
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out _));
         Assert.NotNull(reader.GetReader(fixture.Repo));
     }
 
@@ -63,12 +68,12 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         using var reader = new GitRevisionReader();
         var linked = Path.Combine(fixture.Root, "linked");
         fixture.Git("worktree", "add", "-b", "linked", linked);
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out _));
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out _));
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out _));
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out _));
         Assert.NotNull(reader.GetReader(fixture.Repo));
-        Assert.True(reader.TryResolve(linked, "HEAD^{tree}", out var first));
+        Assert.True(reader.TryResolve(linked, "HEAD~0", out var first));
         Assert.Null(reader.GetReader(linked));
-        Assert.True(reader.TryResolve(linked, "HEAD^{tree}", out var second));
+        Assert.True(reader.TryResolve(linked, "HEAD~0", out var second));
         Assert.Equal(first, second);
         Assert.NotSame(reader.GetReader(fixture.Repo), reader.GetReader(linked));
         Assert.NotNull(reader.GetReader(linked));
@@ -80,21 +85,21 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         using var fixture = new Fixture();
         using var reader = new GitRevisionReader(admissionReads: 0);
         const int samples = 32;
-        var expected = fixture.Oracle("HEAD^{tree}");
+        var expected = fixture.Oracle("HEAD~0");
         var start = Stopwatch.GetTimestamp();
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out var first));
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out var first));
         var startup = Stopwatch.GetElapsedTime(start);
         Assert.Equal(expected, first);
         Assert.NotNull(reader.GetReader(fixture.Repo));
         start = Stopwatch.GetTimestamp();
         for (var i = 0; i < samples; i++)
         {
-            Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{tree}", out var actual));
+            Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out var actual));
             Assert.Equal(expected, actual);
         }
         var batch = Stopwatch.GetElapsedTime(start).TotalMilliseconds / samples;
         start = Stopwatch.GetTimestamp();
-        for (var i = 0; i < samples; i++) Assert.Equal(expected, fixture.Oracle("HEAD^{tree}"));
+        for (var i = 0; i < samples; i++) Assert.Equal(expected, fixture.Oracle("HEAD~0"));
         var oneShot = Stopwatch.GetElapsedTime(start).TotalMilliseconds / samples;
         output.WriteLine($"samples={samples}; reader-start-and-first-query-ms={startup.TotalMilliseconds:F3}; " +
             $"running-reader-ms={batch:F3}; one-shot-ms={oneShot:F3}; admission={GitRevisionReader.DefaultAdmissionReads}");

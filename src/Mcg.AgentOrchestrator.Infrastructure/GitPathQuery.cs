@@ -27,7 +27,8 @@ internal static class GitPathQuery
             var form = arguments[offset];
             var pathQuery = form == "--git-path";
             if (arguments.Count != offset + (pathQuery ? 2 : 1) ||
-                form is not ("--show-toplevel" or "--git-dir" or "--git-common-dir" or "--git-path")) return false;
+                form is not ("--show-toplevel" or "--git-dir" or "--git-common-dir" or "--git-path" or
+                    "--is-inside-work-tree")) return false;
             // Do not guess how an override, config include, alias or subdirectory affects Git.
             foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS",
@@ -54,7 +55,8 @@ internal static class GitPathQuery
             }
             var git = localGit ? ".git" : gitDirectory;
             var common = localGit ? ".git" : commonDirectory;
-            if (form == "--show-toplevel") output = root;
+            if (form == "--is-inside-work-tree") output = "true";
+            else if (form == "--show-toplevel") output = root;
             else if (form == "--git-dir") output = git;
             else if (form == "--git-common-dir") output = common;
             else
@@ -70,7 +72,7 @@ internal static class GitPathQuery
                 if (basis is null) return false;
                 output = Path.Combine(basis, name);
             }
-            if (absolute) output = Path.GetFullPath(output, root);
+            if (absolute && form != "--is-inside-work-tree") output = Path.GetFullPath(output, root);
             output = output.Replace(Path.DirectorySeparatorChar, '/');
             return true;
         }

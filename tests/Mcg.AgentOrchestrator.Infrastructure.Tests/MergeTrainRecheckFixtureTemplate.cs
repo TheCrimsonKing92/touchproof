@@ -56,7 +56,10 @@ internal static class MergeTrainRecheckFixtureTemplate
             {
                 RepairWorktreeLinks(source.Repo, repo, $"Recheck template '{mode}'");
             });
-            MergeTrainFixtureObservation.Run(observer, "index-refresh", () => Builder.RefreshIndex(repo));
+            MergeTrainFixtureObservation.Run(observer, "index-refresh", () =>
+            {
+                if (!OperatingSystem.IsWindows()) Builder.RefreshIndex(repo);
+            });
             return source with { Repo = repo };
         }
         catch

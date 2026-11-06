@@ -40,7 +40,7 @@ public sealed class GitPathQueryParityTests
         else if (layout == "separate")
             fixture.Git("init", "--separate-git-dir=" + Path.Combine(fixture.Root, "metadata"));
 
-        foreach (var form in new[] { new[] { "--show-toplevel" }, ["--git-dir"], ["--git-common-dir"],
+        foreach (var form in new[] { new[] { "--show-toplevel" }, ["--git-dir"], ["--git-common-dir"], ["--is-inside-work-tree"],
             ["--git-path", "objects"], ["--git-path", "info/exclude"], ["--git-path", "index"],
             ["--git-path", "HEAD"], ["--git-path", "mcg-rematerialization"] })
         foreach (var absolute in new[] { false, true })

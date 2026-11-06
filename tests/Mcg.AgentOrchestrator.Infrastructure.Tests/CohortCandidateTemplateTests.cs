@@ -26,8 +26,8 @@ public sealed class CohortCandidateTemplateTests : GoalWorktreeTestBase
             }
             finally { delta = window.Close(); }
             Assert.NotNull(delta);
-            Assert.Equal(OperatingSystem.IsWindows() ? 1 : 3, delta.Launches);
-            Assert.Equal(delta.Launches, delta.Subcommands["update-index"]);
+            Assert.Equal(OperatingSystem.IsWindows() ? 0 : 3, delta.Launches);
+            Assert.Equal(delta.Launches, delta.Subcommands.GetValueOrDefault("update-index"));
 
             reference = CreateReducedAcceptanceCohortRepository();
             Prepare(reference, second.GoalIds);

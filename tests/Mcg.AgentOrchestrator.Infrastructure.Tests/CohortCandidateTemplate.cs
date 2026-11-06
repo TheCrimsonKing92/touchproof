@@ -42,8 +42,9 @@ public sealed class CohortCandidateTemplate : IDisposable
                 source.Repo, repo, $"Candidate template '{key}'"))
                 // Unix ctime cannot be copied. Keep the authoritative refresh on those hosts.
                 if (!OperatingSystem.IsWindows()) MergeTrainRecheckFixtureTemplate.RefreshIndex(worktree);
-            // Root stat data can also be changed by the copy/link repair; refresh it once.
-            MergeTrainRecheckFixtureTemplate.RefreshIndex(repo);
+            // Link repair touches only untracked .git metadata. Preserved Windows file
+            // timestamps also keep the root index valid; Unix ctime still needs a refresh.
+            if (!OperatingSystem.IsWindows()) MergeTrainRecheckFixtureTemplate.RefreshIndex(repo);
             return new PreparedRepository(repo, source.GoalIds.ToArray(), source.Revisions.ToArray());
         }
         catch
