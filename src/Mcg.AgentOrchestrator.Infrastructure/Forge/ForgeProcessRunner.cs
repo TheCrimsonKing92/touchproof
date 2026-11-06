@@ -25,7 +25,7 @@ public sealed class ForgeProcessRunner : IForgeProcessRunner
         using var process = new Process { StartInfo = start };
         try
         {
-            if (!process.Start()) return new(false, -1, "", $"{fileName} did not start");
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) return new(false, -1, "", $"{fileName} did not start");
         }
         catch (Exception exception) when (exception is Win32Exception or IOException)
         {

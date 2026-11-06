@@ -1866,7 +1866,7 @@ public sealed partial class AgentOrchestratorKernel
         HumanInputSuppression.AppendDuplicateHumanInputSuppressed(goal, taskId, request, answered,
             (g, t, k, message) => Append(g, t, k, message), completedRound, workerResultLogReference);
 
-    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId, HumanWaitKind kind)
+    internal void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId, HumanWaitKind kind)
     {
         if (!HumanWaitPolicyDefaults.BlocksActiveWork(kind))
         {

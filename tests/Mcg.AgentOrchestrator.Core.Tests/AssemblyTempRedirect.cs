@@ -12,6 +12,12 @@ internal static class AssemblyTempRedirect
     internal const string ChildReleaseEnvironmentVariable = "MCG_CORE_TEST_TEMP_CHILD_RELEASE";
     private static CoreOwnedTempRoot? processTempRoot;
 
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint GetErrorMode();
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
     [ModuleInitializer]
     internal static void Install()
     {
@@ -20,6 +26,9 @@ internal static class AssemblyTempRedirect
             return;
         }
 
+        // Core.Tests does not reference Execution. Keep flags aligned with
+        // ProcessTreeGuiSuppression.SuppressedErrorModeFlags (SEM_* = 0x8003).
+        _ = SetErrorMode(GetErrorMode() | 0x8003);
         var fileSystem = new PhysicalTempRootFileSystem();
         var labeler = new IcaclsTempRootIntegrityLabeler();
         var selection = SelectWritableRoot(

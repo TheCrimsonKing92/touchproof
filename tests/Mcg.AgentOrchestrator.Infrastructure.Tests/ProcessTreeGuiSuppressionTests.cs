@@ -59,7 +59,7 @@ public sealed class ProcessTreeGuiSuppressionTests
                     ?? throw new InvalidOperationException("Failed to start error-mode probe.");
             }
 
-            Assert.Equal(clearedErrorMode, WindowsProbe.GetErrorMode());
+            Assert.Equal(clearedErrorMode | ProcessTreeGuiSuppression.SuppressedErrorModeFlags, WindowsProbe.GetErrorMode());
             using (process)
             {
                 var stdoutRead = process.StandardOutput.ReadToEndAsync();
@@ -380,7 +380,7 @@ public sealed class ProcessTreeGuiSuppressionTests
         Assert.Matches(
             @"StartSuspendedInJobWithStandardHandles\([^)]*\)\s*=>\s*StartSuspendedInJobCore\(",
             ownedProcessGroup);
-        Assert.Contains("using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(requestOwnConsole);", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Contains("using (var suppression = ProcessTreeGuiSuppression.PrepareSuppressedChildSpawn(requestOwnConsole, requiresLaunchLock, errorModeAccess))", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Matches(
             @"process = StartAcceptanceProcess\(\s*startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,\s*directStartInfo,",

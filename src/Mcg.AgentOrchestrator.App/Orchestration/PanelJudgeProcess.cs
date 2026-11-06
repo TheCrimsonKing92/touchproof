@@ -24,7 +24,7 @@ internal static class PanelJudgeProcess
         using var drainStop = new CancellationTokenSource();
         try
         {
-            if (!process.Start()) throw new InvalidOperationException("Judge process did not start.");
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) throw new InvalidOperationException("Judge process did not start.");
             drains = Task.WhenAll(Capture(process.StandardOutput, stdout, drainStop.Token),
                 Capture(process.StandardError, stderr, drainStop.Token));
             await process.StandardInput.WriteAsync((request.StandardInput ?? "").AsMemory(), linked.Token).ConfigureAwait(false);

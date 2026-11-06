@@ -23,6 +23,7 @@ internal static class AssemblyTempRedirect
             return;
         }
 
+        ProcessTreeGuiSuppression.InitializeProcessErrorMode();
         var fileSystem = new PhysicalTempRootFileSystem();
         var labeler = new IcaclsIntegrityLabeler();
         var timings = new TempRootStartupTimings();

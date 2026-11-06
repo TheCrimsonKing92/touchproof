@@ -129,7 +129,7 @@ public sealed partial class BackgroundDispatchRunner
             _clock,
             isProcessRunning: _isStillRunning,
             readCurrentIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
-        var launch = startProcess ?? Process.Start;
+        var launch = startProcess ?? (info => ProcessTreeGuiSuppression.StartWithLaunchLock(info));
         _startProcess = startInfo => DispatchProcessStartObservation.Start(startInfo, launch);
         _completionBuildEvidence = completionBuildEvidence;
         _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? (_ =>

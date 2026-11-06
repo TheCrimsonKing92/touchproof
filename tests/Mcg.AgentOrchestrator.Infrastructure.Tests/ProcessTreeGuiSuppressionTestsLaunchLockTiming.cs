@@ -7,6 +7,24 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
 
+    [Xunit.Fact(Skip = "Requires Windows launch-lock telemetry.", SkipUnless = nameof(IsWindows))]
+    public void GitLaunches_AppearOnceEachInSummary()
+    {
+        using var capture = LaunchLockTelemetry.BeginCapture();
+        for (var i = 0; i < 3; i++)
+        {
+            var result = GitCli.Run(Path.GetTempPath(), "--version");
+            Xunit.Assert.True(result.Succeeded, result.Error);
+        }
+        var snapshot = capture.Snapshot();
+        Xunit.Assert.Equal(3, snapshot.Launches);
+        Xunit.Assert.Equal(3, snapshot.ByEntry[(int)LaunchLockEntryPoint.GitCli]);
+        Xunit.Assert.Contains("GitCli:3", LaunchLockTelemetry.FormatSummary(snapshot, Environment.ProcessId));
+        Xunit.Assert.Equal(3, capture.Samples.Count);
+        foreach (var sample in capture.Samples)
+            Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
+    }
+
     [Xunit.Fact(Skip = "Requires Windows suspended-process handles.", SkipUnless = nameof(IsWindows))]
     public void ParallelOwnedProcessLaunchesRecordEverySample()
     {
@@ -62,7 +80,8 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         foreach (var sample in capture.Samples)
         {
             Xunit.Assert.True(sample.WaitTicks >= 0);
-            Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
+            Xunit.Assert.Equal(0, sample.WaitTicks);
+            Xunit.Assert.Equal(0, sample.HoldTicks);
             Xunit.Assert.True(sample.CreateTicks > 0);
         }
         Xunit.Assert.True(LaunchLockTelemetry.Process.Snapshot().Launches - processBefore >= expectedLaunches);
@@ -82,6 +101,7 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         Xunit.Assert.Equal(1, snapshot.ByEntry[(int)LaunchLockEntryPoint.AcquireSuppressedChildSpawn]);
         var sample = Xunit.Assert.Single(capture.Samples);
         Xunit.Assert.True(sample.CreateTicks > 0);
-        Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
+        Xunit.Assert.Equal(0, sample.WaitTicks);
+        Xunit.Assert.Equal(0, sample.HoldTicks);
     }
 }

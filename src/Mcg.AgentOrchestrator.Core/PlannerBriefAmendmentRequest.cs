@@ -13,10 +13,25 @@ internal sealed record PlannerBriefAmendmentRequest(
         var amendments = lines.Select(line => line.Trim())
             .Where(line => line.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (amendments.Length == 0) return null;
-        if (amendments.Length > 1) return Malformed("only one amendment line is allowed per round");
+        var directives = new List<HumanInputDirective>();
+        var indexes = new HashSet<int>();
+        foreach (var amendment in amendments)
+        {
+            var parsed = ParseLine(amendment, out var index);
+            if (parsed.IsMalformed) return parsed;
+            if (!indexes.Add(index))
+                return Malformed($"criterion_index {index.ToString(CultureInfo.InvariantCulture)} appears on more than one amendment line; emit at most one amendment line per criterion");
+            directives.Add(parsed.Directive!);
+        }
+        return new(directives.Count == 1 ? directives[0] : null, null) { Directives = directives };
+    }
+
+    private static HumanInputDirectiveParseResult ParseLine(string amendment, out int criterionIndex)
+    {
+        criterionIndex = 0;
         try
         {
-            using var document = JsonDocument.Parse(amendments[0][Prefix.Length..].Trim());
+            using var document = JsonDocument.Parse(amendment[Prefix.Length..].Trim());
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return Malformed("payload must be a JSON object");
             if (!root.TryGetProperty("criterion_index", out var criterion) ||
@@ -39,6 +54,7 @@ internal sealed record PlannerBriefAmendmentRequest(
                     return Malformed("fallback_text must be a string or null");
                 fallback = fallbackProperty.GetString()?.Trim();
             }
+            criterionIndex = index;
             return new PlannerBriefAmendmentRequest(index, defect, evidence, proposed, fallback).ToDirective();
         }
         catch (JsonException)
