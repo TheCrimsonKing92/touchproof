@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -140,12 +141,16 @@ public sealed class AcceptanceMtpFilterResponseFileTests
         string[] arguments = managed
             ? ["dotnet", "x.dll", "--filter-not-class", new string('x', 20000)]
             : ["git", "diff", new string('x', 8200)];
-        var expectedLine = Compose(arguments);
+        var preparedArguments = (string[])arguments.Clone();
+        var prepared = new ProcessStartInfo { FileName = arguments[0], CreateNoWindow = true };
+        GitExecutable.Prepare(prepared);
+        preparedArguments[0] = prepared.FileName;
+        var expectedLine = Compose(preparedArguments);
         var error = Assert.Throws<CommandLineTooLongException>(() => Launch(arguments));
         Assert.Equal(expectedLine.Length, error.Length);
         Assert.Equal(8191, error.Limit);
-        Assert.Equal(arguments[0], error.FirstArgument);
-        Assert.Equal($"Windows cmd.exe command line is {expectedLine.Length} characters, which exceeds the cmd.exe limit of 8191 characters; first argument: {arguments[0]}", error.Message);
+        Assert.Equal(prepared.FileName, error.FirstArgument);
+        Assert.Equal($"Windows cmd.exe command line is {expectedLine.Length} characters, which exceeds the cmd.exe limit of 8191 characters; first argument: {prepared.FileName}", error.Message);
     }
 
     [Fact]

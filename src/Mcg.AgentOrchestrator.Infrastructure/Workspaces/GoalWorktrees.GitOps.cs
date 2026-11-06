@@ -436,7 +436,9 @@ public static partial class GoalWorktrees
                 startInfo.ArgumentList.Add(arg);
             }
 
-            using var process = HandleListProcessLauncher.Start(startInfo);
+            using var process = GitExecutable.Prepare(startInfo)
+                ? HandleListProcessLauncher.StartSuppressed(startInfo)
+                : HandleListProcessLauncher.Start(startInfo);
             if (process is null)
             {
                 return new GitCli.GitResult(1, string.Empty, "failed to start git process");

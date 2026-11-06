@@ -64,14 +64,16 @@ internal static class HandleListProcessLauncher
         return launched.AttachProcess();
     }
 
-    internal static HandleListLaunchedProcess StartSuppressed(ProcessStartInfo info, bool requestOwnConsole = false)
+    internal static HandleListLaunchedProcess StartSuppressed(ProcessStartInfo info, bool requestOwnConsole = false,
+        LaunchLockEntryPoint entry = LaunchLockEntryPoint.Start,
+        ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null)
     {
-        if (!OperatingSystem.IsWindows()) return Start(info);
+        if (!OperatingSystem.IsWindows()) return Start(info, entry, errorModeAccess);
         var original = info.CreateNoWindow;
         try
         {
             info.CreateNoWindow = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole).ChildCreateNoWindow;
-            return Start(info);
+            return Start(info, entry, errorModeAccess);
         }
         finally { info.CreateNoWindow = original; }
     }

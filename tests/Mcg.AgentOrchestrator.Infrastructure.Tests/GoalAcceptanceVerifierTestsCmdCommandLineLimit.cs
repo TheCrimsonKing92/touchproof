@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -10,16 +11,20 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
         var payload = new string('x', 8200);
         const string stdout = @"\\.\pipe\limit-out";
         const string stderr = @"\\.\pipe\limit-err";
-        var expectedLine = $"/c \"(chcp 65001 > nul && \"git\" \"diff\" \"{payload}\") > \"{stdout}\" 2> \"{stderr}\"\"";
+        string[] arguments = ["git", "diff", payload];
+        // Diagnostics describe the prepared executable, including direct-git selection or opt-out.
+        var prepared = new ProcessStartInfo { FileName = arguments[0], CreateNoWindow = true };
+        GitExecutable.Prepare(prepared);
+        var expectedLine = $"/c \"(chcp 65001 > nul && \"{prepared.FileName}\" \"diff\" \"{payload}\") > \"{stdout}\" 2> \"{stderr}\"\"";
 
         var error = Assert.Throws<CommandLineTooLongException>(() =>
             GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
-                ["git", "diff", payload], Path.GetTempPath(), stdout, stderr, forceUtf8ConsoleOutput: true));
+                arguments, Path.GetTempPath(), stdout, stderr, forceUtf8ConsoleOutput: true));
 
         Assert.Equal(expectedLine.Length, error.Length);
         Assert.Equal(8191, error.Limit);
-        Assert.Equal("git", error.FirstArgument);
-        Assert.Equal($"Windows cmd.exe command line is {expectedLine.Length} characters, which exceeds the cmd.exe limit of 8191 characters; first argument: git", error.Message);
+        Assert.Equal(prepared.FileName, error.FirstArgument);
+        Assert.Equal($"Windows cmd.exe command line is {expectedLine.Length} characters, which exceeds the cmd.exe limit of 8191 characters; first argument: {prepared.FileName}", error.Message);
         Assert.DoesNotContain(payload, error.Message, StringComparison.Ordinal);
     }
 

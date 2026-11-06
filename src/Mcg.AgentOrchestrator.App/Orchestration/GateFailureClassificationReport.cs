@@ -40,7 +40,7 @@ internal sealed record GateFailureClassificationReport(string Form, int Attempts
             attempts.Where(attempt => attempt.Exclusion is not null).Select(attempt => $"{attempt.Id}: {attempt.Exclusion}").ToArray(), skipped);
     }
 
-    private static Row Classify(Attempt attempt)
+    internal static Row Classify(Attempt attempt)
     {
         var gaps = attempt.ResultProblems.Concat(attempt.Problems).ToList();
         var evidence = new List<string>();

@@ -114,22 +114,20 @@ internal static class AcceptanceLaneClosureHasher
 
     private static string? RunGit(string root, IReadOnlyList<string> arguments)
     {
-        using var process = new HandleListLaunchedProcess
+        var startInfo = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = root,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
+            FileName = "git",
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
         };
         foreach (var argument in arguments)
-            process.StartInfo.ArgumentList.Add(argument);
-        if (!process.Start())
-            return null;
+            startInfo.ArgumentList.Add(argument);
+        using var process = GitExecutable.Prepare(startInfo)
+            ? HandleListProcessLauncher.StartSuppressed(startInfo)
+            : HandleListProcessLauncher.Start(startInfo);
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
