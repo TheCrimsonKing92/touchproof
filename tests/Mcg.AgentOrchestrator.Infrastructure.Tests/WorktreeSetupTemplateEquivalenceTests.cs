@@ -13,9 +13,20 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
         var second = CreateReducedAcceptanceCohortRepository();
         try
         {
+            // Exercise overlaying Git's immutable objects even on hosts that create writable ones.
+            var objects = Directory.GetFiles(Path.Combine(first, ".git", "objects"), "*", SearchOption.AllDirectories);
+            Assert.NotEmpty(objects);
+            foreach (var file in objects)
+                File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.ReadOnly);
             Builder.Manifest(reference);
             Builder.Manifest(first, template);
             Builder.Manifest(second, template);
+            foreach (var file in objects)
+            {
+                Assert.True(File.GetAttributes(file).HasFlag(FileAttributes.ReadOnly));
+                var relative = Path.GetRelativePath(first, file);
+                Assert.Equal(File.ReadAllBytes(file), File.ReadAllBytes(Path.Combine(second, relative)));
+            }
             AssertEquivalent(reference, first);
             AssertEquivalent(reference, second);
             var goal = GoalId.New();

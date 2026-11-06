@@ -225,9 +225,24 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
     private static void AssertOneReader(string repo, Action check)
     {
         Assert.Null(GitRevisionReader.Shared.GetReader(repo));
-        Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out _));
-        Assert.Null(GitRevisionReader.Shared.GetReader(repo));
-        var delta = Observe(() => { for (var i = 0; i < 3; i++) check(); });
+        var expected = Oracle(repo, "HEAD^{commit}");
+        for (var i = 0; i < GitRevisionReader.DefaultAdmissionReads; i++)
+        {
+            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out var actual));
+            Assert.Equal(expected, actual);
+            Assert.Null(GitRevisionReader.Shared.GetReader(repo));
+        }
+        // Some operations only need file-resolver hits. Admit with a qualifying read explicitly,
+        // then prove the routed operations preserve that reader rather than demanding a new one.
+        var delta = Observe(() =>
+        {
+            Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out var actual));
+            Assert.Equal(expected, actual);
+            var reader = GitRevisionReader.Shared.GetReader(repo);
+            Assert.NotNull(reader);
+            for (var i = 0; i < 3; i++) check();
+            Assert.Same(reader, GitRevisionReader.Shared.GetReader(repo));
+        });
         Assert.Equal(1, delta.Subcommands.GetValueOrDefault("cat-file"));
         Assert.NotNull(delta.Callers);
         Assert.DoesNotContain(HostCapacitySlotGitCensus.GroupByCaller(delta.Callers).Keys, key =>

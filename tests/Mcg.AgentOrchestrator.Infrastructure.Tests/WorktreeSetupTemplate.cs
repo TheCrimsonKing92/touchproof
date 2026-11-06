@@ -98,7 +98,14 @@ public sealed class WorktreeSetupTemplate : IDisposable
             if (excludeStores && name is ".orchestrator" or ".orchestrator-worktrees") continue;
             var destination = Path.Combine(target, name);
             if (Directory.Exists(entry)) CopyFiles(entry, destination);
-            else File.Copy(entry, destination, overwrite: true);
+            else
+            {
+                // Git objects copied into an existing repository may already be read-only.
+                // Clear only the destination's bit; File.Copy preserves the recipe's attributes.
+                if (File.Exists(destination))
+                    File.SetAttributes(destination, File.GetAttributes(destination) & ~FileAttributes.ReadOnly);
+                File.Copy(entry, destination, overwrite: true);
+            }
         }
     }
 

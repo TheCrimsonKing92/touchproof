@@ -90,7 +90,10 @@ public sealed class GitPathQueryParityTests
             case "unknown-path": arguments = ["--git-path", "hooks"]; break;
             case "relative-pointer":
                 fixture.Git("init", "--separate-git-dir=" + Path.Combine(fixture.Root, "metadata"));
-                File.WriteAllText(Path.Combine(directory, ".git"), "gitdir: ../metadata\n"); break;
+                // Git hides this file on Windows; truncate the existing file without CREATE_ALWAYS.
+                using (var writer = new StreamWriter(File.Open(Path.Combine(directory, ".git"), FileMode.Truncate, FileAccess.Write)))
+                    writer.Write("gitdir: ../metadata\n");
+                break;
             case "external-common":
                 var common = Directory.CreateDirectory(Path.Combine(fixture.Root, "common")).FullName;
                 Directory.CreateDirectory(Path.Combine(common, "refs"));
