@@ -24,7 +24,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private readonly Func<CompletionBuildEvidenceOperation, string?> _stop;
     private readonly Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart> _begin;
     private readonly Action<Goal, CompletionBuildEvidenceOperation> _finish;
-    private readonly Func<ProcessStartInfo, Process> _startProcess;
+    private readonly Func<ProcessStartInfo, Process>? _startProcess;
     private readonly Func<Process, SpawnProcessIdentityReadResult> _readIdentity;
     private readonly Func<Process, (TextReader Output, TextReader Error)> _hostReaders;
     private readonly Dictionary<string, CompletionBuildHostCapture> _captures = new();
@@ -63,8 +63,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         _stop = stop is null ? StopChild : operation => { stop(operation); return null; };
         _begin = begin ?? Begin;
         _finish = finish ?? FinishLease;
-        _startProcess = startProcess ?? (info => ProcessTreeGuiSuppression.Start(info)
-            ?? throw new InvalidOperationException("Completion build child launch failed."));
+        _startProcess = startProcess;
         _readIdentity = readIdentity ?? SpawnProcessIdentityReader.ReadForRegistration;
         _hostReaders = hostReaders ?? (process => (process.StandardOutput, process.StandardError));
     }
@@ -413,8 +412,19 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
             info.ArgumentList.Add(argument);
         try
         {
-            var process = _startProcess(info);
-            capture.Attach(process, _hostReaders);
+            Process process;
+            if (_startProcess is null)
+            {
+                var native = HandleListProcessLauncher.StartSuppressed(info);
+                capture.Attach(native, () => (native.StandardOutput, native.StandardError));
+                process = native.AttachProcess();
+            }
+            else
+            {
+                process = _startProcess(info);
+                capture.Attach(process, _hostReaders);
+            }
+            using var identityProcess = _startProcess is null ? process : null;
             var read = _readIdentity(process);
             capture.Registration = read;
             if (!read.Succeeded)

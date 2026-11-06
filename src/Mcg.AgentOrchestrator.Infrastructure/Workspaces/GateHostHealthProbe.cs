@@ -101,7 +101,7 @@ internal static class GateHostHealthProbe
             startInfo.ArgumentList.Add("/c");
             startInfo.ArgumentList.Add("exit");
             var started = Stopwatch.GetTimestamp();
-            using var process = ProcessTreeGuiSuppression.Start(startInfo);
+            using var process = HandleListProcessLauncher.StartSuppressed(startInfo);
             if (!process.WaitForExit(LaunchTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }

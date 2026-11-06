@@ -2493,7 +2493,7 @@ public static partial class WorkerProcessJobs
     {
         try
         {
-            using var process = new Process();
+            using var process = new HandleListLaunchedProcess();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = "taskkill.exe",
@@ -2506,7 +2506,7 @@ public static partial class WorkerProcessJobs
             process.StartInfo.ArgumentList.Add("/F");
             process.StartInfo.ArgumentList.Add("/PID");
             process.StartInfo.ArgumentList.Add(processId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
+            if (!process.Start())
             {
                 return false;
             }

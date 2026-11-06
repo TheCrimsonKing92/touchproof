@@ -35,7 +35,6 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     private static readonly SanctionedCaller[] ProcessStartAllowlist =
     [
-        new("Mcg.AgentOrchestrator.App.Cli.CliStableSlotDotnetCommand", "Stable-slot child for CLI verbs", "src/Mcg.AgentOrchestrator.App/Cli/CliStableSlotDotnetCommand.cs:225"),
         new("Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression", "Shared launch-lock policy for managed child creation", "src/Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs:177,195,198")
     ];
 

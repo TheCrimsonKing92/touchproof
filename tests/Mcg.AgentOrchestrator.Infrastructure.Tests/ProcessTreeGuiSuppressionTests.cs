@@ -366,7 +366,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             "Mcg.AgentOrchestrator.Infrastructure",
             "Workspaces",
             "AcceptanceCheckProcessInvoker.cs"));
-        Assert.Contains("worker = ProcessTreeGuiSuppression.Start(startInfo);", dispatchHost, StringComparison.Ordinal);
+        Assert.Contains("workerLaunch = workerGroup.StartRedirected(startInfo);", dispatchHost, StringComparison.Ordinal);
         Assert.Contains("codexLaunch = StartPreparedCodexWorker(startInfo, codexScratch);", dispatchHost, StringComparison.Ordinal);
         Assert.Contains("var launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);", dispatchHost, StringComparison.Ordinal);
         var ownedProcessGroup = File.ReadAllText(Path.Combine(
@@ -380,8 +380,8 @@ public sealed class ProcessTreeGuiSuppressionTests
         Assert.Matches(
             @"StartSuspendedInJobWithStandardHandles\([^)]*\)\s*=>\s*StartSuspendedInJobCore\(",
             ownedProcessGroup);
-        Assert.Contains("using (var suppression = ProcessTreeGuiSuppression.PrepareSuppressedChildSpawn(requestOwnConsole, requiresLaunchLock, errorModeAccess))", ownedProcessGroup, StringComparison.Ordinal);
-        Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Contains("var policy = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole);", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | policy.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Matches(
             @"process = StartAcceptanceProcess\(\s*startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,\s*directStartInfo,",
             gateVerifier);

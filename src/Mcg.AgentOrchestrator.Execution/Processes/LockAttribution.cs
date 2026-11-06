@@ -464,7 +464,7 @@ internal static partial class LockAttribution
 
         try
         {
-            using var process = new Process();
+            using var process = new HandleListLaunchedProcess();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = handle,
@@ -482,7 +482,7 @@ internal static partial class LockAttribution
             bool started;
             try
             {
-                started = ProcessTreeGuiSuppression.StartWithLaunchLock(process);
+                started = process.Start();
             }
             catch (Exception exception)
             {

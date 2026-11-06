@@ -58,6 +58,34 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     internal static OwnedProcessGroup CreateContained() => new(allowBreakaway: false);
 
+    internal static OwnedProcessGroup Attach(HandleListLaunchedProcess process)
+    {
+        using var attached = process.AttachProcess();
+        return Attach(attached);
+    }
+
+    internal HandleListLaunchedProcess StartRedirected(ProcessStartInfo info, bool requestOwnConsole = false,
+        Action<HandleListLaunchedProcess>? createdObserver = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!OperatingSystem.IsWindows())
+        {
+            var portable = HandleListProcessLauncher.Start(info);
+            using var attached = portable.AttachProcess();
+            Add(attached);
+            return portable;
+        }
+        var original = info.CreateNoWindow;
+        try
+        {
+            info.CreateNoWindow = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole).ChildCreateNoWindow;
+            var process = HandleListProcessLauncher.Start(info, job: _jobHandle, createdObserver: createdObserver);
+            _processIds.Add(process.Id);
+            return process;
+        }
+        finally { info.CreateNoWindow = original; }
+    }
+
     public static OwnedProcessGroup Attach(Process process)
     {
         var group = Create();
@@ -741,9 +769,6 @@ internal sealed class OwnedProcessGroup : IDisposable
         private const uint CreateSuspended = 0x00000004;
         private const uint CreateUnicodeEnvironment = 0x00000400;
         private const uint ExtendedStartupInfoPresent = 0x00080000;
-        private const int ProcThreadAttributeJobList = 0x0002000D;
-        private const int ProcThreadAttributeHandleList = 0x00020002;
-        private const int StartfUseStdHandles = 0x00000100;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareDelete = 0x00000004;
@@ -768,7 +793,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                     job,
                     startInfo,
                     InheritableStandardHandles.AcquireNone,
-                    inheritableWindowObserver, requestOwnConsole, requiresLaunchLock: false, errorModeAccess);
+                    inheritableWindowObserver, requestOwnConsole, errorModeAccess: errorModeAccess);
             }
 
             // The capture files are opened NON-inheritable and only duplicated as inheritable for the
@@ -812,7 +837,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             SafeFileHandle job,
             ProcessStartInfo startInfo,
             Func<InheritableStandardHandles> acquireStandardHandles,
-            Action? inheritableWindowObserver, bool requestOwnConsole, bool requiresLaunchLock = true,
+            Action? inheritableWindowObserver, bool requestOwnConsole,
             ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null)
         {
             // Everything that can allocate, enumerate, or throw is done before any inheritable handle
@@ -823,56 +848,42 @@ internal sealed class OwnedProcessGroup : IDisposable
                 ? Environment.CurrentDirectory
                 : startInfo.WorkingDirectory;
 
-            PROCESS_INFORMATION processInformation;
-            using (var suppression = ProcessTreeGuiSuppression.PrepareSuppressedChildSpawn(requestOwnConsole, requiresLaunchLock, errorModeAccess))
-            using (var standardHandles = acquireStandardHandles())
+            HandleListProcessLauncher.Creation processInformation;
+            var policy = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole);
+            ProcessTreeGuiSuppression.EnsureLaunchSuppression(LaunchLockEntryPoint.AcquireSuppressedChildSpawn,
+                errorModeAccess ?? ProcessTreeGuiSuppression.ErrorModeAccess.Native);
+            var windowStarted = Stopwatch.GetTimestamp();
+            long createTicks = 0;
+            try
             {
-                var inheritedHandles = standardHandles.InheritedHandles;
-                var useStandardHandles = inheritedHandles.Count > 0;
-                var startupInfo = new STARTUPINFOEX
-                {
-                    StartupInfo = new STARTUPINFO
-                    {
-                        cb = Marshal.SizeOf<STARTUPINFOEX>(),
-                        dwFlags = useStandardHandles ? StartfUseStdHandles : 0,
-                        hStdInput = standardHandles.StandardInput,
-                        hStdOutput = standardHandles.StandardOutput,
-                        hStdError = standardHandles.StandardError
-                    }
-                };
-                using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
-                startupInfo.lpAttributeList = attributes.AttributeList;
+                using var standardHandles = acquireStandardHandles();
                 inheritableWindowObserver?.Invoke();
-                var createStarted = Stopwatch.GetTimestamp();
-                var created = CreateProcessW(
-                        null,
-                        commandLine,
-                        IntPtr.Zero,
-                        IntPtr.Zero,
-                        useStandardHandles,
-                        CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,
-                        environment,
-                        workingDirectory,
-                        ref startupInfo,
-                        out processInformation);
-                var nativeErrorCode = created ? 0 : Marshal.GetLastWin32Error();
-                suppression.RecordChildCreateTicks(Stopwatch.GetTimestamp() - createStarted);
-                if (!created)
+                try
                 {
-                    throw new OwnedProcessLaunchException(
-                        nativeErrorCode,
-                        "Failed to start suspended process in owned job object.",
-                        CaptureLaunchFailureEvidence(job));
+                    processInformation = HandleListProcessLauncher.Create(null, commandLine.ToString(), environment,
+                        workingDirectory, CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | policy.ChildCreationFlags,
+                        standardHandles.StandardInput, standardHandles.StandardOutput, standardHandles.StandardError,
+                        standardHandles.InheritedHandles, out createTicks, job);
                 }
+                catch (Win32Exception failure)
+                {
+                    throw new OwnedProcessLaunchException(failure.NativeErrorCode,
+                        "Failed to start suspended process in owned job object.", CaptureLaunchFailureEvidence(job));
+                }
+            }
+            finally
+            {
+                LaunchLockTelemetry.Record(LaunchLockEntryPoint.AcquireSuppressedChildSpawn, 0,
+                    Stopwatch.GetTimestamp() - windowStarted, createTicks);
             }
 
             // Inheritable duplicates are already closed here, before the comparatively slow
             // Process.GetProcessById full-table enumeration below.
-            var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
-            var initialThread = new SafeFileHandle(processInformation.hThread, ownsHandle: true);
+            var nativeProcess = new SafeFileHandle(processInformation.ProcessHandle, ownsHandle: true);
+            var initialThread = new SafeFileHandle(processInformation.ThreadHandle, ownsHandle: true);
             try
             {
-                var process = Process.GetProcessById(unchecked((int)processInformation.dwProcessId));
+                var process = Process.GetProcessById(unchecked((int)processInformation.ProcessId));
                 return new WindowsSuspendedProcess(process, nativeProcess, initialThread);
             }
             catch
@@ -1349,19 +1360,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             IsProcessInJob(process.DangerousGetHandle(), job.DangerousGetHandle(), out var member) && member;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CreateProcessW(
-            string? lpApplicationName,
-            StringBuilder lpCommandLine,
-            IntPtr lpProcessAttributes,
-            IntPtr lpThreadAttributes,
-            bool bInheritHandles,
-            uint dwCreationFlags,
-            string lpEnvironment,
-            string lpCurrentDirectory,
-            ref STARTUPINFOEX lpStartupInfo,
-            out PROCESS_INFORMATION lpProcessInformation);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern SafeFileHandle CreateFileW(
             string lpFileName,
             uint dwDesiredAccess,
@@ -1370,26 +1368,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             uint dwCreationDisposition,
             uint dwFlagsAndAttributes,
             IntPtr hTemplateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool InitializeProcThreadAttributeList(
-            IntPtr lpAttributeList,
-            int dwAttributeCount,
-            int dwFlags,
-            ref IntPtr lpSize);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool UpdateProcThreadAttribute(
-            IntPtr lpAttributeList,
-            uint dwFlags,
-            IntPtr attribute,
-            IntPtr lpValue,
-            IntPtr cbSize,
-            IntPtr lpPreviousValue,
-            IntPtr lpReturnSize);
-
-        [DllImport("kernel32.dll")]
-        private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool DuplicateHandle(
@@ -1677,36 +1655,6 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         private static long ToInt64(ulong value) => value > long.MaxValue ? long.MaxValue : (long)value;
 
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct STARTUPINFO
-        {
-            public int cb;
-            public string? lpReserved;
-            public string? lpDesktop;
-            public string? lpTitle;
-            public int dwX;
-            public int dwY;
-            public int dwXSize;
-            public int dwYSize;
-            public int dwXCountChars;
-            public int dwYCountChars;
-            public int dwFillAttribute;
-            public int dwFlags;
-            public short wShowWindow;
-            public short cbReserved2;
-            public IntPtr lpReserved2;
-            public IntPtr hStdInput;
-            public IntPtr hStdOutput;
-            public IntPtr hStdError;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct STARTUPINFOEX
-        {
-            public STARTUPINFO StartupInfo;
-            public IntPtr lpAttributeList;
-        }
-
         [StructLayout(LayoutKind.Sequential)]
         private struct SECURITY_ATTRIBUTES
         {
@@ -1714,15 +1662,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             public IntPtr lpSecurityDescriptor;
             [MarshalAs(UnmanagedType.Bool)]
             public bool bInheritHandle;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_INFORMATION
-        {
-            public IntPtr hProcess;
-            public IntPtr hThread;
-            public uint dwProcessId;
-            public uint dwThreadId;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -1735,133 +1674,6 @@ internal sealed class OwnedProcessGroup : IDisposable
             Process Process,
             SafeFileHandle ProcessHandle,
             SafeFileHandle InitialThread);
-
-        private sealed class WindowsJobAttributeList : IDisposable
-        {
-            private readonly IntPtr _jobHandleValue;
-            private readonly IntPtr _inheritedHandleValues;
-            private readonly bool _initialized;
-
-            private WindowsJobAttributeList(
-                IntPtr attributeList,
-                IntPtr jobHandleValue,
-                IntPtr inheritedHandleValues,
-                bool initialized)
-            {
-                AttributeList = attributeList;
-                _jobHandleValue = jobHandleValue;
-                _inheritedHandleValues = inheritedHandleValues;
-                _initialized = initialized;
-            }
-
-            public IntPtr AttributeList { get; }
-
-            public static WindowsJobAttributeList Create(SafeFileHandle job, IReadOnlyList<IntPtr> inheritedHandles)
-            {
-                var attributeCount = inheritedHandles.Count == 0 ? 1 : 2;
-                var size = IntPtr.Zero;
-                _ = InitializeProcThreadAttributeList(IntPtr.Zero, attributeCount, 0, ref size);
-                if (size == IntPtr.Zero)
-                {
-                    throw new OwnedProcessLaunchException(
-                        Marshal.GetLastWin32Error(),
-                        "Failed to size owned-process attribute list.",
-                        CaptureLaunchFailureEvidence(job));
-                }
-
-                var attributeList = Marshal.AllocHGlobal(size);
-                var jobHandleValue = Marshal.AllocHGlobal(IntPtr.Size);
-                var inheritedHandleValues = inheritedHandles.Count == 0
-                    ? IntPtr.Zero
-                    : Marshal.AllocHGlobal(IntPtr.Size * inheritedHandles.Count);
-                var initialized = false;
-                var addedRef = false;
-                try
-                {
-                    if (!InitializeProcThreadAttributeList(attributeList, attributeCount, 0, ref size))
-                    {
-                        throw new OwnedProcessLaunchException(
-                            Marshal.GetLastWin32Error(),
-                            "Failed to initialize owned-process attribute list.",
-                            CaptureLaunchFailureEvidence(job));
-                    }
-
-                    initialized = true;
-                    job.DangerousAddRef(ref addedRef);
-                    Marshal.WriteIntPtr(jobHandleValue, job.DangerousGetHandle());
-                    if (!UpdateProcThreadAttribute(
-                            attributeList,
-                            0,
-                            new IntPtr(ProcThreadAttributeJobList),
-                            jobHandleValue,
-                            new IntPtr(IntPtr.Size),
-                            IntPtr.Zero,
-                            IntPtr.Zero))
-                    {
-                        throw new OwnedProcessLaunchException(
-                            Marshal.GetLastWin32Error(),
-                            "Failed to assign owned job during process creation.",
-                            CaptureLaunchFailureEvidence(job));
-                    }
-
-                    if (inheritedHandles.Count > 0)
-                    {
-                        Marshal.Copy(inheritedHandles.ToArray(), 0, inheritedHandleValues, inheritedHandles.Count);
-                        if (!UpdateProcThreadAttribute(
-                                attributeList,
-                                0,
-                                new IntPtr(ProcThreadAttributeHandleList),
-                                inheritedHandleValues,
-                                new IntPtr(IntPtr.Size * inheritedHandles.Count),
-                                IntPtr.Zero,
-                                IntPtr.Zero))
-                        {
-                            throw new OwnedProcessLaunchException(
-                                Marshal.GetLastWin32Error(),
-                                "Failed to restrict inherited handles during owned-process creation.",
-                                CaptureLaunchFailureEvidence(job));
-                        }
-                    }
-
-                    return new WindowsJobAttributeList(
-                        attributeList,
-                        jobHandleValue,
-                        inheritedHandleValues,
-                        initialized);
-                }
-                catch
-                {
-                    if (initialized)
-                    {
-                        DeleteProcThreadAttributeList(attributeList);
-                    }
-
-                    Marshal.FreeHGlobal(inheritedHandleValues);
-                    Marshal.FreeHGlobal(jobHandleValue);
-                    Marshal.FreeHGlobal(attributeList);
-                    throw;
-                }
-                finally
-                {
-                    if (addedRef)
-                    {
-                        job.DangerousRelease();
-                    }
-                }
-            }
-
-            public void Dispose()
-            {
-                if (_initialized)
-                {
-                    DeleteProcThreadAttributeList(AttributeList);
-                }
-
-                Marshal.FreeHGlobal(_inheritedHandleValues);
-                Marshal.FreeHGlobal(_jobHandleValue);
-                Marshal.FreeHGlobal(AttributeList);
-            }
-        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION

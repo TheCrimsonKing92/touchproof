@@ -81,7 +81,7 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         {
             Xunit.Assert.True(sample.WaitTicks >= 0);
             Xunit.Assert.Equal(0, sample.WaitTicks);
-            Xunit.Assert.Equal(0, sample.HoldTicks);
+            Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
             Xunit.Assert.True(sample.CreateTicks > 0);
         }
         Xunit.Assert.True(LaunchLockTelemetry.Process.Snapshot().Launches - processBefore >= expectedLaunches);
@@ -102,6 +102,6 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         var sample = Xunit.Assert.Single(capture.Samples);
         Xunit.Assert.True(sample.CreateTicks > 0);
         Xunit.Assert.Equal(0, sample.WaitTicks);
-        Xunit.Assert.Equal(0, sample.HoldTicks);
+        Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
     }
 }
