@@ -149,6 +149,11 @@ public sealed class AgentTaskRunner
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
         var workerResultReference =
             $"api-run:{resolvedModel.ProviderName}/{resolvedModel.ModelName}:completed-at={execution.CompletedAt:O}";
+        if (humanInputDirective.Directives.Count > 1 &&
+            humanInputDirective.Directives.All(item => item.Kind == HumanWaitKind.PlannerBriefAmendment) &&
+            PlannerAmendmentBatchRecorder.Record(_kernel, goal, task, humanInputDirective.Directives,
+                output, hasCompleteWorkerResult, completedRound, workerResultReference))
+            return new AgentTaskRunResult(goal, task, execution);
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;

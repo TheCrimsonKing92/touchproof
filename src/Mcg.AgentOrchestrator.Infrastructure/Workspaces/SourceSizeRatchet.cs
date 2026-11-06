@@ -86,7 +86,7 @@ internal static class SourceSizeRatchet
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
             // Goal 6a75c73d records the host test-settings binding after process start succeeds; its request
             // property moved with the request record into AcceptanceProcessRequest.cs (goal 18718c48).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 536),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 535),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -659,7 +659,7 @@ internal static class SourceSizeRatchet
             // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9114, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9112, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

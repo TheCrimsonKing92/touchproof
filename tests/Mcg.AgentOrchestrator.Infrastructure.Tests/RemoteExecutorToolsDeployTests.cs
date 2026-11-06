@@ -60,16 +60,23 @@ public sealed class RemoteExecutorToolsDeployTests
         var deploy = Create((args, directory, _, _) =>
         {
             commands.Add(args);
-            composed.Add(GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(args, directory,
+            var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(args, directory,
                 @"\\.\pipe\mcg-acceptance-stdout-01234567890123456789012345678901",
-                @"\\.\pipe\mcg-acceptance-stderr-01234567890123456789012345678901").Arguments);
+                @"\\.\pipe\mcg-acceptance-stderr-01234567890123456789012345678901");
+            Assert.Equal(args[0], startInfo.FileName);
+            Assert.Empty(startInfo.Arguments);
+            Assert.Equal(args.Skip(1), startInfo.ArgumentList);
+            composed.Add(string.Join(' ', new[] { startInfo.FileName }.Concat(startInfo.ArgumentList)
+                .Select(OwnedProcessGroup.QuoteCommandArgument)));
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "{\"readback\":\"B\"}"));
         });
         var result = deploy.Deploy(Entry with { RunRoot = runRoot }, Source with { Folder = "C:/Main tools/検証/tools-staging-B" }, "tools.bak-x");
         Assert.Equal("deployed", result.Outcome); // Fails against the former oversized inline script transport.
         Assert.Equal(4, composed.Count);
+        // Keep the remote cmd transport bound even though the local check now launches directly.
         Assert.All(composed, command => Assert.InRange(command.Length, 1, 8191));
-        Assert.Contains(SshRemoteLaneExecutor.ScpPath.Replace("\"", "\\\"", StringComparison.Ordinal), composed[0]);
+        Assert.Equal(SshRemoteLaneExecutor.ScpPath, commands[0][0]);
+        Assert.StartsWith(OwnedProcessGroup.QuoteCommandArgument(SshRemoteLaneExecutor.ScpPath), composed[0]);
         Assert.Contains("-File", commands[2]);
         Assert.DoesNotContain("-EncodedCommand", commands[2]);
     }

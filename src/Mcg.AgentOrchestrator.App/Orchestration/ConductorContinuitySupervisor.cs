@@ -1179,7 +1179,7 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 }
             }
         };
-        if (!process.Start())
+        if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
         {
             throw new InvalidOperationException("Failed to start the supervised conductor process.");
         }

@@ -67,7 +67,7 @@ public sealed class DefenderPreferenceCmdletAdapter : IHostExclusionReader, IHos
         var script = Path.Combine(AppContext.BaseDirectory, "DefenderExclusionPreferences.ps1");
         if (!File.Exists(script)) throw new FileNotFoundException("Defender adapter script is missing.", script);
         using var process = new Process { StartInfo = CreateStartInfo(operation, path, script) };
-        if (!process.Start()) throw new InvalidOperationException("Could not start Defender preference reader/writer.");
+        if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process)) throw new InvalidOperationException("Could not start Defender preference reader/writer.");
         process.StandardInput.Close();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

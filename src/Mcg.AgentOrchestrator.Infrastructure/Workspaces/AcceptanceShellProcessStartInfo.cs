@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Owns shell quoting and platform-specific setup after the child environment is configured.
+// Owns launch form, quoting and platform-specific setup after the child environment is configured.
 internal static class AcceptanceShellProcessStartInfo
 {
     internal static ProcessStartInfo ForCheck(
@@ -64,7 +64,8 @@ internal static class AcceptanceShellProcessStartInfo
         bool forceUtf8ConsoleOutput,
         Action<IDictionary<string, string?>>? configureEnvironment,
         bool resolveBareCommand,
-        out string? resolvedCommandPath)
+        out string? resolvedCommandPath,
+        bool forceShell = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -82,7 +83,6 @@ internal static class AcceptanceShellProcessStartInfo
                 throw new ArgumentException("Both capture redirection targets must be provided together.");
             }
 
-            startInfo.FileName = "cmd.exe";
             if (resolveBareCommand && arguments.Length > 0)
             {
                 resolvedCommandPath = AcceptanceBareCommandResolver.Resolve(
@@ -93,6 +93,22 @@ internal static class AcceptanceShellProcessStartInfo
                     arguments[0] = resolvedCommandPath;
                 }
             }
+            var image = arguments.Length == 0 ? null : ResolveNativeImage(
+                arguments[0], startInfo.Environment, workingDirectory);
+            if (!forceShell && !forceUtf8ConsoleOutput && image is not null)
+            {
+                startInfo.FileName = image;
+                foreach (var argument in AcceptanceMtpFilterResponseFile.Apply(arguments).Skip(1))
+                    startInfo.ArgumentList.Add(argument);
+                startInfo.RedirectStandardOutput = string.IsNullOrWhiteSpace(stdoutRedirectTarget);
+                startInfo.RedirectStandardError = string.IsNullOrWhiteSpace(stderrRedirectTarget);
+                var length = AcceptanceCmdCommandLineLimit.ThrowIfDirectCommandLineTooLong(startInfo);
+                AcceptanceGatePhaseAccountant.RecordCurrentLaneCommand(length,
+                    AcceptanceMtpFilterResponseFile.Plan(arguments).ResponseFilePath is not null);
+                return startInfo;
+            }
+
+            startInfo.FileName = "cmd.exe";
             var command = BuildShellCommand(AcceptanceMtpFilterResponseFile.Apply(arguments), QuoteForCmd);
             if (forceUtf8ConsoleOutput)
             {
@@ -132,4 +148,30 @@ internal static class AcceptanceShellProcessStartInfo
 
         return startInfo;
     }
+
+    private static string? ResolveNativeImage(string command, IDictionary<string, string?> environment,
+        string workingDirectory)
+    {
+        var candidate = AcceptanceBareCommandResolver.Resolve(command, environment, workingDirectory);
+        var extension = Path.GetExtension(command);
+        if (candidate is null && IsNativeExtension(extension) &&
+            !command.Contains('/') && !command.Contains('\\'))
+        {
+            // The bare resolver intentionally leaves names with extensions alone. Search the
+            // child's PATH for this exact extension without changing that diagnostic contract.
+            var searchEnvironment = new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase)
+            {
+                ["PATHEXT"] = extension
+            };
+            candidate = AcceptanceBareCommandResolver.Resolve(
+                Path.GetFileNameWithoutExtension(command), searchEnvironment, workingDirectory);
+        }
+        if (candidate is null && !IsNativeExtension(extension)) return null;
+        candidate ??= Path.GetFullPath(command, workingDirectory);
+        return IsNativeExtension(Path.GetExtension(candidate)) && File.Exists(candidate) ? candidate : null;
+    }
+
+    private static bool IsNativeExtension(string extension) =>
+        extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".com", StringComparison.OrdinalIgnoreCase);
 }
