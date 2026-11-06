@@ -21,9 +21,17 @@ internal sealed partial class ConductorDriver
                 _executionDirectory, () => _resolveAcceptanceHeads(goal).BranchHeadSha);
         if (!_parallelAcceptanceAttemptCoordinator.HasPassedReconciledReceipt(goal.Id.Value))
             return null;
-        var candidate = TryBuildParallelAcceptanceCandidate(goal, policy, 0, out _);
-        if (candidate is null)
+        var candidate = TryBuildParallelAcceptanceCandidate(goal, policy, 0, out var declineReason);
+        if (candidate is null && declineReason != CandidateDeclineHoldActive)
             return null;
+        // An active landing hold does not invalidate a passed gate. Validate its proof
+        // under receipt custody before returning that hold, rather than queueing a gate.
+        if (candidate is null)
+        {
+            var heldHeads = _resolveAcceptanceHeads(goal);
+            candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, _getLandingFileScopes(goal),
+                heldHeads.BranchHeadSha, heldHeads.MainHeadSha);
+        }
         using var mutation = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-receipt-replay");
         if (mutation is null)
             return ReplacementEvidenceMutationHeld(goal, candidate.GoalPrefix, policy);
@@ -36,7 +44,6 @@ internal sealed partial class ConductorDriver
         if (GoalLifecycle.ResolveState(goal, facts) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying) ||
             !AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) ||
             ((_cohortKernel ?? _conductorTickKernel)?.BuildVerificationGate(goal.Id).IsSatisfied == false) ||
-            HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _) ||
             HasPendingDeferredNoChangeEvidence(goal) || HasRoutableRecordedCohortAttributionFailure(goal))
             return null;
         var circuitHold = PassedAcceptanceReceiptReplay.CircuitHold(goal, policy, _readAcceptanceEngineHealth());
@@ -58,7 +65,20 @@ internal sealed partial class ConductorDriver
                         $"greenToLandingMs={(_utcNow() - (attempt.CompletedAt ?? attempt.StartedAt)).TotalMilliseconds:F0}", mainSha);
             });
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
-            decision => PassedAcceptanceReceiptReplay.Apply(decision, operations),
+            decision =>
+            {
+                if (ReplayLandingHold(goal, candidate.GoalPrefix, policy) is { } hold)
+                {
+                    var original = decision.Run!.Candidate;
+                    var current = _resolveAcceptanceHeads(goal);
+                    if ((original.BranchHeadSha != current.BranchHeadSha || original.MainHeadSha != current.MainHeadSha) &&
+                        CarryForwardGreenVerdict(original, decision.Run.Acceptance!) is not
+                            (AcceptanceMainAdvanceDisposition.Unchanged or AcceptanceMainAdvanceDisposition.Disjoint))
+                        return null;
+                    return hold;
+                }
+                return PassedAcceptanceReceiptReplay.Apply(decision, operations);
+            },
             decision =>
             {
                 var current = GetCurrentGoal(goal);
@@ -70,6 +90,25 @@ internal sealed partial class ConductorDriver
                 return AcceptanceCriterionEvidence.RecordExactReplayEvidence(current, decision.Attempt,
                     currentHeads, _cohortKernel ?? _conductorTickKernel);
             });
+    }
+
+    private ConductorAdvanceResult? ReplayLandingHold(Goal goal, string prefix, ConductorAutonomyPolicy policy)
+    {
+        if (HasActiveOwnerReviewHold(goal, out var sha, out var receipt))
+            return OwnerReviewHeld(goal, prefix, policy, sha, receipt!);
+        if (!HasActiveApparatusHold(goal, out _))
+            return null;
+        var failure = goal.LatestAcceptanceFailure!;
+        var decision = VerifiedAdmissionPolicy.Evaluate(new VerifiedAdmissionFacts(goal.Status)
+        {
+            ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
+            ApparatusMainSha = failure.MainHeadSha ?? "unknown",
+            ApparatusCandidate = FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)
+        });
+        return MakeResult(goal.Id.Value, prefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
+                StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
+            { Decision = decision.ToRecord() });
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
@@ -474,61 +513,18 @@ internal sealed partial class ConductorDriver
         if (EnvironmentGate?.Check(candidate.Goal, policy, GoalLifecycleState.Verifying, forGate: true) is { } environmentHold)
             return ConductorParallelAcceptanceRunResult.Early(candidate, environmentHold, null);
         executionOptions = executionOptions with { IntegrationBranch = _integrationBranch, ProjectHomeDirectory = _cohortWorkspace?.ProjectHomeDirectoryOrNull };
-        var effectiveCandidate = candidate;
-        var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
-            candidate.Goal,
-            "conductor:parallel-acceptance");
-        if (evidenceMutationLease is null)
-        {
-            return ConductorParallelAcceptanceRunResult.Early(
-                candidate,
-                ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
-                null);
-        }
-        ConductorParallelAcceptanceRunResult result;
-        try
-        {
-            var early = RebaseBeforeAcceptance(
-                candidate.Goal,
-                candidate.GoalPrefix,
-                policy,
-                applySideEffects: false,
-                out var earlyOutcome);
-            if (early is not null)
+        return ParallelLandingAcceptanceExecutor.Execute(candidate,
+            () => _tryAcquireEvidenceMutationLease(candidate.Goal, "conductor:parallel-acceptance"),
+            () => ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
+            () =>
             {
-                result = ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
-                return result;
-            }
-
-            effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
-            result = ConductorParallelAcceptanceRunResult.Accepted(
-                effectiveCandidate,
-                _runAcceptanceVerification(
-                    effectiveCandidate.Goal,
-                    omitStableSlotIndexWithoutLease && stableSlotLease is null
-                        ? null
-                        : effectiveCandidate.SlotIndex,
-                    stableSlotLease,
-                    cancellationToken,
-                    executionOptions));
-        }
-        catch (Exception ex)
-        {
-            result = ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
-        }
-        finally
-        {
-            try
-            {
-                evidenceMutationLease.Dispose();
-            }
-            catch
-            {
-                // Cleanup cannot replace a computed acceptance result. Store-backed leases emit
-                // typed failure evidence and retain their owner-qualified row for expiry recovery.
-            }
-        }
-
-        return result;
+                var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy,
+                    applySideEffects: false, out var earlyOutcome);
+                return early is null ? null : ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
+            },
+            () => RefreshParallelAcceptanceCandidate(candidate),
+            effective => _runAcceptanceVerification(effective.Goal,
+                omitStableSlotIndexWithoutLease && stableSlotLease is null ? null : effective.SlotIndex,
+                stableSlotLease, cancellationToken, executionOptions));
     }
 }
