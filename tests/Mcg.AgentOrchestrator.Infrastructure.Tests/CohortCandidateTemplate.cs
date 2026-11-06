@@ -29,12 +29,20 @@ public sealed class CohortCandidateTemplate : IDisposable
             foreach (var directory in Directory.EnumerateDirectories(source.Repo, "*", SearchOption.AllDirectories))
                 Directory.CreateDirectory(Path.Combine(repo, Path.GetRelativePath(source.Repo, directory)));
             foreach (var file in Directory.EnumerateFiles(source.Repo, "*", SearchOption.AllDirectories))
-                File.Copy(file, Path.Combine(repo, Path.GetRelativePath(source.Repo, file)));
+            {
+                var target = Path.Combine(repo, Path.GetRelativePath(source.Repo, file));
+                File.Copy(file, target);
+                // Git for Windows records creation time as ctime. Preserve both timestamps,
+                // as the existing recheck template does, so candidate indexes stay valid.
+                if (OperatingSystem.IsWindows()) File.SetCreationTimeUtc(target, File.GetCreationTimeUtc(file));
+                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(file));
+            }
 
             foreach (var worktree in MergeTrainRecheckFixtureTemplate.RepairWorktreeLinks(
                 source.Repo, repo, $"Candidate template '{key}'"))
-                MergeTrainRecheckFixtureTemplate.RefreshIndex(worktree);
-            // Copied stat data must be refreshed before read-tree -m -u.
+                // Unix ctime cannot be copied. Keep the authoritative refresh on those hosts.
+                if (!OperatingSystem.IsWindows()) MergeTrainRecheckFixtureTemplate.RefreshIndex(worktree);
+            // Root stat data can also be changed by the copy/link repair; refresh it once.
             MergeTrainRecheckFixtureTemplate.RefreshIndex(repo);
             return new PreparedRepository(repo, source.GoalIds.ToArray(), source.Revisions.ToArray());
         }

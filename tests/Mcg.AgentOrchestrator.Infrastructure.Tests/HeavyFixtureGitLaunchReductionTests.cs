@@ -89,6 +89,10 @@ public sealed class HeavyFixtureGitLaunchReductionTests(ITestOutputHelper output
                 GitRevisionReader.Shared.SuccessfulGitRead -= ObserveRead;
                 var delta = Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close());
                 output.WriteLine($"{entry.Class.Name}: rows={rows}; launches={delta.Launches}; historical={entry.Launches}");
+                output.WriteLine("subcommands: " + string.Join(", ", delta.Subcommands.OrderByDescending(pair => pair.Value)
+                    .Select(pair => $"{pair.Key}={pair.Value}")));
+                output.WriteLine("top callers: " + string.Join(", ", (delta.Callers ?? new Dictionary<string, int>())
+                    .OrderByDescending(pair => pair.Value).Take(5).Select(pair => $"{pair.Key}={pair.Value}")));
                 output.WriteLine($"successful file-miss reads by repository: once={reads.Count(pair => pair.Value == 1)}; " +
                     $"repeated={reads.Count(pair => pair.Value > 1)}; reads={reads.Values.Sum()}");
                 total += delta.Launches;

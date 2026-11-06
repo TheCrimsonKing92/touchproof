@@ -112,7 +112,7 @@ internal sealed class GitRevisionReader : IDisposable
         => TryConfirmWorkTree(directory, Environment.GetEnvironmentVariable);
 
     internal static bool TryConfirmWorkTree(string directory, Func<string, string?> environment,
-        bool allowIdentityConfiguration = false)
+        bool allowIdentityConfiguration = true)
     {
         ArgumentNullException.ThrowIfNull(environment);
         try
@@ -331,7 +331,7 @@ internal sealed class GitRevisionReader : IDisposable
 
     // Shared layout policy for both positive ref reads and the absence proof.
     internal static bool TryLocateRefStore(string directory, Func<string, string?> environment,
-        out string gitDirectory, out string commonDirectory, bool allowIdentityConfiguration = false)
+        out string gitDirectory, out string commonDirectory, bool allowIdentityConfiguration = true)
     {
         gitDirectory = commonDirectory = string.Empty;
         if (!TryConfirmWorkTree(directory, environment, allowIdentityConfiguration)) return false;
@@ -491,7 +491,7 @@ internal sealed class GitRevisionReader : IDisposable
     private static bool HasConclusiveWorkTreeConfig(string path) => HasConclusiveWorkTreeConfig(path, out _);
 
     internal static bool HasConclusiveWorkTreeConfig(string path, out int objectIdLength,
-        bool allowIdentityConfiguration = false)
+        bool allowIdentityConfiguration = true)
     {
         objectIdLength = 40;
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
@@ -562,6 +562,9 @@ internal sealed class GitRevisionReader : IDisposable
                 else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                     value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
             }
+            // Literal identity strings do not affect repository discovery or ref interpretation.
+            // The syntax checks above still reject escapes, quoted values and malformed config;
+            // every other user setting (including typed booleans) stays on Git's parser.
             else if (!(allowIdentityConfiguration && section == "user" && key is "name" or "email")) return false;
         }
         return !hasObjectFormat || repositoryFormatVersion == "1";

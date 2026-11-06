@@ -11,7 +11,11 @@ public sealed class GitRevisionReaderFileFastPathTests
     {
         using var fixture = new Fixture();
         using var reader = new GitRevisionReader(admissionReads: 0);
+        fixture.Git("config", "user.name", "Reader");
+        fixture.Git("config", "user.email", "reader@example.test");
         var expected = fixture.Oracle(revision);
+        Assert.True(GitRefFileResolver.TryResolve(fixture.Repo, revision, out var fileValue));
+        Assert.Equal(expected, fileValue);
         var window = Observe();
         Assert.True(reader.TryResolve(fixture.Repo, revision, out var actual));
         AssertCommands(window);
@@ -26,7 +30,7 @@ public sealed class GitRevisionReaderFileFastPathTests
     {
         using var fixture = new Fixture();
         using var reader = new GitRevisionReader(admissionReads: 0);
-        if (!provable) File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[user]\nname = Reader\n");
+        if (!provable) File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[reader-unsupported]\nvalue = true\n");
         Assert.Equal(provable, GitRevisionReader.TryConfirmBranchAbsent(fixture.Repo, "absent"));
         var window = Observe();
         Assert.False(reader.TryResolve(fixture.Repo, "refs/heads/absent", out var actual));

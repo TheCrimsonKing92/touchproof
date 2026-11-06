@@ -2,7 +2,7 @@ using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Fixture = GitRefFileResolverParityTests.Fixture;
 
-// Parallel-safe: isolated reader owners/repositories; census is scoped to the test identity.
+// Parallel-safe: isolated reader owners/repositories and instance-owned read observations.
 public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
 {
     [Fact]
@@ -14,26 +14,28 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         fixture.Git("tag", "-a", "annotated", "-m", "tag");
         var revisions = new[] { "HEAD~1", "HEAD^{tree}", "annotated", fixture.Oracle("HEAD")[..12] };
         var expected = revisions.Select(fixture.Oracle).ToArray();
-        var window = Observe();
+        var completed = new List<bool>();
+        reader.SuccessfulGitRead += _ => completed.Add(reader.GetReader(fixture.Repo) is not null);
         for (var i = 0; i < GitRevisionReader.DefaultAdmissionReads; i++)
         {
             Assert.True(reader.TryResolve(fixture.Repo, revisions[0], out var value));
             Assert.Equal(expected[0], value);
             Assert.Null(reader.GetReader(fixture.Repo));
+            Assert.Equal(i + 1, completed.Count);
+            Assert.All(completed, admitted => Assert.False(admitted));
         }
-        var before = Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close());
-        Assert.Equal(GitRevisionReader.DefaultAdmissionReads, before.Launches);
-        Assert.Equal(GitRevisionReader.DefaultAdmissionReads, before.Subcommands["rev-parse"]);
-        window = Observe();
+        Assert.Equal(GitRevisionReader.DefaultAdmissionReads, completed.Count);
+        GitRevisionReader.ReaderProcess? process = null;
         for (var i = 0; i < revisions.Length; i++)
         {
             Assert.True(reader.TryResolve(fixture.Repo, revisions[i], out var value));
             Assert.Equal(expected[i], value);
             Assert.NotNull(reader.GetReader(fixture.Repo));
+            process ??= reader.GetReader(fixture.Repo);
+            Assert.Same(process, reader.GetReader(fixture.Repo));
+            Assert.Equal(GitRevisionReader.DefaultAdmissionReads + i + 1, completed.Count);
+            Assert.True(completed[^1]);
         }
-        var after = Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close());
-        Assert.Equal(1, after.Subcommands["cat-file"]);
-        Assert.Equal(1, after.Subcommands["rev-parse"]); // Abbreviation confirmation remains fresh.
         Assert.False(reader.TryResolve(fixture.Repo, "refs/heads/missing", out var missing));
         Assert.Empty(missing);
     }
@@ -97,13 +99,5 @@ public sealed class GitRevisionReaderAdmissionTests(ITestOutputHelper output)
         output.WriteLine($"samples={samples}; reader-start-and-first-query-ms={startup.TotalMilliseconds:F3}; " +
             $"running-reader-ms={batch:F3}; one-shot-ms={oneShot:F3}; admission={GitRevisionReader.DefaultAdmissionReads}");
         // Measurements are evidence, never a machine-speed correctness assertion.
-    }
-
-    private static HostCapacitySlotGitCensus.Window Observe()
-    {
-        var identity = HostCapacitySlotTimingWriter.CurrentTestName();
-        Assert.NotEqual("<unknown>", identity);
-        HostCapacitySlotGitCensus.EnsureInstalled(nameof(GitRevisionReaderAdmissionTests));
-        return Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
     }
 }
