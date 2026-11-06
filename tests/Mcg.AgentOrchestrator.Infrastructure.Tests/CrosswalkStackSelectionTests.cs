@@ -48,13 +48,13 @@ public sealed class CrosswalkStackSelectionTests
             OwnerAnswerApplier.Apply(model, Fixture.Answers()))).Kind);
         Assert.Equal(1, crosswalk.VersionCalls);
         Assert.Equal(2, crosswalk.Calls.Count);
-        Assert.Contains(" detect ", crosswalk.Calls[0].Command, StringComparison.Ordinal);
-        Assert.Contains(" list ", crosswalk.Calls[1].Command, StringComparison.Ordinal);
+        Assert.Equal(new[] { "detect", fixture.Root }, crosswalk.Calls[0].Arguments);
+        Assert.Equal(new[] { "list", fixture.Root }, crosswalk.Calls[1].Arguments);
         Assert.All(crosswalk.Calls, call =>
         {
             Assert.Equal(crosswalk.Timeout, call.Timeout);
             Assert.Equal(fixture.Root, call.WorkingDirectory);
-            Assert.Contains(crosswalk.Binary, call.Command, StringComparison.Ordinal);
+            Assert.Equal(crosswalk.Binary, call.FileName);
         });
 
         var roundTrip = ProjectModelJson.Deserialize(ProjectModelJson.Serialize(model));
@@ -75,7 +75,7 @@ public sealed class CrosswalkStackSelectionTests
         Assert.IsType<LuaProjectDiscoveryAdapter>(adapter);
         Assert.Equal(ProjectModelJson.Serialize(new LuaProjectDiscoveryAdapter().Discover(fixture.Root)),
             ProjectModelJson.Serialize(adapter.Discover(fixture.Root)));
-        Assert.Contains(" detect ", Assert.Single(crosswalk.Calls).Command, StringComparison.Ordinal);
+        Assert.Equal("detect", Assert.Single(crosswalk.Calls).Arguments[0]);
     }
 
     [Theory]

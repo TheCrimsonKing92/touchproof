@@ -32,6 +32,14 @@ internal sealed class CohortMemberReopenedGateAbandonment(
         var lines = new List<string>();
         foreach (var attempt in candidates)
         {
+            if (AlreadyEjected(attempt, goalId))
+            {
+                events.AppendRequired("gate-cancel", goalId,
+                    $"GATE_CANCEL_SKIPPED attempt={attempt.AttemptId} kind={attempt.Kind} goal={goalId} intent={intentId} reason=already-ejected",
+                    _utcNow());
+                lines.Add($"COHORT_MEMBER_REOPENED_GATE_SKIPPED attempt={attempt.AttemptId} kind={attempt.Kind} goal={shortGoalId} intent={intentId} reason=already-ejected");
+                continue;
+            }
             var stopped = grouped.AbandonForReopenedMember(attempt, goalId, intentId);
             if (stopped)
             {
@@ -44,5 +52,25 @@ internal sealed class CohortMemberReopenedGateAbandonment(
             lines.Add($"COHORT_MEMBER_REOPENED_GATE_{outcome} attempt={attempt.AttemptId} kind={attempt.Kind} goal={shortGoalId} intent={intentId}");
         }
         return lines;
+    }
+
+    private static bool AlreadyEjected(ConductorGroupedGateAttempt attempt, string goalId)
+    {
+        if (string.IsNullOrWhiteSpace(attempt.StateDirectory)) return false;
+        var path = Path.Combine(attempt.StateDirectory, "merge-train-acceptance.db");
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var store = MergeTrainAcceptanceStore.OpenReadOnly(path);
+            var receipt = store.TryReadReceipt(attempt.IdentityValue);
+            return receipt?.GateAttemptId is { } attemptId &&
+                store.ReadAttemptEjections(attemptId).Any(ejection =>
+                    string.Equals(ejection.GoalId.Value, goalId, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Unavailable evidence cannot exempt a reopened member from the existing cancellation.
+            return false;
+        }
     }
 }

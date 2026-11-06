@@ -84,11 +84,11 @@ public sealed class CrosswalkClientTests : IDisposable
     }
 
     [Fact]
-    public void Detect_ConfiguredPath_QuotesCommandAndUsesDefaultRequest()
+    public void Detect_ConfiguredPath_UsesDirectDefaultRequest()
     {
         var path = CreateExecutable();
         var root = Directory.CreateDirectory(Path.Combine(_sandbox.FullName, "root's folder")).FullName;
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var calls = 0;
         var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
@@ -104,8 +104,8 @@ public sealed class CrosswalkClientTests : IDisposable
         Assert.Equal(Toolchain.Go, Assert.IsType<CrosswalkDetectResult>(outcome.Result).Stack);
         Assert.Equal(1, calls);
         Assert.NotNull(request);
-        Assert.Equal("& '" + path.Replace("'", "''") + "' detect '" + root.Replace("'", "''") +
-            "'; exit $LASTEXITCODE", request.Command);
+        Assert.Equal(path, request.FileName);
+        Assert.Equal(new[] { "detect", root }, request.Arguments);
         Assert.Equal(root, request.WorkingDirectory);
         Assert.Equal(TimeSpan.FromSeconds(5), CrosswalkClient.DefaultTimeout);
         Assert.Equal(CrosswalkClient.DefaultTimeout, request.Timeout);
@@ -124,7 +124,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var path = CreateExecutable();
         var calls = 0;
         var timeout = TimeSpan.FromSeconds(17);
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var client = new CrosswalkClient(Resolver(path), (value, _) =>
         {
             calls++;
@@ -143,7 +143,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var outcome = client.Detect(_sandbox.FullName);
         Assert.Equal(new CrosswalkDetectOutcome(status, null, detail) { Executable = Resolver(path).Resolve().Identity }, outcome);
         Assert.Equal(1, calls);
-        Assert.Equal(timeout, Assert.IsType<WorkerProcessRunRequest>(request).Timeout);
+        Assert.Equal(timeout, Assert.IsType<WorkerProcessDirectRunRequest>(request).Timeout);
     }
 
     [Fact]
@@ -164,12 +164,12 @@ public sealed class CrosswalkClientTests : IDisposable
     }
 
     [Fact]
-    public void List_ConfiguredPath_ReturnsTypedRefsAndQuotesRequest()
+    public void List_ConfiguredPath_ReturnsTypedRefsAndDirectRequest()
     {
         var path = CreateExecutable();
         var root = Path.Combine(_sandbox.FullName, "root's folder");
         var timeout = TimeSpan.FromSeconds(17);
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var calls = 0;
         var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
@@ -190,20 +190,20 @@ public sealed class CrosswalkClientTests : IDisposable
         }, outcome.Result);
         Assert.Equal(1, calls);
         Assert.NotNull(request);
-        Assert.Equal("& '" + path.Replace("'", "''") + "' list '" + root.Replace("'", "''") +
-            "'; exit $LASTEXITCODE", request.Command);
+        Assert.Equal(path, request.FileName);
+        Assert.Equal(new[] { "list", root }, request.Arguments);
         Assert.Equal(root, request.WorkingDirectory);
         Assert.Equal(timeout, request.Timeout);
         Assert.Null(request.StandardInput);
     }
 
     [Fact]
-    public void Run_RequestedIds_QuotesEachIdAndUsesExplicitTimeout()
+    public void Run_RequestedIds_PreservesEachIdAndUsesExplicitTimeout()
     {
         var path = CreateExecutable();
         var root = Path.Combine(_sandbox.FullName, "root's folder");
         var timeout = TimeSpan.FromSeconds(71);
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var calls = 0;
         var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
@@ -237,8 +237,8 @@ public sealed class CrosswalkClientTests : IDisposable
         });
         Assert.Equal(1, calls);
         Assert.NotNull(request);
-        Assert.Equal("& '" + path.Replace("'", "''") + "' run '" + root.Replace("'", "''") +
-            "' --id 'it''s quoted' --id 'with space' --id '' --id 'with space'; exit $LASTEXITCODE", request.Command);
+        Assert.Equal(path, request.FileName);
+        Assert.Equal(new[] { "run", root, "--id", "it's quoted", "--id", "with space", "--id", "", "--id", "with space" }, request.Arguments);
         Assert.Equal(root, request.WorkingDirectory);
         Assert.Equal(timeout, request.Timeout);
         Assert.Null(request.StandardInput);
@@ -248,7 +248,7 @@ public sealed class CrosswalkClientTests : IDisposable
     public void Run_EmptyIds_OmitsIdArguments()
     {
         var path = CreateExecutable();
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var client = new CrosswalkClient(Resolver(path), (value, _) =>
         {
             request = value;
@@ -259,8 +259,8 @@ public sealed class CrosswalkClientTests : IDisposable
 
         Assert.Equal("detected", outcome.Status);
         Assert.Equal(2, outcome.Result.Count);
-        Assert.Equal("& '" + path.Replace("'", "''") + "' run '" + _sandbox.FullName.Replace("'", "''") +
-            "'; exit $LASTEXITCODE", Assert.IsType<WorkerProcessRunRequest>(request).Command);
+        Assert.Equal(path, Assert.IsType<WorkerProcessDirectRunRequest>(request).FileName);
+        Assert.Equal(new[] { "run", _sandbox.FullName }, request.Arguments);
     }
 
     [Theory]
@@ -302,7 +302,7 @@ public sealed class CrosswalkClientTests : IDisposable
         string status, bool faultedTask, string detail)
     {
         var path = CreateExecutable();
-        var requests = new List<WorkerProcessRunRequest>();
+        var requests = new List<WorkerProcessDirectRunRequest>();
         var listTimeout = TimeSpan.FromSeconds(17);
         var runTimeout = TimeSpan.FromSeconds(31);
         var client = new CrosswalkClient(Resolver(path), (request, _) =>
@@ -520,13 +520,13 @@ public sealed class CrosswalkClientTests : IDisposable
         var defaultPath = Path.Combine(_sandbox.FullName, "tools", "crosswalk", "crosswalk.exe");
         Directory.CreateDirectory(Path.GetDirectoryName(defaultPath)!);
         File.WriteAllText(defaultPath, "default executable");
-        var calls = new List<WorkerProcessRunRequest>();
+        var calls = new List<WorkerProcessDirectRunRequest>();
         var resolver = Resolver(path);
         var client = new CrosswalkClient(resolver, (request, _) =>
         {
             calls.Add(request);
             return Task.FromResult(new WorkerProcessRunResult(0,
-                request.Command.Contains("' detect '") ? GoJson : request.Command.Contains("' list '") ? ListJson : RunJson, ""));
+                request.Arguments[0] == "detect" ? GoJson : request.Arguments[0] == "list" ? ListJson : RunJson, ""));
         });
         Assert.Equal("detected", client.Detect(_sandbox.FullName).Status);
         Assert.Equal("detected", client.List(_sandbox.FullName).Status);
@@ -534,8 +534,8 @@ public sealed class CrosswalkClientTests : IDisposable
         Assert.Equal(3, calls.Count);
         Assert.All(calls, request =>
         {
-            Assert.StartsWith("& '" + path.Replace("'", "''") + "' ", request.Command);
-            Assert.DoesNotContain(defaultPath, request.Command);
+            Assert.Equal(path, request.FileName);
+            Assert.NotEqual(defaultPath, request.FileName);
         });
     }
 
@@ -544,7 +544,7 @@ public sealed class CrosswalkClientTests : IDisposable
     {
         const string variable = "MCG_ORCHESTRATOR_CROSSWALK_PATH";
         var previous = Environment.GetEnvironmentVariable(variable);
-        var calls = new List<WorkerProcessRunRequest>();
+        var calls = new List<WorkerProcessDirectRunRequest>();
         var versionCalls = 0;
         // This is an existing host executable; it must never be selected or started.
         var executable = Environment.ProcessPath!;

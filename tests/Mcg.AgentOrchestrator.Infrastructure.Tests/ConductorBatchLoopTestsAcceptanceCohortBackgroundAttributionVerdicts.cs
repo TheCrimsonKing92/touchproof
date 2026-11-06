@@ -82,6 +82,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         OrchestratorSnapshot? saved = null;
         var tickCompleted = false;
 
+        AdmissionFactsTestData.Warm(fixture.Driver, fixture.Kernel);
         fixture.CreateLoop().Run(fixture.Kernel, fixture.Driver, RoutingFixture.Policy,
             Path.Combine(fixture.Repo, "stop-does-not-exist"), maxIterations: 1,
             onlyGoalId: partner.Id.Value,
@@ -301,6 +302,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         internal BatchTickSummary Tick(ConductorBatchLoop loop)
         {
             BatchTickSummary? observed = null;
+            AdmissionFactsTestData.Warm(Driver, Kernel);
             loop.Run(Kernel, Driver, Policy, Path.Combine(Repo, "stop-does-not-exist"), maxIterations: 1,
                 onTick: tick => observed = tick);
             return Assert.IsType<BatchTickSummary>(observed);

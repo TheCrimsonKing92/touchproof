@@ -1,6 +1,10 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed record ProviderUsageHoldRow(ProviderBudgetExhaustionHold Hold, ProviderBudgetHoldSchedule? Schedule);
+public sealed record ProviderUsageHoldRow(ProviderBudgetExhaustionHold Hold, ProviderBudgetHoldSchedule? Schedule)
+{
+    public DateTimeOffset? OverdueSince { get; init; }
+    public DateTimeOffset? LastObservedAt { get; init; }
+}
 
 /// <summary>Only the canonical inputs consumed by the existing binding classifier and scheduler.</summary>
 public sealed record ProviderUsageTaskEvidence(string TaskId, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
@@ -59,13 +63,20 @@ public static class ProviderUsageHoldView
             ProviderBudgetHoldSchedule? schedule;
             try { schedule = ProviderBudgetHoldSchedules.Evaluate(scheduleScope, pair.Value, now); }
             catch (InvalidOperationException) { schedule = null; }
-            return new ProviderUsageHoldRow(pair.Value, schedule);
+            return new ProviderUsageHoldRow(pair.Value, schedule)
+            {
+                OverdueSince = schedule is { ProbeInFlight: false, AdmittedTaskId: null } && now >= schedule.NextProbeAt
+                    ? schedule.NextProbeAt : null,
+                LastObservedAt = schedule?.LastProbeAt ?? pair.Value.PlacedAt
+            };
         }).ToArray();
     }
 
     public static string FormatStatusLine(ProviderUsageHoldRow row)
     {
         var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}";
+        if (row.OverdueSince is { } due && row.Schedule is { } overdue)
+            return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source}";
         return row.Schedule is { } schedule
             ? $"  {row.Hold.BindingKey} | attempt={schedule.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} | reset_source={schedule.ResetSource} | last_probe={schedule.LastProbeOutcome} | {source}"
             : $"  {row.Hold.BindingKey} | schedule=unavailable | {source}";

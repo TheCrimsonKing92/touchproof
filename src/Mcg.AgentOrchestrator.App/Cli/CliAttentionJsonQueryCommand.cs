@@ -25,9 +25,9 @@ internal static class CliAttentionJsonQueryCommand
             cancellationToken).GetAwaiter().GetResult();
         Console.WriteLine(summary
             ? AttentionAgentReadView.RenderSummary(context.Waits, context.Items, time,
-                context.ProviderHolds, context.OwnerQuestions, context.PostLandingDuties, context.Goals)
+                context.ProviderHolds, context.OwnerQuestions, context.PostLandingDuties, context.Goals, context.AmendmentHolds)
             : AttentionAgentReadView.Render(context.Waits, context.Items, time,
                 context.ProviderHolds, goals: context.Goals, gateEvidence: context.GateEvidence, ownerQuestions: context.OwnerQuestions,
-                postLandingDuties: context.PostLandingDuties));
+                postLandingDuties: context.PostLandingDuties, amendmentHolds: context.AmendmentHolds));
     }
 }

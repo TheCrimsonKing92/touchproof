@@ -25,13 +25,19 @@ internal static class CliConductorStatusReader
         output.WriteLine($"Supervisor build: {snapshot.SupervisorBuild ?? "unavailable"}");
         if (snapshot.SupervisorJob is { } job && ProcessJobTrapProbe.Traps(job))
             output.WriteLine($"Supervisor job: jobFlags={ProcessJobTrapProbe.FormatFlags(job.LimitFlags!.Value)} ends the conductor when the launching app closes; restart it from a terminal outside that job.");
+        output.WriteLine(snapshot.LoopBuild is { Commit: { } commit } loop && !string.IsNullOrWhiteSpace(commit)
+            ? $"Loop build: {commit} ({(loop.Source == "supervisor" ? "supervisor build; no activation since supervisor start" : loop.Source)})"
+            : "Loop build: unavailable");
         output.WriteLine(snapshot.Generation.State switch
         {
             "no-build" => "Generation: unavailable (no supervisor build recorded)",
+            "loop-unavailable" => "Generation: unavailable (loop build unreadable)",
             "main-unavailable" => "Generation: main unavailable",
-            "current" => $"Generation: current with main {snapshot.Generation.Main}",
+            "current" => $"Generation: current with main (running {snapshot.Generation.Build}, main {snapshot.Generation.Main})",
             _ => $"Generation: differs from main (running {snapshot.Generation.Build}, main {snapshot.Generation.Main})"
         });
+        if (snapshot.LateFleetAdoption is { } late)
+            output.WriteLine($"Fleet adoption late: commit={late.Commit} elapsed={Math.Floor(late.Elapsed.TotalMinutes).ToString(CultureInfo.InvariantCulture)}m since ACTIVATION_ADOPTED with no FLEET_BUILD_ADOPTED; pending projects unavailable");
         output.WriteLine($"Latest tick: {snapshot.LatestTick?.ToString("O", CultureInfo.InvariantCulture) ?? "unavailable"}");
         if (!snapshot.Goals.Available)
         {
@@ -46,6 +52,8 @@ internal static class CliConductorStatusReader
                 if (output is OwnerConsoleStructuredWriter structured) structured.Mark(OwnerConsoleFieldSnapshot.Create(goal.Id,
                     new("goal", "Goal ID", goal.Id), new("status", "Status", goal.Status), new("role", "Role", goal.Role)));
                 output.WriteLine($"  {goal.Id} | {goal.Status} | role={goal.Role}");
+                if (goal.AmendmentRevisionPending is { } amendmentHold)
+                    output.WriteLine($"    {amendmentHold.Render()}");
                 if (goal.LandingBlocker is { } blocker)
                 {
                     if (output is OwnerConsoleStructuredWriter blocked) blocked.Mark(OwnerConsoleFieldSnapshot.Create(goal.Id,

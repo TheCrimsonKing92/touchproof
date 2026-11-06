@@ -249,7 +249,12 @@ internal sealed partial class OperatorIntentCoordinator
                 item.Message.Contains(marker, StringComparison.Ordinal));
             if (typedApplied || legacyApplied)
             {
-                var recoveredOutcome = typedApplied
+                var recordedBlocker = goal.Timeline.LastOrDefault(item =>
+                    item.OperatorIntentApplied is { BlockedBy: not null } applied &&
+                    applied.IntentId == intent.Id)?.OperatorIntentApplied?.BlockedBy;
+                var recoveredOutcome = recordedBlocker is not null
+                    ? $"AppliedBlocked; recovered durable operator-intent payload {intent.Id}; {OperatorIntentEffectCheck.Describe(recordedBlocker)}"
+                    : typedApplied
                     ? $"Applied; recovered durable operator-intent payload {intent.Id}."
                     : $"Applied; recovered durable goal marker {marker}.";
                 recoveredOutcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
@@ -318,10 +323,15 @@ internal sealed partial class OperatorIntentCoordinator
                     outcome: "applied",
                     retryRoundKind: intent.Verb == OperatorIntentVerbs.Retry
                         ? Deserialize<RetryOperatorIntentPayload>(intent).RetryRoundKind ?? RetryRoundKind.Standard : null);
+                var blocker = OperatorIntentEffectCheck.Evaluate(kernel.GetGoal(goal.Id), intent);
+                if (blocker is not null)
+                    kernel.RecordOperatorIntentBlocked(goal.Id, intent.Id, blocker, OperatorIntentEffectCheck.Describe(blocker));
                 var outcome = (retryClarification == RetryClarificationHandling.Resumed
                     ? "Applied retry continuation to goal "
-                    : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +
+                    : $"{(blocker is null ? "Applied" : "AppliedBlocked")} {intent.Verb} to goal ") + goal.Id.Value[..8] +
                     (intent.TaskId is null ? "." : $" task {intent.TaskId[..Math.Min(8, intent.TaskId.Length)]}.");
+                if (blocker is not null)
+                    outcome += " " + OperatorIntentEffectCheck.Describe(blocker);
                 outcome += OperatorRouteNoteAdmission.Outcome(goal, intent.TaskId, intent.Id);
                 outcome += AnswerOutcome(goal, intent);
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);

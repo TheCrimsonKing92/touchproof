@@ -173,6 +173,85 @@ internal sealed class GitRevisionReader : IDisposable
         return false;
     }
 
+    // No cache: both metadata and the effective Git environment belong to this invocation.
+    internal static string? ResolveCommonDirectoryOrNull(
+        string worktree, IReadOnlyDictionary<string, string>? environmentOverrides)
+    {
+        var effective = new Dictionary<string, string>(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            effective[(string)entry.Key] = (string)entry.Value!;
+        if (environmentOverrides is not null)
+            foreach (var entry in environmentOverrides) effective[entry.Key] = entry.Value;
+        return ResolveCommonDirectoryFromEnvironment(worktree, effective);
+    }
+
+    internal static string? ResolveCommonDirectoryFromEnvironment(
+        string worktree, IReadOnlyDictionary<string, string> effectiveEnvironment)
+    {
+        try
+        {
+            foreach (var name in effectiveEnvironment.Keys)
+            {
+                var canonical = OperatingSystem.IsWindows() ? name.ToUpperInvariant() : name;
+                if (canonical.StartsWith("GIT_", StringComparison.Ordinal) && canonical is not (
+                    "GIT_AUTHOR_NAME" or "GIT_AUTHOR_EMAIL" or "GIT_AUTHOR_DATE" or
+                    "GIT_COMMITTER_NAME" or "GIT_COMMITTER_EMAIL" or "GIT_COMMITTER_DATE" or
+                    "GIT_CONFIG_NOSYSTEM" or "GIT_CONFIG_GLOBAL" or "GIT_TERMINAL_PROMPT")) return null;
+            }
+
+            // Require a checkout-local entry, never infer a root from an enclosing repository.
+            var root = Path.GetFullPath(worktree);
+            var entry = Path.Combine(root, ".git");
+            if (!WorkTreeMetadataEntryExists(entry) ||
+                !TryConfirmWorkTree(worktree, name => effectiveEnvironment.GetValueOrDefault(name))) return null;
+
+            var gitDirectory = Directory.Exists(entry) ? entry : null;
+            if (gitDirectory is null)
+            {
+                var pointer = ReadBranchMetadataLine(entry);
+                if (pointer is null || !pointer.StartsWith("gitdir: ", StringComparison.Ordinal)) return null;
+                gitDirectory = ResolveOrdinaryMetadataDirectory(pointer[8..], root);
+            }
+            if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return null;
+
+            var commonDirectory = gitDirectory;
+            var commonPath = Path.Combine(gitDirectory, "commondir");
+            if (WorkTreeMetadataEntryExists(commonPath))
+            {
+                if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return null;
+                var common = ReadBranchMetadataLine(commonPath);
+                if (common is null) return null;
+                commonDirectory = ResolveOrdinaryMetadataDirectory(common, gitDirectory);
+                if (commonDirectory is null) return null;
+            }
+            if (!HasOrdinaryDirectoryPath(Path.Combine(commonDirectory, "objects")) ||
+                !HasOrdinaryDirectoryPath(Path.Combine(commonDirectory, "refs")) ||
+                !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return null;
+            return commonDirectory;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveOrdinaryMetadataDirectory(string path, string baseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path != path.Trim() || path.Any(char.IsControl)) return null;
+        // Inspect each component before normalization can erase a junction followed by '..'.
+        if (Path.IsPathRooted(path) && !Path.IsPathFullyQualified(path)) return null;
+        var current = Path.IsPathFullyQualified(path) ? Path.GetPathRoot(path)! : baseDirectory;
+        var suffix = Path.IsPathFullyQualified(path) ? path[current.Length..] : path;
+        foreach (var component in suffix.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.GetFullPath(component, current);
+            if (!HasOrdinaryDirectoryPath(current)) return null;
+        }
+        return Path.GetFullPath(current);
+    }
+
     internal static bool TryResolveRootGitDirectory(string directory, out string gitDirectory)
         => TryResolveRootGitDirectory(directory, out gitDirectory, Environment.GetEnvironmentVariable);
 
@@ -211,27 +290,7 @@ internal sealed class GitRevisionReader : IDisposable
             if (HasDescribeObjectSuffix(branch)) return false;
             if (OperatingSystem.IsWindows() && branch.Split('/').Any(IsAmbiguousWindowsRefComponent)) return false;
 
-            // Worktree confirmation permits nested directories; this proof requires the root entry.
-            var root = Path.GetFullPath(directory);
-            var entry = Path.Combine(root, ".git");
-            if (!WorkTreeMetadataEntryExists(entry) ||
-                (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
-            var gitDirectory = ResolveBranchGitDirectory(root);
-            if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return false;
-
-            var commonDirectory = gitDirectory;
-            var commonPath = Path.Combine(gitDirectory, "commondir");
-            if (WorkTreeMetadataEntryExists(commonPath))
-            {
-                if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return false;
-                var common = ReadBranchMetadataLine(commonPath);
-                if (common is null) return false;
-                commonDirectory = Path.GetFullPath(common, gitDirectory);
-            }
-            if (!HasOrdinaryDirectoryPath(commonDirectory) ||
-                WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) ||
-                WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable")) ||
-                !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+            if (!TryLocateRefStore(directory, environment, out _, out var commonDirectory)) return false;
 
             var candidates = new[] { $"refs/heads/{branch}", $"refs/refs/heads/{branch}",
                 $"refs/tags/refs/heads/{branch}", $"refs/heads/refs/heads/{branch}",
@@ -240,40 +299,12 @@ internal sealed class GitRevisionReader : IDisposable
                 if (!IsLooseBranchRefAbsent(commonDirectory, candidate)) return false;
 
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            var packedPath = Path.Combine(commonDirectory, "packed-refs");
-            if (WorkTreeMetadataEntryExists(packedPath))
-            {
-                if ((File.GetAttributes(packedPath) & FileAttributes.ReparsePoint) != 0) return false;
-                using var stream = File.OpenRead(packedPath);
-                const int limit = 1024 * 1024;
-                var bytes = new byte[limit + 1];
-                var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
-                if (count > limit) return false;
-                var text = new UTF8Encoding(false, true).GetString(bytes, 0, count);
-                if (text.Contains('\0') || text.Contains('\r')) return false;
-                var lines = text.Split('\n');
-                if (!lines[0].StartsWith("# pack-refs with:", StringComparison.Ordinal)) return false;
-                var canPeel = false;
-                for (var i = 1; i < lines.Length; i++)
-                {
-                    var line = lines[i];
-                    if (i == lines.Length - 1 && line.Length == 0) continue;
-                    if (line.StartsWith('^'))
-                    {
-                        if (!canPeel || !IsBranchObjectId(line[1..])) return false;
-                        canPeel = false;
-                        continue;
-                    }
-                    var separator = line.IndexOf(' ');
-                    if (separator < 0 || !IsBranchObjectId(line[..separator])) return false;
-                    var name = line[(separator + 1)..];
-                    if (!name.StartsWith("refs/", StringComparison.Ordinal) || !IsBranchRefName(name)) return false;
-                    if (candidates.Any(candidate => name.Equals(candidate, comparison)) ||
-                        name.Equals($"refs/remotes/refs/heads/{branch}/HEAD", comparison) ||
-                        name.StartsWith($"refs/heads/{branch}/", comparison)) return false;
-                    canPeel = true;
-                }
-            }
+            if (!TryReadPackedRefs(commonDirectory, out var entries)) return false;
+            foreach (var (id, name) in entries)
+                if (candidates.Any(candidate => name.Equals(candidate, comparison)) ||
+                    name.Equals($"refs/remotes/refs/heads/{branch}/HEAD", comparison) ||
+                    name.StartsWith($"refs/heads/{branch}/", comparison)) return false;
+
             return true;
         }
         catch (Exception)
@@ -282,7 +313,78 @@ internal sealed class GitRevisionReader : IDisposable
         }
     }
 
-    private static bool HasDescribeObjectSuffix(string branch)
+    // Shared layout policy for both positive ref reads and the absence proof.
+    internal static bool TryLocateRefStore(string directory, Func<string, string?> environment,
+        out string gitDirectory, out string commonDirectory)
+    {
+        gitDirectory = commonDirectory = string.Empty;
+        if (!TryConfirmWorkTree(directory, environment)) return false;
+        // Worktree confirmation permits nested directories; this proof requires the root entry.
+        var root = Path.GetFullPath(directory);
+        var entry = Path.Combine(root, ".git");
+        if (!WorkTreeMetadataEntryExists(entry) ||
+            (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
+        var resolved = ResolveBranchGitDirectory(root);
+        if (resolved is null) return false;
+        gitDirectory = resolved;
+        if (!HasOrdinaryDirectoryPath(gitDirectory)) return false;
+
+        commonDirectory = gitDirectory;
+        var commonPath = Path.Combine(gitDirectory, "commondir");
+        if (WorkTreeMetadataEntryExists(commonPath))
+        {
+            if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return false;
+            var common = ReadBranchMetadataLine(commonPath);
+            if (common is null) return false;
+            commonDirectory = Path.GetFullPath(common, gitDirectory);
+        }
+        if (!HasOrdinaryDirectoryPath(commonDirectory) ||
+            WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) ||
+            WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable")) ||
+            !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+
+        return true;
+    }
+
+    internal static bool TryReadPackedRefs(string commonDirectory, out List<(string Id, string Name)> entries)
+    {
+        entries = new();
+        var packedPath = Path.Combine(commonDirectory, "packed-refs");
+        if (WorkTreeMetadataEntryExists(packedPath))
+        {
+            if ((File.GetAttributes(packedPath) & FileAttributes.ReparsePoint) != 0) return false;
+            using var stream = File.OpenRead(packedPath);
+            const int limit = 1024 * 1024;
+            var bytes = new byte[limit + 1];
+            var count = stream.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+            if (count > limit) return false;
+            var text = new UTF8Encoding(false, true).GetString(bytes, 0, count);
+            if (text.Contains('\0') || text.Contains('\r')) return false;
+            var lines = text.Split('\n');
+            if (!lines[0].StartsWith("# pack-refs with:", StringComparison.Ordinal)) return false;
+            var canPeel = false;
+            for (var i = 1; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (i == lines.Length - 1 && line.Length == 0) continue;
+                if (line.StartsWith('^'))
+                {
+                    if (!canPeel || !IsBranchObjectId(line[1..])) return false;
+                    canPeel = false;
+                    continue;
+                }
+                var separator = line.IndexOf(' ');
+                if (separator < 0 || !IsBranchObjectId(line[..separator])) return false;
+                var name = line[(separator + 1)..];
+                if (!name.StartsWith("refs/", StringComparison.Ordinal) || !IsBranchRefName(name)) return false;
+                entries.Add((line[..separator], name));
+                canPeel = true;
+            }
+        }
+        return true;
+    }
+
+    internal static bool HasDescribeObjectSuffix(string branch)
     {
         var suffixStart = branch.Length;
         while (suffixStart > 0 && Uri.IsHexDigit(branch[suffixStart - 1])) suffixStart--;
@@ -290,7 +392,7 @@ internal sealed class GitRevisionReader : IDisposable
             branch[suffixStart - 2] == '-' && branch[suffixStart - 1] == 'g';
     }
 
-    private static bool IsAmbiguousWindowsRefComponent(string component)
+    internal static bool IsAmbiguousWindowsRefComponent(string component)
     {
         if (component != component.TrimEnd(' ', '.')) return true;
         var stem = component.Split('.')[0];
@@ -303,7 +405,12 @@ internal sealed class GitRevisionReader : IDisposable
     }
 
     private static bool IsLooseBranchRefAbsent(string commonDirectory, string candidate)
+        => TryProbeLooseRef(commonDirectory, candidate, out var exists, out _) && !exists;
+
+    internal static bool TryProbeLooseRef(string commonDirectory, string candidate, out bool exists, out string path)
     {
+        exists = false;
+        path = Path.Combine(commonDirectory, candidate.Replace('/', Path.DirectorySeparatorChar));
         var current = commonDirectory;
         var components = candidate.Split('/');
         for (var i = 0; i < components.Length; i++)
@@ -322,7 +429,12 @@ internal sealed class GitRevisionReader : IDisposable
             }
             if (!WorkTreeMetadataEntryExists(next)) return true;
             var attributes = File.GetAttributes(next);
-            if (i == components.Length - 1 || (attributes & FileAttributes.Directory) == 0 ||
+            if (i == components.Length - 1)
+            {
+                exists = true;
+                return (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+            }
+            if ((attributes & FileAttributes.Directory) == 0 ||
                 (attributes & FileAttributes.ReparsePoint) != 0) return false;
             current = next;
         }
@@ -352,7 +464,7 @@ internal sealed class GitRevisionReader : IDisposable
         return true;
     }
 
-    private static bool WorkTreeMetadataEntryExists(string path)
+    internal static bool WorkTreeMetadataEntryExists(string path)
     {
         // Unlike Exists, preserve access/I/O failures so the caller declines confirmation.
         try { _ = File.GetAttributes(path); return true; }
@@ -360,8 +472,11 @@ internal sealed class GitRevisionReader : IDisposable
         catch (DirectoryNotFoundException) { return false; }
     }
 
-    private static bool HasConclusiveWorkTreeConfig(string path)
+    private static bool HasConclusiveWorkTreeConfig(string path) => HasConclusiveWorkTreeConfig(path, out _);
+
+    internal static bool HasConclusiveWorkTreeConfig(string path, out int objectIdLength)
     {
+        objectIdLength = 40;
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
         using var stream = File.OpenRead(path);
         var bytes = new byte[65537];
@@ -422,7 +537,11 @@ internal sealed class GitRevisionReader : IDisposable
             }
             else if (section == "extensions")
             {
-                if (key == "objectformat" && value is "sha1" or "sha256") hasObjectFormat = true;
+                if (key == "objectformat" && value is "sha1" or "sha256")
+                {
+                    hasObjectFormat = true;
+                    objectIdLength = value == "sha256" ? 64 : 40;
+                }
                 else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                     value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
             }
@@ -431,7 +550,7 @@ internal sealed class GitRevisionReader : IDisposable
         return !hasObjectFormat || repositoryFormatVersion == "1";
     }
 
-    private static string? ReadBranchMetadataLine(string path)
+    internal static string? ReadBranchMetadataLine(string path)
     {
         // Bound malformed files; larger or unsupported representations use the git fallback.
         using var stream = File.OpenRead(path);
@@ -444,10 +563,10 @@ internal sealed class GitRevisionReader : IDisposable
         return line.Length == 0 || line[0] == '\uFEFF' || line.IndexOfAny(['\r', '\n']) >= 0 ? null : line;
     }
 
-    private static bool IsBranchObjectId(string line) =>
+    internal static bool IsBranchObjectId(string line) =>
         line.Length is 40 or 64 && line.All(Uri.IsHexDigit);
 
-    private static bool IsBranchRefName(string name)
+    internal static bool IsBranchRefName(string name)
     {
         if (name.Length == 0 || name == "@" || name.StartsWith('/') || name.EndsWith('/') || name.EndsWith('.') ||
             char.IsWhiteSpace(name[0]) || char.IsWhiteSpace(name[^1]) ||
@@ -463,6 +582,7 @@ internal sealed class GitRevisionReader : IDisposable
 
     internal bool TryResolve(string workingDirectory, string revision, int timeoutMilliseconds, out string objectId)
     {
+        if (GitRefFileResolver.TryResolve(workingDirectory, revision, out objectId)) return true;
         var deadline = Environment.TickCount64 + timeoutMilliseconds;
         ReaderProcess? reader = null;
         string? key = null;
@@ -481,8 +601,18 @@ internal sealed class GitRevisionReader : IDisposable
                         {
                             if (!IsAbbreviatedRevision(revision, objectId.Length)) return true;
                         }
-                        // A normal miss stays usable, but ALWAYS goes through the one-shot below.
-                        else if (line != revision + " missing") Discard(key, reader);
+                        else if (line == revision + " missing")
+                        {
+                            // A fresh proof can avoid confirming a cached reader's negative answer.
+                            const string prefix = "refs/heads/";
+                            if (revision.StartsWith(prefix, StringComparison.Ordinal) &&
+                                TryConfirmBranchAbsent(workingDirectory, revision[prefix.Length..]))
+                            {
+                                objectId = string.Empty;
+                                return false;
+                            }
+                        }
+                        else Discard(key, reader);
                     }
                 }
             }
@@ -641,6 +771,7 @@ internal sealed class GitRevisionReader : IDisposable
     internal sealed class ReaderProcess
     {
         private readonly Process process;
+        private readonly GitCli.ProcessCompletion? completion;
         private readonly string packedRefsPath;
         private readonly string packedRefsVersion;
         private readonly object terminationGate = new();
@@ -652,9 +783,11 @@ internal sealed class GitRevisionReader : IDisposable
         internal long LastCompleted;
         internal bool HasExited => exited;
 
-        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion)
+        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion,
+            GitCli.ProcessCompletion? completion)
         {
             this.process = process;
+            this.completion = completion;
             this.packedRefsPath = packedRefsPath;
             this.packedRefsVersion = packedRefsVersion;
         }
@@ -676,8 +809,11 @@ internal sealed class GitRevisionReader : IDisposable
             foreach (var arg in new[] { "--git-dir=" + gitDirectory,
                 "cat-file", "--batch-check" }) info.ArgumentList.Add(arg);
             GitCli.ApplyLaunchSettings(info, readCommand: true);
+            var completion = GitCli.ProcessCompletion.Begin(Volatile.Read(ref GitCli.CompletionObserver),
+                "cat-file", TimeProvider.System);
             var process = ProcessTreeGuiSuppression.Start(info);
-            var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion);
+            completion?.Started();
+            var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion, completion);
             try
             {
                 // Notify on the querying thread, preserving census/test identity and source frames.
@@ -776,6 +912,7 @@ internal sealed class GitRevisionReader : IDisposable
                 {
                     if (!process.HasExited) process.Kill(entireProcessTree: true);
                     exited = process.WaitForExit(PipeDrain.DefaultTimeoutMilliseconds);
+                    if (exited) completion?.Complete(process);
                 }
                 catch (Exception ex) when (IsReaderFailure(ex)) { /* Already exited/disposed. */ }
             }

@@ -15,27 +15,8 @@ public sealed class ConductorDriverTests
 
     internal static ConductorParallelAcceptanceAttemptCoordinator SeedLiveAcceptanceAttempt(
         string root,
-        Goal goal)
-    {
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, "acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
-            isProcessAlive: _ => true,
-            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(4242));
-        var candidate = ConductorParallelAcceptanceCandidate.Create(
-            goal,
-            0,
-            ["src/CurrentAttempt.cs"],
-            "branch-current",
-            "main-current");
-        var decision = coordinator.Evaluate(
-            candidate,
-            ConductorAutonomyPolicy.Conservative,
-            (_, _, _, _, _) => throw new InvalidOperationException("Owned acceptance callback should not run inline."));
-
-        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
-        Assert.True(coordinator.HasLiveAttempt(goal.Id.Value));
-        return coordinator;
-    }
+        Goal goal) =>
+        ConductorDriverTestHelpers.SeedLiveAcceptanceAttempt(root, goal);
 
     internal static (AgentOrchestratorKernel Kernel, Goal Goal) SimpleGoal(string objective = "Test goal")
     {
@@ -207,15 +188,10 @@ public sealed class ConductorDriverTests
         string? touchProofDiagnostic = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-seed");
-        var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-seed",
-            "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory("A-1", location),
-            "",
-            DateTimeOffset.UtcNow,
-            WorkerResultPresent: true));
+            "review-seed", "C:\\tmp", 1,
+            BlockingIdentityRepairOutput("A-1", "src/A.cs", "A.Run"),
+            "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
         RecordMovedReviewerIdentityViolation(
             kernel,
@@ -234,16 +210,21 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-moved",
             "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory(
-                "A-1",
-                new ReviewFindingLocation("src/B.cs", "B.Run", "guard")),
+            1,
+            BlockingIdentityRepairOutput("A-1", "src/B.cs", "B.Run"),
             "",
             DateTimeOffset.UtcNow,
             StandardOutputPath: "C:\\tmp\\reviewer.out.log",
             WorkerResultPresent: true));
-        Assert.NotNull(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Null(reviewer.LastVerification.MergedReviewFindings);
     }
+
+    internal static string BlockingIdentityRepairOutput(string stableId, string file, string region) =>
+        string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: review",
+            "tests: pass - inspected evidence", "blockers: none",
+            $$"""findings: [{"stable_id":"{{stableId}}","state":"open","severity":"blocking","category":"correctness","location":{"file":"{{file}}","region":"{{region}}","hunk":"guard"},"description":"Blocking identity repair control."}]""",
+            "touched_anchors: []", "verdict: needs-work", "END_WORKER_RESULT");
 
     internal static string ReviewerPassWithAdvisory(string stableId, ReviewFindingLocation location) =>
         ReviewerPassWithFinding(new ReviewFinding(
@@ -468,7 +449,8 @@ public sealed class ConductorDriverTests
         string? executionDirectory = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null, Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
-        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null, Func<GoalId, string>? workerBuildArtifactsPath = null)
+        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null, Func<GoalId, string>? workerBuildArtifactsPath = null,
+        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -498,6 +480,7 @@ public sealed class ConductorDriverTests
             evaluateReadiness,
             completeGoal: completeGoal,
             normalizeLifecycleState: normalizeLifecycleState,
+            getAmendmentRevisionPending: getAmendmentRevisionPending,
             recoverSandboxPrep: recoverSandboxPrep,
             hasGateReadyGoal: hasGateReadyGoal,
             getAcceptanceSlotCount: getAcceptanceSlotCount,

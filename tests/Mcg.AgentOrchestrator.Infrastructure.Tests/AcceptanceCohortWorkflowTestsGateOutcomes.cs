@@ -435,6 +435,7 @@ public sealed class AcceptanceCohortWorkflowTestsGateOutcomes : AcceptanceCohort
             Assert.NotNull(eligibility.Selection);
 
             BatchTickSummary? ordinaryTick = null;
+            AdmissionFactsTestData.Warm(driver, kernel);
             _ = new ConductorBatchLoop().Run(
                 kernel,
                 driver,

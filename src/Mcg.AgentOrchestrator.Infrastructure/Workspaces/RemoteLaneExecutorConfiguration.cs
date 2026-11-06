@@ -7,7 +7,12 @@ internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
     string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1,
     bool OccupancyProbe = false, bool ToolsDigestCheck = false, bool AdmissionEnabled = true,
-    double? CostBudget = null);
+    double? CostBudget = null)
+{
+    internal const string InvalidTestSettings = "invalid-test-settings";
+    internal IReadOnlyDictionary<string, string>? TestSettings { get; init; }
+    internal string? DisabledReason { get; init; }
+}
 
 internal sealed record RemoteFocusedEvidenceSettings(
     string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null,
@@ -20,6 +25,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
     internal const int MinimumSlots = 1;
     internal const int MaximumSlots = 16;
     internal const int MinimumSampleEvery = 1;
+    internal IReadOnlyDictionary<string, string>? LocalTestSettings { get; init; }
+    internal string? LocalTestSettingsFault { get; init; }
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal IReadOnlyList<string> ExecutorSerializedResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
@@ -36,7 +43,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
     {
         var parsed = Parse(path);
         return parsed.DisabledReason is null && (parsed.Executors.Count == 0 || parsed.Lanes.Count == 0)
-            ? Disabled("empty") : parsed;
+            ? Disabled("empty") with { LocalTestSettings = parsed.LocalTestSettings,
+                LocalTestSettingsFault = parsed.LocalTestSettingsFault } : parsed;
     }
 
     internal static IReadOnlyList<RemoteLaneExecutorEntry> LoadExecutors(string path) => Parse(path).Executors;
@@ -93,10 +101,23 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     costBudget = value;
                 }
+                IReadOnlyDictionary<string, string>? testSettings = null;
+                string? disabledReason = null;
+                try
+                {
+                    if (executor.TryGetProperty("testSettings", out _))
+                        testSettings = AcceptanceDeclaredTestSettings.Read(executor,
+                            description: $"Executor '{id.GetString()}' testSettings");
+                }
+                catch (InvalidDataException)
+                {
+                    admissionEnabled = false;
+                    disabledReason = RemoteLaneExecutorEntry.InvalidTestSettings;
+                }
                 if (!executor.TryGetProperty("transport", out var transport))
                 {
                     entries.Add(new(id.GetString()!, seconds, Slots: slots, AdmissionEnabled: admissionEnabled,
-                        CostBudget: costBudget));
+                        CostBudget: costBudget) { TestSettings = testSettings, DisabledReason = disabledReason });
                     continue;
                 }
                 if (transport.ValueKind != JsonValueKind.String || transport.GetString() != "ssh")
@@ -132,7 +153,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     toolsDigestCheck = digestCheck.GetBoolean();
                 }
                 entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot,
-                    pollSeconds, slots, occupancyProbe, toolsDigestCheck, admissionEnabled, costBudget));
+                    pollSeconds, slots, occupancyProbe, toolsDigestCheck, admissionEnabled, costBudget)
+                    { TestSettings = testSettings, DisabledReason = disabledReason });
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())
@@ -165,8 +187,13 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     serializedKeys.Add(key.GetString()!);
                 }
             }
+            IReadOnlyDictionary<string, string>? localTestSettings = null;
+            string? localFault = null;
+            try { localTestSettings = AcceptanceDeclaredTestSettings.Read(root, "localTestSettings", "localTestSettings"); }
+            catch (InvalidDataException error) { localFault = error.Message; }
             return new(entries.ToArray(), names.ToArray(), null)
             {
+                LocalTestSettings = localTestSettings, LocalTestSettingsFault = localFault,
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
                 ExecutorSerializedResourceKeys = serializedKeys.ToArray(),
                 FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root),

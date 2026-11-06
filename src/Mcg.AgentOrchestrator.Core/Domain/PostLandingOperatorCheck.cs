@@ -18,4 +18,17 @@ public static class PostLandingOperatorCheck
             $"(criterion {request.PlannerEvidence!.CriterionIndex}: {request.PlannerEvidence.Needed})").ToArray();
         return checks.Length == 0 ? null : "open post-landing operator check(s): " + string.Join("; ", checks);
     }
+
+    public static string? DescribeOpen(
+        IEnumerable<HumanInputRequest> pending,
+        IEnumerable<CriterionEvidenceObligation> unpublishedDuties)
+    {
+        var requests = DescribeOpen(pending);
+        var duties = unpublishedDuties.Where(duty => !string.IsNullOrWhiteSpace(duty.ExpectedCandidateSha)).Select(duty =>
+            $"{duty.Id} (criterion {duty.CriterionNumber}: unpublished expected candidate " +
+            $"{duty.ExpectedCandidateSha![..Math.Min(8, duty.ExpectedCandidateSha.Length)]})").ToArray();
+        if (duties.Length == 0) return requests;
+        return (requests is null ? "open post-landing operator check(s): " : requests + "; ") +
+            string.Join("; ", duties);
+    }
 }

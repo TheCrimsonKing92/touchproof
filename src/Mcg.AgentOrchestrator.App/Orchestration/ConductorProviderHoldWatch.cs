@@ -13,6 +13,7 @@ internal sealed class ConductorProviderHoldWatch
     private readonly Dictionary<string, Announced> _announced = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<(string Binding, DateTimeOffset Due, int Attempt)> _probes = [];
     private bool _rehydrated;
+    private readonly HashSet<(string Binding, DateTimeOffset Due)> _overdue = [];
 
     internal ConductorProviderHoldWatch(ConductEventLogWriter? writer) => _writer = writer;
 
@@ -45,10 +46,13 @@ internal sealed class ConductorProviderHoldWatch
                 {
                     var schedule = row.Schedule;
                     _writer.Append("provider-hold-placed", hold.SourceGoalId.Value,
-                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)} binding={binding}", timestamp: now);
+                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")} binding={binding}", timestamp: now);
                     _announced[binding] = new(hold.SourceGoalId.Value, hold.SourceTaskId.Value, hold.PlacedAt);
                 }
                 AnnounceProbe(scope, binding, now);
+                if (row.OverdueSince is { } due && _overdue.Add((binding.ToUpperInvariant(), due)))
+                    _writer.Append("provider-hold-overdue", hold.SourceGoalId.Value,
+                        $"PROVIDER_HOLD_OVERDUE due={Instant(due)} balance=unverified binding={binding}", timestamp: now);
             }
         }
         catch (Exception error)
@@ -87,6 +91,8 @@ internal sealed class ConductorProviderHoldWatch
             if (!ConductEventFileSource.TryParse(line, out var evt) || evt is null ||
                 OwnerProviderHoldNarration.Binding(evt) is not { Length: > 0 } binding) continue;
             if (evt.EventKind == "provider-hold-restored") _announced.Remove(binding);
+            else if (evt.EventKind == "provider-hold-overdue" && TryInstant(OwnerEventFields.Field(evt, "due"), out var overdue))
+                _overdue.Add((binding.ToUpperInvariant(), overdue));
             else if (evt.EventKind == "provider-hold-placed" &&
                      TryInstant(OwnerEventFields.Field(evt, "placed_at"), out var placed) &&
                      OwnerEventFields.Field(evt, "source")?.Split('/') is { Length: 2 } source &&

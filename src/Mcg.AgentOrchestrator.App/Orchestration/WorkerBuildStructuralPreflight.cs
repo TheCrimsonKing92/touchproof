@@ -9,6 +9,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference reference,
     Func<DeveloperCompletionStructuralFindings>? evaluate = null, TimeProvider? time = null)
 {
+    // Cold unbounded run at 88da88ef8 (2026-11-05): 16,996 ms total, 11,464 ms
+    // test-class scan. Keep 13,004 ms headroom without assuming parallel speedup.
+    // This is specific to worker builds; the conductor's synchronous bound is separate.
+    internal static readonly TimeSpan EvaluationBound = TimeSpan.FromSeconds(30);
+
     internal static WorkerBuildStructuralPolicy CapturePolicy(TaskDispatchRecord dispatch,
         string? projectHomeDirectory, string integrationBranch)
     {
@@ -67,6 +72,8 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
     internal WorkerBuildStructuralCheck Run(WorkerBuildInvocation invocation, string policyDigest,
         Action validateCurrent, CancellationToken lifetime)
     {
+        var clock = time ?? TimeProvider.System;
+        double? elapsedMilliseconds = null;
         try
         {
             lifetime.ThrowIfCancellationRequested();
@@ -75,52 +82,60 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
                 return Unavailable(invocation, policyDigest, "Host enrollment has no structural policy context.");
             if (policy.UnavailableDiagnostic is { } diagnostic)
                 return Unavailable(invocation, policyDigest, diagnostic);
-            var findings = BoundedStructuralPreflight.Run(() =>
+            DeveloperCompletionStructuralFindings findings;
+            var started = clock.GetTimestamp();
+            try
             {
-                if (policy.RequiresSizeAuthority && !File.Exists(Path.Combine(invocation.WorktreeRoot, SourceSizeRatchet.SourcePath)))
-                    throw new IOException($"Required structural authority is missing: {SourceSizeRatchet.SourcePath}");
-                if (policy.RequiresManifest && (policy.RequiredManifestPath is null ||
-                    !File.Exists(Path.Combine(invocation.WorktreeRoot, policy.RequiredManifestPath))))
-                    throw new IOException($"Required structural manifest is missing: {policy.RequiredManifestPath}");
-                return evaluate is null
-                    ? DeveloperCompletionStructuralPreflight.Evaluate(invocation.WorktreeRoot, policy.ProjectHomeDirectory,
-                        policy.BaselineRevision ?? policy.IntegrationBranch)
-                    : evaluate();
-            }, cancellationToken: lifetime, time: time);
+                findings = BoundedStructuralPreflight.Run(() =>
+                {
+                    if (policy.RequiresSizeAuthority && !File.Exists(Path.Combine(invocation.WorktreeRoot, SourceSizeRatchet.SourcePath)))
+                        throw new IOException($"Required structural authority is missing: {SourceSizeRatchet.SourcePath}");
+                    if (policy.RequiresManifest && (policy.RequiredManifestPath is null ||
+                        !File.Exists(Path.Combine(invocation.WorktreeRoot, policy.RequiredManifestPath))))
+                        throw new IOException($"Required structural manifest is missing: {policy.RequiredManifestPath}");
+                    return evaluate is null
+                        ? DeveloperCompletionStructuralPreflight.Evaluate(invocation.WorktreeRoot, policy.ProjectHomeDirectory,
+                            policy.IntegrationBranch)
+                        : evaluate();
+                }, bound: EvaluationBound, cancellationToken: lifetime, time: clock);
+            }
+            finally { elapsedMilliseconds = clock.GetElapsedTime(started).TotalMilliseconds; }
             lifetime.ThrowIfCancellationRequested();
             validateCurrent();
             if (PolicyDigest(invocation.WorktreeRoot) != policyDigest)
-                return Skipped(invocation, policyDigest, "Structural policy changed during evaluation.");
+                return Skipped(invocation, policyDigest, "Structural policy changed during evaluation.", elapsedMilliseconds);
             if (findings is null || string.IsNullOrWhiteSpace(findings.Message))
-                return Unavailable(invocation, policyDigest, "Structural evaluator returned malformed findings.");
+                return Unavailable(invocation, policyDigest, "Structural evaluator returned malformed findings.", elapsedMilliseconds);
             if (!findings.EvaluationComplete)
-                return Unavailable(invocation, policyDigest, findings.UnavailableDiagnostic ?? findings.Message);
+                return Unavailable(invocation, policyDigest, findings.UnavailableDiagnostic ?? findings.Message, elapsedMilliseconds);
             if (!findings.IsApplicable && (policy.RequiresSizeAuthority || policy.RequiresManifest))
-                return Unavailable(invocation, policyDigest, "Required structural evaluator declined applicability.");
+                return Unavailable(invocation, policyDigest, "Required structural evaluator declined applicability.", elapsedMilliseconds);
             return Bound(invocation, policyDigest, findings.HasViolation ? WorkerBuildStructuralStatus.Violation
-                : findings.IsApplicable ? WorkerBuildStructuralStatus.Passed : WorkerBuildStructuralStatus.NotApplicable, findings.Message);
+                : findings.IsApplicable ? WorkerBuildStructuralStatus.Passed : WorkerBuildStructuralStatus.NotApplicable, findings.Message, elapsedMilliseconds);
         }
         catch (WorkerBuildRequestHost.WorkerBuildCandidateChangedException error)
         {
-            return Skipped(invocation, policyDigest, $"{error.GetType().Name}: {error.Message}");
+            return Skipped(invocation, policyDigest, $"{error.GetType().Name}: {error.Message}", elapsedMilliseconds);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             return Unavailable(invocation, policyDigest, error is TimeoutException
-                ? $"Structural evaluation exceeded {BoundedStructuralPreflight.DefaultBound.TotalMilliseconds:0} ms bound."
-                : $"{error.GetType().Name}: {error.Message}");
+                ? $"Structural evaluation exceeded {EvaluationBound.TotalMilliseconds:0} ms bound."
+                : $"{error.GetType().Name}: {error.Message}", elapsedMilliseconds);
         }
     }
 
-    internal WorkerBuildStructuralCheck Skipped(WorkerBuildInvocation invocation, string policyDigest, string diagnostic) =>
-        Bound(invocation, policyDigest, WorkerBuildStructuralStatus.Unavailable, diagnostic);
+    internal WorkerBuildStructuralCheck Skipped(WorkerBuildInvocation invocation, string policyDigest, string diagnostic,
+        double? elapsedMilliseconds = null) =>
+        Bound(invocation, policyDigest, WorkerBuildStructuralStatus.Unavailable, diagnostic, elapsedMilliseconds);
 
-    internal WorkerBuildStructuralCheck Unavailable(WorkerBuildInvocation invocation, string policyDigest, string diagnostic) =>
+    internal WorkerBuildStructuralCheck Unavailable(WorkerBuildInvocation invocation, string policyDigest, string diagnostic,
+        double? elapsedMilliseconds = null) =>
         Bound(invocation, policyDigest, WorkerBuildStructuralStatus.Unavailable, diagnostic +
-            " Report this unavailable check and host diagnostic; host/operator owns recovery. Do not edit unrelated source or repeatedly rebuild.");
+            " Report this unavailable check and host diagnostic; host/operator owns recovery. Do not edit unrelated source or repeatedly rebuild.", elapsedMilliseconds);
 
     private WorkerBuildStructuralCheck Bound(WorkerBuildInvocation invocation, string policyDigest,
-        WorkerBuildStructuralStatus status, string diagnostic) => new(status, diagnostic,
+        WorkerBuildStructuralStatus status, string diagnostic, double? elapsedMilliseconds = null) => new(status, diagnostic,
             invocation.Id, invocation.DispatchId, invocation.TreeDigest, invocation.ScopeIdentity,
-            reference.StructuralPolicy?.ProjectHomeDirectory, policyDigest);
+            reference.StructuralPolicy?.ProjectHomeDirectory, policyDigest, elapsedMilliseconds);
 }

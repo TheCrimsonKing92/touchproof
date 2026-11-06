@@ -16,7 +16,10 @@ internal sealed class CliConductorConsoleAdapter(OrchestratorWorkspace workspace
         {
             new("state", "Conductor state", snapshot.ConductorState), new("pid", "Owner PID", snapshot.OwnerPid?.ToString()),
             new("since", "Since", snapshot.Since.At?.ToString("O")), new("reason", "Reason", snapshot.Since.Reason),
-            new("build", "Supervisor build", snapshot.SupervisorBuild), new("generation", "Generation", snapshot.Generation.State),
+            new("build", "Supervisor build", snapshot.SupervisorBuild),
+            new("loop-build", "Loop build", snapshot.LoopBuild?.Commit),
+            new("loop-build/source", "Loop build source", snapshot.LoopBuild?.Source),
+            new("generation", "Generation", snapshot.Generation.State),
             new("integration-revision", "Main revision", snapshot.Generation.Main), new("tick", "Latest tick", snapshot.LatestTick?.ToString("O")),
             new("clarifications", "Pending clarifications", snapshot.Goals.PendingClarifications?.ToString()),
             new("human-waits", "Human waits", snapshot.Goals.HumanWaits?.ToString()),

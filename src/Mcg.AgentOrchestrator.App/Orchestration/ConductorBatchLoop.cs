@@ -64,6 +64,7 @@ internal sealed partial class ConductorBatchLoop
     internal const bool DefaultSelfRelaunchEnabled = true;
     internal const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
+    private readonly LandingRelaunchDecisions _landingRelaunchDecisions;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
@@ -102,6 +103,8 @@ internal sealed partial class ConductorBatchLoop
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
 
+    private readonly Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? _providerHoldProbe;
+
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
@@ -136,7 +139,8 @@ internal sealed partial class ConductorBatchLoop
         Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null,
         HomeBuildAdoptionDetector? homeBuildAdoption = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
-        Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null)
+        Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null,
+        Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? providerHoldProbe = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -163,6 +167,7 @@ internal sealed partial class ConductorBatchLoop
         _homeBuildRelaunchCoordinator = homeBuildAdoption is not null && homeBuildRelaunch is not null
             ? new HomeBuildRelaunchCoordinator(homeBuildAdoption, homeBuildRelaunch) : null;
         _homeBuildIdleBlockers = homeBuildIdleBlockers;
+        _providerHoldProbe = providerHoldProbe;
         _postLandingCanary = postLandingCanary;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
@@ -176,6 +181,7 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
+        _landingRelaunchDecisions = new(selfRelaunchEnabled, _selfRelaunch is not null, _postLandingCanary is null ? null : receipt => _postLandingCanary.LaunchLandingAsync(receipt));
         _loadTrxCoherenceVerdicts = loadTrxCoherenceVerdicts ?? (directory =>
         {
             if (workspace is null) return;
@@ -378,42 +384,30 @@ internal sealed partial class ConductorBatchLoop
 
             return effectiveInterval;
         }
+        void HandleLandingRelaunch(int tick, ConductorLandingReceipt receipt, bool changedFilesAvailable = true)
+        {
+            _landingRelaunchDecisions.Handle(tick, receipt, () =>
+            {
+                selfRelaunchDrainCap.NoteLanding(receipt.ChangedFiles);
+                pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, tick);
+                deferredSelfRelaunch = null;
+                selfRelaunchRetryAfterTick = null;
+                selfRelaunchDrainStartedAt ??= _utcNow();
+            }, canaryTask =>
+            {
+                lock (canaryTasksGate)
+                {
+                    canaryTasks.Add(canaryTask);
+                }
+            }, line => EmitProgress(line), changedFilesAvailable);
+        }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         driver.SuccessfulLandingSink = receipt =>
         {
             var landedAt = _promptRolloutWatch is null ? default : _utcNow();
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
-            if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
-            {
-                selfRelaunchDrainCap.NoteLanding(receipt.ChangedFiles);
-                pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
-                deferredSelfRelaunch = null;
-                selfRelaunchRetryAfterTick = null;
-                selfRelaunchDrainStartedAt ??= _utcNow();
-                EmitProgress(
-                    $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
-                    $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
-            }
-            else
-            {
-                var reason = decision.Required
-                    ? (_selfRelaunchEnabled ? "self-relaunch-unavailable" : "self-relaunch-disabled") +
-                      $"+{decision.Classification}"
-                    : decision.Classification;
-                EmitRelaunchNotRequired(totalTicks, receipt, decision with { Required = false, Classification = reason });
-            }
-
+            HandleLandingRelaunch(totalTicks, receipt);
             NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
-            if (_postLandingCanary is not null)
-            {
-                var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
-                lock (canaryTasksGate)
-                {
-                    canaryTasks.Add(canaryTask);
-                }
-            }
-
             _promptRolloutWatch?.NoteLanding(receipt, landedAt);
             previousSuccessfulLandingSink?.Invoke(receipt);
         };
@@ -760,6 +754,8 @@ internal sealed partial class ConductorBatchLoop
                 nextTick,
                 () => PersistSweepTerminalizations(
                     sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay)) ?? [];
+            foreach (var recovered in RecoverSweepLandingReceipts(sweepResult, sweepTerminalizedGoalIds))
+                HandleLandingRelaunch(nextTick, recovered.Receipt, recovered.ChangedFilesAvailable);
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
@@ -1462,7 +1458,7 @@ internal sealed partial class ConductorBatchLoop
                     goalProjectionCache.Invalidate(goal.Id);
                 }
 
-                TrackGoalOutcomeAndCapacity(
+                if (!AdmissionFactsPendingAdmission.IsPending(result)) TrackGoalOutcomeAndCapacity(
                     kernel,
                     driver,
                     goal,
@@ -1478,7 +1474,7 @@ internal sealed partial class ConductorBatchLoop
                     serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
                 goalProgressFields[goalProgressLine] = GoalProgressEventFields.From(goal.Id.Value,
                     result.Outcome, serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
-                if (RecordChangedDisposition(
+                if (!AdmissionFactsPendingAdmission.IsPending(result) && RecordChangedDisposition(
                     goal.Id.Value,
                     goalProgressLine,
                     lastGoalDisposition,
@@ -1504,6 +1500,13 @@ internal sealed partial class ConductorBatchLoop
             goalWalkClock.Stop(); ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
             ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
+            // Admission runs on this thread. A failed gate read must defer the probe like a live gate.
+            if (_providerHoldProbe is not null && RunJanitorialPhase<int?>(
+                    "count-provider-hold-probe-gates", totalTicks, () => _countLiveGroupedGates()) == 0)
+            {
+                foreach (var id in _providerHoldProbe(kernel, _utcNow())) changedGoalIds.Add(id);
+                ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
+            }
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {
@@ -1779,6 +1782,7 @@ internal sealed partial class ConductorBatchLoop
         finally
         {
             StopStewardAndAuthor();
+            driver.AdmissionFacts.Stop();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
@@ -1789,7 +1793,6 @@ internal sealed partial class ConductorBatchLoop
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
-
     private static void TryWriteAbnormalExitDiagnosticFailure(string sink, Exception exception)
     {
         try
@@ -2164,22 +2167,12 @@ internal sealed partial class ConductorBatchLoop
         return true;
     }
 
-    // Sanitize a detail string for compact line format (no spaces, max 40 chars).
-    private static string Sanitize(string value)
-    {
-        var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
-        return s.Length > 40 ? s[..40] : s;
-    }
+    private static string Sanitize(string value) => ConductorDiagnosticText.Sanitize(value);
 
     private static string SanitizeReceiptToken(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
-    internal static string SanitizeReason(string value)
-    {
-        const int maxReasonLength = 512;
-        var sanitized = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
-        return sanitized.Length > maxReasonLength ? sanitized[..maxReasonLength] : sanitized;
-    }
+    internal static string SanitizeReason(string value) => ConductorDiagnosticText.SanitizeReason(value);
 
     private static string SanitizeHeartbeatDetail(string value) =>
         ConductorHeartbeatDetail.Sanitize(value);
@@ -2262,12 +2255,7 @@ internal sealed partial class ConductorBatchLoop
         return state.Results;
     }
 
-    private static string BoundSingleLine(string value)
-    {
-        const int maxLength = 512;
-        var singleLine = value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');
-        return singleLine.Length > maxLength ? singleLine[..maxLength] : singleLine;
-    }
+    private static string BoundSingleLine(string value) => ConductorDiagnosticText.BoundSingleLine(value);
 
     private static ConductorAdvanceResult EscalateParallelAcceptanceSafely(
         ConductorDriver driver,

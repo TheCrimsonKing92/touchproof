@@ -258,7 +258,7 @@ internal sealed partial class ConductorDriver
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
-                    RecordTrainImplicatedMember(redDropped, redReceipt, redSubjects, redAttributionSource);
+                    MergeTrainSurvivorDifferentialFailure.OnSurvivorsPassed(redReceipt, receipt, redDropped, allEjections, GetCurrentGoal(goalsById[redDropped.GoalId]), goal => ProjectGateReadyCandidate(goal, policy), _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure, () => RecordTrainImplicatedMember(redDropped, redReceipt, redSubjects, redAttributionSource));
                 if (gateOnly)
                 {
                     return new ConductorMergeTrainRunResult(receipt,

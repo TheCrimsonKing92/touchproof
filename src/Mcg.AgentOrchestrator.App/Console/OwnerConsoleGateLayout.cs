@@ -22,7 +22,7 @@ internal static class OwnerConsoleGateLayout
                 lines.Add(OwnerConsoleGateFormatter.RunLine(run));
             }
         }
-        else if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
+        else if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate) + OwnerConsoleGateFormatter.Identity(gate));
         else
         {
             var observed = OwnerConsoleGateConfirmation.Attach(gate.Lanes);

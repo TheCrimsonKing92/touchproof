@@ -22,8 +22,8 @@ public sealed class OwnerConsoleGateProjectionReplayTests
         var detailLine = OwnerGoalDetailGateLine.Text(detail.Gate);
         Assert.Contains(state, board);
         Assert.Contains(state, detailLine);
-        Assert.Contains(execution, board);
-        Assert.Contains(execution, detailLine);
+        Assert.DoesNotContain(execution, board);
+        Assert.Contains(" [" + execution[..8] + "]", detailLine);
         using var dialog = new OwnerConsoleGateDialog();
         dialog.Open(OwnerConsolePane.Board, gate, id);
         var dialogText = string.Join('\n', dialog.Lines);

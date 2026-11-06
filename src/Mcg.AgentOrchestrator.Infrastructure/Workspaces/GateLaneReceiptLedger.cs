@@ -12,7 +12,8 @@ internal static class GateLaneReceiptLedger
 
     internal static GateLaneSlowdownDiff.GateLaneSlowdownResult? Record(
         string worktreePath, string? goalId, string laneName, AcceptanceCheckResult result,
-        TimeSpan wall, DateTimeOffset now, Action<string, string>? appender = null)
+        TimeSpan wall, DateTimeOffset now, Action<string, string>? appender = null,
+        AcceptanceHostTestSettings.Binding? testSettings = null)
     {
         GateLaneSlowdownDiff.GateLaneSlowdownResult? slowdown = null;
         string? unavailable = null;
@@ -68,6 +69,11 @@ internal static class GateLaneReceiptLedger
             Add("cpu_ms", receipt.CpuMilliseconds);
             Add("peak_mem_bytes", receipt.PeakMemoryBytes);
             Add("host_available_memory_mb", receipt.HostAvailableMemoryMb);
+            if (testSettings is not null)
+            {
+                row["test_settings"] = testSettings.Settings;
+                row["test_settings_host"] = testSettings.Host;
+            }
             if (snapshot?.SlotTiming is { } slotTiming)
             {
                 row["slot_wait_ms"] = slotTiming.WaitMs;

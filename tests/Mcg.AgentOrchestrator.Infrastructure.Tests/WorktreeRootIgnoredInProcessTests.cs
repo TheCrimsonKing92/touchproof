@@ -190,13 +190,28 @@ public sealed class WorktreeRootIgnoredInProcessTests : IDisposable
         var exclude = Path.Combine(gitDirectory, "info", "exclude");
         const string original = "# fixture without trailing newline";
         File.WriteAllText(exclude, original, new UTF8Encoding(false));
+        var goal = GoalId.New();
         launches.Clear();
 
-        Assert.True(Directory.Exists(GoalWorktrees.Ensure(directory, GoalId.New())));
+        Assert.True(Directory.Exists(GoalWorktrees.Ensure(directory, goal)));
 
         var expected = original + Environment.NewLine + ".orchestrator-worktrees/" + Environment.NewLine;
         Assert.Equal(Encoding.UTF8.GetBytes(expected), File.ReadAllBytes(exclude));
-        Assert.Equal(nested ? 1 : 0, GitDirectoryProbes());
+        Assert.Equal(0, GitDirectoryProbes());
+        var addIndex = launches.FindIndex(args => args.Contains("worktree"));
+        Assert.InRange(addIndex, 0, launches.Count - 1);
+        var creationLaunches = launches.Take(addIndex).ToArray();
+        Assert.Equal(nested ? 1 : 0, creationLaunches.Length);
+        Assert.All(creationLaunches, args => Assert.Equal(
+            GoalWorktreeCreationProbe.Arguments(GoalWorktrees.BranchName(goal)), args.TakeLast(6)));
+
+        // The unchanged freshness check cannot use the batch reader from a nested directory.
+        // Pin its base-ref fallback separately so it cannot hide another creation probe.
+        var freshnessProbes = launches.Skip(addIndex + 1)
+            .Where(args => args.Contains("rev-parse")).ToArray();
+        Assert.Equal(nested ? 1 : 0, freshnessProbes.Length);
+        Assert.All(freshnessProbes, args => Assert.Equal(
+            new[] { "rev-parse", "--verify", "refs/heads/fixture-main" }, args.TakeLast(3)));
     }
 
     private int GitDirectoryProbes() => launches.Count(args =>

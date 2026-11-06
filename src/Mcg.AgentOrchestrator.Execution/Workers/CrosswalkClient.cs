@@ -7,16 +7,16 @@ internal sealed class CrosswalkClient
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
 
     private readonly CrosswalkExecutableResolver _resolver;
-    private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
+    private readonly Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
     private readonly TimeSpan _timeout;
 
     internal CrosswalkClient(
         CrosswalkExecutableResolver resolver,
-        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
+        Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
         TimeSpan? timeout = null)
     {
         _resolver = resolver;
-        _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
+        _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedDirectAsync;
         _timeout = timeout ?? DefaultTimeout;
     }
 
@@ -30,8 +30,7 @@ internal sealed class CrosswalkClient
             if (executable is null)
                 return new(resolution.Status, null, resolution.Detail);
 
-            var request = new WorkerProcessRunRequest(
-                $"& {Quote(executable.Path)} detect {Quote(root)}; exit $LASTEXITCODE", root, _timeout);
+            var request = new WorkerProcessDirectRunRequest(executable.Path, ["detect", root], root, _timeout);
             var run = _runProcessAsync(request, CancellationToken.None).GetAwaiter().GetResult();
             if (run.TimedOut)
                 return new(CrosswalkDetectOutcome.TimedOut, null, string.Empty) { Executable = executable };
@@ -72,7 +71,7 @@ internal sealed class CrosswalkClient
     internal async Task<CrosswalkRunOutcome> RunAsync(string root, IEnumerable<string> ids, TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var arguments = string.Concat(ids.Select(IdArgument));
+        var arguments = ids.SelectMany(id => new[] { "--id", id }).ToArray();
         var outcome = await ExecuteAsync<TestResult>(root, "run", timeout, json =>
         {
             using var document = JsonDocument.Parse(json);
@@ -86,7 +85,7 @@ internal sealed class CrosswalkClient
     private async Task<(string Status, IReadOnlyList<T> Result, string Detail, int? ExitCode,
         string Stderr, IReadOnlyList<CrosswalkInvocationDiagnostic> Diagnostics, CrosswalkExecutableIdentity? Executable)> ExecuteAsync<T>(
         string root, string verb, TimeSpan timeout, Func<string, IReadOnlyList<T>?> parse,
-        CancellationToken cancellationToken, string arguments = "")
+        CancellationToken cancellationToken, IReadOnlyList<string>? arguments = null)
     {
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
         WorkerProcessRunResult? run = null;
@@ -100,8 +99,8 @@ internal sealed class CrosswalkClient
             if (executable is null)
                 return Failure(resolution.Status, resolution.DiagnosticCategory!.Value, resolution.Detail, resolution.ConfigurationDetail);
 
-            var request = new WorkerProcessRunRequest(
-                Command(executable.Path, verb, root, arguments), root, timeout);
+            var request = new WorkerProcessDirectRunRequest(
+                executable.Path, [verb, root, .. arguments ?? []], root, timeout);
             run = await _runProcessAsync(request, cancellationToken).ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 SetFailure("cancelled", CrosswalkDiagnosticCategory.Cancelled);
@@ -174,10 +173,8 @@ internal sealed class CrosswalkClient
         }
     }
 
-    internal static string Command(string executablePath, string verb, string root, string arguments = "")
-        => $"& {Quote(executablePath)} {verb} {Quote(root)}{arguments}; exit $LASTEXITCODE";
-
-    internal static string IdArgument(string id) => " --id " + Quote(id);
-
-    private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+    // Matches AcceptanceShellProcessStartInfo.QuoteForCmd: every element is quoted,
+    // embedded quotes are escaped, and adjacent elements have one separating space.
+    internal static int CmdRenderedLength(IEnumerable<string> arguments)
+        => arguments.Sum(argument => argument.Length + 3 + argument.Count(character => character == '"')) - 1;
 }

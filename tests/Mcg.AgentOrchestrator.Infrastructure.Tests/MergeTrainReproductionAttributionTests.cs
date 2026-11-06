@@ -89,8 +89,10 @@ public sealed class MergeTrainReproductionAttributionTests : AcceptanceCohortWor
             Assert.Empty(AttributionEvents(train.Repo));
             Assert.DoesNotContain(Key(train, 0), train.Driver.ReadTrainImplicatedMemberKeys());
             Assert.DoesNotContain(Key(train, 1), train.Driver.ReadTrainImplicatedMemberKeys());
-            Assert.All(train.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
-            Assert.All(train.Goals, goal => Assert.Null(goal.LatestAcceptanceFailure));
+            Assert.All(train.Goals.Take(2), goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+            Assert.All(train.Goals.Take(2), goal => Assert.Null(goal.LatestAcceptanceFailure));
+            Assert.Equal(GoalStatus.AcceptanceFailed, train.Goals[2].Status);
+            Assert.NotNull(train.Goals[2].LatestAcceptanceFailure);
             Assert.Equal(mode == "absent" ? 0 : mode is "unreadable" or "incomplete" or "skipped" or "exception" ? 2 : 3,
                 train.Calls.Count);
         });

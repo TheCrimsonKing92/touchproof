@@ -52,7 +52,7 @@ public sealed class ConductorBatchLoopTestsStepLedgerFormatParity(ITestOutputHel
             "TICK tick=1 eligible=1 ts=2026-01-01T00:00:00.0650000+00:00",
             $"GOAL goal={goal.Id.Value[..8]} result=executed state=WorkspaceReady ts=2026-01-01T00:00:00.0650000+00:00",
             "TICK_END tick=1 advanced=1 held=0 escalated=0 done=0 cpu_ms=65 cpu_sweep_ms=40 cpu_prewalk_ms=0 cpu_walk_ms=25 ts=2026-01-01T00:00:00.0650000+00:00"
-        }, lines.Select(line => Regex.Replace(line, @" (?:prewalk_steps|sweep_steps|load_counters|admission_steps|unattributed_ms|prep_steps|prep_projection_count|prep_projection_slowest|prep_unattributed_ms|prep_projection_cache)=\S+", "")).ToArray());
+        }, lines.Select(line => Regex.Replace(line, @" (?:prewalk_steps|sweep_steps|load_counters|admission_steps|unattributed_ms|prep_steps|prep_projection_count|prep_projection_slowest|prep_unattributed_ms|prep_projection_cache|prep_merge_conflict_cache|prep_approval_hold_cache|prep_substeps|admission_facts)=\S+", "")).ToArray());
         Assert.Equal(1, sweepCalls);
         Assert.Equal(1, dispatchCalls);
         Assert.Equal(GoalStatus.Active, goal.Status);

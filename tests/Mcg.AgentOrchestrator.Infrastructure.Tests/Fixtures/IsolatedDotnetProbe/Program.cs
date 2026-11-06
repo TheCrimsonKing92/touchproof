@@ -1,5 +1,8 @@
 using System.Diagnostics;
 
+if (args.Length > 0 && args[0] == "parse")
+    return JunitEnvironmentParserProbe.Run(args);
+
 if (args.Length == 2 && args[0].Equals("spawn-descendant", StringComparison.Ordinal))
 {
     if (!OperatingSystem.IsWindows())

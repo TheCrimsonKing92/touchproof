@@ -17,12 +17,12 @@ internal static class OwnerConsoleStageDescriber
             gate?.ForMember(goal.Id.Value) is { } live)
         {
             if (live.ConcurrentRuns is { Count: > 1 } runs)
-                return string.Join('\n', runs.Select(run => "in gate: " + OwnerConsoleGateFormatter.RunLine(run)));
+                return string.Join('\n', runs.Select(run => "in gate: " + OwnerConsoleGateFormatter.RunLine(run, shortIdentity: true)));
             var count = OwnerConsoleGateCount.Of(live);
-            if (!live.Live && live.Participation is not null) return "gate: " + live.Participation + OwnerConsoleGateFormatter.Identity(live);
+            if (!live.Live && live.Participation is not null) return "gate: " + live.Participation;
             if (live.Failing) return OwnerConsoleGateBoardStatus.Failing(count);
             return $"in gate: {OwnerConsoleGateFormatter.CountText(live)}, " +
-                (live.HasEta ? OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds) + " left" : "ETA unknown") + OwnerConsoleGateFormatter.Identity(live);
+                (live.HasEta ? OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds) + " left" : "ETA unknown");
         }
         if (OwnerConsoleDeliveredForReviewText.For(goal) is { } delivered) return delivered;
         if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null))

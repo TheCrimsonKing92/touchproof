@@ -76,7 +76,8 @@ public sealed record AnswerOperatorIntentPayload(
     IReadOnlyList<string>? EvidenceReferences = null,
     string? Precedent = null,
     string? RouteRole = null,
-    string? RouteCause = null);
+    string? RouteCause = null,
+    PlannerBriefAmendmentDisposition? AmendmentDisposition = null);
 
 public sealed record AdjudicateOperatorIntentPayload(
     string Shape,

@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Consumes already reproduced, candidate-bound failures. It neither attributes failures nor runs evidence.
+// Consumes recorded, candidate-bound failures. It neither attributes failures nor runs evidence.
 internal static class AttributedFailureDeveloperRoute
 {
     internal static AttributedFailure? ReadAcceptanceFailure(AcceptanceFailureSummary? summary)
@@ -22,6 +22,14 @@ internal static class AttributedFailureDeveloperRoute
                 cohort.Groups["tests"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(test => test.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
                 cohort.Groups["detail"].Success ? cohort.Groups["detail"].Value : null);
+
+        var survivors = Regex.Match(detail,
+            @"\Amerge train RED attributed \(survivors-passed\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>survivors_passed [\s\S]+)\z");
+        if (survivors.Success)
+            return new("train-survivors-passed", survivors.Groups["receipt"].Value, summary.BranchHeadSha,
+                survivors.Groups["tests"].Value.Split(',').Select(test => test.Trim())
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                survivors.Groups["detail"].Value);
 
         var reproduction = Regex.Match(detail,
             @"\Amerge train RED attributed \(reproduction\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>reproduced [\s\S]+)\z");

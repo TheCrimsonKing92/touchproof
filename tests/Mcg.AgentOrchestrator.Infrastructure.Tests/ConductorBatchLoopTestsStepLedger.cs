@@ -54,7 +54,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             var observed = new List<string>();
             var store = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), Path.Combine(root, "logs"));
             var loop = new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store), processCpuTime: () => cpu)
-                .WithStepProbe(name => { observed.Add(name); cpu += TimeSpan.FromMilliseconds(advances[name]); });
+                .WithStepProbe(name => { observed.Add(name); cpu += TimeSpan.FromMilliseconds(advances.GetValueOrDefault(name)); });
 
             var tick = OneTick(loop, kernel, MakeDriver());
 

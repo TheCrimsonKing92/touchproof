@@ -337,6 +337,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
 internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOwner, IAcceptanceAttemptExecutionOwner
 {
     private readonly AcceptanceAttemptIdentityResolvers _identityResolvers;
+    private readonly bool _writesResultRecord;
 
     internal AcceptanceAttemptExecutionOwner(
         AcceptanceAttemptIdentity identity,
@@ -344,10 +345,12 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         CancellationToken cancellationToken = default,
         AcceptanceRunExecutionOptions? options = null,
         AcceptanceAttemptIdentityResolvers? identityResolvers = null,
-        bool publishResultsPrefix = true)
+        bool publishResultsPrefix = true,
+        bool writesResultRecord = false)
         : base(identity.AttemptId, identity.ResultsPrefix, settings, cancellationToken, options)
     {
         Identity = identity;
+        _writesResultRecord = writesResultRecord;
         _identityResolvers = identityResolvers ?? new AcceptanceAttemptIdentityResolvers(
             _ => identity.CandidateTreeSha,
             _ => identity.MainSha,
@@ -395,19 +398,42 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
                 MarkSuccessful();
             }
 
-            return result with { LaneWaits = GetLaneWaitCollector(verifier.WaitTimeProvider).Snapshot() };
+            result = result with { AttemptId = Identity.AttemptId, LaneWaits = GetLaneWaitCollector(verifier.WaitTimeProvider).Snapshot() };
+            TryWriteResultRecord(result);
+            return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
             _laneWaitCollector?.Stop("cancelled");
             stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Cancelled);
             MarkCancelled();
+            TryWriteResultRecord(exception: ex);
             throw;
         }
-        catch
+        catch (Exception ex)
         {
             _laneWaitCollector?.Stop("faulted");
+            TryWriteResultRecord(exception: ex);
             throw;
+        }
+    }
+
+    private void TryWriteResultRecord(AcceptanceVerificationResult? result = null, Exception? exception = null)
+    {
+        if (!_writesResultRecord) return;
+        var branch = Identity.VerifyingCommitSha == "unavailable" ? null : Identity.VerifyingCommitSha;
+        var main = Identity.MainSha == "unavailable" ? null : Identity.MainSha;
+        try
+        {
+            var artifact = exception is not null
+                ? AcceptanceAttemptResultRecord.ForFault(exception, exception.Message, branch, main)
+                : AcceptanceAttemptResultRecord.ForVerification(result!, branch, main);
+            AcceptanceAttemptResultRecord.Write(Identity.ResultsPrefix + ".result.json", artifact);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Optional evidence cannot replace the gate verdict or its original fault.
+            System.Diagnostics.Trace.TraceWarning($"Acceptance result record unavailable for {RunId}: {ex.Message}");
         }
     }
 
@@ -584,7 +610,8 @@ public static partial class AcceptanceExecutionOwners
             resultsPrefix,
             attemptId,
             AcceptanceGateEngineSettings.Load(worktreePath, options.ProjectHomeDirectory),
-            identityResolvers);
+            identityResolvers,
+            writesResultRecord: options.ResultsPrefix is null);
     }
 
     internal static IAcceptanceAttemptExecutionOwner CreateAttemptForVerifierCompatibility(
@@ -632,7 +659,8 @@ public static partial class AcceptanceExecutionOwners
         string attemptId,
         AcceptanceGateEngineSettings settings,
         AcceptanceAttemptIdentityResolvers identityResolvers,
-        bool publishResultsPrefix = true)
+        bool publishResultsPrefix = true,
+        bool writesResultRecord = false)
     {
         var identity = new AcceptanceAttemptIdentity(
             attemptId,
@@ -658,7 +686,8 @@ public static partial class AcceptanceExecutionOwners
             cancellationToken,
             options,
             identityResolvers,
-            publishResultsPrefix);
+            publishResultsPrefix,
+            writesResultRecord);
     }
 
     private static AcceptanceAttemptIdentityResolvers CreateGitIdentityResolvers(string integrationBranch) =>

@@ -72,6 +72,7 @@ public sealed class ConductorBatchLoopTestsPrelandedRelaunchCheckpoint : Accepta
 
             var saved = new List<(GoalId GoalId, GoalStatus Status)>();
             var relaunchCalls = 0;
+            AdmissionFactsTestData.Warm(driver, kernel);
             var exception = Record.Exception(() => new ConductorBatchLoop(
                 selfRelaunch: _ =>
                 {

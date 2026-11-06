@@ -98,7 +98,7 @@ public sealed class AcceptanceQueuePlannerGitProbeFailureTests
             {
                 var command = args[0];
                 if (command == "for-each-ref" && args.Any(arg => arg.Contains("%(objectname)", StringComparison.Ordinal)))
-                    return new GitCli.GitResult(0, $"{branch} {new string('a', 40)}\n", "");
+                    return new GitCli.GitResult(0, $"{branch} {new string('a', 40)}\nmain {new string('b', 40)}\n", "");
                 if (command == overriddenProbe)
                     return probeResult;
                 return command switch

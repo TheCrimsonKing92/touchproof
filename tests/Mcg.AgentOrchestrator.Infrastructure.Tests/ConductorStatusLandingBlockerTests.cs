@@ -40,6 +40,7 @@ public sealed class ConductorStatusLandingBlockerTests
             "Conductor: stopped",
             "Since: unavailable",
             "Supervisor build: unavailable",
+            "Loop build: unavailable",
             "Generation: unavailable (no supervisor build recorded)",
             "Latest tick: unavailable",
             "Non-terminal goals: 2",

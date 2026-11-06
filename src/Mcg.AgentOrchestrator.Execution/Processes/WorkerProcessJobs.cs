@@ -222,6 +222,85 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         Process.Kill(entireProcessTree);
     }
 
+    internal Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(TimeSpan timeout) =>
+        KillTreeAndWaitForExitAsync(timeout, PinMembers);
+
+    internal async Task<(bool ExitConfirmed, IReadOnlyList<int> RemainingProcessIds)> KillTreeAndWaitForExitAsync(
+        TimeSpan timeout, Action<OwnedProcessGroup, ICollection<Process>> pinMembers)
+    {
+        if (!OwnsRegisteredJob)
+            throw new InvalidOperationException("Cannot terminate an owned tree after its registration was released.");
+
+        using var deadline = new CancellationTokenSource(timeout);
+        // Pin current members before termination on both platforms. Job occupancy and the
+        // launcher's exit alone must not replace observing the known children's exit handles.
+        // Never re-open a PID after the kill, when it might identify an unrelated process.
+        var members = new List<Process>();
+        try
+        {
+            var treeExited = true;
+            IReadOnlyList<int> remainingInJob = [];
+            try
+            {
+                pinMembers(_registration.Group, members);
+            }
+            finally
+            {
+                // Inspection/handle acquisition is best effort; even an unexpected failure
+                // must terminate the job before propagating to cancellation diagnostics.
+                if (OperatingSystem.IsWindows())
+                    treeExited = _registration.Group.TerminateAndConfirmEmpty(timeout, out remainingInJob);
+                else
+                    Kill(entireProcessTree: true);
+            }
+            try
+            {
+                await Task.WhenAll(members.Select(member => member.WaitForExitAsync(deadline.Token))
+                    .Append(WaitForExitAsync(deadline.Token))).ConfigureAwait(false);
+                return (treeExited, remainingInJob);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                var remaining = members.Where(member => !member.HasExited).Select(member => member.Id).ToList();
+                if (!Process.HasExited) remaining.Add(_processId);
+                return (false, remaining.Concat(remainingInJob).Distinct().ToArray());
+            }
+        }
+        finally
+        {
+            foreach (var member in members) member.Dispose();
+        }
+    }
+
+    private void PinMembers(OwnedProcessGroup group, ICollection<Process> members)
+    {
+        if (!group.TryGetActiveProcessIds(out var processIds))
+            throw new InvalidOperationException("Cannot inspect the owned process group before termination.");
+        foreach (var processId in processIds.Where(id => id != _processId))
+        {
+            Process? member = null;
+            try
+            {
+                member = System.Diagnostics.Process.GetProcessById(processId);
+                _ = member.SafeHandle;
+                // Bind the handle to this job before termination; never reopen a recycled PID.
+                if (OperatingSystem.IsWindows() && !group.Contains(member.SafeHandle))
+                {
+                    member.Dispose();
+                    continue;
+                }
+                members.Add(member);
+            }
+            catch (ArgumentException) { member?.Dispose(); } // Already exited.
+            catch (InvalidOperationException) { member?.Dispose(); } // Exited before handle acquisition.
+            catch
+            {
+                member?.Dispose();
+                throw;
+            }
+        }
+    }
+
     internal bool Release(out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
@@ -2427,7 +2506,7 @@ public static partial class WorkerProcessJobs
             process.StartInfo.ArgumentList.Add("/F");
             process.StartInfo.ArgumentList.Add("/PID");
             process.StartInfo.ArgumentList.Add(processId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            if (!process.Start())
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
             {
                 return false;
             }

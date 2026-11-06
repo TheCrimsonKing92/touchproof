@@ -5,11 +5,13 @@ public sealed class TestPowerShellResolutionTests
     [Fact]
     public void EveryPwshFixtureUsesARealInstalledShell()
     {
+        using var junit = new JunitCommandEnvironmentFixture("FIXTURE_" + Guid.NewGuid().ToString("N"), false);
         foreach (var executable in new[]
         {
             TestPowerShell.Executable,
             DotnetBuildEnvironmentManagerTests.ResolvePowerShell(),
-            TestPowerShell.ForTheoryToken("pwsh")
+            TestPowerShell.ForTheoryToken("pwsh"),
+            junit.Shell
         })
         {
             Assert.True(Path.IsPathFullyQualified(executable),

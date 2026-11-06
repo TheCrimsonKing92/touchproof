@@ -10,6 +10,30 @@ public sealed class GateReadyProjectionCacheTests(ITestOutputHelper output) : Co
     private static readonly GateReadyProjectionCache.Heads Heads = new(new string('b', 40), new string('a', 40), new string('a', 40));
 
     [Fact]
+    public void HeldGoalObservations_DoNotInvalidateDeterministicExclusion()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Held pair member");
+        var cache = new GateReadyProjectionCache();
+        GateReadyProjectionCache.Key Key() => GateReadyProjectionCache.CreateKey(goal,
+            ConductorAutonomyPolicy.Permissive, Heads, GoalLifecycleFacts.None);
+        var key = Key();
+        var calls = 0;
+        GateReadyCandidateProjectionResult Project()
+        {
+            calls++;
+            return new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.MergeConflict);
+        }
+        var first = cache.GetOrProject(goal.Id, key, Project, Key);
+        kernel.RecordGoalPolicyDecision(goal.Id, "Approval hold observed again");
+        goal.ObserveLandingBlocker(new("approval", "Waiting for owner", "same-candidate",
+            DateTimeOffset.Parse("2026-11-05T18:30:00Z"), "owner", "approve-policy-change"));
+        Assert.Equal(key, Key());
+        Assert.Same(first, cache.GetOrProject(goal.Id, Key(), Project, Key));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public void Driver_UnchangedKey_ReusesEntireInnerProjectionAcrossCalls()
     {
         var goal = VerifiedGoal();

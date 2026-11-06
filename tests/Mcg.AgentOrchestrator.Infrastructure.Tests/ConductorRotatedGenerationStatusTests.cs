@@ -21,7 +21,7 @@ public sealed class ConductorRotatedGenerationStatusTests
 
         AssertLine(text, $"Running since {StartedAt:O}");
         AssertLine(text, $"Supervisor build: {BuildCommit}");
-        AssertLine(text, $"Generation: current with main {BuildCommit}");
+        AssertLine(text, $"Generation: current with main (running {BuildCommit}, main {BuildCommit})");
     }
 
     [Fact]
@@ -37,7 +37,7 @@ public sealed class ConductorRotatedGenerationStatusTests
         var text = ReadStatus(fixture.Workspace);
 
         AssertLine(text, $"Supervisor build: {BuildCommit}");
-        AssertLine(text, $"Generation: current with main {BuildCommit}");
+        AssertLine(text, $"Generation: current with main (running {BuildCommit}, main {BuildCommit})");
     }
 
     [Fact]

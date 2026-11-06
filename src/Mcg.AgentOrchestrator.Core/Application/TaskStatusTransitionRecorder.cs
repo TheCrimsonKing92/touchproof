@@ -4,6 +4,7 @@ internal readonly record struct TaskStatusChange(TaskId TaskId, WorkTaskStatus F
 
 internal static class TaskStatusTransitionRecorder
 {
+    internal const string GoalLifecycleReplanBriefAmendment = "GoalLifecycle.ReplanBriefAmendment";
     internal const string GoalLifecycleActivateGoal = "GoalLifecycle.ActivateGoal";
     internal const string GoalLifecycleAddTask = "GoalLifecycle.AddTask";
     internal const string GoalLifecycleRequeueInterruptedDispatch = "GoalLifecycle.RequeueInterruptedDispatch";

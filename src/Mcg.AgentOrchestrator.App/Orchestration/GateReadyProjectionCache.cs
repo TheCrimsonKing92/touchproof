@@ -71,7 +71,9 @@ internal sealed class GateReadyProjectionCache
     }
 
     internal static Key CreateKey(Goal goal, ConductorAutonomyPolicy policy, Heads heads, GoalLifecycleFacts facts) =>
-        new(goal.Id, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(goal.ToSnapshot()))),
+        // Neither lifecycle, task verification nor branch risk reads these per-tick observations.
+        new(goal.Id, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+                goal.ToSnapshot() with { Timeline = [], LandingBlocker = null }))),
             heads, JsonSerializer.Serialize(new
             {
                 policy.Name,

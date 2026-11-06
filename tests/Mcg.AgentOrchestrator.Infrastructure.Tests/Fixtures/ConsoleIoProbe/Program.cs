@@ -4,6 +4,21 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// Search all arguments because GitCli prepends its hardening arguments.
+var errorModeIndex = Array.IndexOf(args, "--report-error-mode");
+if (errorModeIndex >= 0)
+{
+    File.WriteAllText(args[errorModeIndex + 1], Native.GetErrorMode().ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return 0;
+}
+if (args.Length > 0 && args[0] == "--hold-for-event")
+{
+    using var ready = EventWaitHandle.OpenExisting(args[1]);
+    using var release = EventWaitHandle.OpenExisting(args[2]);
+    ready.Set();
+    if (!release.WaitOne(TimeSpan.FromMinutes(10))) throw new TimeoutException("Probe release event was not signaled.");
+    return 0;
+}
 if (args.Length > 0 && args[0] == "--startup-launch") return StartupPipeProbe.Launch(args[1..]);
 if (args.Length > 0 && args[0] == "--conhost-experiment") return await ConsoleHostExperimentProbe.Run(args[1..]);
 if (args.Length > 0 && args[0] == "--write-console-text")
@@ -224,6 +239,9 @@ sealed class NoopDisposable : IDisposable
 
 static class Native
 {
+    [DllImport("kernel32.dll")]
+    internal static extern uint GetErrorMode();
+
     internal const uint CreateSuspended = 0x00000004;
     internal const uint CreateNewConsole = 0x00000010;
     internal const uint StartfUseShowWindow = 0x00000001;

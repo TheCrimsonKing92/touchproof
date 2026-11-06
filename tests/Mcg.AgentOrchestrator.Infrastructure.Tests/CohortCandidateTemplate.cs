@@ -31,27 +31,11 @@ public sealed class CohortCandidateTemplate : IDisposable
             foreach (var file in Directory.EnumerateFiles(source.Repo, "*", SearchOption.AllDirectories))
                 File.Copy(file, Path.Combine(repo, Path.GetRelativePath(source.Repo, file)));
 
-            // Repair both directions ourselves, touching only the copy. commondir is relative
-            // and remains valid because the directory topology is unchanged.
-            var administration = Path.Combine(repo, ".git", "worktrees");
-            foreach (var entry in Directory.EnumerateDirectories(administration))
-            {
-                var backlink = Path.Combine(entry, "gitdir");
-                var oldGitFile = File.ReadAllText(backlink).Trim();
-                var relative = Path.GetRelativePath(source.Repo, oldGitFile);
-                if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                    throw new InvalidOperationException($"Candidate template '{key}' has an external worktree: {oldGitFile}");
-                var gitFile = Path.Combine(repo, relative);
-                File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
-                // Git marks this existing file hidden on Windows. Create semantics reject
-                // hidden files; truncate in place to preserve their attributes and isolation.
-                using (var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write)))
-                    writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
-                Builder.RefreshIndex(Path.GetDirectoryName(gitFile)!);
-            }
-            // Index stat data describes the template's files, not this copy. Status runs
-            // with GIT_OPTIONAL_LOCKS=0 and cannot persist a refresh before read-tree -m -u.
-            Builder.RefreshIndex(repo);
+            foreach (var worktree in MergeTrainRecheckFixtureTemplate.RepairWorktreeLinks(
+                source.Repo, repo, $"Candidate template '{key}'"))
+                MergeTrainRecheckFixtureTemplate.RefreshIndex(worktree);
+            // Copied stat data must be refreshed before read-tree -m -u.
+            MergeTrainRecheckFixtureTemplate.RefreshIndex(repo);
             return new PreparedRepository(repo, source.GoalIds.ToArray(), source.Revisions.ToArray());
         }
         catch
@@ -106,7 +90,6 @@ public sealed class CohortCandidateTemplate : IDisposable
         internal static string ProcessRoot => SeedRepositoryProcessRootPath;
         internal static string CreateRepository() => CreateReducedAcceptanceCohortRepository();
         internal static string Revision(string repo, string revision) => RunGitOutput(repo, "rev-parse", revision).Trim();
-        internal static void RefreshIndex(string repo) => RunGit(repo, "update-index", "--refresh");
         internal static void Remove(string repo) => DeleteDirectory(repo);
     }
 }

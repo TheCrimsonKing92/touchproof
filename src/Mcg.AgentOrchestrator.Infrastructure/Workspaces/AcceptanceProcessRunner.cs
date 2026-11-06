@@ -121,7 +121,9 @@ internal static class AcceptanceProcessRunner
         bool stopOnCaptureLimit = false,
         bool? keepCaptureFiles = null,
         Action<int>? resumeObserver = null,
-        bool resolveBareCommand = false) =>
+        bool resolveBareCommand = false,
+        JunitCommandEnvironmentInputs? commandEnvironment = null,
+        bool suppressDiagnosticCaptures = false) =>
         await AcceptanceCheckProcessInvoker.RunAsync(
             arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput, cancellationToken,
             timeoutSignal, registrationIdentityReader, new AcceptanceProcessRequest
@@ -131,6 +133,8 @@ internal static class AcceptanceProcessRunner
                 HeartbeatContext = heartbeatContext,
                 ProgressSink = progressSink,
                 EngineSettings = engineSettings,
+                HostTestSettings = LaneSlotTimingReader.PathForArguments(arguments, workingDirectory) is null ? null :
+                    AcceptanceGatePhaseAccountant.CurrentHostTestSettings?.ForLocal(heartbeatContext?.CurrentTarget ?? "test lane"),
                 AttemptResultsPrefix = attemptResultsPrefix,
                 GateInvocationId = gateInvocationId,
                 ApparatusReceiptPath = apparatusReceiptPath,
@@ -141,6 +145,8 @@ internal static class AcceptanceProcessRunner
                 KeepCaptureFiles = keepCaptureFiles,
                 ResumeObserver = resumeObserver,
                 ResolveBareCommand = resolveBareCommand,
+                CommandEnvironment = commandEnvironment,
+                SuppressDiagnosticCaptures = suppressDiagnosticCaptures || commandEnvironment is not null,
             }).ConfigureAwait(false);
 
     internal static class ProcessInvokerAccess

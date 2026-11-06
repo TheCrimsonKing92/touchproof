@@ -37,6 +37,8 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Equal("operator-stop", Text(since, "reason"));
         Assert.Equal(JsonValueKind.Null, since.GetProperty("previous").ValueKind);
         Assert.Equal("abc123", Text(payload, "supervisorBuild"));
+        Assert.Equal("abc123", Text(payload.GetProperty("loopBuild"), "commit"));
+        Assert.Equal("supervisor", Text(payload.GetProperty("loopBuild"), "source"));
         var build = payload.GetProperty("generation");
         Assert.Equal(generation, Text(build, "state"));
         Assert.Equal("abc123", Text(build, "build"));
@@ -85,6 +87,8 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Null(Text(since, "at"));
         Assert.Null(Text(since, "reason"));
         Assert.Null(Text(payload, "supervisorBuild"));
+        Assert.Null(Text(payload.GetProperty("loopBuild"), "commit"));
+        Assert.Equal("unavailable", Text(payload.GetProperty("loopBuild"), "source"));
         var generation = payload.GetProperty("generation");
         Assert.Equal("no-build", Text(generation, "state"));
         Assert.Null(Text(generation, "build"));
@@ -154,10 +158,11 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Equal(AgentReadEnvelope.ConductorStatusSchemaVersion, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("2026-10-01T12:00:00.0000000Z", Text(root, "generatedAt"));
         var payload = root.GetProperty("payload");
-        Names(payload, "conductor", "since", "supervisorBuild", "generation", "latestTick", "goals",
+        Names(payload, "conductor", "since", "supervisorBuild", "loopBuild", "generation", "latestTick", "goals",
             "mostRecentLanding", "workerAdoption", "pendingIntents", "providerHolds");
         Names(payload.GetProperty("conductor"), "state", "pid");
         Names(payload.GetProperty("since"), "kind", "at", "reason", "previous");
+        Names(payload.GetProperty("loopBuild"), "commit", "source");
         Names(payload.GetProperty("generation"), "state", "build", "main");
         var goals = payload.GetProperty("goals");
         Names(goals, "available", "nonTerminal", "pendingClarifications", "humanWaits");
@@ -182,8 +187,9 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         var since = payload.GetProperty("since");
         Assert.Contains($"Stopped since {Text(since, "at")}; reason={Text(since, "reason")}", human);
         Assert.Contains($"Supervisor build: {Text(payload, "supervisorBuild")}", human);
+        Assert.Contains($"Loop build: {Text(payload.GetProperty("loopBuild"), "commit")}", human);
         var generation = payload.GetProperty("generation");
-        Assert.Contains(Text(generation, "state") == "current" ? $"Generation: current with main {Text(generation, "main")}"
+        Assert.Contains(Text(generation, "state") == "current" ? $"Generation: current with main (running {Text(generation, "build")}, main {Text(generation, "main")})"
             : $"Generation: differs from main (running {Text(generation, "build")}, main {Text(generation, "main")})", human);
         Assert.Contains($"Latest tick: {Text(payload, "latestTick")}", human);
         var goals = payload.GetProperty("goals");

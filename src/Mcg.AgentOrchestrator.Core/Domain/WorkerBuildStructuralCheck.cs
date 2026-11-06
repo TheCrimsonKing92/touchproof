@@ -5,14 +5,15 @@ public enum WorkerBuildStructuralStatus { Unavailable, Passed, Violation, NotApp
 
 public sealed record WorkerBuildStructuralCheck(WorkerBuildStructuralStatus Status, string Diagnostic,
     string InvocationId, string DispatchId, string TreeDigest, string ScopeIdentity,
-    string? ProjectHomeDirectory, string PolicyDigest)
+    string? ProjectHomeDirectory, string PolicyDigest, double? ElapsedMilliseconds = null)
 {
     public bool AllowsVerificationSuccess => Status is WorkerBuildStructuralStatus.Passed or WorkerBuildStructuralStatus.NotApplicable;
 
     public bool IsWellFormed => Enum.IsDefined(Status) && !string.IsNullOrWhiteSpace(Diagnostic) &&
         !string.IsNullOrWhiteSpace(InvocationId) && !string.IsNullOrWhiteSpace(DispatchId) &&
         !string.IsNullOrWhiteSpace(TreeDigest) && !string.IsNullOrWhiteSpace(ScopeIdentity) &&
-        !string.IsNullOrWhiteSpace(PolicyDigest);
+        !string.IsNullOrWhiteSpace(PolicyDigest) &&
+        (ElapsedMilliseconds is null || double.IsFinite(ElapsedMilliseconds.Value) && ElapsedMilliseconds >= 0);
 
     public bool IsBoundTo(WorkerBuildInvocation invocation) =>
         IsWellFormed &&

@@ -140,10 +140,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance transient lock test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "transient-lock.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "transient-lock.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
@@ -251,10 +248,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             // No manual verification recorded: the goal is not Completed and the task is Assigned.
             Assert.Equal(GoalStatus.Active, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
@@ -291,10 +285,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 [],
                 []));
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "diagnostic only");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Add gated diagnostic");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "diagnostic only", "Add gated diagnostic").Worktree;
             kernel.RecordTaskDispatch(
                 goal.Id,
                 task.Id,
@@ -686,12 +677,15 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         try
         {
+            RunGit(repo, "branch", "-M", "main");
             var kernel = new AgentOrchestratorKernel();
             var present = kernel.CreateGoal("Present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             var alsoPresent = kernel.CreateGoal("Also present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             var missing = kernel.CreateGoal("Missing branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             RunGit(repo, "branch", GoalWorktrees.BranchName(present.Id));
             RunGit(repo, "branch", GoalWorktrees.BranchName(alsoPresent.Id));
+            var integrationTip = GitCli.Run(repo, "rev-parse", "--verify", "refs/heads/main");
+            Assert.True(integrationTip.Succeeded, integrationTip.Error);
             var batchedGitCalls = new List<string>();
 
             Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner = (workingDirectory, args) =>
@@ -702,13 +696,14 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 }
 
                 var command = string.Join(" ", args);
-                if (command == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/")
+                if (command == "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main")
                 {
                     return new GitCli.GitResult(
                         0,
                         $"""
                         {GoalWorktrees.BranchName(present.Id)} 1111111111111111111111111111111111111111
                         {GoalWorktrees.BranchName(alsoPresent.Id)} 2222222222222222222222222222222222222222
+                        main {integrationTip.Output.Trim()}
                         """,
                         string.Empty);
                 }
@@ -722,7 +717,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             Assert.Contains(plan.Items, item => item.GoalId == present.Id);
             Assert.Contains(plan.Items, item => item.GoalId == alsoPresent.Id);
             Assert.DoesNotContain(plan.Items, item => item.GoalId == missing.Id);
-            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
             Assert.DoesNotContain(batchedGitCalls, call => call.StartsWith("rev-parse --verify --quiet refs/heads/goal/", StringComparison.Ordinal));
@@ -795,10 +790,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Policy queued acceptance", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "policy-queue.txt"), "goal");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Policy queued goal");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "policy-queue.txt", "goal", "Policy queued goal").Worktree;
 
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance-queue", "--autonomy", "safe-auto"], context));
@@ -870,10 +862,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance concurrency test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "concurrency.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "concurrency.txt", "goal work", "Goal work").Worktree;
 
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();

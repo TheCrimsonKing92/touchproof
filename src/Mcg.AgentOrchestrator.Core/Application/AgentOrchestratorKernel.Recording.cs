@@ -128,7 +128,8 @@ public sealed partial class AgentOrchestratorKernel
                 verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole)
             : null;
         if (incomingPlannerBatch is not null &&
-            (incomingPlannerBatch.IsMalformed || incomingPlannerBatch.Directives.Any(item => item.PlannerEvidence is not null)) &&
+            (incomingPlannerBatch.IsMalformed || incomingPlannerBatch.Directives.Any(item => item.PlannerEvidence is not null ||
+                item.Kind == HumanWaitKind.PlannerBriefAmendment)) &&
             verification.DispatchAttemptAt is { } plannerAttemptAt && plannerAttemptAt != task.LastDispatch.DispatchedAt)
         {
             Append(goal, taskId, ProgressKind.TaskNote, "Ignored stale Planner evidence dispatch completion; current attempt is unchanged.");
@@ -301,7 +302,7 @@ public sealed partial class AgentOrchestratorKernel
                     recordDuplicateSuppression: verification.WorkerResultPresent,
                     evidenceOwner: owner,
                     storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                    testNames: testNames);
+                    testNames: testNames, amendmentCriterionIndex: parsedHumanInput.Directive?.AmendmentCriterionIndex);
                 if (verification.WorkerResultPresent &&
                     requestResult.WasSuppressedByAnswer &&
                     WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
@@ -315,7 +316,7 @@ public sealed partial class AgentOrchestratorKernel
                         verification.StandardOutputPath);
                 }
                 if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
-                    (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
+                    (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer || kind == HumanWaitKind.PlannerBriefAmendment))
                 {
                     return;
                 }
@@ -1138,7 +1139,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         WorkerResultBlockers.TryFindReviewFindingRound(
-            verification, out _, out _, out var advisoryRejections, out _);
+            verification, out var submittedRound, out _, out var advisoryRejections, out _);
         foreach (var rejection in advisoryRejections)
         {
             var warning = ReviewFindingParseRejectionNote.BuildAdvisoryWarning(task.RequiredRole, rejection);
@@ -1173,13 +1174,9 @@ public sealed partial class AgentOrchestratorKernel
             return verification with
             {
                 ReviewFindingContractViolation = violation,
-                MergedReviewFindings = violation is not null &&
-                    (ReviewFindingConvergence.IsRejectedCapResolutionRound(violation) ||
-                     violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode ||
-                     violation.Code == ReviewFindingConvergence.FindingFormatViolationCode ||
-                     identityTransitionSalvaged)
-                    ? mergedFindings
-                    : null
+                MergedReviewFindings = ReviewFindingRoundSalvage.SelectRejectedLedger(
+                    violation, identityTransitionSalvaged, submittedRound, mergedFindings,
+                    goal.EffectiveAcceptanceCriteriaCorrections)
             };
         }
 
@@ -1466,30 +1463,31 @@ public sealed partial class AgentOrchestratorKernel
                     }
 
                     if (ReviewFindingConvergence.IsRejectedIdentityTransitionRound(ex.Violation) &&
-                        !string.IsNullOrWhiteSpace(lastAcceptedReviewedCommit) &&
-                        !string.IsNullOrWhiteSpace(verification.ReviewedCommit))
+                        ((!string.IsNullOrWhiteSpace(lastAcceptedReviewedCommit) &&
+                          !string.IsNullOrWhiteSpace(verification.ReviewedCommit)) ||
+                         ReviewFindingRoundSalvage.IsAdvisoryOnlyIdentityMove(state, round, ex.Violation)))
                     {
                         var priorState = state;
                         try
                         {
-                            state = ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(
-                                priorState,
-                                round,
-                                ex.Violation);
+                            state = ReviewFindingRoundSalvage.ApplyIdentityRejectedRound(
+                                priorState, round, ex.Violation, role, reviewRetryCap,
+                                goal.EffectiveAcceptanceCriteriaCorrections,
+                                currentVerification.ReviewedCommit, evidenceReceipts, out var salvagedViolation);
+                            diagnostic = $"{salvagedViolation.Code}: {salvagedViolation.Message}";
+                            violation = salvagedViolation;
+                            identityTransitionSalvaged = true;
+                            return false;
                         }
                         catch (ReviewFindingConvergenceException salvagedRoundException)
                         {
-                            // Applying the non-identity portion of the round can expose another invalid
-                            // transition. Preserve the accepted ledger while still recording the more
-                            // specific typed violation on this verification.
+                            // Preserve the accepted ledger if salvage exposes another invalid transition.
                             state = priorState;
                             diagnostic = $"{salvagedRoundException.Code}: {salvagedRoundException.Message}";
                             violation = salvagedRoundException.Violation;
                             identityTransitionSalvaged = true;
                             return false;
                         }
-
-                        identityTransitionSalvaged = true;
                     }
 
                     diagnostic = $"{ex.Code}: {ex.Message}";
@@ -2081,6 +2079,8 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
+        if (task.RequiredRole == AgentRole.Planner && task.LastVerification?.PlannerEvidenceBatch?.Directives
+                .Any(directive => directive.Kind == HumanWaitKind.PlannerBriefAmendment) == true) return false;
         if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task)) return false;
         if (task.Status == WorkTaskStatus.Completed ||
             task.LastVerification is not { Succeeded: true } ||

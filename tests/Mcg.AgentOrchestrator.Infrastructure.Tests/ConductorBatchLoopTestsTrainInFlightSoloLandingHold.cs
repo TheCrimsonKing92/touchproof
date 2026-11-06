@@ -172,6 +172,7 @@ public sealed class ConductorBatchLoopTestsTrainInFlightSoloLandingHold : Accept
     private static BatchTickSummary RunOneTick(Fixture fixture)
     {
         BatchTickSummary? observed = null;
+        AdmissionFactsTestData.Warm(fixture.Driver, fixture.Kernel);
         _ = new ConductorBatchLoop().Run(fixture.Kernel, fixture.Driver, Policy,
             Path.Combine(fixture.Repo, "stop-does-not-exist"), maxIterations: 1,
             onTick: summary => observed = summary, onlyGoalId: fixture.Solo.Id.Value);

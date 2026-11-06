@@ -14,6 +14,6 @@ internal static class OwnerGoalDetailGateLine
             var estimate = gate.Failing ? "failing" : gate.HasEta ? OwnerConsoleGateFormatter.Remaining(gate.RemainingSeconds) + " left" : "ETA unknown";
             text += $", {OwnerConsoleGateFormatter.CountText(gate)} lanes, {count.Failed} failed, {estimate}";
         }
-        return text + OwnerConsoleGateFormatter.Identity(gate) + " (g opens the gate view)";
+        return text + OwnerConsoleGateFormatter.ShortIdentity(gate) + " (g opens the gate view)";
     }
 }

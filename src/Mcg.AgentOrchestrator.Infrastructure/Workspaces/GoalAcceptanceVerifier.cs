@@ -1909,7 +1909,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         for (var index = 0; index < checks.Count; index++)
         {
             var check = checks[index];
-            var key = SemanticExecutionKey(check);
+            var key = EffectiveAcceptanceManifestIdentity.SemanticExecutionKey(check);
             if (!TryGetInfrastructurePartitionId(check, out var partitionId, out _) ||
                 !keys.TryGetValue(key, out var retained))
             {
@@ -1930,30 +1930,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new SemanticExecutionDeduplicationPlan(unique, receipts);
     }
 
-    private static string SemanticExecutionKey(AcceptanceManifestCheck check) =>
-        JsonSerializer.Serialize(new
-        {
-            check.Name,
-            check.Type,
-            check.Command,
-            Project = NormalizePath(check.Project),
-            check.Arguments,
-            check.Pattern,
-            FilePath = NormalizePath(check.FilePath),
-            check.TimeoutMinutes,
-            check.Advisory,
-            check.Runner,
-            check.EstimatedSerialSeconds,
-            ExclusiveResourceKeys = check.ExclusiveResourceKeys
-                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
-            check.IsFocusedEvidenceSelection,
-            check.FocusedEvidenceTokens,
-            check.FocusedEvidenceSelections
-        });
-
     internal static string SemanticExecutionKeyForTests(AcceptanceManifestCheck check) =>
-        SemanticExecutionKey(check);
+        EffectiveAcceptanceManifestIdentity.SemanticExecutionKey(check);
 
     private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(
         AcceptanceManifestCheck check,
@@ -2274,6 +2252,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (new AcceptanceCheckResult(check.Name, false, null, missingToolHome, Advisory: check.Advisory), false);
         try
         {
+        check.ValidateEnvironment();
         if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
             return (await CrosswalkAcceptanceCheck.RunOwnedAsync(check, worktreePath,
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
@@ -2285,8 +2264,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
                 (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
-                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true),
-                RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
+                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true,
+                    commandEnvironment: JunitCommandEnvironmentInputs.FromCheck(check)),
+                (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
+                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: false,
+                    suppressDiagnosticCaptures: check.Environment is { Count: > 0 }), cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
@@ -3623,7 +3605,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start())
+            if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
             {
                 return null;
             }
@@ -3863,7 +3845,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GateHeartbeatContext heartbeatContext,
         CancellationToken cancellationToken,
         CancellationToken timeoutSignal,
-        bool resolveBareCommand)
+        bool resolveBareCommand,
+        JunitCommandEnvironmentInputs? commandEnvironment = null,
+        bool suppressDiagnosticCaptures = false)
     {
         return _requiresTestTelemetryReceipt
             ? await AcceptanceProcessRunner.RunProcessAsync(
@@ -3882,7 +3866,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatInterval: _testOverrides.HeartbeatInterval, progressInterval: _testOverrides.ProgressInterval,
                 capturePublicationInterval: _testOverrides.CapturePublicationInterval,
                 stopOnCaptureLimit: StopsOnCaptureLimit(heartbeatContext),
-                resolveBareCommand: resolveBareCommand).ConfigureAwait(false)
+                resolveBareCommand: resolveBareCommand,
+                commandEnvironment: commandEnvironment,
+                suppressDiagnosticCaptures: suppressDiagnosticCaptures).ConfigureAwait(false)
             : await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
     }
     private GateHeartbeatContext CreateGateHeartbeatContext(
@@ -4147,7 +4133,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    internal sealed partial class AcceptanceManifestCheck
+    internal sealed partial class AcceptanceManifestCheck : IJsonOnDeserialized
     {
         public static AcceptanceManifestCheck DefaultDotnetTest { get; } = new()
         {
@@ -4161,6 +4147,20 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? Project { get; init; }
         public IReadOnlyList<string> Arguments { get; init; } = [];
         public IReadOnlyList<string> Reports { get; init; } = [];
+        private readonly IReadOnlyDictionary<string, string>? _environment;
+
+        [JsonConverter(typeof(JunitCommandEnvironmentConverter))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyDictionary<string, string>? Environment
+        {
+            get => _environment;
+            init => _environment = JunitCommandEnvironmentInputs.Snapshot(value);
+        }
+
+        void IJsonOnDeserialized.OnDeserialized() => ValidateEnvironment();
+
+        internal void ValidateEnvironment() => JunitCommandEnvironmentInputs.ValidateCheck(this);
+
         public string? Pattern { get; init; }
         public string? FilePath { get; init; }
         public int? TimeoutMinutes { get; init; }

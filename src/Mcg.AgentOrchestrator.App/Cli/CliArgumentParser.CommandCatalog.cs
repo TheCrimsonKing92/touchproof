@@ -93,6 +93,8 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "build-lease-cleanup",
     "repo-process-info",
     "repo-process-stop",
+    "worker-build-request",
+    "submit-worker-result",
     "stable-slot-dotnet",
     "gate-status",
     "acceptance-engine",
