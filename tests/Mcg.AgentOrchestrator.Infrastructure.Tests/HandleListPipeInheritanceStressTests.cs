@@ -42,6 +42,9 @@ public sealed class HandleListPipeInheritanceStressTests
                 if (contained)
                 {
                     owned = OwnedProcessGroup.StartSuspendedContainedRedirected(info);
+                    // GetProcessById does not retain a handle. Cache one before the child can
+                    // exit so WaitForExit and ExitCode observe this same process after exit.
+                    Assert.False(owned.Process.SafeHandle.IsInvalid);
                     owned.Resume();
                 }
                 else output = HandleListProcessLauncher.Start(info);
