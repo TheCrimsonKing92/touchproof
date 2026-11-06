@@ -52,6 +52,7 @@ internal sealed class ProjectFleetSupervisor(
             var id = Guid.NewGuid().ToString("N");
             var started = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
             var commit = readBuildCommit();
+            Directory.CreateDirectory(workspace.LogDirectory);
             var request = new ConductorSupervisorProcessRequest(
                 ["conduct", "--loop", "--project=" + project.Name], project.RootDirectory,
                 Path.Combine(workspace.OrchestratorDirectory, "fleet", id + ".exit.json"),

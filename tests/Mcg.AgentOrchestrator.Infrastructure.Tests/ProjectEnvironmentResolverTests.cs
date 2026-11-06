@@ -5,6 +5,78 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ProjectEnvironmentResolverTests
 {
     [Fact]
+    public void Resolve_SystemDefinedReferences_ExpandWithCurrentWindowsIdentity()
+    {
+        var resolver = new ProjectEnvironmentResolver(
+            () => new Dictionary<string, string>
+            {
+                ["Path"] = @"%SystemRoot%\system32;%ProgramFiles%\tools",
+                ["ComSpec"] = @"%SystemRoot%\system32\cmd.exe",
+                ["windir"] = "%SystemRoot%", ["USERNAME"] = "SYSTEM",
+                ["TEMP"] = @"%SystemRoot%\TEMP"
+            },
+            () => new Dictionary<string, string>
+            {
+                ["Path"] = @"%USERPROFILE%\bin", ["TEMP"] = @"%LOCALAPPDATA%\Temp",
+                ["JAVA_HOME"] = @"%USERPROFILE%\jdk"
+            },
+            readSystemDefined: () => new Dictionary<string, string>
+            {
+                ["SystemRoot"] = @"C:\Windows", ["ProgramFiles"] = @"C:\Program Files",
+                ["USERPROFILE"] = @"C:\Users\fleet", ["LOCALAPPDATA"] = @"C:\Users\fleet\AppData\Local",
+                ["USERNAME"] = "fleet"
+            });
+
+        var result = resolver.Resolve([new("JDK", "JAVA_HOME")]);
+
+        Assert.Equal(@"C:\Windows\system32;C:\Program Files\tools;C:\Users\fleet\bin", result.Environment["Path"]);
+        Assert.Equal(@"C:\Windows\system32\cmd.exe", result.Environment["ComSpec"]);
+        Assert.Equal(@"C:\Windows", result.Environment["windir"]);
+        Assert.Equal(@"C:\Users\fleet\AppData\Local\Temp", result.Environment["TEMP"]);
+        Assert.Equal("fleet", result.Environment["USERNAME"]);
+        Assert.Equal(@"C:\Users\fleet\jdk", result.ToolVariables["JAVA_HOME"]);
+        Assert.Empty(result.Missing);
+    }
+
+    [Fact]
+    public void Resolve_SystemContext_CannotSupplyUndeclaredScopeToolSettings()
+    {
+        var resolver = new ProjectEnvironmentResolver(
+            () => new Dictionary<string, string> { ["INDIRECT"] = "%JAVA_HOME%" },
+            () => new Dictionary<string, string>(),
+            readSystemDefined: () => new Dictionary<string, string>
+            {
+                ["JAVA_HOME"] = "process-only-jdk", ["USERPROFILE"] = @"C:\Users\fleet"
+            });
+
+        var result = resolver.Resolve([new("JDK", "JAVA_HOME"), new("indirect", "INDIRECT"),
+            new("profile", "USERPROFILE")]);
+
+        Assert.Empty(result.Environment);
+        Assert.Empty(result.ToolVariables);
+        Assert.Equal(new[] { "JDK (JAVA_HOME)", "indirect (INDIRECT)", "profile (USERPROFILE)" }, result.Missing);
+    }
+
+    [Theory]
+    [InlineData(@"good;%UNKNOWN_ROOT%\bin", "good")]
+    [InlineData(@"%UNKNOWN_ROOT%\bin", null)]
+    public void Resolve_UnresolvedReferences_OmitsOverridesAndInvalidPathEntries(string path, string? expectedPath)
+    {
+        var resolver = new ProjectEnvironmentResolver(() => new Dictionary<string, string>
+        {
+            ["TEMP"] = @"%UNKNOWN_ROOT%\temp", ["Path"] = path,
+            ["JAVA_HOME"] = "%UNKNOWN_ROOT%"
+        }, () => new Dictionary<string, string>());
+
+        var result = resolver.Resolve([new("JDK", "JAVA_HOME")]);
+
+        Assert.Equal(expectedPath, result.Environment.GetValueOrDefault("Path"));
+        Assert.False(result.Environment.ContainsKey("TEMP"));
+        Assert.False(result.Environment.ContainsKey("JAVA_HOME"));
+        Assert.Equal(new[] { "JDK (JAVA_HOME)" }, result.Missing);
+    }
+
+    [Fact]
     public void Resolve_UserOverrideAndPathMerge_UsesOnlyExplicitScopes()
     {
         var resolver = new ProjectEnvironmentResolver(

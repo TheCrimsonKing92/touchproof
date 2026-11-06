@@ -6,6 +6,24 @@ using static InfrastructureTestSupport;
 public sealed class ProjectFleetSupervisorTests
 {
     [Fact]
+    public async Task Start_FreshProject_PreparesDirectoryForHostLogWriters()
+    {
+        using var fixture = new Fixture();
+        var project = fixture.Project("fresh");
+        Assert.False(Directory.Exists(project.ResolveWorkspace().LogDirectory));
+        fixture.Host.OpenLogFiles = true;
+
+        var pass = await Reported(fixture.Supervisor().StartAsync([project], default));
+
+        var child = Assert.Single(pass.Children);
+        Assert.Equal("started", child.State);
+        Assert.Null(child.Error);
+        var request = Assert.Single(fixture.Host.Requests);
+        Assert.True(File.Exists(request.StdoutPath));
+        Assert.True(File.Exists(request.StderrPath));
+    }
+
+    [Fact]
     public async Task Start_EnabledLiveAndBlockedProjects_StartsOnlyEligibleWithEnvironment()
     {
         using var fixture = new Fixture();
@@ -215,10 +233,17 @@ public sealed class ProjectFleetSupervisorTests
         private readonly List<Action> startCallbacks = [];
         internal string? FirstFailure { get; set; }
         internal bool DelayStarted { get; set; }
+        internal bool OpenLogFiles { get; set; }
         public Task<ConductorSupervisorProcessResult> RunAsync(
             ConductorSupervisorProcessRequest request, CancellationToken token)
         {
             Requests.Add(request);
+            if (OpenLogFiles)
+            {
+                // Match the real host's append precondition, before reporting startup.
+                using var stdout = new FileStream(request.StdoutPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                using var stderr = new FileStream(request.StderrPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            }
             if (Requests.Count == 1 && FirstFailure == "throw") throw new IOException("launch denied");
             if (Requests.Count == 1 && FirstFailure == "early-exit")
                 return Task.FromResult(new ConductorSupervisorProcessResult(23, 999));
