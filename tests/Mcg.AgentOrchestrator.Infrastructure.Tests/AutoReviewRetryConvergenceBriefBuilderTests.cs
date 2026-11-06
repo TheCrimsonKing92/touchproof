@@ -1204,23 +1204,35 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             "Repair reviewer contract");
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         var firstLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
-        var secondLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
-        var opened = new[]
-        {
-            new ReviewFinding("F-1", ReviewFindingState.Open, firstLocation, "First advisory.", FindingSeverity.Advisory),
-            new ReviewFinding("F-2", ReviewFindingState.Open, secondLocation, "Second advisory.", FindingSeverity.Advisory)
-        };
-        var rejected = new[]
-        {
-            opened[0] with { Location = new ReviewFindingLocation("src/C.cs", "C.Run", "guard") },
-            opened[1] with { State = ReviewFindingState.Resolved }
-        };
-        var firstOutput = ReviewerOutput("pass", opened);
-        var rejectedOutput = ReviewerOutput("pass", rejected);
+        var movedLocation = new ReviewFindingLocation("src/C.cs", "C.Run", "guard");
+        // A blocking move rejects the round, including its unrelated claimed resolution.
+        // An advisory-only move would apply F-2's resolution through per-finding salvage.
+        const string firstOutput = """
+            WORKER_RESULT:
+            files: none
+            commands: review
+            tests: pass - inspected evidence
+            blockers: none
+            findings: [{"stable_id":"F-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"open","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
+            touched_anchors: []
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
+        const string rejectedOutput = """
+            WORKER_RESULT:
+            files: none
+            commands: review
+            tests: pass - inspected evidence
+            blockers: none
+            findings: [{"stable_id":"F-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/C.cs","region":"C.Run","hunk":"guard"},"description":"First blocker."},{"stable_id":"F-2","state":"resolved","severity":"advisory","category":"correctness","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Second advisory."}]
+            touched_anchors: []
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1",
             @"C:\tmp",
-            0,
+            1,
             firstOutput,
             "",
             DateTimeOffset.Parse("2026-07-30T10:00:00Z"),
@@ -1231,11 +1243,11 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             "F-1",
             "F-1",
             firstLocation,
-            rejected[0].Location);
+            movedLocation);
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-2",
             @"C:\tmp",
-            0,
+            1,
             rejectedOutput,
             "",
             DateTimeOffset.Parse("2026-07-30T10:01:00Z"),
@@ -1243,6 +1255,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             WorkerResultPresent: true,
             ReviewFindingContractViolation: violation));
 
+        Assert.Null(reviewer.LastVerification!.MergedReviewFindings);
         var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
             goal,
             reviewer,
@@ -1254,7 +1267,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.StartsWith("review-finding contract-repair: attempt 1/2", brief, StringComparison.Ordinal);
         Assert.Contains("violation_code: ERR_REVIEW_FINDING_IDENTITY_MOVED", brief, StringComparison.Ordinal);
         Assert.Contains("open_count: 2", brief, StringComparison.Ordinal);
-        Assert.Contains($"stable_id: F-1 | severity=advisory | {firstLocation}", brief, StringComparison.Ordinal);
+        Assert.Contains($"stable_id: F-1 | severity=blocking | {firstLocation}", brief, StringComparison.Ordinal);
         Assert.Contains("- stable_id: F-2", brief, StringComparison.Ordinal);
         Assert.Contains("authoritative stable_id and prior location", brief, StringComparison.Ordinal);
         Assert.Contains("report the same stable_id at the defect's current location", brief, StringComparison.Ordinal);
