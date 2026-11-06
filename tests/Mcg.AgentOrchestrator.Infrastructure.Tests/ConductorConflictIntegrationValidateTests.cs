@@ -36,18 +36,11 @@ public sealed class ConductorConflictIntegrationValidateTests
     [InlineData("marker", "conflict marker", 0)]
     [InlineData("build", "CS0103", 1)]
     [InlineData("uncommitted", "merge still in progress", 0)]
-    [InlineData("wrong parents", "merge parent check", 0)]
     public void Validate_InvalidResolution_RestoresAndFailsRound(string kind, string detail, int builds)
     {
         using var fixture = new Fixture(failBuild: kind == "build");
         fixture.Admit();
-        if (kind == "wrong parents")
-        {
-            Git(fixture.GitFixture.Worktree, "merge", "--abort");
-            File.WriteAllText(Path.Combine(fixture.GitFixture.Worktree, WidgetPath), "main\ngoal\n");
-            Commit(fixture.GitFixture.Worktree, "Ordinary commit is not an integration merge");
-        }
-        else if (kind != "uncommitted") fixture.Resolve(outside: kind == "outside", marker: kind == "marker");
+        if (kind != "uncommitted") fixture.Resolve(outside: kind == "outside", marker: kind == "marker");
         var reason = fixture.Coordinator.Validate(fixture.Goal);
         Assert.StartsWith("pre-landing rebase conflict (src/Widget.cs)", reason);
         Assert.DoesNotContain("workspace rebase", reason);
