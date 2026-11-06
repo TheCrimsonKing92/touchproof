@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -13,24 +12,11 @@ internal static class MergeTrainBisectionAttempts
         IReadOnlyCollection<Goal> goals, MergeTrainPrefixBisection.Runner? runner,
         DateTimeOffset now, CancellationToken token)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"),
-            Pooling = false
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS merge_train_bisection_outcomes (
-                receipt_id TEXT PRIMARY KEY, train_id TEXT NOT NULL, result_json TEXT NOT NULL);
-            """;
-        command.ExecuteNonQuery();
-        command.CommandText = "SELECT result_json FROM merge_train_bisection_outcomes WHERE receipt_id = $receipt AND train_id = $train";
-        command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
-        command.Parameters.AddWithValue("$train", receipt.Identity.Value);
+        var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory,
+            "merge-train-acceptance.db"));
         var tests = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
             .Select(failure => failure.TestName ?? "").Distinct(StringComparer.Ordinal).ToArray();
-        if (command.ExecuteScalar() is string cached)
+        MergeTrainPrefixBisection.Result Decode(string cached)
         {
             var saved = JsonSerializer.Deserialize<MergeTrainPrefixBisection.Result>(cached)
                 ?? throw new InvalidDataException("Stored bisection outcome is missing.");
@@ -45,6 +31,8 @@ internal static class MergeTrainBisectionAttempts
                 throw new InvalidDataException("Stored bisection outcome does not match its receipt.");
             return saved with { Member = member };
         }
+        if (store.ReadBisectionOutcome(receipt.ReceiptId, receipt.Identity.Value) is { } cached)
+            return Decode(cached);
         var history = new CrossGoalTestFailureHistory(Path.Combine(workspace.OrchestratorDirectory,
             "acceptance-gate-attempts", AcceptanceFailingTestIndex.FileName), workspace.ExecutionDirectory, () => goals);
         var repeat = MergeTrainPrefixBisection.HasExternalHistory(history, members, tests, now);
@@ -58,9 +46,7 @@ internal static class MergeTrainBisectionAttempts
             ConductorGateProgressLog.TryAppend(writer, member.GoalId.Value,
                 $"receipt={receipt.ReceiptId} {result.Outcome} reason={result.Reason ?? "none"} " +
                 $"source=bisection culprit={result.Member?.GoalId.Value ?? "none"}", "train-bisection-outcome");
-        command.CommandText = "INSERT INTO merge_train_bisection_outcomes(receipt_id, train_id, result_json) VALUES($receipt, $train, $result)";
-        command.Parameters.AddWithValue("$result", JsonSerializer.Serialize(result));
-        command.ExecuteNonQuery();
-        return result;
+        return Decode(store.SaveBisectionOutcome(receipt.ReceiptId, receipt.Identity.Value,
+            JsonSerializer.Serialize(result)));
     }
 }
