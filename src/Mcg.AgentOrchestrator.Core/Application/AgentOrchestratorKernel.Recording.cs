@@ -200,7 +200,7 @@ public sealed partial class AgentOrchestratorKernel
             var terminalOutcome = DispatchFailureClassifier.Classify(task, verification, providerFailureKind);
             if (task.Status == WorkTaskStatus.Running &&
                 verification.HumanInputQuestion is null &&
-                AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput) is null &&
+                AgentOutputDirectives.ParseHumanInputRequest(verification.StandardOutput).Directives.Count == 0 &&
                 terminalOutcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
             {
                 task.RecordCompletionVerdict(true, TaskOutcomeClassifier.TryExtractRule(terminalOutcome.ClassifierReceipt));
@@ -229,11 +229,9 @@ public sealed partial class AgentOrchestratorKernel
 
         var parsedHumanInput = verification.PlannerEvidenceBatch ?? AgentOutputDirectives.ParseHumanInputRequest(
             verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
-        if (parsedHumanInput.IsMalformed)
-        {
-            PlannerEvidenceCompletion.Reject(this, goal, task, verification, parsedHumanInput.Diagnostic!);
+        if (PlannerAmendmentBatchRecorder.TryHandleDispatch(this, goal, task,
+            parsedHumanInput, verification, completedRound))
             return;
-        }
         if (parsedHumanInput.Directives.Any(item => item.PlannerEvidence is not null))
         {
             var provenanceDiagnostic = PlannerEvidenceCompletion.ValidateProvenance(task, verification, out var briefVersion);
