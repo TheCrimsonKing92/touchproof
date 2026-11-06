@@ -197,10 +197,10 @@ public sealed class ProjectFleetRollingRestartTests
         using var harness = new Harness();
         var stopped = harness.Project("a");
         var ready = harness.Project("b");
-        var stopFile = stopped.ResolveWorkspace().ConductorStopFilePath;
-        File.WriteAllText(stopFile, "operator request");
         var ownerExited = false;
         harness.WriteLive(stopped, 1, () => !ownerExited);
+        var stopFile = stopped.ResolveWorkspace().ConductorStopFilePath;
+        File.WriteAllText(stopFile, "operator request");
         harness.ExitAfterStop(ready, 2);
         harness.Delay = (duration, token) =>
         {
