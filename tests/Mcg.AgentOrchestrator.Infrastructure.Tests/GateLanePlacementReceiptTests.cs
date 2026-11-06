@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Owns stable slots and verifier hooks in the existing JobAccounting collection.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceiptPlacement : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GateLanePlacementReceiptTests : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Fact]
     public async Task DeclinedOffer_RecordsLocalPlacementAndExactCoordinatorReason()
@@ -238,9 +238,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceiptPlaceme
 
     private sealed class Scenario : IDisposable
     {
-        private readonly GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceiptPlacement _owner;
+        private readonly GateLanePlacementReceiptTests _owner;
         private readonly string _mode;
-        internal Scenario(GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceiptPlacement owner, string root, string mode)
+        internal Scenario(GateLanePlacementReceiptTests owner, string root, string mode)
         {
             _owner = owner; Root = root; _mode = mode;
             Fake.Submit = (request, _) =>
