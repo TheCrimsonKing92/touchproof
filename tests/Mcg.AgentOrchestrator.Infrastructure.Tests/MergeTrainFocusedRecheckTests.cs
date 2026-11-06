@@ -195,7 +195,7 @@ public sealed class MergeTrainFocusedRecheckTests(ITestOutputHelper output) : Ac
             string? trainCommit = null;
             MergeTrainFixtureObservation.Run(observer, "runner-setup", () =>
             {
-                driver.MergeTrainReproductionRunner = (_, _, _, _) => null;
+                driver.MergeTrainBisectionRunner = (_, _, _, _) => null;
                 driver.MergeTrainRecheckDependencySelector = (_, paths) =>
                 {
                     dependencyCalls.Add(paths.ToArray());

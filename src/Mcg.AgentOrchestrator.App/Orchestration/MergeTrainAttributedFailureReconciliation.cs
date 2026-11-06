@@ -53,12 +53,14 @@ internal static class MergeTrainAttributedFailureReconciliation
                     var member = receipt.Identity.Members.SingleOrDefault(member =>
                         member.GoalId == goal.Id && member.CandidateRevision == revision);
                     if (member is null) continue;
-                    var reproduced = MergeTrainReproductionAttribution.ReadEjectionFailures(receipt, detail);
+                    var bisection = detail.StartsWith($"Dropped after RED receipt {receipt.ReceiptId}.\nbisection=", StringComparison.Ordinal);
+                    var reproduced = bisection ? MergeTrainPrefixBisection.ReadEjectionFailures(receipt, detail) :
+                        MergeTrainReproductionAttribution.ReadEjectionFailures(receipt, detail);
                     if (reproduced is null && detail != $"Dropped after RED receipt {receipt.ReceiptId}.") continue;
                     // Routing writes the receipt identity into the goal's durable timeline.
                     // That event survives failure clearing by an operator re-gate or restore.
                     applying = true;
-                    MergeTrainAttributedFailure.Apply(receipt, member, goal, reproduced is null ? "recorded" : "reproduction", 3, [],
+                    MergeTrainAttributedFailure.Apply(receipt, member, goal, reproduced is null ? "recorded" : bisection ? "bisection" : "reproduction", 3, [],
                         _ => throw new InvalidOperationException("Parent reconciliation cannot record another ejection."),
                         recordFailure, kernel.RouteRecordedAcceptanceFailure, reproduced);
                     break;
@@ -105,7 +107,8 @@ internal static class MergeTrainAttributedFailureReconciliation
             JOIN merge_train_receipts r ON r.train_id = i.train_id
             JOIN merge_train_ejections e ON e.goal_id = i.goal_id
                 AND (e.detail = 'Dropped after RED receipt ' || r.receipt_id || '.'
-                    OR instr(e.detail, 'Dropped after RED receipt ' || r.receipt_id || '.' || char(10) || 'reproduction=') = 1)
+                    OR instr(e.detail, 'Dropped after RED receipt ' || r.receipt_id || '.' || char(10) || 'reproduction=') = 1
+                    OR instr(e.detail, 'Dropped after RED receipt ' || r.receipt_id || '.' || char(10) || 'bisection=') = 1)
             WHERE e.reason = 'RedAttributedMember'
             UNION
             SELECT DISTINCT e.goal_id, r.train_id, '', e.detail, e.reason

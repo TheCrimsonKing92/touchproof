@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: partitions, build storage, leases and process receipts are fixture-owned.
-public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : AcceptanceCohortWorkflowTests
+public sealed class MergeTrainPrefixRunnerProvenanceTests : AcceptanceCohortWorkflowTests
 {
     private const string Project = "Mcg.AgentOrchestrator.Infrastructure.Tests";
     private const string TestName = "Ns.ReproductionProbeTests.Passes";
@@ -12,7 +12,7 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void LiveRunnerRecordsEachPartitionsBuildAndRejectsForeignTrxAssembly(bool foreignAssembly)
+    public void LiveRunnerBuildsPinnedPrefixesAndRejectsForeignTrxAssembly(bool foreignAssembly)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         try
@@ -48,8 +48,8 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
             }, process.Run);
             var cleanup = CreateIsolatedCleanupContext(repo);
             var leases = new List<DotnetBuildEnvironmentLease>();
-            var runner = MergeTrainReproductionAttribution.CreateLiveRunner(
-                OrchestratorWorkspace.ForDirectory(repo), verifier, cleanup.Hooks, (_, _) =>
+            var runner = MergeTrainPrefixRunner.Create(
+                OrchestratorWorkspace.ForDirectory(repo), verifier, cleanup.Hooks, members[0].GoalId, (_, _) =>
                 {
                     var root = Path.Combine(repo, ".reproduction-lease");
                     Directory.CreateDirectory(root);
@@ -63,29 +63,30 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
                 });
 
             var roots = new List<string>();
-            foreach (var member in members)
+            for (var count = 0; count < 3; count++)
             {
                 var before = process.Builds.Count;
-                var result = Assert.IsType<MergeTrainReproductionAttribution.RunResult>(
-                    runner(member, main, [TestName], CancellationToken.None));
-                var evidence = Assert.IsType<MergeTrainReproductionProvenance>(result.Provenance);
+                var result = runner(members.Take(count).ToArray(), main, [TestName], CancellationToken.None);
                 Assert.Equal(before + 1, process.Builds.Count);
                 var build = process.Builds[^1];
-                Assert.Equal(main, evidence.MainRevision);
-                Assert.Equal(member.CandidateRevision, evidence.MemberRevision);
-                Assert.Equal(RunGitOutput(repo, "rev-parse", member.CandidateRevision + "^{tree}").Trim(), evidence.ExpectedTreeRevision);
-                Assert.Equal(build.Tree, evidence.TreeRevision);
-                Assert.Equal(evidence.ExpectedTreeRevision, evidence.TreeRevision);
-                Assert.Equal(build.OutputRoot, evidence.PartitionBuildOutputRoot);
-                Assert.Equal(new[] { build.OutputRoot }, evidence.BuildOutputRoots);
-                Assert.Equal(new[] { process.Assemblies[^1] }, evidence.AssemblyPaths);
-                if (!foreignAssembly) Assert.Equal(build.AssemblyPath, Assert.Single(evidence.AssemblyPaths));
-                Assert.Equal(new[] { TestName }, result.ExecutedTests);
-                Assert.Empty(result.Failures);
-                Assert.Equal(foreignAssembly ? "assembly-outside-root" : null,
-                    MergeTrainReproductionEvidenceCheck.InvalidReason(evidence, member, main));
-                // Validation survives disposal of the fresh output directory.
-                Assert.Equal(foreignAssembly ? "assembly-outside-root" : null, evidence.ValidationFailure);
+                Assert.Equal(Enumerable.Range(1, count), process.ComposedMembers[^1]);
+                if (foreignAssembly)
+                    Assert.Null(result);
+                else
+                {
+                    Assert.NotNull(result);
+                    var evidence = Assert.IsType<MergeTrainReproductionProvenance>(result.Execution.Provenance);
+                    Assert.Equal(main, evidence.MainRevision);
+                    Assert.Equal(count == 0 ? main : members[count - 1].CandidateRevision, evidence.MemberRevision);
+                    Assert.Equal(build.Tree, evidence.TreeRevision);
+                    Assert.Equal(evidence.ExpectedTreeRevision, evidence.TreeRevision);
+                    Assert.Equal(build.OutputRoot, evidence.PartitionBuildOutputRoot);
+                    Assert.Equal(new[] { build.OutputRoot }, evidence.BuildOutputRoots);
+                    Assert.Equal(new[] { build.AssemblyPath }, evidence.AssemblyPaths);
+                    Assert.Equal(new[] { TestName }, result.Execution.ExecutedTests);
+                    Assert.Empty(result.Execution.Failures);
+                    Assert.All(result.TrxPaths, path => Assert.True(File.Exists(path), "Prefix TRX must survive build cleanup."));
+                }
                 Assert.False(Directory.Exists(build.OutputRoot));
                 roots.Add(build.OutputRoot);
             }
@@ -101,6 +102,7 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
     {
         internal List<(string OutputRoot, string Tree, string AssemblyPath)> Builds { get; } = [];
         internal List<string> Assemblies { get; } = [];
+        internal List<int[]> ComposedMembers { get; } = [];
 
         internal Task<GoalAcceptanceVerifier.CommandResult> Run(string[] args, string workingDirectory,
             CancellationToken cancellationToken)
@@ -117,12 +119,15 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     File.WriteAllText(path, "modeled build output");
                 }
+                ComposedMembers.Add(Enumerable.Range(1, 3).Where(index => File.Exists(Path.Combine(workingDirectory, $"member-{index}.txt"))).ToArray());
                 Builds.Add((root, RunGitOutput(workingDirectory, "rev-parse", "HEAD^{tree}").Trim(),
                     invocation.ResolveManagedAssemblyPath(environment)));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             }
             Assert.True(args.Length > 1 && args[0] == "dotnet" && args[1].EndsWith(Project + ".dll", StringComparison.Ordinal),
                 "Only the selected managed test assembly may execute: " + string.Join(" ", args));
+            Assert.Equal("*" + TestName + "*", Argument(args, "--filter-method"));
+            Assert.DoesNotContain("--filter-class", args);
             var build = Builds[^1];
             Assert.StartsWith(build.OutputRoot + Path.DirectorySeparatorChar, args[1], StringComparison.OrdinalIgnoreCase);
             Assert.Equal(build.AssemblyPath, args[1]);

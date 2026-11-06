@@ -8,6 +8,28 @@ using Microsoft.Data.Sqlite;
 public sealed class MergeTrainFocusedRecheckReceiptAcceptanceTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
+    public void BisectionSourceRetainsTheExistingCompositeReceiptContract()
+    {
+        MergeTrainFocusedRecheckTests.WithTrain("green", true, train =>
+        {
+            var receipt = train.Result.Receipt!;
+            var proof = receipt.Recheck! with { AttributionSource = "bisection" };
+            var bisection = receipt with
+            {
+                Recheck = proof,
+                ReceiptId = MergeTrainFocusedRecheckReceipt.ReceiptId(receipt.Identity, proof)
+            };
+            Assert.True(MergeTrainFocusedRecheckReceiptAcceptance.Accepts(bisection, train.Store));
+            var invalid = proof with { AttributionSource = "unrecognized" };
+            Assert.False(MergeTrainFocusedRecheckReceiptAcceptance.Accepts(bisection with
+            {
+                Recheck = invalid,
+                ReceiptId = MergeTrainFocusedRecheckReceipt.ReceiptId(receipt.Identity, invalid)
+            }, train.Store));
+        });
+    }
+
+    [Fact]
     public void StoredComposite_CompleteProof_IsAcceptedByLanding()
     {
         MergeTrainFocusedRecheckTests.WithTrain("green", true, train =>

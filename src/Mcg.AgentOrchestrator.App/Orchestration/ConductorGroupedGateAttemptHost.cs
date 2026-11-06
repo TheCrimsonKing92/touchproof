@@ -108,7 +108,6 @@ internal static class ConductorGroupedGateAttemptHost
             NullOperatorChannel.Instance, providers,
             cleanupHooks: WorktreeCleanupContext.Load(
                 attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
-        driver.MergeTrainReproductionRunner = driver.CreateMergeTrainReproductionRunner();
         return driver.RunGroupedGateAttemptBody(attempt);
     }
 
