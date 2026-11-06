@@ -46,6 +46,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
     internal RemoteLaneOccupancyHeartbeat? Occupancy { get; set; }
     internal AcceptanceLaneWaitCollector? WaitCollector { get; init; }
+    internal GateLaneOfferOutcomeCollector? OfferOutcomes { get; init; }
     internal AcceptanceHostTestSettings HostTestSettings { get; init; }
     internal IReadOnlyDictionary<string, string> TestSettings
     {
@@ -585,6 +586,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :
                 System.Text.RegularExpressions.Regex.Replace(reason, @"\s+", " ").Trim();
             if (compactReason.Length > 200) compactReason = compactReason[..200];
+            OfferOutcomes?.Record(request.Lane, System.Text.Json.JsonNamingPolicy.KebabCaseLower.ConvertName(code.ToString()), compactReason);
             var lane = request.Lane.Any(char.IsWhiteSpace) ? $"\"{request.Lane.Replace('"', '\'')}\"" : request.Lane;
             _onEvent?.Invoke($"REMOTE_LANE executor={(string.IsNullOrEmpty(request.ExecutorId) ? "none" : request.ExecutorId)} " +
                 $"lane={lane} attempt={request.AttemptId} outcome={System.Text.Json.JsonNamingPolicy.KebabCaseLower.ConvertName(code.ToString())} reason={compactReason}");

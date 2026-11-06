@@ -107,7 +107,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
             Assert.Equal(exitCode == 0, result.Passed);
             var receipt = Assert.Single(ReadRows(GateLaneReceiptLedger.ResolveStorePath(root)), row => row.GetProperty("lane").GetString() == lane);
             Assert.Equal(status, receipt.GetProperty("slowdown_status").GetString());
-            Assert.Equal(27, receipt.EnumerateObject().Count());
+            Assert.Equal(30, receipt.EnumerateObject().Count());
             var timingReason = receipt.GetProperty("slot_timing_unavailable_reason").GetString();
             Assert.Contains("slot-timing-unreadable:", timingReason);
             Assert.Contains("FileNotFoundException", timingReason);

@@ -10,7 +10,8 @@ public sealed class SlotFixtureCollectionGuardTests
     [
         typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneResourceUsage), typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrumentation),
         typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotClaims), typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClassClaim),
-        typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicyConductEvent), typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShadowPreemption)
+        typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicyConductEvent), typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShadowPreemption),
+        typeof(GateLanePlacementReceiptTests)
     ];
     private static readonly IReadOnlyDictionary<string, (string Collection, string Reason)> CollectionExceptions =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)

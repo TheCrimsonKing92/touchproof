@@ -154,6 +154,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRunClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRuntime",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLaneOfferOutcomeCollector",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLaneReceiptLedger",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/LaneSchedulingSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/LocalAdmissionOrder",

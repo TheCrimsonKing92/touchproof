@@ -13,7 +13,7 @@ internal static class GateLaneReceiptLedger
     internal static GateLaneSlowdownDiff.GateLaneSlowdownResult? Record(
         string worktreePath, string? goalId, string laneName, AcceptanceCheckResult result,
         TimeSpan wall, DateTimeOffset now, Action<string, string>? appender = null,
-        AcceptanceHostTestSettings.Binding? testSettings = null)
+        AcceptanceHostTestSettings.Binding? testSettings = null, GateLaneOfferOutcome? offer = null)
     {
         GateLaneSlowdownDiff.GateLaneSlowdownResult? slowdown = null;
         string? unavailable = null;
@@ -65,6 +65,9 @@ internal static class GateLaneReceiptLedger
                 ["run_ordinal"] = receipt.RunOrdinal, ["accounting_source"] = receipt.AccountingSource,
                 ["recorded_at"] = now
             };
+            row["placement"] = "local";
+            row["offer_outcome"] = offer?.Outcome;
+            row["offer_reason"] = offer?.Reason;
             Add("wall_ms", receipt.WallMilliseconds);
             Add("cpu_ms", receipt.CpuMilliseconds);
             Add("peak_mem_bytes", receipt.PeakMemoryBytes);
@@ -124,5 +127,60 @@ internal static class GateLaneReceiptLedger
         }
         catch (Exception) { /* Diagnostic receipts must never affect the gate verdict. */ }
         return slowdown with { UnavailableReason = unavailable ?? slowdown.UnavailableReason };
+    }
+
+    internal static void RecordRemote(string worktreePath, string? goalId, string laneName,
+        AcceptanceCheckResult result, string executorId, TimeSpan wall, DateTimeOffset now,
+        GateLaneOfferOutcome? offer = null, Action<string, string>? appender = null,
+        IReadOnlyDictionary<string, string>? testSettings = null, string? testSettingsHost = null)
+    {
+        try
+        {
+            // Remote observations must not enter the local duration baseline or slowdown diff.
+            var row = new Dictionary<string, object?>
+            {
+                ["version"] = 1, ["goal_id"] = goalId, ["lane"] = laneName,
+                ["run_ordinal"] = result.TestResultRunOrdinal, ["accounting_source"] = null,
+                ["recorded_at"] = now, ["placement"] = executorId,
+                ["offer_outcome"] = offer?.Outcome, ["offer_reason"] = offer?.Reason,
+                ["wall_ms"] = wall.TotalMilliseconds, ["wall_ms_unavailable_reason"] = null,
+                ["cpu_ms"] = null, ["cpu_ms_unavailable_reason"] = "remote-not-reported",
+                ["peak_mem_bytes"] = null, ["peak_mem_bytes_unavailable_reason"] = "remote-not-reported",
+                ["host_available_memory_mb"] = null, ["host_available_memory_mb_unavailable_reason"] = "remote-not-reported",
+                ["slot_timing_unavailable_reason"] = "remote-not-reported",
+                ["slowdown_status"] = null, ["slowdown_ratio"] = null,
+                ["sched_samples"] = null, ["sched_processes"] = null,
+                ["sched_root_priority"] = null, ["sched_root_throttle_masks"] = null,
+                ["sched_below_normal_processes"] = null, ["sched_eco_processes"] = null,
+                ["sched_opted_out_processes"] = null, ["sched_background_memory_processes"] = null,
+                ["sched_lowest"] = null, ["sched_unavailable_reason"] = "not-sampled"
+            };
+            if (testSettings is not null)
+            {
+                row["test_settings"] = testSettings;
+                row["test_settings_host"] = testSettingsHost;
+            }
+            var path = ResolveStorePath(worktreePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            (appender ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(row));
+        }
+        catch (Exception) { /* Diagnostic receipts must never affect the gate verdict. */ }
+    }
+
+    internal static void RecordOfferSummary(string worktreePath, string? goalId, int lanesOffered,
+        int lanesRemote, DateTimeOffset now, Action<string, string>? appender = null)
+    {
+        try
+        {
+            var row = new Dictionary<string, object?>
+            {
+                ["version"] = 1, ["row_kind"] = "gate_offer_summary", ["goal_id"] = goalId,
+                ["lanes_offered"] = lanesOffered, ["lanes_remote"] = lanesRemote, ["recorded_at"] = now
+            };
+            var path = ResolveStorePath(worktreePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            (appender ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(row));
+        }
+        catch (Exception) { /* Diagnostic receipts must never affect the gate verdict. */ }
     }
 }
