@@ -9,6 +9,8 @@ internal interface IAuthorBriefDraftRepository
     int? TrackedLineCount(string sha, string path);
     bool IsTrackedDirectory(string sha, string path) => false;
     string? TrackedFileText(string sha, string path) => null;
+    bool IsAncestorOfMain(string candidate, string mainHead) =>
+        throw new NotSupportedException("Author repository does not support commit ancestry checks.");
 }
 
 internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, string integrationBranch) : IAuthorBriefDraftRepository
@@ -36,6 +38,19 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, strin
         if (tracked.Edits is not null) return (main, tracked.Edits);
         if (!tracked.Clean) throw new InvalidOperationException("Author repository inspection failed: tracked edits unresolved.");
         return (main, null);
+    }
+
+    public bool IsAncestorOfMain(string candidate, string mainHead)
+    {
+        var resolved = GitCli.Run(repositoryRoot, "rev-parse", "--verify", "--quiet", $"{candidate}^{{commit}}");
+        if (!resolved.ProcessStarted || resolved.DrainTimedOut)
+            throw new InvalidOperationException($"Cannot resolve retirement commit {candidate}: {resolved.Error}");
+        if (resolved.ExitCode == 1) return false;
+        var commit = Require(resolved).Trim();
+        var ancestry = GitCli.Run(repositoryRoot, "merge-base", "--is-ancestor", commit, mainHead);
+        if (!ancestry.ProcessStarted || ancestry.DrainTimedOut || ancestry.ExitCode is not (0 or 1))
+            throw new InvalidOperationException($"Cannot check retirement ancestry for {candidate}: {ancestry.Error}");
+        return ancestry.ExitCode == 0;
     }
 
     public int? TrackedLineCount(string sha, string path)

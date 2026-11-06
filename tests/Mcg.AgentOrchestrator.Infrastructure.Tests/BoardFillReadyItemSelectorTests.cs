@@ -58,6 +58,32 @@ public sealed class BoardFillReadyItemSelectorTests
     }
 
     [Theory]
+    [InlineData("author-refused")]
+    [InlineData("ready, AUTHOR-REFUSED\tother")]
+    public void Refusal_tag_blocks_newer_stamp_until_removed(string tags)
+    {
+        // Parallel-safe: private SQLite history and fixed timestamps, no shared state.
+        var root = Path.Combine(Path.GetTempPath(), "board-fill-refused-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var original = Item();
+            var store = new ConductorBoardFillDraftStore(Path.Combine(root, "drafts.db"));
+            var round = store.Begin(original, Now);
+            store.Finish(round, new("stale", 2, new string('c', 40), null, null, []), Now.AddMinutes(1));
+            var item = original with { Tags = tags, Notes = [new(Now.AddMinutes(2), "Author refusal note")] };
+            var rounds = store.ReadAll();
+            Assert.True(BoardFillReadyItemSelector.ChangeStamp(item) > Assert.Single(rounds).ChangeStamp);
+            Assert.Empty(store.AlreadyDrafted([item]));
+            Assert.Null(BoardFillReadyItemSelector.Select([item], [], store.AlreadyDrafted([item]), Ready, rounds));
+
+            item = item with { Tags = "ready,not-author-refused" };
+            Assert.Same(item, BoardFillReadyItemSelector.Select([item], [], store.AlreadyDrafted([item]), Ready, rounds));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
     [InlineData("OwNeR DeCiSiOn")]
     [InlineData("OwNeR ApPrOvAl")]
     [InlineData("OwNeR RuLiNg")]

@@ -14,10 +14,15 @@ internal static class BoardFillReadyItemSelector
         item.Notes.Select(note => note.CreatedAt).Append(item.UpdatedAt).Max();
 
     internal static bool IsOwnerGated(BacklogItem item) =>
-        item.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains("owner-gated", StringComparer.OrdinalIgnoreCase) ||
+        HasTag(item, "owner-gated") ||
         OwnerMarkers.Any(marker => item.Body.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
             item.Notes.Any(note => note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
+
+    internal static bool IsAuthorRefused(BacklogItem item) => HasTag(item, AuthorStaleRetirement.Tag);
+
+    private static bool HasTag(BacklogItem item, string tag) =>
+        item.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Contains(tag, StringComparer.OrdinalIgnoreCase);
 
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
@@ -33,7 +38,7 @@ internal static class BoardFillReadyItemSelector
             (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
                 BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
             !goals.Any(goal => goal.SourceBacklogItemId == item.Id) &&
-            !IsOwnerGated(item))
+            !IsOwnerGated(item) && !IsAuthorRefused(item))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)
         .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
