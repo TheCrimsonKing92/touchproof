@@ -10,6 +10,7 @@ Use this skill when building, testing, or diagnosing this repository on Windows.
 ## Command Discipline
 
 - Use `.\scripts\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` as the normal Developer/Tester build command. It retains complete per-project output in the isolated goal artifacts area and returns a bounded project/error summary. Do not use raw `dotnet build` for routine verification when this helper can express the target.
+  With a managed build channel, the build helper forwards through `Request-HostWorkerBuild.ps1` to the pre-built `worker-build-request` CLI verb.
 - Prefer `scripts/Invoke-TestSummary.ps1 -Target <test-project> -Filter 'FullyQualifiedName~<class>'` with narrow filters over full-suite runs until a change is ready. Do not run raw `dotnet test`, which launches the generated native test apphost on Windows.
 - Follow the [operator runbook's Codex harness timeout floor](../../../docs/operator-runbook.md): choose the outer collection budget from the invoked helper's documented/internal maximum plus at least 30 seconds of startup and result-reconciliation margin. A helper phase bound does not bound the whole operation.
 - Resume the same yielded session while it runs; do not restart or cancel it merely because a collection window expires. Inspect bounded process evidence and retained receipts before claiming a hang. Cancellation, an outer timeout, or a missing final receipt (including TRX) is inconclusive; report terminal build/test failure only from a completed operation's result.

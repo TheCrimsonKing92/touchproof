@@ -124,6 +124,7 @@ public sealed class WorkerBuildPipeBusyRetryTests
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
             };
             AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(start.Environment, repository);
+            start.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = AppContext.BaseDirectory;
             start.Environment["TEMP"] = _root;
             start.Environment["TMP"] = _root;
             foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File",
