@@ -15,7 +15,7 @@ public sealed class CrosswalkExecutableResolverTests : IDisposable
     public void DefaultFile_ResolvesAbsolutePathRawByteHashAndVersion(string? explicitPath)
     {
         var path = CreateDefault();
-        WorkerProcessRunRequest? request = null;
+        WorkerProcessDirectRunRequest? request = null;
         var resolver = new CrosswalkExecutableResolver(explicitPath, _sandbox.FullName, (value, token) =>
         {
             request = value;
@@ -28,7 +28,8 @@ public sealed class CrosswalkExecutableResolverTests : IDisposable
         Assert.Equal("detected", resolution.Status);
         Assert.Null(resolution.DiagnosticCategory);
         Assert.Equal(new CrosswalkExecutableIdentity(path, "crosswalk 8a2e58d\nsecond line", Hash(path)), resolution.Identity);
-        Assert.Equal("& '" + path.Replace("'", "''") + "' --version; exit $LASTEXITCODE", request!.Command);
+        Assert.Equal(path, request!.FileName);
+        Assert.Equal(new[] { "--version" }, request.Arguments);
         Assert.Equal(Path.GetDirectoryName(path), request.WorkingDirectory);
         Assert.Equal(TimeSpan.FromSeconds(5), request.Timeout);
         Assert.Null(request.StandardInput);

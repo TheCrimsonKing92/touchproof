@@ -30,7 +30,7 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         File.WriteAllText(Path.Combine(ProjectRoot, Literal), "selected fixture");
         var command = WriteScript("command", new { variable, mode = "command", pipe, observation = CommandObservation,
             expected = optIn ? Literal : null, exitCode, diagnostic });
-        var parser = WriteScript("parser", new { variable, mode = "parser", observation = ParserObservation, failParser, diagnostic });
+        var parser = WriteParser(new { variable, observation = ParserObservation, failParser, diagnostic });
         var declaration = new Dictionary<string, object?> { ["name"] = "declared-test", ["type"] = "junit-command",
             ["command"] = Shell, ["arguments"] = new[] { "-NoProfile", "-File", command }, ["project"] = "suite",
             ["reports"] = new[] { "reports/*.xml" }, ["timeoutMinutes"] = 3 };
@@ -42,6 +42,20 @@ internal sealed class JunitCommandEnvironmentFixture : GoalAcceptanceVerifierTes
         var resolver = new CrosswalkExecutableResolver(parser, runVersionAsync: (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "fixture-v1", "")));
         Assert.NotNull(resolver.Resolve().Identity);
         Verifier = new GoalAcceptanceVerifier(resolver);
+    }
+
+    private string WriteParser(object config)
+    {
+        const string project = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
+        var apphost = project + (OperatingSystem.IsWindows() ? ".exe" : "");
+        string[] files = [apphost, project + ".dll", project + ".runtimeconfig.json", project + ".deps.json"];
+        var source = FixtureProbeLocator.FindDirectory(typeof(JunitCommandEnvironmentFixture), project, files)
+            ?? throw new FileNotFoundException("Build the isolated dotnet probe before running the JUnit environment fixture.");
+        // Each fixture owns its executable and sidecar, including overlapping checks.
+        foreach (var file in files) File.Copy(Path.Combine(source, file), Path.Combine(ProjectRoot, file));
+        var parser = Path.Combine(ProjectRoot, apphost);
+        File.WriteAllText(parser + ".json", JsonSerializer.Serialize(config));
+        return parser;
     }
 
     internal string WriteScript(string name, object config)

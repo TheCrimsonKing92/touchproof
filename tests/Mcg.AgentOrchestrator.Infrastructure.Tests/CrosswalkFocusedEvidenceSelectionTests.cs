@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -35,9 +34,8 @@ public sealed class CrosswalkFocusedEvidenceSelectionTests
 
         Assert.True(result.Passed, result.OutputTail);
         Assert.Equal(2, fixture.Calls.Count);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "list", fixture.Root), fixture.Calls[0]);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root,
-            string.Concat(selected.Select(CrosswalkClient.IdArgument))), fixture.Calls[1]);
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, fixture.Calls[0]);
+        Assert.Equal(new[] { fixture.Binary, "run", fixture.Root }.Concat(selected.SelectMany(id => new[] { "--id", id })).ToArray(), fixture.Calls[1]);
         Assert.Equal(selected, Fixture.SelectedIds(fixture.Calls[1]));
         Assert.Equal(2, result.ExecutedTestCount);
         var read = new NormalizedTestResultSource().Read(Assert.Single(result.NormalizedTestResultPaths!));
@@ -56,22 +54,20 @@ public sealed class CrosswalkFocusedEvidenceSelectionTests
         var check = fixture.Build(request, out var coverage);
         Assert.Equal(ids, check.Arguments);
         Assert.Equal(ids.Length, coverage.TargetToChecks.Count);
-        Assert.True(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root,
-            string.Concat(ids.Select(CrosswalkClient.IdArgument))).Length > CrosswalkAcceptanceCheck.RunCommandLineLimit);
+        Assert.True(CrosswalkClient.CmdRenderedLength(new[] { fixture.Binary, "run", fixture.Root }.Concat(ids.SelectMany(id => new[] { "--id", id }))) > CrosswalkAcceptanceCheck.RunCommandLineLimit);
 
         var result = await fixture.RunAsync(check);
 
         Assert.True(result.Passed, result.OutputTail);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "list", fixture.Root), fixture.Calls[0]);
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, fixture.Calls[0]);
         var runs = fixture.Calls.Skip(1).ToArray();
         Assert.True(runs.Length > 1, "Focused ids must use the existing bounded batch runner.");
         Assert.All(runs, command =>
         {
-            Assert.True(command.Length <= CrosswalkAcceptanceCheck.RunCommandLineLimit);
+            Assert.True(CrosswalkClient.CmdRenderedLength(command) <= CrosswalkAcceptanceCheck.RunCommandLineLimit);
             var selected = Fixture.SelectedIds(command);
             Assert.NotEmpty(selected);
-            Assert.Equal(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root,
-                string.Concat(selected.Select(CrosswalkClient.IdArgument))), command);
+            Assert.Equal(new[] { fixture.Binary, "run", fixture.Root }.Concat(selected.SelectMany(id => new[] { "--id", id })).ToArray(), command);
         });
         Assert.Equal(ids, runs.SelectMany(Fixture.SelectedIds));
         Assert.Equal(ids.Length, result.ExecutedTestCount);
@@ -84,7 +80,7 @@ public sealed class CrosswalkFocusedEvidenceSelectionTests
     {
         internal string Root { get; } = InfrastructureTestSupport.CreateTempDirectory();
         internal string Binary => Path.Combine(Root, "crosswalk.exe");
-        internal List<string> Calls { get; } = [];
+        internal List<string[]> Calls { get; } = [];
 
         internal Check Build(string request, out FocusedEvidenceCoverage coverage)
         {
@@ -109,17 +105,16 @@ public sealed class CrosswalkFocusedEvidenceSelectionTests
                 (arguments, root, _, _, _, _) =>
                 {
                     Assert.Equal(Root, root);
-                    var command = arguments[^1];
+                    var command = arguments;
                     Calls.Add(command);
-                    var json = command.Contains(" list ", StringComparison.Ordinal)
+                    var json = command[1] == "list"
                         ? CrosswalkAcceptanceFixture.List(discovered)
                         : CrosswalkAcceptanceFixture.Report(SelectedIds(command).Select(id => (id, "passed")).ToArray());
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, json) { StandardOutput = json });
                 }, CancellationToken.None);
         }
 
-        internal static string[] SelectedIds(string command) => Regex.Matches(command, @" --id '((?:[^']|'')*)'")
-            .Select(match => match.Groups[1].Value.Replace("''", "'", StringComparison.Ordinal)).ToArray();
+        internal static string[] SelectedIds(string[] command) => command.Skip(3).Chunk(2).Select(pair => pair[1]).ToArray();
 
         public void Dispose() => Directory.Delete(Root, recursive: true);
     }

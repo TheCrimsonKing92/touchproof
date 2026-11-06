@@ -11,11 +11,11 @@ internal sealed class CrosswalkBatchedRunner(CrosswalkClient client, int command
 
         var batches = new List<string[]>();
         var batch = new List<string>();
-        var baseLength = CrosswalkClient.Command(executable.Path, "run", root).Length;
+        var baseLength = CrosswalkClient.CmdRenderedLength([executable.Path, "run", root]);
         var length = baseLength;
         for (var index = 0; index < ids.Count; index++)
         {
-            var argumentLength = CrosswalkClient.IdArgument(ids[index]).Length;
+            var argumentLength = 1 + CrosswalkClient.CmdRenderedLength(["--id", ids[index]]);
             if ((long)baseLength + argumentLength >= commandLineLimit)
                 return new(CrosswalkDetectOutcome.StartFailed, [], "Selected ID cannot fit in a command batch.")
                 {
