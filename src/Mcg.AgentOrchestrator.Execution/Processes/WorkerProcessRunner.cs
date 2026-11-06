@@ -19,6 +19,18 @@ public sealed record WorkerProcessRunResult(
     bool TimedOut = false,
     bool CaptureLimited = false);
 
+public sealed record WorkerProcessDirectRunRequest(
+    string FileName,
+    IReadOnlyList<string> Arguments,
+    string WorkingDirectory,
+    TimeSpan? Timeout = null,
+    string? StandardInput = null,
+    ProcessOutputDrainPolicy? OutputDrainPolicy = null,
+    bool RequireOwnedProcessGroup = false)
+{
+    public string[] ToArgumentVector() => [FileName, .. Arguments];
+}
+
 public static class WorkerProcessRunner
 {
     public static ProcessStartInfo BuildPowerShellStartInfo(
@@ -53,17 +65,52 @@ public static class WorkerProcessRunner
         return startInfo;
     }
 
-    public static async Task<WorkerProcessRunResult> RunBufferedAsync(
+    public static ProcessStartInfo BuildDirectStartInfo(
+        string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+        bool redirectStandardInput = true)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = redirectStandardInput,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        if (redirectStandardInput)
+            startInfo.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+        HarnessHookRootContract.Apply(startInfo);
+        return startInfo;
+    }
+
+    public static Task<WorkerProcessRunResult> RunBufferedAsync(
         WorkerProcessRunRequest request,
         CancellationToken cancellationToken)
+        => RunBufferedCoreAsync(BuildPowerShellStartInfo(request.Command, request.WorkingDirectory),
+            request.Timeout, request.StandardInput, request.OutputDrainPolicy, request.RequireOwnedProcessGroup, cancellationToken);
+
+    public static Task<WorkerProcessRunResult> RunBufferedDirectAsync(
+        WorkerProcessDirectRunRequest request, CancellationToken cancellationToken)
+        => RunBufferedCoreAsync(BuildDirectStartInfo(request.FileName, request.Arguments, request.WorkingDirectory),
+            request.Timeout, request.StandardInput, request.OutputDrainPolicy, request.RequireOwnedProcessGroup, cancellationToken);
+
+    private static async Task<WorkerProcessRunResult> RunBufferedCoreAsync(
+        ProcessStartInfo startInfo, TimeSpan? timeout, string? standardInput,
+        ProcessOutputDrainPolicy? outputDrainPolicy, bool requireOwnedProcessGroup,
+        CancellationToken cancellationToken)
     {
-        using var timeoutCts = request.Timeout is { } timeout
-            ? new CancellationTokenSource(timeout)
+        using var timeoutCts = timeout is { } duration
+            ? new CancellationTokenSource(duration)
             : new CancellationTokenSource();
-        using var linkedCts = request.Timeout is null
+        using var linkedCts = timeout is null
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-        var startInfo = BuildPowerShellStartInfo(request.Command, request.WorkingDirectory);
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
         OwnedProcessGroup? processGroup = null;
@@ -73,7 +120,7 @@ public static class WorkerProcessRunner
         }
         catch
         {
-            if (request.RequireOwnedProcessGroup)
+            if (requireOwnedProcessGroup)
             {
                 TryKillProcessTree(process, null);
                 throw;
@@ -84,7 +131,7 @@ public static class WorkerProcessRunner
 
         try
         {
-            if (request.StandardInput is null)
+            if (standardInput is null)
             {
                 try { process.StandardInput.Close(); } catch { }
             }
@@ -92,7 +139,7 @@ public static class WorkerProcessRunner
             {
                 try
                 {
-                    await process.StandardInput.WriteAsync(request.StandardInput).ConfigureAwait(false);
+                    await process.StandardInput.WriteAsync(standardInput).ConfigureAwait(false);
                     await process.StandardInput.FlushAsync(linkedCts.Token).ConfigureAwait(false);
                     process.StandardInput.Close();
                 }
@@ -111,7 +158,7 @@ public static class WorkerProcessRunner
 
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
 
-            var drainPolicy = (request.OutputDrainPolicy ?? ProcessOutputDrainPolicy.Default).Validate();
+            var drainPolicy = (outputDrainPolicy ?? ProcessOutputDrainPolicy.Default).Validate();
             await DrainOutputAsync(process, processGroup, drainCts, stdoutTask, stderrTask, drainPolicy).ConfigureAwait(false);
 
             return new WorkerProcessRunResult(

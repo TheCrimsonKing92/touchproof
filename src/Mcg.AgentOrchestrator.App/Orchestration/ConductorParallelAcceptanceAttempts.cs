@@ -377,7 +377,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
 internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
-    internal const string GateDispatchKind = "gate";
+    internal const string GateDispatchKind = AcceptanceAttemptResultRecord.GateDispatchKind;
     internal const string PreReviewEvidenceDispatchKind = "pre-review-evidence";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -2909,37 +2909,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     {
         if (run.Exception is not null)
         {
-            return new ConductorParallelAcceptanceRunArtifact(
-                "fault",
-                run.Exception switch
-                {
-                    AcceptanceExecutionIdentityChangedException { IsChangedIdentity: true } => "identity-stale",
-                    DotnetBuildSlotsBusyException => "blocked-build-slot",
-                    BuildLockBlockedException => "blocked-build-lock",
-                    AcceptanceInfrastructureDeferredException deferred when
-                        deferred.ReasonCode == "structural-coverage-permit-unavailable" =>
-                        "structural-coverage-permit-unavailable",
-                    AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
-                    AcceptanceGateEngineException => "gate-engine-fault",
-                    OperationCanceledException => "cancelled",
-                    _ => "exception"
-                },
+            return AcceptanceAttemptResultRecord.ForFault(run.Exception,
                 WorkerRegistrationFaultMessage(run.Exception) ?? run.Exception.Message,
-                null,
-                null,
-                null,
-                run.Candidate.BranchHeadSha,
-                run.Candidate.MainHeadSha,
-                null,
-                null,
-                InfrastructureReasonCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ReasonCode,
-                InfrastructureExitCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ExitCode,
-                InfrastructureOutputTail: (run.Exception as AcceptanceInfrastructureDeferredException)?.OutputTail,
-                InfrastructureBuildLockAttribution: (run.Exception as AcceptanceInfrastructureDeferredException)?.BuildLockAttribution,
-                FaultType: (run.Exception as AcceptanceGateEngineException)?.FaultType,
-                FaultStack: (run.Exception as AcceptanceGateEngineException)?.FaultStack,
-                GatePhase: (run.Exception as AcceptanceGateEngineException)?.GatePhase,
-                GateTarget: (run.Exception as AcceptanceGateEngineException)?.GateTarget);
+                run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha);
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
@@ -3204,12 +3176,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static void WriteResult(string path, ConductorParallelAcceptanceRunArtifact artifact)
-    {
-        var tmp = TemporarySiblingPath(path);
-        WriteAllTextDurable(tmp, JsonSerializer.Serialize(artifact, JsonOptions));
-        File.Move(tmp, path, overwrite: true);
-    }
+    private static void WriteResult(string path, ConductorParallelAcceptanceRunArtifact artifact) =>
+        AcceptanceAttemptResultRecord.Write(path, artifact);
 
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
@@ -3551,25 +3519,3 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return code is 32 or 33;
     }
 }
-
-internal sealed record ConductorParallelAcceptanceRunArtifact(
-    string Kind,
-    string? FaultKind,
-    string? FaultMessage,
-    string? State,
-    string? Message,
-    AcceptanceVerificationSummary? Acceptance,
-    string? BranchHeadSha,
-    string? MainHeadSha,
-    string? EarlyOutcomeKind,
-    string? EarlyOutcomeDetail,
-    string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
-    FocusedEvidenceRunResult? FocusedEvidence = null,
-    string? InfrastructureReasonCode = null,
-    int? InfrastructureExitCode = null,
-    string? InfrastructureOutputTail = null,
-    BuildLockAttribution? InfrastructureBuildLockAttribution = null,
-    string? FaultType = null,
-    string? FaultStack = null,
-    string? GatePhase = null,
-    string? GateTarget = null);

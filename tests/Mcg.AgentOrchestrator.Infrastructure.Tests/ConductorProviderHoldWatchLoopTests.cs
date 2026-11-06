@@ -7,6 +7,59 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: private workspace/kernel, fixed clock and AsyncLocal output capture.
 public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void Run_StandaloneProbeDefersWhileGateIsLive()
+    {
+        using var workspace = new ConductorVerbStartTests.Fixture();
+        var calls = 0;
+        var gates = 1;
+        var fixture = new WatchFixture(workspace.Workspace, exhausted: true,
+            probe: (kernel, _) =>
+            {
+                calls++;
+                var source = kernel.Goals.Single(goal => goal.Status == GoalStatus.Failed);
+                kernel.RecordTaskNote(source.Id, source.Tasks.Single().Id, "Fixture standalone probe checkpoint");
+                return [source.Id];
+            }, gates: () => gates);
+        fixture.Run(1);
+        Assert.Equal(0, calls);
+        gates = 0;
+        fixture.Run(1);
+        Assert.Equal(1, calls);
+        Assert.Contains(fixture.Source.Id, fixture.Persisted);
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(System.Text.Json.JsonException))]
+    [InlineData(typeof(InvalidDataException))]
+    public void Run_GateCountThrows_DefersProbeAndCompletesTick(Type exceptionType)
+    {
+        using var workspace = new ConductorVerbStartTests.Fixture();
+        var calls = 0;
+        var gateReads = 0;
+        var failure = (Exception)Activator.CreateInstance(exceptionType, "fixture gate read failure")!;
+        var fixture = new WatchFixture(workspace.Workspace, exhausted: true,
+            probe: (_, _) =>
+            {
+                calls++;
+                return [];
+            }, gates: () =>
+            {
+                gateReads++;
+                throw failure;
+            });
+
+        var text = fixture.Run(1);
+
+        Assert.Equal(1, gateReads);
+        Assert.Equal(0, calls);
+        Assert.Contains("LOOP_JANITORIAL_FAILED tick=1 phase=count-provider-hold-probe-gates", text);
+        Assert.Contains($"exception={exceptionType.Name}", text);
+        Assert.Single(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+    }
+
     [Fact]
     public void Run_RepeatedHeldTicksAndSuccessfulVerification_AnnounceOnceEach()
     {
@@ -76,14 +129,20 @@ public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output
         private readonly OrchestratorWorkspace _workspace;
         private readonly Goal _held;
         private readonly ConductorDriver _driver;
+        private readonly Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? _probe;
+        private readonly Func<int>? _gates;
         internal readonly ClockSource Clock = new();
         internal readonly AgentOrchestratorKernel Kernel;
         internal readonly Goal Source;
         internal readonly ConductEventLogWriter Writer;
+        internal readonly HashSet<GoalId> Persisted = [];
         internal ConductorBatchLoop Loop { get; private set; }
 
-        internal WatchFixture(OrchestratorWorkspace workspace, bool exhausted)
+        internal WatchFixture(OrchestratorWorkspace workspace, bool exhausted,
+            Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? probe = null, Func<int>? gates = null)
         {
+            _probe = probe;
+            _gates = gates;
             _workspace = workspace;
             Kernel = new(Clock);
             var agent = ProviderHoldAgentSubstitutionTests.Scenario.Agent("xai-tester", "xAI", "grok-cli", "grok-4.7");
@@ -124,12 +183,14 @@ public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output
         }
 
         internal void Restart() => Loop = NewLoop();
-        private ConductorBatchLoop NewLoop() => new(conductEventLogWriter: Writer, utcNow: () => Clock.UtcNow, workspace: _workspace);
-        internal void Run(int ticks) => InfrastructureTestSupport.CaptureConsole(() =>
+        private ConductorBatchLoop NewLoop() => new(conductEventLogWriter: Writer, utcNow: () => Clock.UtcNow, workspace: _workspace,
+            providerHoldProbe: _probe, countLiveGroupedGates: _gates);
+        internal string Run(int ticks) => InfrastructureTestSupport.CaptureConsole(() =>
         {
             var summary = Loop.Run(Kernel, _driver, ConductorAutonomyPolicy.Conservative with { MaxConcurrentPaidWorkers = 2 },
                 Path.Combine(_workspace.RootDirectory, "stop"), onlyGoalId: _held.Id.Value, maxIterations: ticks,
-                watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => false);
+                watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => false,
+                persistGoalTick: (_, ids) => Persisted.UnionWith(ids));
             Assert.Equal(ticks, summary.Ticks);
             Assert.Equal(ticks, summary.Held);
         });

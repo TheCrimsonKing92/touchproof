@@ -47,8 +47,13 @@ public sealed class GroupedAdmissionOwnerApprovalHoldTests
                 .Members.Select(member => member.GoalId));
         Assert.Empty(progress);
 
-        ConductorSpeculativeAcceptanceCandidate[] Project() => GroupedAdmissionCandidateProjection.ProjectAll(
-            scenario.Goals, scenario.Driver, ConductorAutonomyPolicy.Permissive, scenario.Kernel, 1, progress.Add);
+        ConductorSpeculativeAcceptanceCandidate[] Project()
+        {
+            // Observe the current approval input set, including the approval recorded above.
+            scenario.WarmAdmissionFacts();
+            return GroupedAdmissionCandidateProjection.ProjectAll(
+                scenario.Goals, scenario.Driver, ConductorAutonomyPolicy.Permissive, scenario.Kernel, 1, progress.Add);
+        }
     }
 
     [Fact]
@@ -56,6 +61,7 @@ public sealed class GroupedAdmissionOwnerApprovalHoldTests
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario(protectedMemberIndex: null);
         var progress = new List<string>();
+        scenario.WarmAdmissionFacts();
         var candidates = GroupedAdmissionCandidateProjection.ProjectAll(scenario.Goals, scenario.Driver,
             ConductorAutonomyPolicy.Permissive, scenario.Kernel, 1, progress.Add);
 

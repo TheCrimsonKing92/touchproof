@@ -35,6 +35,7 @@ public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflo
         var ticks = new List<BatchTickSummary>();
         Assert.All(scenario.Goals, goal => Assert.Empty(HeldDecisions(goal)));
 
+        scenario.WarmAdmissionFacts();
         // One Run preserves the solo-hold disposition cache across both ticks.
         new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(
             scenario.Workspace.ConductEventsLogPath)).Run(

@@ -14,7 +14,7 @@ internal sealed class CrosswalkAcceptanceCheck(
     Func<string[], GateHeartbeatContext> createHeartbeat,
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runProcess)
 {
-    // Reserve cmd.exe/pwsh quoting, arguments and heartbeat pipe redirects outside the script.
+    // Reserve cmd.exe wrapper arguments, code-page preflight and heartbeat file redirects.
     private const int CommandWrapperMargin = 691;
     internal const int RunCommandLineLimit = AcceptanceCmdCommandLineLimit.MaxCmdCommandLineLength - CommandWrapperMargin;
 
@@ -60,7 +60,7 @@ internal sealed class CrosswalkAcceptanceCheck(
                 // never an unverified external artifact path.
                 if (!string.Equals(root, ResolveCrosswalkProjectRoot(worktreePath, check.Project), CrosswalkPathComparison))
                     throw new IOException("Crosswalk project root changed before launch.");
-                var arguments = new[] { WorkerShell.Executable }.Concat(WorkerShell.BaseArguments()).Append(request.Command).ToArray();
+                var arguments = request.ToArgumentVector();
                 var heartbeat = createHeartbeat(arguments);
                 heartbeatPath = heartbeat.HeartbeatPath;
                 lastProcess = await owner.TrackStarted(runProcess(arguments, root,

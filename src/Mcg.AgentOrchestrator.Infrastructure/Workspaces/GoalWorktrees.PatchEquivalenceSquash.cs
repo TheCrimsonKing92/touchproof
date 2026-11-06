@@ -4,6 +4,18 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
+    internal static StringComparer CommitFactKeyComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static readonly BoundedInsertionOrderMemo<string, bool> MergeCommitsOutsideBaseMemo =
+        new(256, CommitFactKeyComparer);
+
+    internal static bool IsFullObjectId(string? value) => value is { Length: 40 or 64 } &&
+        value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    internal static string CommitFactKey(string directory, string first, string? second = null) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + '\0' + first + '\0' + second;
+
     // A squash may change patch history, but it must preserve exactly the merged candidate tree.
     private static bool TryComputeSquashEquivalence(
         string executionDirectory, string oldHeadSha, string newHeadSha, string integrationBranch, out string evidence)
@@ -32,9 +44,19 @@ public static partial class GoalWorktrees
         return true;
     }
 
-    internal static bool HasMergeCommitsOutsideBase(string executionDirectory, string baseHead, string branchHead) =>
-        TryReadGit(executionDirectory, ["rev-list", "--merges", "--count", $"{baseHead}..{branchHead}"], out var output) &&
-        int.TryParse(output, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0;
+    internal static bool HasMergeCommitsOutsideBase(string executionDirectory, string baseHead, string branchHead)
+    {
+        var key = IsFullObjectId(baseHead) && IsFullObjectId(branchHead)
+            ? CommitFactKey(executionDirectory, baseHead, branchHead) : null;
+        if (key is not null && MergeCommitsOutsideBaseMemo.TryGet(key, out var cached)) return cached;
+        var result = GitCli.Run(executionDirectory, "rev-list", "--merges", "--count", $"{baseHead}..{branchHead}");
+        if (!result.Succeeded || result.DrainTimedOut || !result.ProcessStarted ||
+            !int.TryParse(result.Output.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count))
+            return false;
+        var hasMerges = count > 0;
+        if (key is not null) MergeCommitsOutsideBaseMemo.Store(key, hasMerges);
+        return hasMerges;
+    }
 
     private static bool TryReadCleanMergeTree(
         string executionDirectory, string baseHead, string branchHead, out string tree)

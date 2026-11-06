@@ -7,14 +7,14 @@ public sealed class CrosswalkStackReader
 {
     private readonly CrosswalkExecutableResolver _resolver;
     private readonly TimeSpan _timeout;
-    private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
+    private readonly Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
 
     public CrosswalkStackReader(CrosswalkExecutableResolver resolver, TimeSpan timeout,
-        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null)
+        Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null)
     {
         _resolver = resolver;
         _timeout = timeout;
-        _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
+        _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedDirectAsync;
     }
 
     internal CrosswalkStackReport Detect(string repositoryRoot)
@@ -25,7 +25,7 @@ public sealed class CrosswalkStackReader
         try
         {
             var root = Path.GetFullPath(repositoryRoot);
-            var run = _runProcessAsync(new(CrosswalkClient.Command(executable.Path, "detect", root), root, _timeout),
+            var run = _runProcessAsync(new(executable.Path, ["detect", root], root, _timeout),
                 CancellationToken.None).GetAwaiter().GetResult();
             if (run.TimedOut)
                 throw new InvalidOperationException("detect timed out");

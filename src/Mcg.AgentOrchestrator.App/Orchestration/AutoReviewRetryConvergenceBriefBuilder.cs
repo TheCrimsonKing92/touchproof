@@ -37,6 +37,24 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         ArgumentNullException.ThrowIfNull(triggeringTask);
 
         if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            triggeringTask.LastVerification?.ReviewFindingContractViolation is { } violation &&
+            WorkerResultBlockers.TryFindNeedsWorkVerdict(triggeringTask.LastVerification, out _) &&
+            WorkerResultBlockers.TryFindReviewFindingRound(triggeringTask.LastVerification, out var submittedRound, out _))
+        {
+            var hidden = ReviewFindingRoundSalvage.FindHiddenSubmittedBlockers(
+                submittedRound, ReadStructuredReviewFindingState(goal, triggeringTask),
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            if (hidden.Count > 0)
+            {
+                throw new ReviewFindingConvergenceException(
+                    violation.Code, hidden.Count, 0,
+                    $"Rejected Reviewer round has open blocking findings unavailable in the merged ledger: " +
+                    $"{string.Join(", ", hidden.Select(finding => finding.StableId))}; {violation.Message}",
+                    violation);
+            }
+        }
+
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
             !UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, currentFinding))
         {
             var findings = ReadStructuredReviewFindingStates(goal, triggeringTask);

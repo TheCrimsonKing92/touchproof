@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+// Shared persisted result schema. Preserve its namespace for existing consumers.
 internal sealed record AcceptanceVerificationSummary(
     bool Passed,
     IReadOnlyList<AcceptanceCheckResult> UnmetCriteria,

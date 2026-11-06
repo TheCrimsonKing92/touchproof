@@ -41,6 +41,11 @@ internal sealed class AcceptanceBalancedLanePlanWriter
 
     internal AcceptanceGateLanePlan Snapshot { get { lock (_sync) return _plan; } }
 
+    internal void RecordTestSettings(AcceptanceHostTestSettings.Binding binding)
+    {
+        lock (_sync) _plan = _plan with { LaneTestSettings = [.. _plan.LaneTestSettings, binding] };
+    }
+
     internal void Record(AcceptanceManifestCheck check, AcceptanceCheckResult result)
     {
         if (_plan.BalancedLayout is not { } layout ||
@@ -82,15 +87,17 @@ internal sealed class AcceptanceBalancedLanePlanWriter
     {
         lock (_sync)
         {
-            if (_plan.BalancedLayout is not { } layout) return;
-            var failureReason = AcceptanceClassDurationHistoryStore.RecordAttempt(_worktreePath, _plan.AttemptId, _samples,
-                layout.HistoryWindow, outcome == "completed", outcome == "completed");
-            _plan = _plan with { BalancedLayout = layout with
+            if (_plan.BalancedLayout is { } layout)
             {
-                Commands = _commands.Count == 0 ? layout.Commands :
-                    _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray(),
-                HistoryWriteFailure = failureReason
-            } };
+                var failureReason = AcceptanceClassDurationHistoryStore.RecordAttempt(_worktreePath, _plan.AttemptId, _samples,
+                    layout.HistoryWindow, outcome == "completed", outcome == "completed");
+                _plan = _plan with { BalancedLayout = layout with
+                {
+                    Commands = _commands.Count == 0 ? layout.Commands :
+                        _commands.Values.OrderBy(item => item.Lane, StringComparer.Ordinal).ToArray(),
+                    HistoryWriteFailure = failureReason
+                } };
+            }
             // Faults before lane execution have no new observations to publish.
             // Preserve the original selection event while still publishing real updates.
             if (_plan == _publishedPlan) return;

@@ -10,10 +10,10 @@ public sealed class WorkerBuildRequestAuthorityTests
     public async Task ForeignPipePeerCannotReachHostService()
     {
         using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
-        var observed = new TaskCompletionSource<(int Pid, bool Admitted)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<(int? ParentPid, bool Admitted)>(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new CountingService();
         using var channel = new WorkerBuildRequestChannel(fixture.RepositoryRoot, service,
-            (pid, admitted) => observed.TrySetResult((pid, admitted)));
+            (pid, admitted) => observed.TrySetResult((ProcessParentIdResolver.TryGetParentProcessId(pid), admitted)));
         var ownerInfo = new ProcessStartInfo(WorkerShell.Executable) { UseShellExecute = false, CreateNoWindow = true };
         ownerInfo.ArgumentList.Add("-NoProfile");
         ownerInfo.ArgumentList.Add("-Command");
@@ -26,6 +26,7 @@ public sealed class WorkerBuildRequestAuthorityTests
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = fixture.RepositoryRoot,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
+        start.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = AppContext.BaseDirectory;
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File",
             Path.Combine(WorkerBuildRequestFixture.FindRepository(), "scripts", "Request-HostWorkerBuild.ps1"),
             "-Projects", WorkerBuildRequestFixture.Project }) start.ArgumentList.Add(arg);
@@ -33,7 +34,7 @@ public sealed class WorkerBuildRequestAuthorityTests
         var run = CliChildProcessRunner.RunAsync(start, started: p => { foreignPid = p.Id; p.StandardInput.Close(); });
         var peer = await observed.Task.WaitAsync(TimeSpan.FromSeconds(60));
         var result = await run.WaitAsync(TimeSpan.FromSeconds(60));
-        Assert.Equal(foreignPid, peer.Pid);
+        Assert.Equal(foreignPid, peer.ParentPid);
         Assert.False(peer.Admitted);
         Assert.Equal(0, service.Calls);
         Assert.NotEqual(0, result.ExitCode);

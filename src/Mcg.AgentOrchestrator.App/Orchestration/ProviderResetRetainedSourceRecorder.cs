@@ -49,4 +49,26 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
     {
         public DateTimeOffset UtcNow => now;
     }
+
+    internal bool RecordCheck(AgentOrchestratorKernel kernel, ProviderBudgetExhaustionHold hold, string note, DateTimeOffset now)
+    {
+        var snapshot = repository().TransactGoalAsync<GoalSnapshot?>("provider-check-retained-source", hold.SourceGoalId,
+            (stored, _) =>
+            {
+                if (stored is null) return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
+                var scratch = new AgentOrchestratorKernel(new FixedClock(now));
+                scratch.ReplaceGoalWithSnapshot(stored);
+                // The transaction validates the source generation again before writing the observation.
+                if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scratch.ProviderHoldScope, hold.BindingKey, out var current) || current != hold)
+                    return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
+                scratch.RecordTaskNote(hold.SourceGoalId, hold.SourceTaskId, note);
+                var saved = scratch.ExportGoalSnapshot(hold.SourceGoalId);
+                return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((true, saved, saved));
+            }).GetAwaiter().GetResult();
+        if (snapshot is null) return false;
+        var retained = new AgentOrchestratorKernel(new FixedClock(now));
+        retained.ReplaceGoalWithSnapshot(snapshot);
+        kernel.ProviderHoldHistory.Retain(retained.GetGoal(hold.SourceGoalId), kernel.Goals);
+        return true;
+    }
 }

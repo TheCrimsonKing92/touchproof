@@ -42,6 +42,14 @@ public static class HostCapacitySlotTimingWriter
                     .Take(GitCallerLimit).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
                 callers["other"] = git.Launches - callers.Values.Sum();
                 row["git_callers"] = callers;
+                if (git.Timing is { Processes: > 0 } timing)
+                {
+                    row["git_start_ms"] = timing.StartMs;
+                    row["git_wall_ms"] = timing.WallMs;
+                    row["git_wall_ms_by_subcommand"] = timing.WallMsBySubcommand;
+                    if (timing.CpuMs is { } cpuMs) row["git_cpu_ms"] = cpuMs;
+                    if (timing.CpuUnavailable > 0) row["git_cpu_unavailable"] = timing.CpuUnavailable;
+                }
             }
             var line = JsonSerializer.Serialize(row);
             // SharedJsonlFile also excludes concurrent writers across processes for the whole append.

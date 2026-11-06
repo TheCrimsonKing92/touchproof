@@ -89,36 +89,15 @@ public sealed partial class AgentOrchestratorKernel
         string? decisionId = null,
         string? outcome = null,
         RetryRoundKind? retryRoundKind = null)
-    {
-        var goal = GetGoal(goalId);
-        var payload = new OperatorIntentAppliedPayload(
-            intentId,
-            verb,
-            taskId,
-            actor,
-            channel,
-            authenticationAssurance,
-            actorKind,
-            decisionId,
-            outcome,
-            retryRoundKind);
-        if (!string.IsNullOrEmpty(intentId) &&
-            goal.Timeline.Any(evt => evt.OperatorIntentApplied?.IntentId == intentId))
-        {
-            return false;
-        }
+        => OperatorIntentApplicationRecorder.RecordApplied(GetGoal(goalId),
+            new OperatorIntentAppliedPayload(intentId, verb, taskId, actor, channel,
+                authenticationAssurance, actorKind, decisionId, outcome, retryRoundKind),
+            message, _clock, _eventWriter);
 
-        var progressEvent = new ProgressEvent(
-            goalId,
-            null,
-            ProgressKind.GoalPolicyDecision,
-            message,
-            _clock.UtcNow,
-            OperatorIntentApplied: payload);
-        goal.Append(progressEvent);
-        _eventWriter.AppendTimelineEvent(progressEvent);
-        return true;
-    }
+    public bool RecordOperatorIntentBlocked(
+        GoalId goalId, string intentId, OperatorIntentBlocker blocker, string detail)
+        => OperatorIntentApplicationRecorder.RecordBlocked(
+            GetGoal(goalId), intentId, blocker, detail, _clock, _eventWriter);
 
     public void ConcludeInterruptedDispatchRecovery(
         GoalId goalId,

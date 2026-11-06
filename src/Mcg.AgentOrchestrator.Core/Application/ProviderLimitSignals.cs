@@ -139,6 +139,14 @@ public static class ProviderLimitSignals
                 observation.Verification.Succeeded)
             .Select(observation => (DateTimeOffset?)observation.Verification.CompletedAt)
             .Max();
+        var checkedAvailabilityAt = goalList.SelectMany(goal => goal.Timeline.Select(evt => (Goal: goal, Event: evt)))
+            .Where(item => ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check) &&
+                check.Outcome == "available" && check.BindingKey.Equals(requestedBinding.Key, StringComparison.OrdinalIgnoreCase) &&
+                observations.Any(observation => observation.Goal == item.Goal && observation.Task.Id == item.Event.TaskId &&
+                    observation.Binding.Equals(requestedBinding) && observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                    observation.Verification.CompletedAt == check.PlacedAt))
+            .Select(item => { ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check); return (DateTimeOffset?)check.StartedAt; })
+            .Max();
 
         foreach (var observation in observations)
         {
@@ -146,6 +154,7 @@ public static class ProviderLimitSignals
             if (verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted ||
                 !observedBinding.Equals(requestedBinding) ||
                 HasExplicitBudgetRecoveryForBinding(task, observedBinding, verification.CompletedAt) ||
+                checkedAvailabilityAt >= verification.CompletedAt ||
                 latestAvailabilityAt > verification.CompletedAt)
             {
                 continue;

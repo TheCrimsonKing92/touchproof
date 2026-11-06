@@ -376,10 +376,8 @@ public sealed class ConductorDriverTestsContractRepairBounds
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
             "test-1",
             "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory(
-                "T-1",
-                new ReviewFindingLocation("tests/A.cs", "A.Tests", "guard")),
+            1,
+            BlockingIdentityRepairOutput("T-1", "tests/A.cs", "A.Tests"),
             "",
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true));
@@ -388,17 +386,16 @@ public sealed class ConductorDriverTestsContractRepairBounds
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
             "test-2",
             "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory(
-                "T-1",
-                new ReviewFindingLocation("tests/B.cs", "B.Tests", "guard")),
+            1,
+            BlockingIdentityRepairOutput("T-1", "tests/B.cs", "B.Tests"),
             "",
             DateTimeOffset.UtcNow,
             StandardOutputPath: "C:\\tmp\\tester.out.log",
             WorkerResultPresent: true));
 
         Assert.Equal(WorkTaskStatus.Failed, tester.Status);
-        Assert.NotNull(tester.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, tester.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Null(tester.LastVerification.MergedReviewFindings);
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;

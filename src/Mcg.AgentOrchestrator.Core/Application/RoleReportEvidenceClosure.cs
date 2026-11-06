@@ -6,6 +6,8 @@ internal sealed class RoleReportEvidenceClosure(
     IClock clock,
     Action<Goal, TaskId?, ProgressKind, string> append)
 {
+    internal const string NoExecutorClosesReport = "no-executor-closes-report";
+
     internal IReadOnlyDictionary<HumanInputRequestId, string> Close(Goal goal,
         IEnumerable<HumanInputRequest> requests, string landingCandidateSha,
         Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null,
@@ -39,12 +41,22 @@ internal sealed class RoleReportEvidenceClosure(
                 string? gate = null;
                 var testsPass = false;
                 string? buildEvidence = null;
+                var criterion = owner == "developer" && !buildReport
+                    ? ReportCriterionLookup.Find(goal, request.PlannerIdentity) : null;
+                var reviewerExecuted = criterion is not null &&
+                    DeveloperReportEvidence.FindRequiredField(criterion) is null &&
+                    AcceptanceCriterionOwnershipMarker.ReadExecutor(criterion) == "reviewer";
+                if (reviewerExecuted)
+                {
+                    role = AgentRole.Reviewer;
+                    task = Latest(goal, role);
+                }
                 var reason = request.PlannerIdentity?.BriefVersion != goal.AuthoritativeBrief.Version
                     ? "brief-version-differs"
                     : buildReport
                         ? DeveloperBuildReportEvidence.Validate(goal, request, task, landingCandidateSha,
                             buildPassedGateSourceForClass ?? passedGateSourceForClass, buildCandidateEvidence, out buildEvidence)
-                    : owner == "developer"
+                    : owner == "developer" && !reviewerExecuted
                         ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
                         : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange, out testsPass);
                 if (reason is not null)
@@ -66,6 +78,7 @@ internal sealed class RoleReportEvidenceClosure(
                     $"criterion={request.PlannerIdentity!.CriterionIndex} candidate={Available(commit)} " +
                     $"landing_candidate={landingCandidateSha} worker_result_log={Available(log)}";
                 if (buildReport) answer += $" {buildEvidence}";
+                else if (reviewerExecuted) answer += " verdict=pass executor=reviewer";
                 else if (owner == "developer") answer += $" tests={tests} gate={gate}";
                 if (owner == "reviewer") answer += " verdict=pass";
                 if (owner == "tester" && testsPass) answer += " tests=pass";
@@ -85,7 +98,8 @@ internal sealed class RoleReportEvidenceClosure(
         tests = gate = null;
         var criterion = ReportCriterionLookup.Find(goal, request.PlannerIdentity);
         var requiredField = criterion is null ? null : DeveloperReportEvidence.FindRequiredField(criterion);
-        if (requiredField is null) return "not-a-report-criterion";
+        if (requiredField is null) return criterion is null ? "not-a-report-criterion" :
+            $"{NoExecutorClosesReport}:{AcceptanceCriterionOwnershipMarker.ReadExecutor(criterion)}";
         if (developer?.Status != WorkTaskStatus.Completed) return "owner-round-incomplete";
         if (!DeveloperReportEvidence.TryReadReport(developer, out var report)) return "developer-report-missing";
         var names = DeveloperDeferredTestClassNames.Parse(report).Order(StringComparer.Ordinal).ToArray();

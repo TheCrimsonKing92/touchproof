@@ -7,6 +7,56 @@ public sealed class LaneSlotTimingReaderTests : IDisposable
     private readonly string root = Path.Combine(Path.GetTempPath(), "lane-slot-reader-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void Read_LegacyAndTimedRows_SumsGitTimeOnlyFromTimedRows()
+    {
+        var trx = Write("git-times", Row("Example.Legacy", 1, 2),
+            WithGitTimes(Row("Example.Timed", 3, 4), "1.25", "3.75"),
+            WithGitTimes(Row("Example.StartOnly", 5, 6), "2.5", null),
+            WithGitTimes(Row("Example.WallOnly", 7, 8), null, "4.125"));
+        var result = LaneSlotTimingReader.Read([trx, trx]);
+        Assert.Equal(new LaneSlotTimingReader.LaneSlotTotals(16, 20, 2,
+            GitStartMs: 3.75, GitWallMs: 7.875), result.Totals);
+        Assert.Null(result.UnavailableReason);
+    }
+
+    [Fact]
+    public void Read_LegacyAndMeasuredZero_DistinguishesUnavailableTime()
+    {
+        var legacy = LaneSlotTimingReader.Read([Write("legacy-git", Row("Example.Legacy", 1, 2))]);
+        Assert.Null(legacy.Totals!.GitStartMs);
+        Assert.Null(legacy.Totals.GitWallMs);
+        var zero = LaneSlotTimingReader.Read([Write("zero-git",
+            WithGitTimes(Row("Example.Zero", 1, 2), "0", "0"))]);
+        Assert.Equal(0, zero.Totals!.GitStartMs);
+        Assert.Equal(0, zero.Totals.GitWallMs);
+        Assert.Null(zero.UnavailableReason);
+    }
+
+    [Fact]
+    public void Read_MalformedGitTiming_SkipsFieldAndReportsOncePerFile()
+    {
+        var row = Row("Example.Timed", 1, 2);
+        var trx = Write("invalid-git-time", WithGitTimes(row, "-1", "1.25"),
+            WithGitTimes(row, "\"bad\"", "2.5"), WithGitTimes(row, "null", "-1"),
+            WithGitTimes(row, "1e400", "\"bad\""),
+            WithGitTimes(row, "1e308", "1e308"), WithGitTimes(row, "1e308", "1e308"));
+        var result = LaneSlotTimingReader.Read([trx]);
+        Assert.Equal(6, result.Totals!.WaitMs);
+        Assert.Equal(12, result.Totals.HeldMs);
+        Assert.Equal(1e308, result.Totals.GitStartMs);
+        Assert.Equal(1e308, result.Totals.GitWallMs);
+        Assert.Equal(new[]
+        {
+            $"slot-timing-git-start-invalid:{LaneSlotTimingReader.PathFor(trx)}:5 lines",
+            $"slot-timing-git-wall-invalid:{LaneSlotTimingReader.PathFor(trx)}:3 lines"
+        }, result.UnavailableReason!.Split("; "));
+    }
+
+    private static string WithGitTimes(string row, string? start, string? wall) => row[..^1]
+        + (start is null ? "" : ",\"git_start_ms\":" + start)
+        + (wall is null ? "" : ",\"git_wall_ms\":" + wall) + "}";
+
+    [Fact]
     public void Read_InvalidLines_RetainsValidRowsAndReportsOneSkippedCount()
     {
         var trx = Write("mixed", Row("Example.Tests.Method(1)", 10.25, 20),

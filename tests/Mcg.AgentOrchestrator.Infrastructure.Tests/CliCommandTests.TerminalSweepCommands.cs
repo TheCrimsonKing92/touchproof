@@ -142,13 +142,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goal = kernel.CreateGoal("Verified missing branch already landed", [task]);
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            var worktree = CreateGoalBranchScenario(root, goal.Id,
+                "src/landed-missing.txt", "goal work").Worktree;
             var baseCommit = RunGitOutput(root, "rev-parse", "HEAD").Trim();
-            var path = Path.Combine(worktree, "src", "landed-missing.txt");
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, "goal work");
-            RunGit(worktree, "add", "-A");
-            RunGit(worktree, "commit", "-m", "Goal work");
             var resultCommit = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
             kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                 "manual",
@@ -381,7 +377,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 root,
                 goal,
                 new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "operator retired missing goal branch"));
-            CommitGoalWork(root, goal.Id, "src/reappeared.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/reappeared.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
             var result = RunSweep(kernel, root, goal.Id);
@@ -414,7 +410,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/equivalent.txt", "already upstream");
+            CommitGoalWork(root, goal.Id, "src/equivalent.txt", "already upstream", useTemplate: false);
             var branch = GoalWorktrees.BranchName(goal.Id);
             var mainPath = Path.Combine(root, "src", "equivalent.txt");
             Directory.CreateDirectory(Path.GetDirectoryName(mainPath)!);
@@ -464,7 +460,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/verified-equivalent.txt", "already upstream");
+            CommitGoalWork(root, goal.Id, "src/verified-equivalent.txt", "already upstream", useTemplate: false);
             var branch = GoalWorktrees.BranchName(goal.Id);
             var mainPath = Path.Combine(root, "src", "verified-equivalent.txt");
             Directory.CreateDirectory(Path.GetDirectoryName(mainPath)!);
@@ -508,7 +504,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            var worktree = CommitGoalWork(root, goal.Id, "src/squashed-a.txt", "first");
+            var worktree = CommitGoalWork(root, goal.Id, "src/squashed-a.txt", "first", useTemplate: false);
             File.WriteAllText(Path.Combine(worktree, "src", "squashed-b.txt"), "second");
             RunGit(worktree, "add", "-A");
             RunGit(worktree, "commit", "-m", "Second goal commit");
@@ -557,7 +553,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/inconclusive.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/inconclusive.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             GitCli.GitResult GitRunner(string workingDirectory, IReadOnlyList<string> args) =>
                 args.Count > 0 && args[0] == "cherry"
@@ -903,7 +899,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/unmerged.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/unmerged.txt", "goal work").Worktree;
             var workspace = CreateRefinedWorkspace(root);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -991,7 +987,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goal = kernel.CreateGoal("Raw completed assigned with unmerged branch", [task]);
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            CommitGoalWork(root, goal.Id, "src/raw-completed-assigned.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/raw-completed-assigned.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
             var result = RunSweep(kernel, root, goal.Id);
@@ -1024,7 +1020,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/typed-remedy.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/typed-remedy.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
             var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
@@ -1064,7 +1060,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/pending-evidence.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/pending-evidence.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
             var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
@@ -1112,7 +1108,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/aborted-remedy.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/aborted-remedy.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
             var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
@@ -1164,7 +1160,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/aborted-without-gate.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/aborted-without-gate.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
             var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
@@ -1214,7 +1210,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 cleanupGoalId = goal.Id;
                 kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
                 kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-                CommitGoalWork(root, goal.Id, $"src/{testCase.Name}.txt", "goal work");
+                _ = CreateGoalBranchScenario(root, goal.Id, $"src/{testCase.Name}.txt", "goal work").Worktree;
                 if (testCase.StopFile)
                 {
                     File.WriteAllText(Path.Combine(root, ConductorBatchLoop.StopFileName), "stop");
@@ -1272,7 +1268,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 WorktreeHeadSha: "abc123",
                 DirtyStateHash: "dirty-hash"));
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/merged.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/merged.txt", "goal work").Worktree;
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
@@ -1308,7 +1304,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/transient-merged.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/transient-merged.txt", "goal work").Worktree;
             var expectedMergeSha = RunGitOutput(root, "log", "--format=%H", "-n", "1", GoalWorktrees.BranchName(goal.Id)).Trim();
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
@@ -1374,7 +1370,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/off-main-merged.txt", "goal work");
+            CommitGoalWork(root, goal.Id, "src/off-main-merged.txt", "goal work", useTemplate: false);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
 
             RunGit(root, "checkout", "-b", "side");
@@ -1417,7 +1413,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            var worktree = CommitGoalWork(root, goal.Id, "src/leftover.txt", "goal work");
+            var worktree = CreateGoalBranchScenario(root, goal.Id, "src/leftover.txt", "goal work").Worktree;
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             File.Delete(Path.Combine(worktree, ".git"));
@@ -1464,7 +1460,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goal = kernel.CreateGoal("Completed assigned but landed", [task]);
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/landed.txt", "goal work").Worktree;
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
@@ -1532,7 +1528,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Decision", "body", "merged-decision");
         await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Clarification", "body", "merged-clarification");
         await store.RaiseAsync(CollaborationItemType.Verify, other.Id.Value, "Other verify", "body", "other-verify");
-        var sentinelWorktree = CommitGoalWork(root, goal.Id, "src/sentinel.txt", "keep");
+        var sentinelWorktree = CreateGoalBranchScenario(root, goal.Id, "src/sentinel.txt", "keep").Worktree;
         RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
         var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
         var resolver = new StubGoalIntegrationEvidenceResolver(goal.Id, evidence);
@@ -1858,7 +1854,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance started before external merge.");
             }
 
-            CommitGoalWork(root, goal.Id, $"src/ancestry-{status}.txt", "goal work");
+            CommitGoalWork(root, goal.Id, $"src/ancestry-{status}.txt", "goal work", useTemplate: false);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             var branchTip = RunGitOutput(root, "rev-parse", goalBranch).Trim();
             RunGit(root, "branch", "side", "main");
@@ -1930,7 +1926,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 string.Empty,
                 DateTimeOffset.UtcNow));
             kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance in progress.");
-            CommitGoalWork(root, goal.Id, "src/verifying-unmerged.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/verifying-unmerged.txt", "goal work").Worktree;
             var branchTip = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "refs/heads/main").ExitCode);
 
@@ -1970,7 +1966,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 cleanupGoalId ??= goal.Id;
                 kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
                 kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-                CommitGoalWork(root, goal.Id, $"src/batched-{index}.txt", "goal work");
+                CommitGoalWork(root, goal.Id, $"src/batched-{index}.txt", "goal work", useTemplate: false);
                 kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             }
 
@@ -2014,7 +2010,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             cleanupGoalId = completed.Id;
             kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(completed.Id, completedTask.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, completed.Id, "src/measured.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, completed.Id, "src/measured.txt", "goal work").Worktree;
             kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
             var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cancelled goal");
             kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
@@ -2099,7 +2095,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            CommitGoalWork(root, goal.Id, "src/deferred-merge-cleanup.txt", "goal work");
+            _ = CreateGoalBranchScenario(root, goal.Id, "src/deferred-merge-cleanup.txt", "goal work").Worktree;
             var branch = GoalWorktrees.BranchName(goal.Id);
             RunGit(root, "merge", "--no-ff", branch, "-m", $"Integrate {branch}");
             var worktree = GoalWorktrees.WorktreePath(root, goal.Id);

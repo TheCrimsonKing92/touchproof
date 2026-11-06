@@ -59,6 +59,8 @@ internal sealed record OwnerFleetProviderHoldNode(string BindingKey, string Name
 {
     internal string? SourceGoalId { get; init; }
     internal string? SourceTaskId { get; init; }
+    internal DateTimeOffset? OverdueSince { get; init; }
+    internal DateTimeOffset? LastObservedAt { get; init; }
     internal OwnerConsoleFieldSnapshot Fields() => OwnerConsoleFieldSnapshot.Create(BindingKey,
         new("binding", "Binding", BindingKey), new("name", "Name", Name), new("source-goal", "Source goal ID", SourceGoalId),
         new("source-task", "Source task ID", SourceTaskId), new("placed", "Placed at", PlacedAt.ToString("O")),
@@ -92,7 +94,9 @@ internal static class OwnerFleetViewModelBuilder
                 row.Schedule is { } schedule ? TimeZoneInfo.ConvertTime(schedule.NextProbeAt, zone) : null,
                 row.Schedule?.Attempt, row.Schedule?.ResetSource,
                 row.Schedule?.LastProbeOutcome is { } outcome && outcome != "none" ? outcome : null)
-                { SourceGoalId = row.Hold.SourceGoalId.Value, SourceTaskId = row.Hold.SourceTaskId.Value }).ToArray());
+                { SourceGoalId = row.Hold.SourceGoalId.Value, SourceTaskId = row.Hold.SourceTaskId.Value,
+                  OverdueSince = row.OverdueSince is { } due ? TimeZoneInfo.ConvertTime(due, zone) : null,
+                  LastObservedAt = row.LastObservedAt is { } observed ? TimeZoneInfo.ConvertTime(observed, zone) : null }).ToArray());
 
     internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness, TimeProvider? clock = null,
         OwnerConsoleHostRowOwner? owners = null) =>

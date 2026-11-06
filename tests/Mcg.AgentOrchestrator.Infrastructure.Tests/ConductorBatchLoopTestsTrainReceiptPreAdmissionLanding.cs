@@ -111,6 +111,7 @@ public sealed class ConductorBatchLoopTestsTrainReceiptPreAdmissionLanding : Acc
         ConductorDriver driver, ConductorAutonomyPolicy policy, string? logPath = null)
     {
         BatchTickSummary? observed = null;
+        AdmissionFactsTestData.Warm(driver, kernel);
         _ = new ConductorBatchLoop(conductEventLogWriter: logPath is null ? null :
             new ConductEventLogWriter(logPath)).Run(kernel, driver, policy,
             Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1,

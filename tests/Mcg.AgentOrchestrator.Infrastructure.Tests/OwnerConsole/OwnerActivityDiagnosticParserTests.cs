@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 // Parallel-safe: immutable fixtures and pure source-span parsing.
 public sealed class OwnerActivityDiagnosticParserTests
@@ -36,6 +37,27 @@ public sealed class OwnerActivityDiagnosticParserTests
         Assert.NotEqual(extras[0].Key, extras[1].Key);
         Assert.Equal("none", Assert.Single(parsed.Fields, field => field.Label == "foo_bar").Value);
         Assert.Equal("a=b", Assert.Single(parsed.Fields, field => field.Label == "foo-bar").Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PendingBlockedIntent_EscalationEnvelope_PreservesDiagnosticFields(bool batch)
+    {
+        var raw = Raw();
+        var source = "Goal is in Failed state; TaskFailed: " + raw + "; operator action required" +
+            ConductorOutcomeText.PendingBlockedIntentClause +
+            "intent-1 (adjudicate task tester-1); blocked by Failed Developer task developer-1 " +
+            "(incomplete-scope-declaration); close or route task 2 to proceed";
+        if (batch) source = "Batch loop tick 3: escalated at Failed — " + source;
+
+        var expected = OwnerActivityDiagnosticParser.Parse(raw);
+        var parsed = OwnerActivityDiagnosticParser.Parse(source);
+
+        Assert.True(expected.Complete);
+        Assert.Equal(12, expected.Fields.Count);
+        Assert.True(parsed.Complete);
+        Assert.Equal(expected.Fields.ToArray(), parsed.Fields.ToArray());
     }
 
     [Theory]

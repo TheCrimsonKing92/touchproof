@@ -19,6 +19,7 @@ public sealed class AcceptanceCohortWorkflowTestsMainSuspectAdmission
             conductEventLogWriter: new ConductEventLogWriter(scenario.Workspace.ConductEventsLogPath));
         BatchTickSummary? heldTick = null;
 
+        AdmissionFactsTestData.Warm(scenario.Driver, scenario.Kernel);
         loop.Run(scenario.Kernel, scenario.Driver, ConductorAutonomyPolicy.Permissive,
             Path.Combine(scenario.Repo, "stop-does-not-exist"), maxIterations: 1,
             onTick: tick => heldTick = tick, persistGoalTick: (_, _) => { });

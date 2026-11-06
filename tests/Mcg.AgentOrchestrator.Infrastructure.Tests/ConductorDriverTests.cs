@@ -188,15 +188,10 @@ public sealed class ConductorDriverTests
         string? touchProofDiagnostic = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-seed");
-        var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-seed",
-            "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory("A-1", location),
-            "",
-            DateTimeOffset.UtcNow,
-            WorkerResultPresent: true));
+            "review-seed", "C:\\tmp", 1,
+            BlockingIdentityRepairOutput("A-1", "src/A.cs", "A.Run"),
+            "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
         RecordMovedReviewerIdentityViolation(
             kernel,
@@ -215,16 +210,21 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-moved",
             "C:\\tmp",
-            0,
-            ReviewerPassWithAdvisory(
-                "A-1",
-                new ReviewFindingLocation("src/B.cs", "B.Run", "guard")),
+            1,
+            BlockingIdentityRepairOutput("A-1", "src/B.cs", "B.Run"),
             "",
             DateTimeOffset.UtcNow,
             StandardOutputPath: "C:\\tmp\\reviewer.out.log",
             WorkerResultPresent: true));
-        Assert.NotNull(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Null(reviewer.LastVerification.MergedReviewFindings);
     }
+
+    internal static string BlockingIdentityRepairOutput(string stableId, string file, string region) =>
+        string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: review",
+            "tests: pass - inspected evidence", "blockers: none",
+            $$"""findings: [{"stable_id":"{{stableId}}","state":"open","severity":"blocking","category":"correctness","location":{"file":"{{file}}","region":"{{region}}","hunk":"guard"},"description":"Blocking identity repair control."}]""",
+            "touched_anchors: []", "verdict: needs-work", "END_WORKER_RESULT");
 
     internal static string ReviewerPassWithAdvisory(string stableId, ReviewFindingLocation location) =>
         ReviewerPassWithFinding(new ReviewFinding(

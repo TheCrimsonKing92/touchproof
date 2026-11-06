@@ -823,6 +823,8 @@ internal static class CliCommandHelp
                 "--command-contains", "--conduct-loop", "--dispatch-host", "--id", "--include-children",
                 "--locks", "--name", "--newest", "--parent-id"),
             ["repo-process-stop"] = Flags("--command-contains", "--force", "--id"),
+            ["worker-build-request"] = Flags("--configuration", "--request-key", "--busy-timeout-seconds"),
+            ["submit-worker-result"] = Flags("--worktree", "--task", "--path", "--input"),
             ["failure-triage"] = Flags("--autonomy", "--autonomy-policy", "--policy"),
             ["build-lease-cleanup"] = Flags("--confirm-build-lease-cleanup"),
             ["acceptance-queue"] = Flags(
