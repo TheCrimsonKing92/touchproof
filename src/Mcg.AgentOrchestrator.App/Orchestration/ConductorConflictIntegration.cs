@@ -13,7 +13,9 @@ internal sealed class ConductorConflictIntegration(
     Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> retry,
     Func<Goal, DeveloperBranchIntegrationResult> inner,
     Func<string, OrchestratorBuildCheckResult>? buildCheck = null,
-    Func<string, string?>? objectiveReader = null, string? projectHomeDirectory = null)
+    Func<string, string?>? objectiveReader = null, string? projectHomeDirectory = null,
+    Func<string, string[], GitCli.GitResult>? restoreGit = null,
+    Func<string, string[], GitCli.GitResult>? mergeGit = null)
 {
     internal const string OperationName = "conductor:conflict-integration";
     private sealed record Round(string OriginalHead, string MainSha, string[] ConflictPaths,
@@ -24,6 +26,7 @@ internal sealed class ConductorConflictIntegration(
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         if (worktree is null || !Directory.Exists(worktree)) return (false, "worktree missing");
+        RetireStaleRound(goal, worktree, "record");
         var status = GitCli.InspectWorktreeStatus(worktree);
         if (!status.Succeeded) return (false, "worktree status unavailable: " + status.Error);
         if (status.IsDirty) return (false, "dirty worktree");
@@ -68,13 +71,16 @@ internal sealed class ConductorConflictIntegration(
 
     internal DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(Goal goal)
     {
-        var round = OpenRound(goal);
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var round = worktree is null ? null : RetireStaleRound(goal, worktree, "dispatch");
         var task = goal.Tasks.FirstOrDefault(item => item.RequiredRole == AgentRole.Developer && item.Status == WorkTaskStatus.Assigned);
         if (round is null || worktree is null || task is null || task.Id.Value != round.DeveloperTaskId ||
             task.PendingRetryCause != RetryCause.MainDriftConflict || round.RetryAt is null || task.LatestRetryAt != round.RetryAt ||
             ReadRef(worktree, "HEAD") != round.OriginalHead || ReadRef(worktree, integrationBranch) != round.MainSha)
+        {
+            if (worktree is not null) RetireStaleRound(goal, worktree, "dispatch");
             return inner(goal);
+        }
         if (ReadRef(worktree, "MERGE_HEAD") == round.MainSha)
             return Admit(goal, task, worktree, round);
         var result = inner(goal);
@@ -82,12 +88,27 @@ internal sealed class ConductorConflictIntegration(
             return result;
         // Recheck after the inner guard: an inner integration or a moved ref cannot authorize this merge.
         if (ReadRef(worktree, "HEAD") != round.OriginalHead || ReadRef(worktree, integrationBranch) != round.MainSha || GitCli.IsWorktreeDirty(worktree))
+        {
+            RetireStaleRound(goal, worktree, "dispatch");
             return result;
-        var merge = GitCli.Run(worktree, [.. Identity, "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", round.MainSha]);
+        }
+        string[] mergeArgs = [.. Identity, "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", round.MainSha];
+        var merge = mergeGit is null ? GitCli.Run(worktree, mergeArgs) : mergeGit(worktree, mergeArgs);
         var paths = Run(worktree, "diff", "--name-only", "--diff-filter=U", "-z").Split('\0', StringSplitOptions.RemoveEmptyEntries);
         if (!merge.ProcessStarted || merge.DrainTimedOut || merge.ExitCode != 1 || ReadRef(worktree, "MERGE_HEAD") != round.MainSha || !SamePaths(paths, round.ConflictPaths))
         {
-            if (ReadRef(worktree, "MERGE_HEAD") is not null) Run(worktree, "merge", "--abort");
+            if (ReadRef(worktree, "MERGE_HEAD") is not null)
+            {
+                var restored = Restore(worktree, goal, round);
+                if (restored.StaleHead is { } head)
+                {
+                    Retire(goal, round, head, "dispatch");
+                    ConductorConflictIntegrationMarker.Remove(worktree);
+                    return result;
+                }
+                if (!restored.Restored)
+                    throw new InvalidOperationException("Conductor integration admission failed to restore the candidate.");
+            }
             if (ReadRef(worktree, "HEAD") != round.OriginalHead || GitCli.IsWorktreeDirty(worktree))
                 throw new InvalidOperationException("Conductor integration admission failed to restore the candidate.");
             return result;
@@ -113,11 +134,13 @@ internal sealed class ConductorConflictIntegration(
             ConductorConflictIntegrationMarker.Remove(worktree);
             return null;
         }
-        var restored = Restore(worktree, goal, round, candidate);
+        var restored = Restore(worktree, goal, round);
         ConductorConflictIntegrationMarker.Remove(worktree);
-        Save(goal, round, GoalOperationStatus.Failed);
+        if (restored.StaleHead is { } staleHead) Retire(goal, round, staleHead, "restore");
+        else Save(goal, round, GoalOperationStatus.Failed);
         return $"pre-landing rebase conflict ({string.Join(", ", round.ConflictPaths)}); conductor integration failed: {failure}; " +
-            (restored ? $"branch restored to {round.OriginalHead[..12]}" : "compare-and-swap restore failed; operator recovery required") +
+            (restored.StaleHead is { } head ? $"conductor integration round stale; branch preserved at {head} (original {round.OriginalHead})" :
+                restored.Restored ? $"branch restored to {round.OriginalHead[..12]}" : "compare-and-swap restore failed; operator recovery required") +
             "; the operator integrates main into the goal branch";
     }
 
@@ -172,6 +195,34 @@ internal sealed class ConductorConflictIntegration(
         return journal.Entries.Any(item => item.Operation == OperationName &&
             item.Status is GoalOperationStatus.Completed or GoalOperationStatus.Failed && ReadRound(item).OriginalHead == round.OriginalHead)
             ? null : round;
+    }
+
+    private Round? RetireStaleRound(Goal goal, string worktree, string site)
+    {
+        var round = OpenRound(goal);
+        if (round is null) return null;
+        var head = ReadRef(worktree, "refs/heads/" + GoalWorktrees.BranchName(goal.Id));
+        if (OwnsHead(worktree, round, head)) return round;
+        Retire(goal, round, head ?? "missing", site);
+        ConductorConflictIntegrationMarker.Remove(worktree);
+        return null;
+    }
+
+    private void Retire(Goal goal, Round round, string head, string site)
+    {
+        Save(goal, round, GoalOperationStatus.Failed);
+        kernel.RecordGoalPolicyDecision(goal.Id,
+            $"conflict-round-stale original={round.OriginalHead} head={head} site={site}");
+    }
+
+    private static bool OwnsHead(string worktree, Round round, string? head)
+    {
+        if (head == round.OriginalHead) return true;
+        if (head is null || !round.Admitted) return false;
+        // Admission starts this exact two-parent merge. Commits on top of it are not
+        // the round's merge result and cannot authorize rolling back the branch.
+        var parents = Run(worktree, "rev-list", "--parents", "-n", "1", head).Trim().Split(' ');
+        return parents.SequenceEqual(new[] { head, round.OriginalHead, round.MainSha }, StringComparer.Ordinal);
     }
 
     private static Round ReadRound(GoalOperationJournalEntry entry) => JsonSerializer.Deserialize<Round>(entry.Detail ?? "null")
@@ -232,19 +283,31 @@ internal sealed class ConductorConflictIntegration(
         return note.ToString();
     }
 
-    private static bool Restore(string worktree, Goal goal, Round round, string candidate)
+    private sealed record RestoreResult(bool Restored, string? StaleHead = null);
+
+    private RestoreResult Restore(string worktree, Goal goal, Round round)
     {
-        if (ReadRef(worktree, "MERGE_HEAD") is not null)
-        {
-            var abort = GitCli.Run(worktree, "merge", "--abort");
-            if (!abort.Succeeded || abort.DrainTimedOut) return false;
-        }
         var branch = "refs/heads/" + GoalWorktrees.BranchName(goal.Id);
-        if (Run(worktree, "symbolic-ref", "HEAD").Trim() != branch) return false;
-        var reset = GitCli.Run(worktree, "update-ref", branch, round.OriginalHead, candidate);
-        if (!reset.Succeeded || reset.DrainTimedOut) return false;
-        Run(worktree, "reset", "--hard");
-        return ReadRef(worktree, "HEAD") == round.OriginalHead && !GitCli.IsWorktreeDirty(worktree) && ReadRef(worktree, "MERGE_HEAD") is null;
+        var attached = GitCli.Run(worktree, "symbolic-ref", "--quiet", "HEAD");
+        if (!attached.Succeeded || attached.DrainTimedOut || attached.Output.Trim() != branch) return new(false);
+        var observed = ReadRef(worktree, branch);
+        if (!OwnsHead(worktree, round, observed)) return new(false, observed ?? "missing");
+        var reset = RestoreGit("update-ref", "-m", "conductor integration restore", branch, round.OriginalHead, observed!);
+        if (!reset.Succeeded || reset.DrainTimedOut) return new(false, ReadRef(worktree, branch) ?? "missing");
+        var afterSwap = ReadRef(worktree, branch);
+        if (afterSwap != round.OriginalHead) return new(false, afterSwap ?? "missing");
+        // Neither cleanup command writes a branch ref. A reset/abort here could overwrite a
+        // commit made after the successful compare-and-swap, even with no reset argument.
+        var checkout = RestoreGit("read-tree", "--reset", "-u", round.OriginalHead);
+        var quit = ReadRef(worktree, "MERGE_HEAD") is null ? (GitCli.GitResult?)null : RestoreGit("merge", "--quit");
+        var clean = checkout.Succeeded && !checkout.DrainTimedOut &&
+            (quit is null || (quit.Value.Succeeded && !quit.Value.DrainTimedOut)) &&
+            ReadRef(worktree, "HEAD") == round.OriginalHead && !GitCli.IsWorktreeDirty(worktree) && ReadRef(worktree, "MERGE_HEAD") is null;
+        var current = ReadRef(worktree, branch);
+        if (current != round.OriginalHead) return new(false, current ?? "missing");
+        return new(clean);
+
+        GitCli.GitResult RestoreGit(params string[] args) => restoreGit is null ? GitCli.Run(worktree, args) : restoreGit(worktree, args);
     }
 
     private static readonly string[] Identity = [.. ConductorGitIdentity.ConductorArguments, "-c", "commit.gpgSign=false"];
