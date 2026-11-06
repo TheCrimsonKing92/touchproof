@@ -13,7 +13,7 @@ public sealed class RemainderBalanceDLaneMoveTests
     private static readonly string[] MovedClassNames =
     [
         "MergeTrainFocusedRecheckReceiptAcceptanceTests",
-        "MergeTrainReproductionAttributionTests",
+        "MergeTrainPrefixBisectionTrainTests",
         "PassedCohortReceiptApprovalHoldTests",
         "IntegrationMergeRatchetOnlyCleanTests",
         "MergeTrainFocusedRecheckTests"

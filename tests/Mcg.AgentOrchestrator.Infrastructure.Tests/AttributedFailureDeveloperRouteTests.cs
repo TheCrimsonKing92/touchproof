@@ -20,6 +20,23 @@ public sealed class AttributedFailureDeveloperRouteTests
     ];
 
     [Fact]
+    public void BisectionProducerRetainsFailingTestsAndPrefixTrxInDeveloperFeedback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CompletedGoal(kernel);
+        var tests = new[] { "Ns.AlphaTests.Fails", "Ns.ZebraTests.Fails" };
+        RecordCohortFailure(kernel, goal, evidence:
+            "merge train RED attributed (bisection) receipt train-red: " + string.Join(", ", tests) +
+            "\nreproduced Ns.AlphaTests.Fails: assertion failed\nprefix_trx=main.trx,prefix-1.trx,prefix-2.trx");
+        var failure = Assert.IsType<AttributedFailure>(AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure));
+        Assert.Equal("train-bisection", failure.Source);
+        Assert.Equal(tests, failure.FailingTests);
+        var feedback = AttributedFailureDeveloperRoute.BuildFeedback(goal, failure, "signature");
+        Assert.All(tests, test => Assert.Contains(test, feedback));
+        Assert.All(new[] { "main.trx", "prefix-1.trx", "prefix-2.trx" }, path => Assert.Contains(path, feedback));
+    }
+
+    [Fact]
     public void CohortProducerParsesPartitionAndReproducedTests()
     {
         var (kernel, first, second) = CohortGoals();

@@ -32,9 +32,9 @@ internal static class AttributedFailureDeveloperRoute
                 survivors.Groups["detail"].Value);
 
         var reproduction = Regex.Match(detail,
-            @"\Amerge train RED attributed \(reproduction\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>reproduced [\s\S]+)\z");
+            @"\Amerge train RED attributed \((?<source>reproduction|bisection)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>reproduced [\s\S]+)\z");
         if (reproduction.Success)
-            return new("train-reproduction", reproduction.Groups["receipt"].Value, summary.BranchHeadSha,
+            return new("train-" + reproduction.Groups["source"].Value, reproduction.Groups["receipt"].Value, summary.BranchHeadSha,
                 reproduction.Groups["tests"].Value.Split(',').Select(test => test.Trim())
                     .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
                 reproduction.Groups["detail"].Value);

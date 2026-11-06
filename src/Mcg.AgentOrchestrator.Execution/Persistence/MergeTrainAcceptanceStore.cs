@@ -91,6 +91,10 @@ public sealed class MergeTrainAcceptanceStore
                     pair_fingerprint TEXT PRIMARY KEY,
                     train_id TEXT NOT NULL,
                     created_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS merge_train_bisection_outcomes(
+                    receipt_id TEXT PRIMARY KEY,
+                    train_id TEXT NOT NULL,
+                    result_json TEXT NOT NULL);
                 """;
             command.ExecuteNonQuery();
             EnsureMemberIndex(connection, transaction);
@@ -523,6 +527,30 @@ public sealed class MergeTrainAcceptanceStore
         {
             throw new InvalidOperationException("Merge train landing effects were not finalized exactly once.");
         }
+    }
+
+    public string? ReadBisectionOutcome(string receiptId, string trainId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT result_json FROM merge_train_bisection_outcomes WHERE receipt_id=$receipt AND train_id=$train";
+        command.Parameters.AddWithValue("$receipt", receiptId);
+        command.Parameters.AddWithValue("$train", trainId);
+        return command.ExecuteScalar() as string;
+    }
+
+    // Keep the first completed outcome when child/parent receipt replays overlap.
+    public string SaveBisectionOutcome(string receiptId, string trainId, string resultJson)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR IGNORE INTO merge_train_bisection_outcomes(receipt_id, train_id, result_json) VALUES($receipt, $train, $result)";
+        command.Parameters.AddWithValue("$receipt", receiptId);
+        command.Parameters.AddWithValue("$train", trainId);
+        command.Parameters.AddWithValue("$result", resultJson);
+        command.ExecuteNonQuery();
+        return ReadBisectionOutcome(receiptId, trainId)
+            ?? throw new InvalidOperationException("Stored bisection outcome belongs to a different train.");
     }
 
     private SqliteConnection Open() => OpenConnection(_databasePath, _readOnly);

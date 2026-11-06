@@ -35,7 +35,7 @@ internal static class MergeTrainAttributedFailure
             reason = $"merge train RED attributed ({source}) receipt {receipt.ReceiptId}: " +
                 string.Join(", ", reproducedFailures.Select(failure => failure.TestName).Distinct(StringComparer.Ordinal)) +
                 Environment.NewLine + string.Join(Environment.NewLine, reproducedFailures.Select(failure =>
-                    $"reproduced {failure.TestName}: {BoundMessage(failure.Message)}"));
+                    $"reproduced {failure.TestName}: {(source == "bisection" ? failure.Message : BoundMessage(failure.Message))}"));
         if (goal.Status != GoalStatus.AcceptanceFailed ||
             goal.LatestAcceptanceFailure?.BranchHeadSha != member.CandidateRevision)
         {
