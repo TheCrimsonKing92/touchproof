@@ -86,6 +86,8 @@ public sealed class OrchestratorProjectRegistry
                     IntegrationBranchNote = resolution.Note,
                     UseLearnedIntegrationBranch = entry.UseLearnedIntegrationBranch == true,
                     DataRootDirectory = DataRootDirectory,
+                    Enabled = entry.Enabled == true,
+                    ToolRequirements = ProjectToolRequirement.Validate(entry.ToolRequirements ?? []),
                     Delivery = entry.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
                     ForgeIdentity = entry.ForgeIdentityAnswer?.Value,
                     ForgeIdentityAnswer = entry.ForgeIdentityAnswer,
@@ -165,6 +167,8 @@ public sealed class OrchestratorProjectRegistry
         return new OrchestratorProject(existing.Name, existingRoot)
         {
             IntegrationBranch = existingBranch, DataRootDirectory = DataRootDirectory,
+            Enabled = existing.Enabled == true,
+            ToolRequirements = ProjectToolRequirement.Validate(existing.ToolRequirements ?? []),
             Delivery = existing.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
             ForgeIdentity = existing.ForgeIdentityAnswer?.Value,
             ForgeIdentityAnswer = existing.ForgeIdentityAnswer,
@@ -190,6 +194,27 @@ public sealed class OrchestratorProjectRegistry
 
         _ = GetRequiredProject(normalizedName);
         File.WriteAllText(CurrentProjectPath, normalizedName + Environment.NewLine);
+    }
+
+    public void SetFleetEnabled(string name, bool value) =>
+        UpdateFleetEntry(name, entry => entry.Enabled = value ? true : null);
+
+    public void SetToolRequirements(string name, IReadOnlyList<ProjectToolRequirement> requirements)
+    {
+        var validated = ProjectToolRequirement.Validate(requirements);
+        UpdateFleetEntry(name, entry => entry.ToolRequirements = validated.Count == 0 ? null : validated.ToList());
+    }
+
+    private void UpdateFleetEntry(string name, Action<ProjectEntry> update)
+    {
+        var normalized = OrchestratorProjectSelection.NormalizeProjectName(name);
+        if (normalized.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The default project is implicit and cannot join the project fleet.");
+        var file = LoadFile();
+        var entry = file.Projects.FirstOrDefault(project => project.Name.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException(UnknownProjectMessage(normalized));
+        update(entry);
+        SaveFile(file);
     }
 
     public void SetUseLearnedIntegrationBranch(string name, bool value)
@@ -358,6 +383,10 @@ public sealed class OrchestratorProjectRegistry
 
         public string Name { get; set; }
         public string RootDirectory { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? Enabled { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ProjectToolRequirement>? ToolRequirements { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? IntegrationBranch { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
