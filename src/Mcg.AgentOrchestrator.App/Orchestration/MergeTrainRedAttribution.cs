@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -56,7 +57,35 @@ internal static class MergeTrainRedAttribution
         if (receipt.Outcome != MergeTrainGateOutcome.Failed) return null;
         if (receipt.FailedChecks.Contains(SourceSizeRatchetPreflight.CheckName, StringComparer.Ordinal))
             return MergeTrainRatchetAttribution.TryAttribute(receipt, workspacePath, members, out failingSubjects);
-        return TryAttribute(receipt.GateTestResultPaths, workspacePath, members, out failingSubjects);
+        return TryAttribute(receipt.GateTestResultPaths, workspacePath, members, out failingSubjects,
+            confirmedIdentities: ReadConfirmedIdentities(receipt));
+    }
+
+    // The retained TRX history also contains checks that passed their rerun. The
+    // gate's failed-check coverage, not filenames or row ordering, selects RED.
+    private static IReadOnlySet<string>? ReadConfirmedIdentities(MergeTrainReceipt receipt)
+    {
+        var evidence = receipt.FailedCheckEvidence;
+        if (evidence is null || receipt.FailedChecks.Count == 0 ||
+            evidence.Any(check => check is null || check.FatalTestIdentities is null) ||
+            !evidence.Select(check => check.CheckName).SequenceEqual(receipt.FailedChecks, StringComparer.Ordinal)) return null;
+        var names = AcceptanceAttributionLaneScope.FromCombinedFailedChecks(receipt.FailedChecks)?.Names ?? receipt.FailedChecks;
+        var checks = evidence.Where(check => names.Contains(check.CheckName, StringComparer.Ordinal)).ToArray();
+        if (checks.Length == 0 || checks.Any(check => !check.ExplainedByFatalTrx || check.FatalTestIdentities.Count == 0)) return null;
+        try
+        {
+            if (!AcceptanceCohortGateEvidence.HasContentBoundEvidence(receipt.GateTestResultPaths, receipt.GateEvidenceArtifacts)) return null;
+            var verdict = receipt.GateEvidenceArtifacts.Single(artifact => artifact.Kind == "gate-verdict");
+            using var document = JsonDocument.Parse(File.ReadAllBytes(verdict.Path));
+            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            if (JsonSerializer.Serialize(document.RootElement.GetProperty("failedChecks"), options) !=
+                    JsonSerializer.Serialize(receipt.FailedChecks, options) ||
+                JsonSerializer.Serialize(document.RootElement.GetProperty("failedCheckEvidence"), options) !=
+                    JsonSerializer.Serialize(evidence, options)) return null;
+            return checks.SelectMany(check => check.FatalTestIdentities).ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+            InvalidOperationException or KeyNotFoundException) { return null; }
     }
 
     internal static MergeTrainMemberBinding? TryAttribute(
@@ -64,13 +93,26 @@ internal static class MergeTrainRedAttribution
         string workspacePath,
         IReadOnlyList<MergeTrainMemberBinding> members,
         out IReadOnlyList<string> failingSubjects,
-        AcceptanceTestSourceResolver.Request? sources = null)
+        AcceptanceTestSourceResolver.Request? sources = null,
+        IReadOnlySet<string>? confirmedIdentities = null)
     {
         failingSubjects = [];
         var results = resultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
         // Missing evidence may hide another owner's failure; never attribute a partial read.
         if (results.Any(result => result.Status != AcceptanceTrxReadStatus.Readable)) return null;
         var failures = FatalFailures(results);
+        if (confirmedIdentities is not null)
+        {
+            // Coverage includes apparatus rows retained by the gate; only ownership excludes them.
+            var observed = results.SelectMany(result => result.Failures)
+                .Where(failure => AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome) &&
+                    !string.IsNullOrWhiteSpace(failure.TestName))
+                .Select(failure => AcceptanceTrxTestIdentityResolver.NormalizeSelector(failure.TestName!))
+                .ToHashSet(StringComparer.Ordinal);
+            if (!confirmedIdentities.All(observed.Contains)) return null;
+            failures = failures.Where(failure => failure.TestName is not null &&
+                confirmedIdentities.Contains(AcceptanceTrxTestIdentityResolver.NormalizeSelector(failure.TestName))).ToArray();
+        }
         if (failures.Count == 0) return null;
 
         MergeTrainMemberBinding? attributed = null;
