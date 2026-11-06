@@ -8,8 +8,8 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
     internal string Root { get; }
     internal string Prefix { get; }
     internal string Binary { get; }
-    internal List<(string Command, string Root, TimeSpan Budget, CancellationToken Token)> Calls { get; } = [];
-    internal Func<string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>>? Handler { get; set; }
+    internal List<(string[] Arguments, string Root, TimeSpan Budget, CancellationToken Token)> Calls { get; } = [];
+    internal Func<string[], CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>>? Handler { get; set; }
     internal string Discovery { get; set; } = List(Id);
     internal string Output { get; set; } = Report((Id, "passed"));
     internal int Exit { get; set; }
@@ -41,12 +41,12 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
         TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "candidate-commit";
         Verifier = new GoalAcceptanceVerifier(TestOverrides, async (arguments, root, budget, token) =>
         {
-            var command = arguments.LastOrDefault() ?? "";
-            if (!command.StartsWith("& '", StringComparison.Ordinal)) return new(0, "");
+            var command = arguments;
+            if (arguments[0] != Executable.Resolve().Identity?.Path) return new(0, "");
             Calls.Add((command, root, budget, token));
             if (Handler is { } handler) return await handler(command, token);
-            return Result(command.Contains("' list '", StringComparison.Ordinal) ? Discovery : Output,
-                command.Contains("' list '", StringComparison.Ordinal) ? 0 : Exit);
+            return Result(command[1] == "list" ? Discovery : Output,
+                command[1] == "list" ? 0 : Exit);
         }, clock ?? TimeProvider.System) { CrosswalkExecutable = Executable };
     }
 

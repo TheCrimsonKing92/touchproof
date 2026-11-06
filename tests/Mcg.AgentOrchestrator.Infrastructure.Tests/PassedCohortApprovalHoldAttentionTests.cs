@@ -57,8 +57,10 @@ public sealed class PassedCohortApprovalHoldAttentionTests : AcceptanceCohortWor
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)),
             [], "owner", "cli", "local-process", DateTimeOffset.UtcNow, ActorKind: OperatorActorKind.Human);
         intents.EnqueueAsync(intent).GetAwaiter().GetResult();
+        // The normal sweep follows intent application. Complete the new approval facts there,
+        // so this tick observes their effects rather than the intentional cold-input hold.
         var progress = scenario.Tick(new OperatorIntentCoordinator(intents, decisions: decisions,
-            goalStateVersionResolver: _ => 0));
+            goalStateVersionResolver: _ => 0), sweep: _ => scenario.WarmAdmissionFacts());
 
         Assert.Equal(OperatorIntentStatus.Applied, intents.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);
         Assert.True(AcceptancePolicyChangeDecision.IsApprovedAsync(decisions, waiting.Id.Value, candidate)

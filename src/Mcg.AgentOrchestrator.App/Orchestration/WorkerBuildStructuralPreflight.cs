@@ -95,7 +95,7 @@ internal sealed class WorkerBuildStructuralPreflight(WorkerBuildHostReference re
                         throw new IOException($"Required structural manifest is missing: {policy.RequiredManifestPath}");
                     return evaluate is null
                         ? DeveloperCompletionStructuralPreflight.Evaluate(invocation.WorktreeRoot, policy.ProjectHomeDirectory,
-                            policy.BaselineRevision ?? policy.IntegrationBranch)
+                            policy.IntegrationBranch)
                         : evaluate();
                 }, bound: EvaluationBound, cancellationToken: lifetime, time: clock);
             }

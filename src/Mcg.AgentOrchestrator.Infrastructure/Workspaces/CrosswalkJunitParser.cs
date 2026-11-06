@@ -7,9 +7,7 @@ internal static class CrosswalkJunitParser
     internal static async Task<TestResultReadResult> ParseAsync(CrosswalkExecutableIdentity executable,
         string report, string toolName, Func<string[], Task<CommandResult>> runProcess)
     {
-        var command = CrosswalkClient.Command(executable.Path, "parse junit", report,
-            " --tool '" + toolName.Replace("'", "''") + "'");
-        var arguments = new[] { WorkerShell.Executable }.Concat(WorkerShell.BaseArguments()).Append(command).ToArray();
+        var arguments = new[] { executable.Path, "parse", "junit", report, "--tool", toolName };
         var process = await runProcess(arguments).ConfigureAwait(false);
         if (process.TimedOut || process.CaptureLimited || process.ExitCode != 0)
             throw new IOException($"JUnit parser failed for '{report}': exit code {process.ExitCode}, timedOut={process.TimedOut}, captureLimited={process.CaptureLimited}. {process.Stderr}");

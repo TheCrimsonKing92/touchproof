@@ -574,6 +574,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
 
         internal void Run(ConductorBatchLoop loop, int count, Action<BatchTickSummary> onTick)
         {
+            AdmissionFactsTestData.Warm(Driver, Kernel);
             var observedEventCount = File.Exists(LogPath) ? File.ReadAllLines(LogPath).Length : 0;
             Trace($"RECEIPT_HOLD_PHASE loop=start requestedTicks={count}");
             loop.Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
@@ -603,6 +604,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
                     }).OfType<string>().ToArray();
                     observedEventCount = events.Length;
                     onTick(tick with { ProgressLines = (tick.ProgressLines ?? []).Concat(receiptEvents).ToArray() });
+                    if (tick.Tick < count) AdmissionFactsTestData.Warm(Driver, Kernel);
                     Trace($"RECEIPT_HOLD_PHASE tick={tick.Tick} callback=returned");
                 });
             Trace("RECEIPT_HOLD_PHASE loop=returned");

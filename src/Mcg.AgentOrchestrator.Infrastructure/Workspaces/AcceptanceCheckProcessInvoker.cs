@@ -180,6 +180,7 @@ internal static class AcceptanceCheckProcessInvoker
                 commandIdentityObserver?.Invoke(identity);
             }
             startedProcessId = process.Id;
+            AcceptanceGatePhaseAccountant.RecordCurrentTestSettings(request.HostTestSettings);
             using var qosSweep = AcceptanceChildQos.StartSweep(process.Id, ownLoop: heartbeatContext is null);
             var sampler = heartbeatContext is null ? null : new LaneSchedulingSampler(process.Id);
             completedProcessId = process.Id;

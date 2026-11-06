@@ -163,7 +163,12 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
                 Mode = focused?.Mode ?? before.FocusedEvidence.Mode,
                 SampleEvery = focused?.SampleEvery ?? before.FocusedEvidence.SampleEvery
             };
-            if (!after.Executors.SequenceEqual(expectedExecutors) || !after.Lanes.SequenceEqual(before.Lanes) ||
+            // Reparsed settings maps have new references; compare their contents and all other record fields.
+            var sameExecutors = after.Executors.Count == before.Executors.Count &&
+                after.Executors.Zip(expectedExecutors).All(pair =>
+                    AcceptanceDeclaredTestSettings.Equal(pair.First.TestSettings, pair.Second.TestSettings) &&
+                    (pair.First with { TestSettings = pair.Second.TestSettings }) == pair.Second);
+            if (!sameExecutors || !after.Lanes.SequenceEqual(before.Lanes) ||
                 !after.MachineLocalResourceKeys.SequenceEqual(before.MachineLocalResourceKeys) ||
                 after.AllInfrastructureLanes != before.AllInfrastructureLanes || after.FocusedEvidence != expectedFocused ||
                 after.Screening.Mode != before.Screening.Mode || after.Screening.FaultReason != before.Screening.FaultReason ||

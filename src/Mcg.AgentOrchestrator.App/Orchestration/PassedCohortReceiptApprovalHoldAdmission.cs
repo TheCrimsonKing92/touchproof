@@ -43,21 +43,22 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
     {
         if (!driver.AcceptanceCohortsEnabled) return (eligible, candidates);
         var candidateIds = candidates.Select(candidate => candidate.GoalId).ToHashSet();
-        var observable = scopedGoals.Where(goal =>
+        var observable = ConductorTickStepLedger.Measure("approval-inputs", () => scopedGoals.Where(goal =>
             !results.ContainsKey(goal.Id.Value) && !activeGoalIds.Contains(goal.Id.Value) &&
             !ConductorWorkingSet.IsPreWalkExcludedGoal(goal) && otherwiseEligible(goal) &&
             !goal.OutstandingCriterionEvidenceObligations.Any(item => item.Owner != CriterionEvidenceOwner.Acceptance) &&
-            (candidateIds.Contains(goal.Id) || intentChangedGoalIds.Contains(goal.Id))).ToArray();
+            (candidateIds.Contains(goal.Id) || intentChangedGoalIds.Contains(goal.Id))).ToArray());
         var groupedIds = GroupedAdmissionCandidateFilter.FilterGoals(
             observable.Select(goal => goal.Id.Value).ToArray(), kernel.Goals, activeGoalIds);
         observable = observable.Where(goal => groupedIds.Contains(goal.Id.Value)).ToArray();
-        var projections = observable.ToDictionary(goal => goal.Id,
+        var projections = ConductorTickStepLedger.Measure("approval-projections", () => observable.ToDictionary(goal => goal.Id,
             goal => GroupedAdmissionLandingHold.Apply(driver.ProjectCachedGateReadyCandidate(goal, policy),
-                kernel.GetPendingHumanInput(goal.Id), goal));
+                kernel.GetPendingHumanInput(goal.Id), goal)));
         var receiptObservations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, projections[goal.Id])).ToArray();
+        AdmissionFactsPendingAdmission.Apply(observable, receiptObservations, results, policy, tick, recordProgress, driver);
         var observations = observable.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-            goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
+            goal.Id, driver.AdmissionFacts.ApplyApproval(goal, projections[goal.Id], driver.ExecutionDirectory))).ToArray();
         var goals = observable.ToDictionary(goal => goal.Id);
         var eligibleIds = goals.Keys.ToHashSet();
         var restored = new HashSet<GoalId>();
@@ -69,12 +70,9 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
             PassedCohortReceiptApprovalHold.Decision? hold;
             try
             {
-                var denylist = driver.ApprovalHoldCache.LoadDenylist(driver.ExecutionDirectory, receipt.Identity.ObservedMainRevision);
-                var decisions = CollaborationItemStore.ForDirectory(OrchestratorWorkspace.ForDirectory(driver.ExecutionDirectory).OrchestratorDirectory);
-                hold = PassedCohortReceiptApprovalHold.Evaluate(receipt, goals, projections, eligibleIds,
-                    driver.HasFinalizedCohortLanding, member => driver.ApprovalHoldCache.Evaluate(
-                        driver.ExecutionDirectory, denylist, decisions, member.GoalId.Value,
-                        receipt.Identity.ObservedMainRevision, member.CandidateRevision, member.LandingPaths));
+                hold = ConductorTickStepLedger.Measure("approval-receipts", () => PassedCohortReceiptApprovalHold.Evaluate(
+                    receipt, goals, projections, eligibleIds, driver.HasFinalizedCohortLanding,
+                    member => AdmissionFactsApprovalReader.Read(driver, receipt, member)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {

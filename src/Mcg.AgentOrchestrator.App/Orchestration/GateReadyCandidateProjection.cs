@@ -20,7 +20,8 @@ internal enum GateReadyCandidateExclusionReason
     ApparatusHold,
     OwnerReviewHold,
     PassedTrainReceiptHeld,
-    LandingHeld
+    LandingHeld,
+    AdmissionFactsPending
 }
 
 internal enum GateReadyVerificationState

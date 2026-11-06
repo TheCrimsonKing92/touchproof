@@ -54,6 +54,116 @@ public sealed class CohortMemberReopenedGateAbandonmentTests
         Assert.Single(f.Events());
     }
 
+    [Fact]
+    public async Task ApplyPending_ReopenedGoalAlreadyEjectedFromTrain_LeavesAttemptRunningAndLogsAlreadyEjected()
+    {
+        using var f = new Fixture();
+        var a = f.Goal();
+        var b = f.Goal();
+        var c = f.Goal();
+        var attempt = f.Train("train", "inner-attempt", a, b, c);
+        f.Eject("inner-attempt", c);
+        var before = f.Metadata();
+        var intent = await f.Queue(c);
+
+        var application = OperatorIntentGoalApplication.ApplyPending(f.Kernel, c, f.Coordinator(), f.Solo);
+
+        Assert.True(application.Result.MutatedGoalState);
+        Fixture.AssertFilesEqual(before, f.Metadata());
+        Assert.Empty(f.Stops);
+        var running = ConductorGroupedGateAttemptCoordinator.Read(attempt.MetadataPath);
+        Assert.Equal("Running", running.Outcome);
+        Assert.Null(running.ReconciledAt);
+        Assert.True(f.Grouped.ReservesCapacity(running));
+        var record = Assert.Single(f.Events());
+        Assert.Equal(Fixture.Now, record.Timestamp);
+        Assert.Equal(c.Id.Value, record.GoalId);
+        Assert.Equal($"GATE_CANCEL_SKIPPED attempt={attempt.AttemptId} kind=train goal={c.Id.Value} intent={intent.Id} reason=already-ejected", record.Detail);
+        Assert.Contains($"COHORT_MEMBER_REOPENED_GATE_SKIPPED attempt={attempt.AttemptId} kind=train goal={c.Id.Value[..8]} intent={intent.Id} reason=already-ejected", application.Lines);
+        Assert.Equal(GoalStatus.Active, c.Status);
+        Assert.All(new[] { a, b }, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+    }
+
+    [Fact]
+    public async Task ApplyPending_EjectedInOneAttemptOnly_SkipsThatAttemptAndCancelsTheOther()
+    {
+        using var f = new Fixture();
+        var a = f.Goal();
+        var c = f.Goal();
+        var skipped = f.Train("a-skipped", "inner-ejected", a, c);
+        // A different composition also contains C; its receipt points to another inner attempt.
+        var cancelled = f.Train("b-cancelled", "inner-composed", f.Goal(), c);
+        f.Eject("inner-ejected", c);
+        var bytes = File.ReadAllBytes(skipped.MetadataPath);
+        var intent = await f.Queue(c);
+
+        OperatorIntentGoalApplication.ApplyPending(f.Kernel, c, f.Coordinator(), f.Solo);
+
+        Assert.Equal(new[] { cancelled.AttemptId }, f.Stops);
+        Assert.Equal(bytes, File.ReadAllBytes(skipped.MetadataPath));
+        Assert.True(f.Grouped.ReservesCapacity(ConductorGroupedGateAttemptCoordinator.Read(skipped.MetadataPath)));
+        Assert.Equal("Reconciled", ConductorGroupedGateAttemptCoordinator.Read(cancelled.MetadataPath).Outcome);
+        Assert.Equal(new[]
+        {
+            $"GATE_CANCEL_SKIPPED attempt={skipped.AttemptId} kind=train goal={c.Id.Value} intent={intent.Id} reason=already-ejected",
+            $"GATE_CANCELLED attempt={cancelled.AttemptId} kind=train members={string.Join('+', cancelled.Members.Select(member => member.GoalId))} intent={intent.Id} reason=cohort-member-reopened goal={c.Id.Value}"
+        }, f.Events().Select(record => record.Detail));
+    }
+
+    [Fact]
+    public async Task ApplyPending_ReopenedMemberStillInComposition_CancelsWhileSiblingEjected()
+    {
+        using var f = new Fixture();
+        var a = f.Goal();
+        var b = f.Goal();
+        var c = f.Goal();
+        var attempt = f.Train("train", "inner-attempt", a, b, c);
+        f.Eject("inner-attempt", c);
+        var intent = await f.Queue(a);
+
+        OperatorIntentGoalApplication.ApplyPending(f.Kernel, a, f.Coordinator(), f.Solo);
+
+        Assert.Equal(new[] { attempt.AttemptId }, f.Stops);
+        var stopped = ConductorGroupedGateAttemptCoordinator.Read(attempt.MetadataPath);
+        Assert.Equal("Reconciled", stopped.Outcome);
+        Assert.Equal($"refused:cohort-member-reopened goal={a.Id.Value} intent={intent.Id}", stopped.Detail);
+        Assert.False(f.Grouped.ReservesCapacity(stopped));
+        Assert.Equal($"GATE_CANCELLED attempt={attempt.AttemptId} kind=train members={a.Id.Value}+{b.Id.Value}+{c.Id.Value} intent={intent.Id} reason=cohort-member-reopened goal={a.Id.Value}", Assert.Single(f.Events()).Detail);
+    }
+
+    [Theory]
+    [InlineData("missing-store")]
+    [InlineData("invalid-store")]
+    [InlineData("missing-receipt")]
+    [InlineData("missing-inner-id")]
+    [InlineData("outer-id-only")]
+    public async Task ApplyPending_UnprovenEjection_Cancels(string evidence)
+    {
+        using var f = new Fixture();
+        var goal = f.Goal();
+        ConductorGroupedGateAttempt attempt;
+        if (evidence is "missing-store" or "invalid-store")
+        {
+            attempt = f.Group("train", "outer", goal) with { StateDirectory = f.Root };
+            if (evidence == "invalid-store")
+                File.WriteAllText(Path.Combine(f.Root, "merge-train-acceptance.db"), "invalid database");
+        }
+        else
+        {
+            attempt = f.Train("outer", evidence == "missing-inner-id" ? null : "inner", goal, f.Goal());
+            f.Eject(evidence == "outer-id-only" ? attempt.AttemptId : "inner", goal);
+            if (evidence == "missing-receipt") attempt = attempt with { IdentityValue = "missing" };
+        }
+        ConductorGroupedGateAttemptCoordinator.Save(attempt);
+        await f.Queue(goal);
+
+        OperatorIntentGoalApplication.ApplyPending(f.Kernel, goal, f.Coordinator(), f.Solo);
+
+        Assert.Equal(new[] { attempt.AttemptId }, f.Stops);
+        Assert.Equal("Reconciled", ConductorGroupedGateAttemptCoordinator.Read(attempt.MetadataPath).Outcome);
+        Assert.Contains("reason=cohort-member-reopened", Assert.Single(f.Events()).Detail);
+    }
+
     [Theory]
     [InlineData("outside")]
     [InlineData("priority")]
@@ -283,6 +393,24 @@ public sealed class CohortMemberReopenedGateAbandonmentTests
             ConductorGroupedGateAttemptCoordinator.Save(attempt);
             return attempt;
         }
+
+        internal ConductorGroupedGateAttempt Train(string id, string? innerAttemptId, params Goal[] members)
+        {
+            var bindings = members.Select(goal => new MergeTrainMemberBinding(goal.Id,
+                new string('b', 40), new string('b', 40), [], [], ChangeRiskTier.Behavior,
+                ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected", new string('c', 40))).ToArray();
+            var identity = MergeTrainIdentity.Create(bindings, new string('a', 40), new string('c', 40), "manifest");
+            var store = new MergeTrainAcceptanceStore(Path.Combine(Root, "merge-train-acceptance.db"));
+            store.SaveGateReceipt(new MergeTrainReceipt("receipt-" + id, identity, MergeTrainGateOutcome.Failed,
+                Earlier, 10, ["gate"], 1, []) { GateAttemptId = innerAttemptId });
+            var attempt = Group("train", id, members) with { IdentityValue = identity.Value, StateDirectory = Root };
+            ConductorGroupedGateAttemptCoordinator.Save(attempt);
+            return attempt;
+        }
+
+        internal void Eject(string innerAttemptId, Goal goal) =>
+            new MergeTrainAcceptanceStore(Path.Combine(Root, "merge-train-acceptance.db")).RecordEjections(
+                innerAttemptId, [new(goal.Id, MergeTrainEjectionReason.RedNewestMember, [], "Dropped after RED.")]);
 
         internal Task<OperatorIntentRecord> Queue(Goal goal, bool priority = false)
         {

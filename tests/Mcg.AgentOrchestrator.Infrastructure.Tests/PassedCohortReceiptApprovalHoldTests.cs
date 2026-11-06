@@ -51,7 +51,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     }
 
     [Fact]
-    public void ApprovalRecorded_NextTickLandsBothMembersFromSameReceiptWithoutNewGate()
+    public void ApprovalRecorded_FactsRefreshThenLandsBothFromReceiptWithoutNewGate()
     {
         using var scenario = new Scenario();
         using (Scenario.PauseNewGates())
@@ -68,9 +68,11 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             [], "owner", "cli", "local-process", DateTimeOffset.UtcNow, ActorKind: OperatorActorKind.Human);
         store.EnqueueAsync(intent).GetAwaiter().GetResult();
         var decisions = CollaborationItemStore.ForDirectory(scenario.Workspace.OrchestratorDirectory);
-        var progress = scenario.Tick(new OperatorIntentCoordinator(store, decisions: decisions,
+        var pending = scenario.Tick(new OperatorIntentCoordinator(store, decisions: decisions,
             goalStateVersionResolver: _ => 0));
         Assert.Equal(OperatorIntentStatus.Applied, store.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);
+        Assert.Contains(pending, line => line.Contains("reason=admission-facts-pending", StringComparison.Ordinal));
+        var progress = scenario.Tick();
         Assert.Contains(progress, line => line.Contains(
             $"prelanded=true outcome=passed receipt={scenario.Receipt.ReceiptId}", StringComparison.Ordinal));
         Assert.Equal(gateCount, scenario.Verifier.RunCount);
@@ -261,10 +263,12 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             Assert.True(_started.Wait(TimeSpan.FromSeconds(30)), "Ordinary admission did not start a new gate.");
 
         internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null,
-            ConductEventLogWriter? events = null)
+            ConductEventLogWriter? events = null, bool waitForAdmissionFacts = true,
+            Action<AgentOrchestratorKernel>? sweep = null)
         {
+            if (waitForAdmissionFacts) WarmAdmissionFacts();
             BatchTickSummary? tick = null;
-            new ConductorBatchLoop(operatorIntents: intents, conductEventLogWriter: events).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
+            new ConductorBatchLoop(operatorIntents: intents, conductEventLogWriter: events, sweep: sweep).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
                 Path.Combine(Repo, "stop-does-not-exist"), maxIterations: 1, onTick: summary => tick = summary,
                 persistGoalTick: (kernel, ids) =>
                 {
@@ -274,8 +278,18 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             return tick.ProgressLines;
         }
 
+        internal void WarmAdmissionFacts()
+        {
+            AdmissionFactsTestData.Warm(Driver, Kernel);
+            // Setup derivation diagnostics are outside the tick/projection being observed.
+            _ = Driver.AdmissionFacts.Reader!.DrainReports().ToArray();
+        }
+
         public void Dispose()
         {
+            Driver.AdmissionFacts.Stop();
+            if (Driver.AdmissionFacts.Reader is { } reader)
+                AdmissionFactsTestData.Wait(reader.Derivation.Completion, "Scenario admission worker did not exit.");
             _release.Set();
             var drained = SpinWait.SpinUntil(() => Driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(30));

@@ -11,6 +11,23 @@ Names must match `^MCG_TEST_[A-Z0-9_]+$` exactly; duplicates, lane-owned names (
 Values must be non-empty strings without NUL, CR or LF; they are passed without normalization.
 Manifest values override child overrides for those names. Ambient test settings are never inherited.
 
+The operator-owned `remote-lane-executors.json` can overlay those defaults per host. An executor's
+optional `testSettings` object applies to its remote lanes; top-level `localTestSettings` applies to
+the conductor's local lanes. For example, `"localTestSettings":{"MCG_TEST_HOST_CAPACITY_SLOTS":"3"}`
+and an executor's `"testSettings":{"MCG_TEST_HOST_CAPACITY_SLOTS":"2"}` override a manifest pin of 4
+on their respective hosts. Both maps use the validation above. Omitted maps and `{}` add no overrides;
+explicit `null` is invalid. An invalid executor map disables only that executor with reason
+`invalid-test-settings`. An invalid local map prints `LOCAL_TEST_SETTINGS_IGNORED` and retains all
+manifest defaults. Ambient values remain ignored.
+
+Settings are captured once per attempt. The lane plan's `laneTestSettings` records each launch's
+lane, execution host (`local` or configured executor id), and effective map, including remote-to-local
+fallbacks. Remote jobs carry `testSettings` and `testSettingsHost`; local slot-timing ledger rows carry
+`test_settings` and `test_settings_host`, including failed runs. Unlaunched or reused lanes get no
+launch binding. The plan-level `testSettings` remains the declared manifest defaults. Host maps and
+host references are execution metadata: manifest identity, partition reuse keys and receipt candidate
+identity continue to depend only on the declared manifest settings.
+
 The lane plan records the complete settings map, including an empty object when none are declared.
 Remote jobs carry the same snapshot through the executor's sealed runner and echo it in status.
 A missing or different echo for declared settings causes `BindingMismatchTestSettings` and local

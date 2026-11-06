@@ -44,6 +44,7 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
             starts.Capture(driver);
             var logPath = Path.Combine(repo, "train-width-conduct.jsonl");
             BatchTickSummary? observed = null;
+            AdmissionFactsTestData.Warm(driver, kernel);
             _ = new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(logPath))
                 .Run(kernel, driver, ConductorAutonomyPolicy.Permissive with { AcceptanceWidth = 1 },
                     Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1,

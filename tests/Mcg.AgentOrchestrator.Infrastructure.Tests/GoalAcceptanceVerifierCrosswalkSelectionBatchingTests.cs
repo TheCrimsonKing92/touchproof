@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // The fixture changes the process-wide attempt prefix, so use the acceptance collection.
@@ -17,9 +16,9 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
 
         Assert.True(check.Passed, check.OutputTail);
         Assert.Equal(2, fixture.Calls.Count);
-        Assert.Contains(" list ", fixture.Calls[0].Command);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root), fixture.Calls[1].Command);
-        Assert.DoesNotContain("--id", fixture.Calls[1].Command);
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, fixture.Calls[0].Arguments);
+        Assert.Equal(new[] { fixture.Binary, "run", fixture.Root }, fixture.Calls[1].Arguments);
+        Assert.DoesNotContain("--id", fixture.Calls[1].Arguments);
         Assert.Equal("crosswalk: selected=600 results=600", check.ResultSummary);
         Assert.Equal(600, check.ExecutedTestCount);
         Assert.Single(check.NormalizedTestResultPaths!);
@@ -37,7 +36,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
 
         Assert.False(check.Passed);
         Assert.Equal(2, fixture.Calls.Count);
-        Assert.DoesNotContain("--id", fixture.Calls[1].Command);
+        Assert.DoesNotContain("--id", fixture.Calls[1].Arguments);
         var diagnostic = Assert.Single(check.CrosswalkDiagnostics!, d => d.Category == CrosswalkDiagnosticCategory.MissingCoverage);
         Assert.Contains(ids[^1], diagnostic.Detail);
         Assert.DoesNotContain(ids[0], diagnostic.Detail);
@@ -56,8 +55,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
             clock.Advance(TimeSpan.FromSeconds(1));
             return Task.FromResult(fixture.Result(IsList(command) ? fixture.Discovery : Report(SelectedIds(command))));
         };
-        Assert.True(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root,
-            string.Concat(ids.Select(CrosswalkClient.IdArgument))).Length > 30_000);
+        Assert.True(CrosswalkClient.CmdRenderedLength(new[] { fixture.Binary, "run", fixture.Root }.Concat(ids.SelectMany(id => new[] { "--id", id }))) > 30_000);
         Assert.Equal(7_500, CrosswalkAcceptanceCheck.RunCommandLineLimit);
 
         var check = await fixture.RunAsync();
@@ -67,13 +65,12 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
         Assert.True(runs.Length > 1);
         Assert.All(runs, run =>
         {
-            Assert.True(run.Command.Length < CrosswalkAcceptanceCheck.RunCommandLineLimit);
-            Assert.Contains(" run ", run.Command);
-            Assert.NotEmpty(SelectedIds(run.Command));
-            Assert.Equal(CrosswalkClient.Command(fixture.Binary, "run", fixture.Root,
-                string.Concat(SelectedIds(run.Command).Select(CrosswalkClient.IdArgument))), run.Command);
+            Assert.True(CrosswalkClient.CmdRenderedLength(run.Arguments) < CrosswalkAcceptanceCheck.RunCommandLineLimit);
+            Assert.Equal("run", run.Arguments[1]);
+            Assert.NotEmpty(SelectedIds(run.Arguments));
+            Assert.Equal(new[] { fixture.Binary, "run", fixture.Root }.Concat(SelectedIds(run.Arguments).SelectMany(id => new[] { "--id", id })).ToArray(), run.Arguments);
         });
-        Assert.Equal(ids, runs.SelectMany(run => SelectedIds(run.Command)).ToArray());
+        Assert.Equal(ids, runs.SelectMany(run => SelectedIds(run.Arguments)).ToArray());
         for (var index = 1; index < fixture.Calls.Count; index++)
             Assert.Equal(fixture.Calls[index - 1].Budget - TimeSpan.FromSeconds(1), fixture.Calls[index].Budget);
         Assert.Equal("crosswalk: selected=600 results=600", check.ResultSummary);
@@ -92,7 +89,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
         var check = await fixture.RunAsync();
 
         Assert.True(check.Passed, check.OutputTail);
-        Assert.Equal(new[] { ids[41], ids[2] }, SelectedIds(fixture.Calls[1].Command));
+        Assert.Equal(new[] { ids[41], ids[2] }, SelectedIds(fixture.Calls[1].Arguments));
         Assert.Equal(600, check.DiscoveredTestCount);
         Assert.Equal("crosswalk: selected=2 results=2", check.ResultSummary);
     }
@@ -168,7 +165,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
         var check = await fixture.RunAsync();
 
         Assert.False(check.Passed);
-        Assert.Equal(ids, fixture.Calls.Skip(1).SelectMany(call => SelectedIds(call.Command)).ToArray());
+        Assert.Equal(ids, fixture.Calls.Skip(1).SelectMany(call => SelectedIds(call.Arguments)).ToArray());
         Assert.Equal(1, check.ExitCode);
         Assert.Equal(600, check.ExecutedTestCount);
         Assert.Equal(ids[0], Assert.Single(check.FailingTestIdentities!));
@@ -237,9 +234,8 @@ public sealed class GoalAcceptanceVerifierCrosswalkSelectionBatchingTests
         return fixture;
     }
 
-    private static bool IsList(string command) => command.Contains(" list ", StringComparison.Ordinal);
-    private static string[] SelectedIds(string command) => Regex.Matches(command, @" --id '((?:[^']|'')*)'")
-        .Select(match => match.Groups[1].Value.Replace("''", "'", StringComparison.Ordinal)).ToArray();
+    private static bool IsList(string[] command) => command[1] == "list";
+    private static string[] SelectedIds(string[] command) => command.Skip(3).Chunk(2).Select(pair => pair[1]).ToArray();
     private static string Report(IEnumerable<string> ids) => CrosswalkAcceptanceFixture.Report(ids.Select(id => (id, "passed")).ToArray());
 
     private sealed class SelectionClock : TimeProvider

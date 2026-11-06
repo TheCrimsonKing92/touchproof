@@ -264,7 +264,7 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         }
     }
 
-    private static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.EnsureInitialized();
+    private protected static string EnsureSeedRepositoryProcessRoot() => SeedRepositoryProcessRoot.EnsureInitialized();
 
     private protected static string BuildSeedRepositoryContainerName(
         long processStartTimeUtcTicks,
@@ -282,6 +282,11 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
             SeedRepositoryProcessRootPath,
             TempRootJanitor.DeleteTree,
             path => Directory.CreateDirectory(path));
+
+    private protected static (string Repo, string Worktree) CreateGoalBranchScenario(
+        string repo, GoalId goalId, string relativePath, string content, string message = "Goal work",
+        GoalBranchScenarioTemplate.BaseKind kind = GoalBranchScenarioTemplate.BaseKind.GoalWorktreeDefault) =>
+        (repo, GoalBranchScenarioTemplate.Materialize(repo, kind, goalId, relativePath, content, message));
 
     private protected static string CreateSeededRepository()
     {

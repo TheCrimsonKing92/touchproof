@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -13,7 +12,7 @@ public sealed class CrosswalkUnmatchedSelectorRefusalTests
         using var fixture = new Fixture(ids.Append(ids[0].Replace("case", "second", StringComparison.Ordinal)).ToArray());
         var check = fixture.Build("NoSuchSuite", "AlsoAbsent");
         var result = await fixture.RunAsync(check);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "list", fixture.Root), Assert.Single(fixture.Calls));
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, Assert.Single(fixture.Calls));
         Assert.False(result.Passed);
         Assert.Equal(0, result.ExecutedTestCount);
         Assert.Empty(result.NormalizedTestResultPaths!);
@@ -51,7 +50,7 @@ public sealed class CrosswalkUnmatchedSelectorRefusalTests
         Assert.Contains("selector matched no discovered test: NoSuchSuite", result.Summary);
         Assert.Null(result.OutcomeReason);
         Assert.Null(result.Arms);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "list", fixture.Root), Assert.Single(fixture.Calls));
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, Assert.Single(fixture.Calls));
     }
 
     [Fact]
@@ -84,7 +83,7 @@ public sealed class CrosswalkUnmatchedSelectorRefusalTests
         using var fixture = new Fixture([]);
         var check = fixture.Build(selector);
         var result = await fixture.RunAsync(check);
-        Assert.Equal(CrosswalkClient.Command(fixture.Binary, "list", fixture.Root), Assert.Single(fixture.Calls));
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, Assert.Single(fixture.Calls));
         Assert.Equal("selector matched no discovered test: " + selector + "; discovered test files: ", Assert.Single(result.CrosswalkDiagnostics!).Detail);
         Assert.True(CrosswalkSelectorResolution.TryBuildRejection("request", [check], [result], out _));
     }
@@ -104,7 +103,7 @@ public sealed class CrosswalkUnmatchedSelectorRefusalTests
     {
         internal string Root { get; } = InfrastructureTestSupport.CreateTempDirectory();
         internal string Binary => Path.Combine(Root, "crosswalk.exe");
-        internal List<string> Calls { get; } = [];
+        internal List<string[]> Calls { get; } = [];
         internal string DiscoveryJson { get; init; } = CrosswalkAcceptanceFixture.List(discovered);
 
         internal Check Build(params string[] selectors)
@@ -128,16 +127,15 @@ public sealed class CrosswalkUnmatchedSelectorRefusalTests
                 _ => new(null, "test", check.Name, null, Path.Combine(Root, "heartbeat"), null, "stub", null),
                 (arguments, _, _, _, _, _) =>
                 {
-                    var command = arguments[^1];
+                    var command = arguments;
                     Calls.Add(command);
-                    var json = command.Contains(" list ", StringComparison.Ordinal) ? DiscoveryJson
+                    var json = command[1] == "list" ? DiscoveryJson
                         : CrosswalkAcceptanceFixture.Report(SelectedIds(command).Select(id => (id, "passed")).ToArray());
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, json) { StandardOutput = json });
                 }, CancellationToken.None);
         }
 
-        internal static string[] SelectedIds(string command) => Regex.Matches(command, @" --id '((?:[^']|'')*)'")
-            .Select(match => match.Groups[1].Value.Replace("''", "'", StringComparison.Ordinal)).ToArray();
+        internal static string[] SelectedIds(string[] command) => command.Skip(3).Chunk(2).Select(pair => pair[1]).ToArray();
 
         public void Dispose() => Directory.Delete(Root, recursive: true);
     }

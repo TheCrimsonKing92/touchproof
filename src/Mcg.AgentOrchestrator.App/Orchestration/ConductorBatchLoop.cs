@@ -1454,7 +1454,7 @@ internal sealed partial class ConductorBatchLoop
                     goalProjectionCache.Invalidate(goal.Id);
                 }
 
-                TrackGoalOutcomeAndCapacity(
+                if (!AdmissionFactsPendingAdmission.IsPending(result)) TrackGoalOutcomeAndCapacity(
                     kernel,
                     driver,
                     goal,
@@ -1470,7 +1470,7 @@ internal sealed partial class ConductorBatchLoop
                     serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
                 goalProgressFields[goalProgressLine] = GoalProgressEventFields.From(goal.Id.Value,
                     result.Outcome, serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
-                if (RecordChangedDisposition(
+                if (!AdmissionFactsPendingAdmission.IsPending(result) && RecordChangedDisposition(
                     goal.Id.Value,
                     goalProgressLine,
                     lastGoalDisposition,
@@ -1771,6 +1771,7 @@ internal sealed partial class ConductorBatchLoop
         finally
         {
             StopStewardAndAuthor();
+            driver.AdmissionFacts.Stop();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
@@ -1781,7 +1782,6 @@ internal sealed partial class ConductorBatchLoop
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
-
     private static void TryWriteAbnormalExitDiagnosticFailure(string sink, Exception exception)
     {
         try
