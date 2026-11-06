@@ -146,6 +146,19 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private string? _gateAttemptId;
     private bool _disposed;
     internal AcceptanceBalancedLanePlanWriter? BalancedPlan { get; set; }
+    private AcceptanceHostTestSettings? _hostTestSettings;
+    internal static AcceptanceHostTestSettings? CurrentHostTestSettings => CurrentAccountant.Value?._hostTestSettings;
+    internal static void SetCurrentHostTestSettings(AcceptanceHostTestSettings settings)
+    {
+        if (CurrentAccountant.Value is { } accountant) accountant._hostTestSettings = settings;
+    }
+    internal static void RecordCurrentTestSettings(AcceptanceHostTestSettings.Binding? binding)
+    {
+        if (binding is not null) CurrentAccountant.Value?.BalancedPlan?.RecordTestSettings(binding);
+    }
+    internal static AcceptanceHostTestSettings.Binding? CurrentLocalTestSettingsFor(string lane) =>
+        CurrentAccountant.Value?.BalancedPlan?.Snapshot.LaneTestSettings.LastOrDefault(binding =>
+            binding.Lane == lane && binding.Host == AcceptanceHostTestSettings.LocalHost);
 
     internal static void RecordCurrentClassResults(GoalAcceptanceVerifier.AcceptanceManifestCheck check, AcceptanceCheckResult result) =>
         CurrentAccountant.Value?.BalancedPlan?.Record(check, result);

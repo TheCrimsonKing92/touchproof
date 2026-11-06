@@ -76,6 +76,10 @@ public sealed partial class GoalAcceptanceVerifier
     {
         var configuration = RemoteLaneExecutorConfiguration.Load(_testOverrides.RemoteLaneExecutorConfigurationPathForTests ??
             RemoteLaneExecutorConfiguration.ResolveStorePath(worktreePath));
+        var hostTestSettings = AcceptanceHostTestSettings.Resolve(EngineSettings.DeclaredTestSettings, configuration);
+        AcceptanceGatePhaseAccountant.SetCurrentHostTestSettings(hostTestSettings);
+        if (configuration.LocalTestSettingsFault is { } fault)
+            Console.WriteLine($"LOCAL_TEST_SETTINGS_IGNORED reason={fault}");
         if (!configuration.Enabled)
         {
             var line = $"REMOTE_LANES_DISABLED reason={configuration.DisabledReason}";
@@ -116,7 +120,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
-            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, TestSettings = EngineSettings.DeclaredTestSettings };
+            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, HostTestSettings = hostTestSettings };
         _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
@@ -283,7 +287,7 @@ public sealed partial class GoalAcceptanceVerifier
             AcceptanceGatePhaseAccountant.RecordCurrentLaneSample(shardElapsed);
             outcomes[shard.Index] = new ShardRunOutcome(result, retried);
             AcceptanceLaneDurationStore.Record(shard.Check, result, shardElapsed);
-            var slowdown = GateLaneReceiptLedger.Record(worktreePath, goalId?.Value, shard.Check.Name, result, shardElapsed, _timeProvider.GetUtcNow());
+            var slowdown = GateLaneReceiptLedger.Record(worktreePath, goalId?.Value, shard.Check.Name, result, shardElapsed, _timeProvider.GetUtcNow(), testSettings: result.TestResultIsExplicitCrossAttemptReuse ? null : AcceptanceGatePhaseAccountant.CurrentLocalTestSettingsFor(shard.Check.Name));
             EmitShardTimingProgress(goalId, "shard-complete", shard.Check.Name, primarySlotIndex, shardElapsed, shardConcurrency.Count, _storageRoot, EmitGateProgress, result);
             GateLaneSlowdownDiff.TryEmitProgress(slowdown, goalId?.Value, shard.Check.Name, shardElapsed, EmitGateProgress);
         }

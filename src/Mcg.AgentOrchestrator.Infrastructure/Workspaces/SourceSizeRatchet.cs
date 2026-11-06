@@ -84,7 +84,9 @@ internal static class SourceSizeRatchet
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 652),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 535),
+            // Goal 6a75c73d records the host test-settings binding after process start succeeds; its request
+            // property moved with the request record into AcceptanceProcessRequest.cs (goal 18718c48).
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 536),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -620,7 +622,8 @@ internal static class SourceSizeRatchet
             // Goal 7ddf0b64 extracts owner-protected configuration decisions into OwnerProtectedConfigurationPolicy.
             // Goal 8846120e extracts AcceptanceProcessRunner; main d2ecd0a2e integrated, measured 7830 lines in 26 partials.
             // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6916, 17),
+            // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6920, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

@@ -46,7 +46,11 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
     internal RemoteLaneOccupancyHeartbeat? Occupancy { get; set; }
     internal AcceptanceLaneWaitCollector? WaitCollector { get; init; }
-    internal IReadOnlyDictionary<string, string> TestSettings { get; init; } = AcceptanceDeclaredTestSettings.Empty;
+    internal AcceptanceHostTestSettings HostTestSettings { get; init; }
+    internal IReadOnlyDictionary<string, string> TestSettings
+    {
+        init => HostTestSettings = AcceptanceHostTestSettings.Resolve(value, _configuration);
+    }
     private readonly Dictionary<string, AcceptanceLaneWaitCollector.Occurrence> _waits = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
@@ -56,6 +60,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         RemoteExecutorClaimClass claimClass = RemoteExecutorClaimClass.Gate)
     {
         _configuration = configuration;
+        HostTestSettings = AcceptanceHostTestSettings.Resolve(AcceptanceDeclaredTestSettings.Empty, configuration);
         _worktreePath = worktreePath;
         _cache = cache;
         _executor = executor;
@@ -244,7 +249,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             request = CreateRequest(check, "");
             if (!_noSlotLanes.Add(request.Lane)) return;
             occupancy = RemoteExecutorOccupancyCensus.Take(_occupancyRoot,
-                _configuration.Executors.Select(executor => (executor.Id, !executor.AdmissionEnabled ? "disabled" : _retired.Contains(executor.Id) ? "retired" :
+                _configuration.Executors.Select(executor => (executor.Id, !executor.AdmissionEnabled ? executor.DisabledReason ?? "disabled" : _retired.Contains(executor.Id) ? "retired" :
                     _busyUntil.TryGetValue(executor.Id, out var until) && until > _clock.GetUtcNow() ? "backoff" : "full")));
         }
         Record(request, RemoteLaneOutcomeCode.OfferSkippedNoExecutor,
@@ -284,16 +289,20 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private RemoteLaneRequest CreateRequest(Check check, string executorId)
     {
         GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out var filter);
+        var binding = HostTestSettings.ForExecutor(check.Name, executorId);
         return new(executorId, _cache.AttemptId, _cache.GoalId, check.Name, check.Project!, filter,
             GoalAcceptanceVerifier.ShortHash(filter), _cache.VerifyingCommitSha, _cache.CandidateTreeSha,
-            _cache.MainSha, _cache.ManifestIdentity, TestSettings: TestSettings);
+            _cache.MainSha, _cache.ManifestIdentity, TestSettings: binding.Settings, TestSettingsHost: binding.Host);
     }
 
     internal RemoteLaneRequest CreateRequest(string lane, string project, string filter,
-        IRemoteLaneCandidateIdentity identity, string executorId) =>
-        new(executorId, identity.AttemptId, identity.GoalId, lane, project, filter,
+        IRemoteLaneCandidateIdentity identity, string executorId)
+    {
+        var binding = HostTestSettings.ForExecutor(lane, executorId);
+        return new(executorId, identity.AttemptId, identity.GoalId, lane, project, filter,
             GoalAcceptanceVerifier.ShortHash(filter), identity.VerifyingCommitSha, identity.CandidateTreeSha,
-            identity.MainSha, identity.ManifestIdentity, TestSettings: TestSettings);
+            identity.MainSha, identity.ManifestIdentity, TestSettings: binding.Settings, TestSettingsHost: binding.Host);
+    }
 
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, TimeSpan deadline, CancellationToken cancellationToken,
@@ -369,6 +378,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     ? RemoteLaneOutcomeCode.TransportUnavailable : RemoteLaneOutcomeCode.Unreachable,
                     reason: submission.FailureReason).ConfigureAwait(false);
             lock (_gate) _handles.Add(handle);
+            AcceptanceGatePhaseAccountant.RecordCurrentTestSettings(new(request.Lane, request.TestSettingsHost!, request.TestSettings!));
             var heartbeat = submittedAt;
             while (true)
             {
