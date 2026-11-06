@@ -131,9 +131,23 @@ internal sealed class HandleListLaunchedProcess : IDisposable
             EffectiveCreationFlags = creationFlags | HandleListProcessLauncher.UnicodeEnvironment | HandleListProcessLauncher.ExtendedStartup |
                 (StartInfo.CreateNoWindow ? ChildConsoleLaunchPolicy.CreateNoWindow : 0) |
                 (StartInfo.CreateNewProcessGroup ? 0x200u : 0);
-            var created = HandleListProcessLauncher.Create(application, command, environment,
+            HandleListProcessLauncher.Creation Create() => HandleListProcessLauncher.Create(application, command, environment,
                 string.IsNullOrWhiteSpace(StartInfo.WorkingDirectory) ? null : StartInfo.WorkingDirectory,
                 EffectiveCreationFlags, stdin, stdout, stderr, handles, out createTicks, job);
+            HandleListProcessLauncher.Creation created;
+            if (redirected)
+            {
+                lock (HandleListProcessLauncher.InheritanceLock)
+                {
+                    try
+                    {
+                        foreach (var child in children) HandleListProcessLauncher.MakeInheritable(child);
+                        created = Create();
+                    }
+                    finally { foreach (var child in children) child.Dispose(); }
+                }
+            }
+            else created = Create();
             handle = new SafeProcessHandle(created.ProcessHandle, ownsHandle: true);
             using var thread = new SafeFileHandle(created.ThreadHandle, ownsHandle: true);
             id = created.ProcessId;

@@ -129,18 +129,18 @@ internal sealed class OwnedProcessGroup : IDisposable
                 "Suspended redirected owned-process launch requires UseShellExecute=false and all standard streams redirected.");
         }
 
-        var stdin = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
-        var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
-        var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var stdin = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
+        var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
+        var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.None);
         var group = CreateContained();
         try
         {
             var processStart = WindowsJob.StartSuspendedInJobWithStandardHandles(
                 group._jobHandle!,
                 startInfo,
-                stdin.ClientSafePipeHandle.DangerousGetHandle(),
-                stdout.ClientSafePipeHandle.DangerousGetHandle(),
-                stderr.ClientSafePipeHandle.DangerousGetHandle());
+                stdin.ClientSafePipeHandle,
+                stdout.ClientSafePipeHandle,
+                stderr.ClientSafePipeHandle);
             stdin.DisposeLocalCopyOfClientHandle();
             stdout.DisposeLocalCopyOfClientHandle();
             stderr.DisposeLocalCopyOfClientHandle();
@@ -814,13 +814,13 @@ internal sealed class OwnedProcessGroup : IDisposable
         public static WindowsSuspendedProcess StartSuspendedInJobWithStandardHandles(
             SafeFileHandle job,
             ProcessStartInfo startInfo,
-            IntPtr stdin,
-            IntPtr stdout,
-            IntPtr stderr) =>
+            SafePipeHandle stdin,
+            SafePipeHandle stdout,
+            SafePipeHandle stderr) =>
             StartSuspendedInJobCore(
                 job,
                 startInfo,
-                () => InheritableStandardHandles.Borrowed(stdin, stdout, stderr),
+                () => InheritableStandardHandles.DuplicateForRedirectedPipes(stdin, stdout, stderr),
                 inheritableWindowObserver: null, requestOwnConsole: false);
 
         public static int ReadProcessExitCode(SafeFileHandle processHandle)
@@ -840,8 +840,8 @@ internal sealed class OwnedProcessGroup : IDisposable
             Action? inheritableWindowObserver, bool requestOwnConsole,
             ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null)
         {
-            // Everything that can allocate, enumerate, or throw is done before any inheritable handle
-            // exists, so the process-global inheritance window is only the CreateProcessW call itself.
+            // Prepare before exposing child handles. Pipe duplicates become inheritable only under
+            // the runtime's process-creation monitor, after suppression has taken its own lock.
             var commandLine = new StringBuilder(BuildCommandLine(startInfo));
             var environment = BuildEnvironmentBlock(startInfo.Environment);
             var workingDirectory = string.IsNullOrWhiteSpace(startInfo.WorkingDirectory)
@@ -857,18 +857,41 @@ internal sealed class OwnedProcessGroup : IDisposable
             try
             {
                 using var standardHandles = acquireStandardHandles();
-                inheritableWindowObserver?.Invoke();
-                try
+                HandleListProcessLauncher.Creation Create()
                 {
-                    processInformation = HandleListProcessLauncher.Create(null, commandLine.ToString(), environment,
-                        workingDirectory, CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | policy.ChildCreationFlags,
-                        standardHandles.StandardInput, standardHandles.StandardOutput, standardHandles.StandardError,
-                        standardHandles.InheritedHandles, out createTicks, job);
+                    try
+                    {
+                        return HandleListProcessLauncher.Create(null, commandLine.ToString(), environment,
+                            workingDirectory, CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | policy.ChildCreationFlags,
+                            standardHandles.StandardInput, standardHandles.StandardOutput, standardHandles.StandardError,
+                            standardHandles.InheritedHandles, out createTicks, job);
+                    }
+                    catch (Win32Exception failure)
+                    {
+                        throw new OwnedProcessLaunchException(failure.NativeErrorCode,
+                            "Failed to start suspended process in owned job object.", CaptureLaunchFailureEvidence(job));
+                    }
                 }
-                catch (Win32Exception failure)
+                if (standardHandles.HasPipe)
                 {
-                    throw new OwnedProcessLaunchException(failure.NativeErrorCode,
-                        "Failed to start suspended process in owned job object.", CaptureLaunchFailureEvidence(job));
+                    // Observers can start other processes; never call one with this monitor held.
+                    inheritableWindowObserver?.Invoke();
+                    lock (HandleListProcessLauncher.InheritanceLock)
+                    {
+                        try
+                        {
+                            standardHandles.MakeInheritable();
+                            processInformation = Create();
+                        }
+                        finally { standardHandles.Dispose(); }
+                    }
+                }
+                else
+                {
+                    // Preserve the disk-capture observer's deliberately exposed file window.
+                    standardHandles.MakeInheritable();
+                    inheritableWindowObserver?.Invoke();
+                    processInformation = Create();
                 }
             }
             finally
@@ -948,17 +971,13 @@ internal sealed class OwnedProcessGroup : IDisposable
         }
 
         /// <summary>
-        /// Standard handles supplied to a single CreateProcessW call. Capture-file handles are owned:
-        /// they are inheritable duplicates created immediately before the launch and closed immediately
-        /// after it, which narrows the window in which they are inheritable to that one call rather than
-        /// eliminating it. Any unrelated CreateProcessW that this process issues with bInheritHandle=TRUE
-        /// while the window is open still inherits them - that is exactly what the two-arm inheritance
-        /// control in PostLandingCanaryCaptureAvailabilityTests demonstrates, and why a retained capture
-        /// can be held by a process this group never launched. Pipe handles are borrowed and their
-        /// lifetime stays with the caller that created them.
+        /// Owns private duplicates for one CreateProcessW call. Pipe duplicates are exposed and
+        /// disposed under the runtime monitor; original pipe handles always remain non-inheritable.
+        /// Disk-file captures retain their observable inheritance window for the canary control.
         /// </summary>
         private readonly struct InheritableStandardHandles : IDisposable
         {
+            private readonly SafeFileHandle? _ownedStandardInput;
             private readonly SafeFileHandle? _ownedStandardOutput;
             private readonly SafeFileHandle? _ownedStandardError;
 
@@ -967,6 +986,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 IntPtr standardOutput,
                 IntPtr standardError,
                 IReadOnlyList<IntPtr> inheritedHandles,
+                SafeFileHandle? ownedStandardInput,
                 SafeFileHandle? ownedStandardOutput,
                 SafeFileHandle? ownedStandardError)
             {
@@ -974,6 +994,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 StandardOutput = standardOutput;
                 StandardError = standardError;
                 InheritedHandles = inheritedHandles;
+                _ownedStandardInput = ownedStandardInput;
                 _ownedStandardOutput = ownedStandardOutput;
                 _ownedStandardError = ownedStandardError;
             }
@@ -986,44 +1007,69 @@ internal sealed class OwnedProcessGroup : IDisposable
 
             public IReadOnlyList<IntPtr> InheritedHandles { get; }
 
-            public static InheritableStandardHandles AcquireNone() =>
-                new(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, [], null, null);
+            public bool HasPipe => InheritedHandles.Any(IsPipe);
 
-            public static InheritableStandardHandles Borrowed(IntPtr stdin, IntPtr stdout, IntPtr stderr) =>
-                new(stdin, stdout, stderr, [stdin, stdout, stderr], null, null);
+            private static bool IsPipe(IntPtr handle)
+            {
+                var type = GetFileType(handle);
+                if (type == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+                return type == 3; // FILE_TYPE_PIPE
+            }
+
+            public void MakeInheritable()
+            {
+                if (_ownedStandardInput is not null) HandleListProcessLauncher.MakeInheritable(_ownedStandardInput);
+                if (_ownedStandardOutput is not null) HandleListProcessLauncher.MakeInheritable(_ownedStandardOutput);
+                if (_ownedStandardError is not null) HandleListProcessLauncher.MakeInheritable(_ownedStandardError);
+            }
+
+            public static InheritableStandardHandles AcquireNone() =>
+                new(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, [], null, null, null);
+
+            public static InheritableStandardHandles DuplicateForRedirectedPipes(
+                SafePipeHandle stdin, SafePipeHandle stdout, SafePipeHandle stderr) => Duplicate(stdin, stdout, stderr);
 
             public static InheritableStandardHandles DuplicateForCapture(
                 SafeFileHandle standardOutput,
-                SafeFileHandle standardError)
+                SafeFileHandle standardError) => Duplicate(null, standardOutput, standardError);
+
+            private static InheritableStandardHandles Duplicate(SafeHandle? stdin, SafeHandle stdout, SafeHandle stderr)
             {
-                var ownedStandardOutput = DuplicateAsInheritable(standardOutput);
+                SafeFileHandle? ownedStandardInput = null, ownedStandardOutput = null, ownedStandardError = null;
                 try
                 {
-                    var ownedStandardError = DuplicateAsInheritable(standardError);
-                    var stdout = ownedStandardOutput.DangerousGetHandle();
-                    var stderr = ownedStandardError.DangerousGetHandle();
+                    if (stdin is not null) ownedStandardInput = DuplicateForChild(stdin);
+                    ownedStandardOutput = DuplicateForChild(stdout);
+                    ownedStandardError = DuplicateForChild(stderr);
+                    var input = ownedStandardInput?.DangerousGetHandle() ?? IntPtr.Zero;
+                    var output = ownedStandardOutput.DangerousGetHandle();
+                    var error = ownedStandardError.DangerousGetHandle();
                     return new InheritableStandardHandles(
-                        IntPtr.Zero,
-                        stdout,
-                        stderr,
-                        [stdout, stderr],
+                        input,
+                        output,
+                        error,
+                        input == IntPtr.Zero ? [output, error] : [input, output, error],
+                        ownedStandardInput,
                         ownedStandardOutput,
                         ownedStandardError);
                 }
                 catch
                 {
-                    ownedStandardOutput.Dispose();
+                    ownedStandardInput?.Dispose();
+                    ownedStandardOutput?.Dispose();
+                    ownedStandardError?.Dispose();
                     throw;
                 }
             }
 
             public void Dispose()
             {
+                _ownedStandardInput?.Dispose();
                 _ownedStandardOutput?.Dispose();
                 _ownedStandardError?.Dispose();
             }
 
-            private static SafeFileHandle DuplicateAsInheritable(SafeFileHandle source)
+            private static SafeFileHandle DuplicateForChild(SafeHandle source)
             {
                 var addedRef = false;
                 try
@@ -1036,7 +1082,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                             currentProcess,
                             out var duplicate,
                             0,
-                            true,
+                            false,
                             DuplicateSameAccess) ||
                         duplicate.IsInvalid)
                     {
@@ -1058,6 +1104,9 @@ internal sealed class OwnedProcessGroup : IDisposable
                 }
             }
         }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint GetFileType(IntPtr handle);
 
         public static string CaptureAssignmentFailureEvidence(SafeFileHandle ownedJob, Process candidate)
         {
