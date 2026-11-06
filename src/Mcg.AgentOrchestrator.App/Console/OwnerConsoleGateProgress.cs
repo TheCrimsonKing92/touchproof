@@ -34,7 +34,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyDictionary<string, OwnerConsoleGateProgress>? MemberViews = null,
     IReadOnlyList<OwnerConsoleGateProgress>? Executions = null,
     bool? EtaAvailable = null, DateTimeOffset? AdmittedAt = null,
-    IReadOnlyList<OwnerConsoleGateProgress>? ConcurrentRuns = null)
+    IReadOnlyList<OwnerConsoleGateProgress>? ConcurrentRuns = null,
+    string? FinalOutcome = null, DateTimeOffset? FinishedAt = null, TimeSpan? FinishedAge = null)
 {
     internal bool ScheduleKnown => LanePlanAvailable != false;
     internal bool HasEta => EtaAvailable ?? ScheduleKnown;
@@ -139,7 +140,7 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
         lanes ??= new OwnerConsoleGateLaneResolver(manifest);
         var snapshots = gates.Values.Select(Snapshot).ToArray();
         var live = snapshots.Where(gate => gate.Live).OrderBy(gate => gate.StartedAt).ToArray();
-        var views = MemberProjections(snapshots, ejections);
+        var views = MemberProjections(snapshots, ejections, now);
         var primary = live.FirstOrDefault() ?? Idle(lastEnd is null ? null : Nonnegative(now - lastEnd.Value));
         return primary with { OtherLiveGates = live.Skip(1).ToArray(), MemberViews = views, Executions = snapshots };
 
@@ -268,7 +269,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
                 (int)remaining, done.Length, counted.Length,
                 LanePlanAvailable: plan is not null, ExecutionId: gate.ExecutionId, OuterAttemptId: gate.OuterAttemptId,
                 TrainIdentity: gate.TrainIdentity, Participation: gate.Participation, EtaAvailable: etaAvailable,
-                AdmittedAt: gate.AdmittedAt);
+                AdmittedAt: gate.AdmittedAt, FinalOutcome: gate.FinalOutcome, FinishedAt: gate.FinishedAt,
+                FinishedAge: gate.FinishedAt is { } finished ? Nonnegative(now - finished) : null);
         }
     }
 
@@ -343,6 +345,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
         internal string? TrainIdentity { get; set; }
         internal string? Participation { get; set; }
         internal DateTimeOffset? AdmittedAt { get; set; }
+        internal string? FinalOutcome { get; set; }
+        internal DateTimeOffset? FinishedAt { get; set; }
         internal DateTimeOffset Start { get; } = start;
         internal DateTimeOffset Last { get; set; } = start;
         internal bool Live { get; set; } = true;

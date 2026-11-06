@@ -66,7 +66,8 @@ internal sealed partial record OwnerConsoleGateProgress
                     gates["ejected:" + outer + ":" + goal + ":" + train] = new([goal], item.Event.Timestamp)
                     {
                         ExecutionId = execution.Length == 0 ? null : execution, OuterAttemptId = outer.Length == 0 ? null : outer,
-                        TrainIdentity = train.Length == 0 ? null : train, Live = false, Participation = "ejected / awaiting survivor"
+                        TrainIdentity = train.Length == 0 ? null : train, Live = false, Participation = "ejected / awaiting survivor",
+                        FinalOutcome = "ejected", FinishedAt = item.Event.Timestamp
                     };
                 continue;
             }
@@ -78,7 +79,7 @@ internal sealed partial record OwnerConsoleGateProgress
                 outcome is not ("" or "inflight" or "gathering" or "unpaired")) || solo && item.Get("result") is not ("" or "started" or "running");
             if (cohort && outer.Length > 0)
             {
-                owners[outer] = item;
+                if (!completedOwners.Contains(outer)) owners[outer] = item;
                 if (terminal)
                 {
                     completedOwners.Add(outer);
@@ -87,6 +88,11 @@ internal sealed partial record OwnerConsoleGateProgress
                     {
                         child.Live = false;
                         child.Participation = "outer attempt completed";
+                        if (child.FinishedAt is null)
+                        {
+                            child.FinalOutcome = FinalOutcomeOf(item);
+                            child.FinishedAt = item.Event.Timestamp;
+                        }
                     }
                 }
                 continue; // Outer ownership never asserts execution participation.
@@ -137,10 +143,17 @@ internal sealed partial record OwnerConsoleGateProgress
             {
                 gate.Live = false;
                 gate.Participation = "outer attempt completed";
+                if (gate.FinishedAt is null)
+                {
+                    gate.FinalOutcome = FinalOutcomeOf(owners[outer]);
+                    gate.FinishedAt = owners[outer].Event.Timestamp;
+                }
             }
             if (terminal)
             {
                 gate.Live = false;
+                gate.FinalOutcome = FinalOutcomeOf(item);
+                gate.FinishedAt = item.Event.Timestamp;
                 lastEnd = item.Event.Timestamp;
                 continue;
             }
@@ -190,14 +203,30 @@ internal sealed partial record OwnerConsoleGateProgress
             gates["owner:" + outer] = new(members, owner.Event.Timestamp)
             {
                 OuterAttemptId = outer, Live = false,
-                Participation = completedOwners.Contains(outer) ? "outer attempt completed" : "awaiting execution evidence"
+                Participation = completedOwners.Contains(outer) ? "outer attempt completed" : "awaiting execution evidence",
+                FinalOutcome = completedOwners.Contains(outer) ? FinalOutcomeOf(owner) : null,
+                FinishedAt = completedOwners.Contains(outer) ? owner.Event.Timestamp : null
             };
         }
         return gates;
     }
 
+    private static string? FinalOutcomeOf(Observation item)
+    {
+        if (item.Event.Detail.Contains("ABANDON", StringComparison.Ordinal)) return "cancelled";
+        var outcome = item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal) ? item.Get("result") :
+            item.Get("outcome") is { Length: > 0 } recorded ? recorded : item.Get("result");
+        return outcome switch
+        {
+            "passed" or "gate-passed" => "passed",
+            "aborted" or "cancelled" or "canceled" => "cancelled",
+            "" => null,
+            _ => outcome
+        };
+    }
+
     private static IReadOnlyDictionary<string, OwnerConsoleGateProgress> MemberProjections(
-        OwnerConsoleGateProgress[] snapshots, List<Ejection> ejections)
+        OwnerConsoleGateProgress[] snapshots, List<Ejection> ejections, DateTimeOffset now)
     {
         var views = new Dictionary<string, OwnerConsoleGateProgress>(StringComparer.Ordinal);
         foreach (var member in snapshots.SelectMany(gate => gate.Members).Select(member => member.Id)
@@ -214,12 +243,15 @@ internal sealed partial record OwnerConsoleGateProgress
                 {
                     var original = group.FirstOrDefault(gate => gate.ExecutionId == ejection.Execution) ?? current;
                     dispositions.Add(original with { Live = false, Participation = "ejected / awaiting survivor", Lanes = [],
-                        LanePlanAvailable = false, EtaAvailable = false, DoneCount = 0, TotalCount = 0, RemainingSeconds = 0 });
+                        LanePlanAvailable = false, EtaAvailable = false, DoneCount = 0, TotalCount = 0, RemainingSeconds = 0,
+                        FinalOutcome = "ejected", FinishedAt = ejection.At, FinishedAge = Nonnegative(now - ejection.At) });
                 }
                 else if (current.Participation == "current execution unresolved")
                     dispositions.Add(Idle() with { Kind = "unresolved", OuterAttemptId = current.OuterAttemptId,
                         Members = [new(member, "")], Participation = current.Participation, LanePlanAvailable = false, EtaAvailable = false });
                 else if (current.Live || current.Participation is not null) dispositions.Add(current);
+                else if (current.FinishedAt is { } finished && now - finished <= TimeSpan.FromMinutes(15))
+                    dispositions.Add(current with { Participation = current.FinalOutcome ?? "finished" });
             }
             // Independent live executions that share a member stay independent.
             // A goal selection cannot silently choose one by chronology.
