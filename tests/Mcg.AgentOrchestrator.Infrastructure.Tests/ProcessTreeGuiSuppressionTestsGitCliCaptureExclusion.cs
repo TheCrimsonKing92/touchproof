@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Support = ProcessTreeGuiSuppressionTestsHandleListSupport;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
@@ -31,7 +32,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
             var previousObserver = GitCli.StartInfoObserver;
             try
             {
-                GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+                GitCli.StartInfoObserver = start => Support.PinEnvironment(start, root);
                 var alias = "!" + ShellQuote(ProcessTreeGuiSuppressionTestsProcessErrorMode.ProbeExecutable().Replace('\\', '/')) +
                     " --hold-for-event " + ShellQuote(key + $"-ready-{index}") + " " + ShellQuote(releaseName);
                 string[] args = ["-c", "alias.mcg-capture-hold=" + alias, "mcg-capture-hold"];

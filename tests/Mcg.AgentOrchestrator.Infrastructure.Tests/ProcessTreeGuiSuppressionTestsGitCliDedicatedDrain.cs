@@ -18,7 +18,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliDedicatedDrain
             {
                 GitCli.StartInfoObserver = start =>
                 {
-                    ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+                    Support.PinEnvironment(start, root);
                     start.StandardOutputEncoding = start.StandardErrorEncoding = System.Text.Encoding.UTF8;
                 };
                 BoundedThreadPoolSaturationApparatus.RunWithBoundedSaturatedThreadPool(evidence =>

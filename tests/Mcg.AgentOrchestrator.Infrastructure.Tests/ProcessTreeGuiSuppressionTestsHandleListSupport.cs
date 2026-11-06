@@ -13,10 +13,22 @@ internal static class ProcessTreeGuiSuppressionTestsHandleListSupport
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
-        ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(info, root);
+        PinEnvironment(info, root);
         info.ArgumentList.Add("--handle-list-probe");
         foreach (var arg in args) info.ArgumentList.Add(arg);
         return info;
+    }
+
+    internal static void PinEnvironment(ProcessStartInfo info, string root)
+    {
+        ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(info, root);
+        // A remote test host may use a private runtime with no machine registration.
+        // Derive the apphost root from the loaded runtime, not ambient DOTNET_ROOT.
+        var runtimeRoot = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", ".."));
+        Assert.True(File.Exists(Path.Combine(runtimeRoot, "dotnet.exe")),
+            "The executing test runtime has no dotnet host: " + runtimeRoot);
+        info.Environment["DOTNET_ROOT"] = runtimeRoot;
+        info.Environment["DOTNET_ROOT_" + RuntimeInformation.ProcessArchitecture.ToString().ToUpperInvariant()] = runtimeRoot;
     }
 
     internal static SafeFileHandle Duplicate(IntPtr sourceProcess, IntPtr value)

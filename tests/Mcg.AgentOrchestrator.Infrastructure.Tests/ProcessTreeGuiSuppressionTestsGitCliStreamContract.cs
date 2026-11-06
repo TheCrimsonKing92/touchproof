@@ -32,10 +32,11 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
             Assert.True(managed.WaitForExit(120_000), "Managed stream oracle did not exit.");
             Assert.True(output.Join(Environment.TickCount64 + 120_000), "Managed stdout did not drain.");
             Assert.True(error.Join(Environment.TickCount64 + 120_000), "Managed stderr did not drain.");
-            GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+            GitCli.StartInfoObserver = start => Support.PinEnvironment(start, root);
             var actual = GitCli.RunExecutable(info.FileName, root, 120_000, info.ArgumentList.ToArray());
             Assert.True(actual.ProcessStarted, actual.Error);
             Assert.False(actual.DrainTimedOut, actual.Error);
+            Assert.Equal(mode == "exit" ? 3 : 0, managed.ExitCode);
             Assert.Equal(managed.ExitCode, actual.ExitCode);
             Assert.Equal(output.Text, actual.Output);
             Assert.Equal(error.Text, actual.Error);
@@ -51,7 +52,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
         var prior = GitCli.StartInfoObserver;
         try
         {
-            GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+            GitCli.StartInfoObserver = start => Support.PinEnvironment(start, root);
             var content = new string('x', 128 * 1024);
             var bytes = Encoding.UTF8.GetBytes(content);
             var blob = Encoding.ASCII.GetBytes($"blob {bytes.Length}\0").Concat(bytes).ToArray();
@@ -82,7 +83,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliStreamContract
         try
         {
             var info = Support.Probe(root, "tree", key, pidFile, key + "-ready");
-            GitCli.StartInfoObserver = start => ProcessTreeGuiSuppressionTestsProcessErrorMode.PinEnvironment(start, root);
+            GitCli.StartInfoObserver = start => Support.PinEnvironment(start, root);
             var result = GitCli.RunExecutable(info.FileName, root, 1000, info.ArgumentList.ToArray(), null, null,
                 process =>
                 {

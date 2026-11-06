@@ -232,11 +232,25 @@ internal sealed class HandleListLaunchedProcess : IDisposable
     }
     internal void Kill(bool entireProcessTree = false)
     {
-        if (entireProcessTree) Attached.Kill(entireProcessTree: true);
-        else if (!HasExited && !TerminateProcess(SafeHandle, uint.MaxValue))
+        if (portable is not null) { portable.Kill(entireProcessTree); return; }
+        if (HasExited) return;
+        if (entireProcessTree)
+        {
+            try { Attached.Kill(entireProcessTree: true); }
+            catch (ArgumentException) when (HasExited)
+            {
+                // The process can exit between the native check and GetProcessById.
+                // The retained native handle proves that this exact process exited.
+            }
+        }
+        else if (!TerminateProcess(SafeHandle, uint.MaxValue))
         {
             var failure = new Win32Exception(Marshal.GetLastWin32Error());
-            if (!HasExited) throw failure;
+            // Match Process.Kill: an exit code can be available before the process
+            // handle signals. Only forgive access denied with proof of termination.
+            if (failure.NativeErrorCode == 5 &&
+                GetExitCodeProcess(SafeHandle, out var exitCode) && exitCode != 259) return;
+            throw failure;
         }
     }
     public void Dispose()
