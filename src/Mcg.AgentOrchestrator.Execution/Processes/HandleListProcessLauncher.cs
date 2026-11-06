@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -15,6 +16,19 @@ internal static class HandleListProcessLauncher
     private const int UseStdHandles = 0x100, ProcThreadAttributeHandleList = 0x00020002;
     internal readonly record struct Creation(IntPtr ProcessHandle, IntPtr ThreadHandle, int ProcessId);
     internal readonly record struct LaunchOutcome(bool Created, IntPtr ProcessHandle, IntPtr ThreadHandle, int ProcessId, int NativeError);
+
+    // Process.Start uses this monitor around its all-handles-inheriting CreateProcess call.
+    // Sharing it also covers raw managed starts in fixtures and libraries. A missing runtime
+    // field fails closed, before any pipe is made inheritable; do not substitute another lock.
+    internal static object InheritanceLock => RuntimeCreateProcessLock(null);
+
+    [UnsafeAccessor(UnsafeAccessorKind.StaticField, Name = "s_createProcessLock")]
+    private static extern ref object RuntimeCreateProcessLock(Process? declaringType);
+
+    internal static void MakeInheritable(SafeHandle handle)
+    {
+        if (!SetHandleInformation(handle, 1, 1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
 
     // Detached successors borrow their log handles; ownership stays with the caller.
     internal static LaunchOutcome Launch(string application, string commandLine, string environment,
@@ -208,7 +222,7 @@ internal static class HandleListProcessLauncher
 
     internal static SafeFileHandle NullHandle()
     {
-        var security = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), Inherit = true };
+        var security = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>() };
         var handle = CreateFileW("NUL", 0xC0000000, 3, ref security, 3, 0x80, IntPtr.Zero);
         if (handle.IsInvalid) { var error = Marshal.GetLastWin32Error(); handle.Dispose(); throw new Win32Exception(error); }
         return handle;
@@ -216,12 +230,10 @@ internal static class HandleListProcessLauncher
 
     internal static (SafeFileHandle Parent, SafeFileHandle Child) Pipe(bool input)
     {
-        // Start non-inheritable, then expose only the designated child end.
+        // Both ends stay private until the caller holds InheritanceLock.
         if (!CreatePipe(out var read, out var write, IntPtr.Zero, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
         var parent = input ? write : read;
         var child = input ? read : write;
-        if (!SetHandleInformation(child, 1, 1))
-        { var error = Marshal.GetLastWin32Error(); read.Dispose(); write.Dispose(); throw new Win32Exception(error); }
         return (parent, child);
     }
 
@@ -250,7 +262,7 @@ internal static class HandleListProcessLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, IntPtr attributes, uint size);
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool SetHandleInformation(SafeFileHandle handle, uint mask, uint flags);
+    private static extern bool SetHandleInformation(SafeHandle handle, uint mask, uint flags);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileW(string path, uint access, uint share, ref SecurityAttributes security,
         uint disposition, uint flags, IntPtr template);
