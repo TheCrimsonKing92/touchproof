@@ -13,13 +13,13 @@ public sealed class GoalAcceptanceVerifierCrosswalkTests
         var check = await fixture.RunAsync();
         Assert.True(check.Passed, check.OutputTail);
         Assert.Equal(2, fixture.Calls.Count);
-        Assert.Contains(" list ", fixture.Calls[0].Command);
-        Assert.Contains(" run ", fixture.Calls[1].Command);
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, fixture.Calls[0].Arguments);
+        Assert.Equal(new[] { fixture.Binary, "run", fixture.Root }, fixture.Calls[1].Arguments[..3]);
         if (explicitSelection)
-            Assert.EndsWith(" --id '" + CrosswalkAcceptanceFixture.Id.Replace("'", "''") + "'; exit $LASTEXITCODE", fixture.Calls[1].Command);
+            Assert.Equal(new[] { "--id", CrosswalkAcceptanceFixture.Id }, fixture.Calls[1].Arguments[3..]);
         else
-            Assert.DoesNotContain("--id", fixture.Calls[1].Command);
-        Assert.DoesNotContain("--filter", fixture.Calls[1].Command);
+            Assert.DoesNotContain("--id", fixture.Calls[1].Arguments);
+        Assert.DoesNotContain("--filter", fixture.Calls[1].Arguments);
         Assert.All(fixture.Calls, call => Assert.Equal(fixture.Root, call.Root));
         Assert.All(fixture.Calls, call => Assert.True(call.Token.CanBeCanceled));
         Assert.Equal(1, check.ExecutedTestCount);
@@ -55,7 +55,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkTests
         var check = await fixture.RunAsync();
         Assert.False(check.Passed);
         Assert.Single(fixture.Calls);
-        Assert.Contains(" list ", fixture.Calls[0].Command);
+        Assert.Equal(new[] { fixture.Binary, "list", fixture.Root }, fixture.Calls[0].Arguments);
         Assert.NotEmpty(check.CrosswalkDiagnostics!);
         Assert.Empty(check.NormalizedTestResultPaths!);
     }

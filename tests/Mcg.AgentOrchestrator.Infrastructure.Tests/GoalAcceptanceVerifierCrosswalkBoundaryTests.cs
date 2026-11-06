@@ -123,7 +123,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkBoundaryTests
         using var fixture = new CrosswalkAcceptanceFixture(clock: clock);
         fixture.Handler = (command, _) =>
         {
-            var list = command.Contains(" list ", StringComparison.Ordinal);
+            var list = command[1] == "list";
             clock.Advance(TimeSpan.FromSeconds(list ? 20 : 50));
             return Task.FromResult(fixture.Result(list ? fixture.Discovery : fixture.Output));
         };

@@ -133,6 +133,8 @@ internal static class AcceptanceProcessRunner
                 HeartbeatContext = heartbeatContext,
                 ProgressSink = progressSink,
                 EngineSettings = engineSettings,
+                HostTestSettings = LaneSlotTimingReader.PathForArguments(arguments, workingDirectory) is null ? null :
+                    AcceptanceGatePhaseAccountant.CurrentHostTestSettings?.ForLocal(heartbeatContext?.CurrentTarget ?? "test lane"),
                 AttemptResultsPrefix = attemptResultsPrefix,
                 GateInvocationId = gateInvocationId,
                 ApparatusReceiptPath = apparatusReceiptPath,

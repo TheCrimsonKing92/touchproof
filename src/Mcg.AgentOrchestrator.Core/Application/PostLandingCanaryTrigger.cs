@@ -105,6 +105,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateShardCancellation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHostTestSettings",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInfrastructureLaneResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInvocationEvidenceProvenance",

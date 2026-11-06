@@ -275,6 +275,11 @@ The largest partial classes are also bounded by total lines across their partial
 
 ### Recorded row raises
 
+Host test settings overlay and snapshot logic live in `AcceptanceHostTestSettings`. The verifier retains
+only the single configuration-read wiring and local-fallback diagnostic; the process invoker carries
+the binding and records a launch after process start succeeds. Goal `6a75c73d` justifications for those
+boundary calls are above the authoritative ratchet rows.
+
 This is a closed historical record; new justifications belong in the inline comment immediately above the authoritative row.
 
 Goal `18afe5f2` raised the `BackgroundDispatchRunner.cs` row from 3499 to 3525 because missing-build-evidence rejection and commit suppression must run where parsed worker results and authoritative changed paths meet.

@@ -258,6 +258,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohortInteractionOn
         internal BatchTickSummary Tick(ConductorBatchLoop loop)
         {
             BatchTickSummary? observed = null;
+            AdmissionFactsTestData.Warm(Driver, Kernel);
             loop.Run(Kernel, Driver, Policy, Path.Combine(Repo, "stop-does-not-exist"), maxIterations: 1,
                 onTick: tick => observed = tick);
             return Assert.IsType<BatchTickSummary>(observed);

@@ -424,8 +424,18 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return root;
     }
 
-    private protected string CommitGoalWork(string root, GoalId goalId, string relativePath, string content)
+    private protected (string Repo, string Worktree) CreateGoalBranchScenario(
+        string root, GoalId goalId, string relativePath, string content, string message = "Goal work") =>
+        (root, GoalBranchScenarioTemplate.Materialize(root, GoalBranchScenarioTemplate.BaseKind.CliAcceptance,
+            goalId, relativePath, content, message));
+
+    private protected string CommitGoalWork(string root, GoalId goalId, string relativePath, string content,
+        bool useTemplate = true)
     {
+        if (useTemplate && GoalWorktrees.TryResolve(root, goalId) is null &&
+            GoalBranchScenarioTemplate.TryMaterialize(root, GoalBranchScenarioTemplate.BaseKind.CliAcceptance,
+                goalId, relativePath, content, "Goal work") is { } prepared)
+            return prepared;
         var worktree = GoalWorktrees.Ensure(root, goalId);
         var path = Path.Combine(worktree, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

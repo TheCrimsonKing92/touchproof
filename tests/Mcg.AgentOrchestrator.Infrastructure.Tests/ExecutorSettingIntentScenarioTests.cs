@@ -60,6 +60,47 @@ public sealed class ExecutorSettingIntentScenarioTests
         AssertEvent(events[1], intent, "focusedEvidence.sampleEvery", "1", "4", true, backup);
     }
 
+    [Theory]
+    [InlineData("executor-set-slots", "{}")]
+    [InlineData("executor-set-slots", "{\"MCG_TEST_HOST_CAPACITY_SLOTS\":\"2\"}")]
+    [InlineData("executor-set-enabled", "{}")]
+    [InlineData("executor-set-enabled", "{\"MCG_TEST_HOST_CAPACITY_SLOTS\":\"2\"}")]
+    [InlineData("focused-evidence-set", "{}")]
+    [InlineData("focused-evidence-set", "{\"MCG_TEST_HOST_CAPACITY_SLOTS\":\"2\"}")]
+    public async Task SettingsRewrite_HostTestSettings_AppliesAndPreservesMap(string verb, string settings)
+    {
+        using var fixture = new Harness();
+        var original = Harness.Json.Replace("\"id\": \"mcg-exec-1\",",
+            $"\"id\": \"mcg-exec-1\", \"enabled\": true, \"testSettings\": {settings},", StringComparison.Ordinal);
+        fixture.Write(original);
+        var declared = fixture.Load().Executors[0].TestSettings;
+        Assert.NotNull(declared);
+        Assert.Equal(settings == "{}" ? 0 : 1, declared.Count);
+        var arguments = verb switch
+        {
+            "executor-set-slots" => new[] { verb, "mcg-exec-1", "4" },
+            "executor-set-enabled" => new[] { verb, "mcg-exec-1", "false" },
+            _ => new[] { verb, "--mode", "off" }
+        };
+        var intent = await fixture.Queue(arguments);
+
+        Assert.Single(fixture.Tick());
+
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Intents.GetAsync(intent.Id))!.Status);
+        var expected = verb switch
+        {
+            "executor-set-slots" => original.Replace("\"slots\": 3", "\"slots\": 4", StringComparison.Ordinal),
+            "executor-set-enabled" => original.Replace("\"enabled\": true", "\"enabled\": false", StringComparison.Ordinal),
+            _ => original.Replace("\"mode\": \"shadow\"", "\"mode\": \"off\"", StringComparison.Ordinal)
+        };
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), fixture.FileBytes());
+        var preserved = fixture.Load().Executors[0].TestSettings;
+        Assert.NotNull(preserved);
+        Assert.Equal(declared.OrderBy(pair => pair.Key).ToArray(), preserved.OrderBy(pair => pair.Key).ToArray());
+        Assert.Equal(Encoding.UTF8.GetBytes(original),
+            File.ReadAllBytes(System.IO.Path.Combine(fixture.Folder, fixture.BackupName(intent))));
+    }
+
     [Fact]
     public async Task Slots_CurrentValue_LeavesFileAndFolderUntouchedButAuditsNoop()
     {

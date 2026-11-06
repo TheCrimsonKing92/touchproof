@@ -140,10 +140,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance transient lock test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "transient-lock.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "transient-lock.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
@@ -251,10 +248,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             // No manual verification recorded: the goal is not Completed and the task is Assigned.
             Assert.Equal(GoalStatus.Active, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
@@ -291,10 +285,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 [],
                 []));
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "diagnostic only");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Add gated diagnostic");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "diagnostic only", "Add gated diagnostic").Worktree;
             kernel.RecordTaskDispatch(
                 goal.Id,
                 task.Id,
@@ -799,10 +790,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Policy queued acceptance", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "policy-queue.txt"), "goal");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Policy queued goal");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "policy-queue.txt", "goal", "Policy queued goal").Worktree;
 
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance-queue", "--autonomy", "safe-auto"], context));
@@ -874,10 +862,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance concurrency test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "concurrency.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "concurrency.txt", "goal work", "Goal work").Worktree;
 
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();

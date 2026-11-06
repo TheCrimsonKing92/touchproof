@@ -7,18 +7,18 @@ public sealed class CrosswalkExecutableResolver
     private readonly Lazy<CrosswalkExecutableResolution> _resolution;
 
     public CrosswalkExecutableResolver(string? explicitPath = null, string? dataRoot = null,
-        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runVersionAsync = null,
+        Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runVersionAsync = null,
         TimeSpan? versionTimeout = null)
     {
         _resolution = new(() => ResolveOnce(explicitPath, dataRoot,
-            runVersionAsync ?? WorkerProcessRunner.RunBufferedAsync, versionTimeout ?? CrosswalkClient.DefaultTimeout),
+            runVersionAsync ?? WorkerProcessRunner.RunBufferedDirectAsync, versionTimeout ?? CrosswalkClient.DefaultTimeout),
             LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public CrosswalkExecutableResolution Resolve() => _resolution.Value;
 
     private static CrosswalkExecutableResolution ResolveOnce(string? explicitPath, string? dataRoot,
-        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> runVersionAsync, TimeSpan timeout)
+        Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>> runVersionAsync, TimeSpan timeout)
     {
         try
         {
@@ -40,9 +40,9 @@ public sealed class CrosswalkExecutableResolver
             var version = "unknown";
             try
             {
-                var request = new WorkerProcessRunRequest(
-                    $"& '{path.Replace("'", "''")}' --version; exit $LASTEXITCODE", Path.GetDirectoryName(path)!, timeout);
-                // RunBufferedAsync owns the bounded subprocess and drains/terminates it on timeout.
+                var request = new WorkerProcessDirectRunRequest(
+                    path, ["--version"], Path.GetDirectoryName(path)!, timeout);
+                // The buffered runner owns the subprocess and drains/terminates it on timeout.
                 var run = runVersionAsync(request, CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
                 if (run.ExitCode == 0 && !run.TimedOut && !run.CaptureLimited && !string.IsNullOrWhiteSpace(run.StandardOutput))
                     version = run.StandardOutput.Trim();

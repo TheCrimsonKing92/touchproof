@@ -44,6 +44,7 @@ public sealed class ConflictIntegrationBatchLoopTests : AcceptanceCohortWorkflow
             Assert.Equal(GateReadyCandidateExclusionReason.MergeConflict, projection.Reason);
             Assert.Equal(new[] { conflictPath }, projection.ConflictPaths);
 
+            AdmissionFactsTestData.Warm(driver, kernel);
             var summary = new ConductorBatchLoop().Run(kernel, driver, policy, Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1);
 
             var escalationPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");

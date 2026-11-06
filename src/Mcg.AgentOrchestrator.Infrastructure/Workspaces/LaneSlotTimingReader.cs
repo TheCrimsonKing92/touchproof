@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class LaneSlotTimingReader
 {
     internal const string VariableName = "MCG_TEST_SLOT_TIMING_FILE";
-    internal sealed record LaneSlotTotals(double WaitMs, double HeldMs, int SlotCount, long? GitLaunches = null);
+    internal sealed record LaneSlotTotals(double WaitMs, double HeldMs, int SlotCount, long? GitLaunches = null,
+        double? GitStartMs = null, double? GitWallMs = null);
     internal sealed record Reading(
         IReadOnlyDictionary<string, Dictionary<string, double>> WaitsByFile,
         LaneSlotTotals? Totals, string? UnavailableReason)
@@ -54,6 +55,7 @@ internal static class LaneSlotTimingReader
         var counts = new SortedSet<int>();
         double totalWait = 0, totalHeld = 0;
         long? gitLaunches = null;
+        double? gitStartMs = null, gitWallMs = null;
         foreach (var trxPath in trxPaths ?? [])
         {
             string path;
@@ -71,6 +73,8 @@ internal static class LaneSlotTimingReader
             }
             var skipped = 0;
             var invalidGitLaunches = 0;
+            var invalidGitStart = 0;
+            var invalidGitWall = 0;
             foreach (var line in lines)
             {
                 try
@@ -92,6 +96,8 @@ internal static class LaneSlotTimingReader
                     totalWait += wait;
                     totalHeld += held;
                     counts.Add(count);
+                    if (!AccumulateOptional(row, "git_start_ms", ref gitStartMs)) invalidGitStart++;
+                    if (!AccumulateOptional(row, "git_wall_ms", ref gitWallMs)) invalidGitWall++;
                     if (row.TryGetProperty("git_launches", out var launches))
                     {
                         if (launches.ValueKind == JsonValueKind.Number && launches.TryGetInt64(out var value)
@@ -106,11 +112,26 @@ internal static class LaneSlotTimingReader
             if (skipped > 0) diagnostics.Add($"slot-timing-skipped:{path}:{skipped} invalid lines");
             if (invalidGitLaunches > 0)
                 diagnostics.Add($"slot-timing-git-launches-invalid:{path}:{invalidGitLaunches} lines");
+            if (invalidGitStart > 0)
+                diagnostics.Add($"slot-timing-git-start-invalid:{path}:{invalidGitStart} lines");
+            if (invalidGitWall > 0)
+                diagnostics.Add($"slot-timing-git-wall-invalid:{path}:{invalidGitWall} lines");
         }
         if (counts.Count > 1)
             diagnostics.Add($"slot-timing-inconsistent-counts:{string.Join(",", counts)}");
-        return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max, gitLaunches),
+        return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max, gitLaunches,
+                gitStartMs, gitWallMs),
             diagnostics.Count == 0 ? null : string.Join("; ", diagnostics));
+    }
+
+    private static bool AccumulateOptional(JsonElement row, string key, ref double? total)
+    {
+        if (!row.TryGetProperty(key, out _)) return true;
+        if (!Number(row, key, out var value)) return false;
+        var sum = total.GetValueOrDefault() + value;
+        if (!double.IsFinite(sum)) return false;
+        total = sum;
+        return true;
     }
 
     private static bool Number(JsonElement row, string key, out double value)

@@ -277,10 +277,10 @@ internal sealed partial class ConductorBatchLoop
         Func<bool> suppressNewAcceptanceAdmission)
     {
         state.OrderedEligible = ConductorTickStepLedger.Measure("prep-cohort-receipts", () => ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines));
-        // Reconcile child ejections before projections or implication-key exclusions can hide them.
         state.OrderedEligible = ConductorTickStepLedger.Measure("prep-train-reconcile", () => MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines));
         var speculativeCandidates = ConductorTickStepLedger.Measure("prep-projection", () => GroupedAdmissionCandidateProjection.ProjectAll(
-            ConductorTickStepLedger.ObserveProjections(driver.ProjectionCache.Retain(eligible, state.OrderedEligible)), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)));
+            driver.ProjectionCache.Retain(eligible, state.OrderedEligible), driver, policy, kernel, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), scopedGoals.Where(goal => preWalkIntentChangedGoalIds.Contains(goal.Id))));
+        state.OrderedEligible = AdmissionFactsPendingAdmission.Apply(state.OrderedEligible, speculativeCandidates, state.Results, policy, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), driver);
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = ConductorTickStepLedger.Measure("prep-census", () => CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,

@@ -247,7 +247,59 @@ internal sealed class WorkerGitContext
         return status;
     }
 
-    private ReviewerMergeTreeStatus RunReviewerMergeTree(string workingDirectory, string baseReference, string headReference)
+    internal (IReadOnlyList<ReviewerMergeTreeStatus> Results, int Launches) ReadBatchedMergeTreeStatus(
+        string directory, string main, IReadOnlyList<string> candidates,
+        Func<string, int, string, string[], GitCli.GitResult>? runBatch = null, Action? launched = null)
+    {
+        if (candidates.Count == 0) return ([], 0);
+        if (!IsFullSha(main) || candidates.Any(candidate => !IsFullSha(candidate)))
+            throw new ArgumentException("Batched merge checks require immutable commit ids.");
+        GitCli.GitResult? batch = null;
+        try
+        {
+            batch = (runBatch ?? ((root, timeout, input, args) =>
+                GitCli.RunWithStandardInput(root, timeout, input, args)))(directory,
+                GitCli.DefaultTimeoutMilliseconds, string.Concat(candidates.Select(candidate => $"{main} {candidate}\n")),
+                ["merge-tree", "--write-tree", "--stdin", "--name-only", "--no-messages"]);
+            if (batch.Value.ProcessStarted) launched?.Invoke();
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            // A transport failure has the same per-candidate fallback as unusable output.
+        }
+        if (batch is { Succeeded: true, ProcessStarted: true, DrainTimedOut: false } completed &&
+            TryParseBatchedMergeTrees(completed.Output, candidates.Count, out var results))
+            return (results, 1);
+        return (candidates.Select(candidate => RunReviewerMergeTree(directory, main, candidate,
+                requireComplete: true, launched)).ToArray(),
+            (batch is { ProcessStarted: true } ? 1 : 0) + candidates.Count);
+    }
+
+    private static bool TryParseBatchedMergeTrees(string output, int count,
+        out IReadOnlyList<ReviewerMergeTreeStatus> results)
+    {
+        var records = new List<ReviewerMergeTreeStatus>();
+        var fields = output.Split('\0');
+        var index = 0;
+        while (records.Count < count && index + 2 < fields.Length)
+        {
+            var status = fields[index++];
+            var tree = fields[index++];
+            if (status is not ("0" or "1") || !IsFullSha(tree)) break;
+            var paths = new List<string>();
+            while (index < fields.Length && fields[index].Length > 0) paths.Add(fields[index++]);
+            if (index >= fields.Length || (status == "1" && paths.Count != 0) ||
+                (status == "0" && paths.Count == 0)) break;
+            index++; // --no-messages leaves one NUL record terminator after the paths.
+            records.Add(new(status == "1", paths.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+                paths.Count, status == "1" ? tree : null));
+        }
+        results = records;
+        return records.Count == count && index == fields.Length - 1 && fields[index].Length == 0;
+    }
+
+    private ReviewerMergeTreeStatus RunReviewerMergeTree(string workingDirectory, string baseReference, string headReference,
+        bool requireComplete = false, Action? launched = null)
     {
         var mergeTreeResult = _reviewerMergeTreeGitRunner(
             workingDirectory,
@@ -259,6 +311,10 @@ internal sealed class WorkerGitContext
                 baseReference,
                 headReference
             ]);
+        if (mergeTreeResult.ProcessStarted) launched?.Invoke();
+        if (requireComplete && mergeTreeResult.DrainTimedOut)
+            throw new ReviewerMergeTreeStatusException(ReviewerMergeTreeUnavailableErrorCode,
+                "Batched merge fallback returned incomplete git output.");
         if (!mergeTreeResult.ProcessStarted)
         {
             throw new ReviewerMergeTreeStatusException(
@@ -272,6 +328,9 @@ internal sealed class WorkerGitContext
             var tree = mergeTreeResult.Output
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
+            if (requireComplete && (tree is null || !IsFullSha(tree)))
+                throw new ReviewerMergeTreeStatusException(ReviewerMergeTreeUnavailableErrorCode,
+                    "Batched merge fallback returned no valid tree id.");
             return new ReviewerMergeTreeStatus(IsClean: true, [], 0,
                 TreeId: !mergeTreeResult.DrainTimedOut && tree is not null && IsFullSha(tree) ? tree : null);
         }

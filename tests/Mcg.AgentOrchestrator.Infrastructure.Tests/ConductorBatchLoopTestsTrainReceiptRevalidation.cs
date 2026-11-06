@@ -209,6 +209,7 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
     private static BatchTickSummary RunTick(Fixture fixture)
     {
         BatchTickSummary? observed = null;
+        AdmissionFactsTestData.Warm(fixture.Driver, fixture.Kernel);
         fixture.Loop.Run(fixture.Kernel, fixture.Driver, ConductorAutonomyPolicy.Permissive with { AcceptanceWidth = 1 },
             Path.Combine(fixture.Repo, "stop-does-not-exist"), maxIterations: 1, onTick: summary => observed = summary);
         return Assert.IsType<BatchTickSummary>(observed);

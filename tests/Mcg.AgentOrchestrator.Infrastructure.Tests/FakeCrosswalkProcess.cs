@@ -8,7 +8,7 @@ internal sealed class FakeCrosswalkProcess : IDisposable
     internal string Binary { get; }
     internal CrosswalkStackReader Reader { get; }
     internal int VersionCalls { get; private set; }
-    internal List<WorkerProcessRunRequest> Calls { get; } = [];
+    internal List<WorkerProcessDirectRunRequest> Calls { get; } = [];
     internal WorkerProcessRunResult DetectResult { get; set; }
     internal WorkerProcessRunResult ListResult { get; set; } = new(0, "[]", "");
     internal Exception? DetectException { get; set; }
@@ -30,12 +30,13 @@ internal sealed class FakeCrosswalkProcess : IDisposable
         Reader = new(resolver, Timeout, (request, _) =>
         {
             Calls.Add(request);
-            if (request.Command.Contains(" detect ", StringComparison.Ordinal))
+            if (request.Arguments[0] == "detect")
             {
                 if (DetectException is not null) throw DetectException;
                 return Task.FromResult(DetectResult);
             }
-            Assert.Contains(" list ", request.Command, StringComparison.Ordinal);
+            Assert.Equal(new[] { "list", request.WorkingDirectory }, request.Arguments);
+            Assert.Equal(Binary, request.FileName);
             return Task.FromResult(ListResult);
         });
     }

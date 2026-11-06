@@ -239,7 +239,7 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
     }
 
     private CrosswalkShadowDetect CreateShadow(
-        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runner = null,
+        Func<WorkerProcessDirectRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runner = null,
         bool missing = false, Func<DateTimeOffset>? utcNow = null)
     {
         var path = Path.Combine(_sandbox.FullName, "crosswalk.exe");
