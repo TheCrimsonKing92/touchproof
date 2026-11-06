@@ -24,29 +24,38 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
     }
 
     [Theory]
-    [InlineData(8190)]
-    [InlineData(8191)]
+    [InlineData(32766)]
+    [InlineData(32767)]
     public void AtOrBelowLimitBuildsWindowsLaunch(int length)
     {
         if (!OperatingSystem.IsWindows()) return;
-        const string emptyLine = "/c \"\"git\" \"\"\"";
+        var executable = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        // Quoted image + separating space + terminating null; x requires no argument quoting.
+        var overhead = OwnedProcessGroup.QuoteCommandArgument(executable).Length + 2;
+        var payload = new string('x', length - overhead);
         var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
-            ["git", new string('x', length - emptyLine.Length)], Path.GetTempPath());
+            [executable, payload], Path.GetTempPath());
 
-        Assert.Equal("cmd.exe", startInfo.FileName);
-        Assert.Equal(length, startInfo.Arguments.Length);
+        Assert.Equal(executable, startInfo.FileName);
+        Assert.Empty(startInfo.Arguments);
+        Assert.Equal(new[] { payload }, startInfo.ArgumentList);
+        Assert.Equal(length, OwnedProcessGroup.QuoteCommandArgument(startInfo.FileName).Length + 1 +
+            OwnedProcessGroup.QuoteCommandArgument(Assert.Single(startInfo.ArgumentList)).Length + 1);
     }
 
     [Fact]
     public void OneCharacterOverLimitIsRejected()
     {
         if (!OperatingSystem.IsWindows()) return;
-        const string emptyLine = "/c \"\"git\" \"\"\"";
+        var executable = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        var overhead = OwnedProcessGroup.QuoteCommandArgument(executable).Length + 2;
         var error = Assert.Throws<CommandLineTooLongException>(() =>
             GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
-                ["git", new string('x', 8192 - emptyLine.Length)], Path.GetTempPath()));
-        Assert.Equal(8192, error.Length);
-        Assert.Equal(8191, error.Limit);
+                [executable, new string('x', 32768 - overhead)], Path.GetTempPath()));
+        Assert.Equal(32768, error.Length);
+        Assert.Equal(32767, error.Limit);
+        Assert.Equal(executable, error.FirstArgument);
+        Assert.Equal($"Windows CreateProcessW command line is 32768 characters, which exceeds the CreateProcessW limit of 32767 characters; first argument: {executable}", error.Message);
     }
 
     [Fact]
@@ -55,19 +64,26 @@ public sealed class GoalAcceptanceVerifierTestsCmdCommandLineLimit : GoalAccepta
         if (!OperatingSystem.IsWindows()) return;
         var observations = new List<AcceptanceProcessCleanupObservation>();
         var identitiesObserved = 0;
+        var resumesObserved = 0;
+        var executable = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        var payload = new string('x', 32768);
+        var expectedLength = OwnedProcessGroup.QuoteCommandArgument(executable).Length + payload.Length + 2;
         var error = await Assert.ThrowsAsync<CommandLineTooLongException>(() =>
             AcceptanceProcessRunner.RunProcessForTestsAsync(
-                ["git", new string('x', 8200)], Path.GetTempPath(), TimeSpan.FromSeconds(30),
+                [executable, payload], Path.GetTempPath(), TimeSpan.FromMinutes(5),
                 cleanupObserver: observations.Add,
-                commandIdentityObserver: _ => identitiesObserved++));
+                commandIdentityObserver: _ => identitiesObserved++,
+                resumeObserver: _ => resumesObserved++));
 
-        Assert.True(error.Length > 8191);
-        Assert.Equal(8191, error.Limit);
-        Assert.Equal("git", error.FirstArgument);
+        Assert.Equal(expectedLength, error.Length);
+        Assert.Equal(32767, error.Limit);
+        Assert.Equal(executable, error.FirstArgument);
         Assert.Contains(error.Length.ToString(System.Globalization.CultureInfo.InvariantCulture), error.Message, StringComparison.Ordinal);
-        Assert.Contains("8191", error.Message, StringComparison.Ordinal);
-        Assert.Contains("first argument: git", error.Message, StringComparison.Ordinal);
+        Assert.Contains("32767", error.Message, StringComparison.Ordinal);
+        Assert.Contains($"first argument: {executable}", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(payload, error.Message, StringComparison.Ordinal);
         Assert.Empty(observations);
         Assert.Equal(0, identitiesObserved);
+        Assert.Equal(0, resumesObserved);
     }
 }

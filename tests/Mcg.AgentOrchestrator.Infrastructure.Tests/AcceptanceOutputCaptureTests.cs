@@ -21,19 +21,21 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
             stdoutTarget,
             stderrTarget);
 
-        Xunit.Assert.Equal(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh", startInfo.FileName);
-        var command = OperatingSystem.IsWindows()
-            ? startInfo.Arguments
-            : startInfo.ArgumentList.Last();
         if (OperatingSystem.IsWindows())
         {
+            var resolved = AcceptanceBareCommandResolver.Resolve("dotnet", startInfo.Environment, Path.GetTempPath());
+            Xunit.Assert.NotNull(resolved);
+            Xunit.Assert.Equal(resolved, startInfo.FileName);
+            Xunit.Assert.Equal("dotnet.exe", Path.GetFileName(startInfo.FileName), ignoreCase: true);
+            Xunit.Assert.Empty(startInfo.Arguments);
+            Xunit.Assert.Equal(new[] { "test" }, startInfo.ArgumentList);
             Xunit.Assert.False(startInfo.RedirectStandardOutput);
             Xunit.Assert.False(startInfo.RedirectStandardError);
-            Xunit.Assert.Contains(stdoutTarget, command, StringComparison.Ordinal);
-            Xunit.Assert.Contains(stderrTarget, command, StringComparison.Ordinal);
         }
         else
         {
+            Xunit.Assert.Equal("/bin/sh", startInfo.FileName);
+            var command = startInfo.ArgumentList.Last();
             Xunit.Assert.True(startInfo.RedirectStandardOutput);
             Xunit.Assert.True(startInfo.RedirectStandardError);
             Xunit.Assert.DoesNotContain(" > ", command, StringComparison.Ordinal);

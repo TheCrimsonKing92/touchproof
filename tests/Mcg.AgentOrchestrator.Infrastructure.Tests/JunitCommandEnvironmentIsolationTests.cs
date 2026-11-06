@@ -149,11 +149,8 @@ public sealed class JunitCommandEnvironmentIsolationTests
         private readonly Task _connected;
         private StreamWriter? _writer;
         private Process? _child;
-        private Process? _launcher;
         private string _childIdentity = "child=unobserved";
-        private string _launcherIdentity = "launcher=unobserved";
         private bool _childExitObserved;
-        private bool _launcherExitObserved;
         private string _ownedMembers = "unobserved";
         internal ChildGate()
         {
@@ -176,15 +173,11 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 _childIdentity = DescribeIdentity(_child, "child");
                 if (OperatingSystem.IsWindows())
                 {
-                    // cmd.exe owns the command working directory independently of pwsh. Pin it
-                    // while pwsh is gated: cancellation must await both identities, and waiting
-                    // for pwsh alone cannot prove that both working-directory holders exited.
+                    // The in-process verifier calls the owned CreateProcess launcher directly.
+                    // The fixture child must therefore have this process as its immediate parent.
                     var parent = WindowsNativeProcessInspection.ReadParentProcessId(_child.Id);
                     Assert.Equal(ProcessInspectionStatus.Available, parent.Status);
-                    _launcher = Process.GetProcessById(Assert.IsType<int>(parent.ParentProcessId));
-                    _ = _launcher.SafeHandle;
-                    Assert.Equal("cmd", _launcher.ProcessName, ignoreCase: true);
-                    _launcherIdentity = DescribeIdentity(_launcher, "launcher");
+                    Assert.Equal(Environment.ProcessId, Assert.IsType<int>(parent.ParentProcessId));
                 }
                 _writer = new StreamWriter(_pipe, leaveOpen: true) { AutoFlush = true };
             }
@@ -195,15 +188,14 @@ public sealed class JunitCommandEnvironmentIsolationTests
         {
             if (!OperatingSystem.IsWindows()) return;
             Assert.NotNull(_child);
-            Assert.NotNull(_launcher);
-            // Prove cmd launched the selected installed binary without package/alias redirection.
+            // Prove the owned root is the selected installed binary without package/alias redirection.
             Assert.Equal(Path.GetFullPath(shell), _child.MainModule?.FileName, ignoreCase: true);
-            // Query only the registered launcher's job while both pinned processes are
-            // blocked on this gate. Parentage alone does not prove job membership.
-            var inspected = WorkerProcessJobs.TryGetActiveProcessIds(_launcher.Id, out var members);
+            // Query only the registered child's job while it is blocked on this gate.
+            // Parentage alone does not prove job membership.
+            var inspected = WorkerProcessJobs.TryGetActiveProcessIds(_child.Id, out var members);
             _ownedMembers = inspected ? string.Join(",", members.Order()) : "inspection-failed";
             Assert.True(inspected, $"Cannot inspect the fixture's owned job: {DescribeProcesses()}");
-            Assert.True(members.Contains(_launcher.Id) && members.Contains(_child.Id),
+            Assert.True(members.Contains(_child.Id),
                 $"Fixture processes must belong to the owned job before cancellation: {DescribeProcesses()}");
         }
         internal async Task ReleaseSurvivor()
@@ -220,12 +212,7 @@ public sealed class JunitCommandEnvironmentIsolationTests
                 .OrderBy(key => key, StringComparer.Ordinal).Select(key => $"{key}={cancellation.Data[key]}"));
             Assert.NotNull(_child);
             _childExitObserved = _child.HasExited;
-            if (OperatingSystem.IsWindows())
-            {
-                Assert.NotNull(_launcher);
-                _launcherExitObserved = _launcher.HasExited;
-            }
-            Assert.True(_childExitObserved && (!OperatingSystem.IsWindows() || _launcherExitObserved),
+            Assert.True(_childExitObserved,
                 $"Cancellation returned before all fixture processes exited: {DescribeProcesses()}; " +
                 $"cleanup_ran={cleanupRan}; cancellation={cancellation.Message}; {cancellationDetail}");
             Assert.True(cleanupRan, $"Cancellation cleanup was not observed: {cancellationDetail}");
@@ -236,8 +223,6 @@ public sealed class JunitCommandEnvironmentIsolationTests
             {
                 await WaitForExit(_child, "Fixture child");
                 _childExitObserved = _child is not null;
-                await WaitForExit(_launcher, "Fixture command launcher");
-                _launcherExitObserved = _launcher is not null;
             }
             finally
             {
@@ -259,14 +244,11 @@ public sealed class JunitCommandEnvironmentIsolationTests
         }
         private void DisposeProcesses()
         {
-            _launcher?.Dispose();
-            _launcher = null;
             _child?.Dispose();
             _child = null;
         }
         internal string DescribeProcesses() =>
             $"{_childIdentity} child_exit_observed={_childExitObserved} child_handle_released={_child is null}; " +
-            $"{_launcherIdentity} launcher_exit_observed={_launcherExitObserved} launcher_handle_released={_launcher is null}; " +
             $"owned_job_members_before_cancellation={_ownedMembers}";
 
         private static string DescribeIdentity(Process process, string role) =>

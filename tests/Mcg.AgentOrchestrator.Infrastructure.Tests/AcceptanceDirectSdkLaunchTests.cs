@@ -62,7 +62,7 @@ public sealed class AcceptanceDirectSdkLaunchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task NonSdkAndUtf8DiscoveryKeepShellLaunch(bool utf8Discovery)
+    public async Task NonSdkLaunchesDirectlyAndUtf8DiscoveryKeepsShellLaunch(bool utf8Discovery)
     {
         if (!OperatingSystem.IsWindows()) return;
         var directory = SharedTestSupport.CreateTempDirectory();
@@ -73,8 +73,16 @@ public sealed class AcceptanceDirectSdkLaunchTests
 
             Assert.Equal(0, actual.ExitCode);
             Assert.NotEmpty(actual.Stdout);
-            Assert.Equal("cmd.exe", actual.RootImage);
-            Assert.Contains(actual.JobImages, IsCmd);
+            Assert.Equal(utf8Discovery ? "cmd.exe" : "git.exe", actual.RootImage);
+            if (utf8Discovery)
+                Assert.Contains(actual.JobImages, IsCmd);
+            else
+            {
+                Assert.NotEmpty(actual.JobImages);
+                Assert.DoesNotContain(actual.JobImages, IsCmd);
+                Assert.Equal(actual.RootProcessId, actual.CommandProcessId);
+                Assert.Equal(actual.RootProcessId, actual.ObservedCommandProcessId);
+            }
         }
         finally { SharedTestSupport.RemoveTempDirectory(directory); }
     }
@@ -182,7 +190,9 @@ public sealed class AcceptanceDirectSdkLaunchTests
 
     private static async Task<ShellCapture> RunShellAsync(string[] arguments, string directory)
     {
-        var info = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(arguments, directory);
+        // Keep an actual shell reference even now that the production builder selects direct launch.
+        var info = AcceptanceShellProcessStartInfo.Build(arguments, directory, null, null,
+            false, null, false, out _, forceShell: true);
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(info.Environment, directory);
         using var process = ProcessTreeGuiSuppression.Start(info);
         using var stdout = new MemoryStream();
