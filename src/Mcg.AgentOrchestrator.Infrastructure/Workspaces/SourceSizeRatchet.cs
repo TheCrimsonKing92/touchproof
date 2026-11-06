@@ -560,7 +560,7 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
-            new SourceClassCeiling("ConductorDriver", 14249, 70),
+            new SourceClassCeiling("ConductorDriver", 14244, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

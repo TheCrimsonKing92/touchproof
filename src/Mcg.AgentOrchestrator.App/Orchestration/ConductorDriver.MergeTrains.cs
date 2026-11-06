@@ -7,12 +7,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal MergeTrainReproductionAttribution.Runner? MergeTrainReproductionRunner { get; set; }
+    internal MergeTrainPrefixBisection.Runner? MergeTrainBisectionRunner { get; set; }
     internal MergeTrainFocusedRecheckRunner.Runner? MergeTrainRecheckRunner { get; set; }
     internal MergeTrainFocusedRecheckDecision.DependencySelector MergeTrainRecheckDependencySelector { get; set; } = RepositoryRecheckTestSelection.Read;
 
-    internal MergeTrainReproductionAttribution.Runner CreateMergeTrainReproductionRunner() =>
-        MergeTrainReproductionAttribution.CreateLiveRunner(_cohortWorkspace!, _cohortAcceptanceVerifier!, _cohortCleanupHooks,
+    internal MergeTrainPrefixBisection.Runner CreateMergeTrainBisectionRunner(GoalId goalId) =>
+        MergeTrainPrefixRunner.Create(_cohortWorkspace!, _cohortAcceptanceVerifier!, _cohortCleanupHooks, goalId,
             (identity, token) => CohortPartitionStableSlotLeaseSource is { } source ? source(identity, token) :
                 _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity, token));
 
@@ -341,36 +341,31 @@ internal sealed partial class ConductorDriver
             }
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
-            var reproduced = attributed is null && !messageSubjectFailure && MergeTrainRedAttribution.IsGenuineTrainRed(receipt)
-                ? MergeTrainReproductionAttribution.TryAttribute(receipt, members, MergeTrainReproductionRunner, cancellationToken,
-                    evidence => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
-                        evidence.MemberId, evidence.LogLine(receipt.ReceiptId), eventKind: "train-reproduction")) : null;
-            if (reproduced is not null)
+            var bisection = attributed is null && !messageSubjectFailure && MergeTrainRedAttribution.IsGenuineTrainRed(receipt)
+                ? MergeTrainBisectionAttempts.Run(receipt, members, _cohortWorkspace, _cohortKernel.Goals.ToArray(),
+                    MergeTrainBisectionRunner ?? CreateMergeTrainBisectionRunner(members[0].GoalId), _utcNow(), cancellationToken) : null;
+            if (bisection?.OrdinaryFallback == true)
+                return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+            if (bisection?.Member is { } culprit)
             {
-                var completions = new List<Action>();
-                foreach (var item in reproduced)
-                {
-                    RecordTrainImplicatedMember(item.Member, receipt, item.Failures.Select(failure => failure.TestName!).ToArray(), "reproduction");
-                    completions.Add(() => MergeTrainAttributedFailure.Apply(receipt, item.Member,
-                        GetCurrentGoal(goalsById[item.Member.GoalId]), "reproduction", members.Count, allEjections,
-                        ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]),
-                        _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure, item.Failures));
-                    var reproductionEjection = MergeTrainReproductionAttribution.CreateEjection(receipt, item);
-                    allEjections.Add(reproductionEjection);
-                    _mergeTrainAcceptanceStore.RecordEjections(attemptId, [reproductionEjection]);
-                }
-                completeAttributedFailure = () => { foreach (var complete in completions) complete(); };
-                var removed = reproduced.Select(item => item.Member.GoalId).ToHashSet();
-                composition = members.Where(member => !removed.Contains(member.GoalId)).ToArray();
+                RecordTrainImplicatedMember(culprit, receipt, bisection.RoutedFailures(receipt).Select(failure => failure.TestName!).ToArray(), "bisection");
+                completeAttributedFailure = () => MergeTrainAttributedFailure.Apply(receipt, culprit,
+                    GetCurrentGoal(goalsById[culprit.GoalId]), "bisection", members.Count, allEjections,
+                    ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]),
+                    _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure, bisection.RoutedFailures(receipt));
+                var bisectionEjection = MergeTrainPrefixBisection.CreateEjection(receipt, bisection);
+                allEjections.Add(bisectionEjection);
+                _mergeTrainAcceptanceStore.RecordEjections(attemptId, [bisectionEjection]);
+                AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, culprit.GoalId, bisectionEjection.Reason);
+                composition = members.Where(member => member.GoalId != culprit.GoalId).ToArray();
                 redDropped = null;
                 if (composition.Count < 2 || attempt == 1)
                 {
                     completeAttributedFailure();
                     return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
                 }
-                if (reproduced.Count == 1)
-                    pendingRecheck = MergeTrainFocusedRecheckDecision.Plan(receipt, workspace.Path,
-                        reproduced[0].Member, "reproduction", MergeTrainRecheckDependencySelector);
+                pendingRecheck = MergeTrainFocusedRecheckDecision.Plan(receipt, workspace.Path,
+                    culprit, "bisection", MergeTrainRecheckDependencySelector);
                 continue;
             }
             // Record positively attributed RED before the bisect can lose its build slot;

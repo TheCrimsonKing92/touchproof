@@ -50,7 +50,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
     }
 
     [Fact]
-    public void Setup_FreshDatabase_CreatesSixTablesAndVersionOne()
+    public void Setup_FreshDatabase_CreatesOwnedTablesAndVersionOne()
     {
         Assert.False(File.Exists(Db()));
 
@@ -58,11 +58,31 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
 
         using (var connection = Open(Db()))
         {
-            Assert.Equal(OriginalTables.Concat(["merge_train_receipt_members", "store_schema_versions"])
+            Assert.Equal(OriginalTables.Concat(["merge_train_bisection_outcomes", "merge_train_receipt_members", "store_schema_versions"])
                 .Order(StringComparer.Ordinal), Tables(connection));
             Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
         }
         Assert.Empty(MergeTrainAcceptanceStore.OpenReadOnly(Db()).ReadPassedReceiptsForGoal(Binding('a').GoalId));
+        AssertSecondSetupUnchanged(Db());
+    }
+
+    [Fact]
+    public void Setup_CurrentVersionWithoutBisectionTable_AddsReceiptBoundReplayStorage()
+    {
+        MergeTrainAcceptanceStore.Setup(Db());
+        using (var connection = Open(Db(), SqliteOpenMode.ReadWrite))
+            RunNonQuery(connection, "DROP TABLE merge_train_bisection_outcomes");
+
+        var store = new MergeTrainAcceptanceStore(Db());
+
+        Assert.Null(store.ReadBisectionOutcome("receipt", "train"));
+        Assert.Equal("first", store.SaveBisectionOutcome("receipt", "train", "first"));
+        Assert.Equal("first", store.SaveBisectionOutcome("receipt", "train", "second"));
+        var readOnly = MergeTrainAcceptanceStore.OpenReadOnly(Db());
+        Assert.Equal("first", readOnly.ReadBisectionOutcome("receipt", "train"));
+        Assert.Null(readOnly.ReadBisectionOutcome("receipt", "other-train"));
+        Assert.Throws<InvalidOperationException>(() => store.SaveBisectionOutcome("receipt", "other-train", "wrong"));
+        Assert.Throws<SqliteException>(() => readOnly.SaveBisectionOutcome("other", "train", "wrong"));
         AssertSecondSetupUnchanged(Db());
     }
 
@@ -82,6 +102,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         using (var connection = Open(Db()))
         {
             Assert.Equal(rows, OriginalRows(connection));
+            Assert.Contains("merge_train_bisection_outcomes", Tables(connection));
             Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
             AssertMembers(connection, receipts);
         }
@@ -144,6 +165,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         Assert.Contains("reject version", error.Message);
         using var current = Open(Db());
         Assert.Equal(schema, Schema(current));
+        Assert.DoesNotContain("merge_train_bisection_outcomes", Tables(current));
         Assert.DoesNotContain("merge_train_receipt_members", Tables(current));
         Assert.Null(StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
         Assert.Equal(rows, OriginalRows(current));
@@ -202,6 +224,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
                 VALUES ('attempt', 'goal', 'conflict', '["src/Example.cs"]', 'detail', 'original');
             INSERT INTO merge_train_implicated_candidates VALUES ('goal', 'candidate', 'train', 'main', 'original');
             INSERT INTO merge_train_pair_suppressions VALUES ('pair', 'train', 'original');
+            DROP TABLE merge_train_bisection_outcomes;
             DROP TABLE merge_train_receipt_members;
             DROP TABLE store_schema_versions;
             """);
