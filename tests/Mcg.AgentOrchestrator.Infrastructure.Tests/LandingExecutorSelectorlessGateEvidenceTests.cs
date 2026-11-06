@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorSelectorlessGateEvidenceTests
+public sealed class LandingExecutorSelectorlessGateEvidenceTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(false)]

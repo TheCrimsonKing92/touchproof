@@ -5,9 +5,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Shares the Landing lane's GitRunner seam; repositories and receipts are private.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class DeliveredForReviewHoldRecognitionTests
+// Parallel safe: GitRunner overrides are flow-local; repositories and receipts are private.
+public sealed class DeliveredForReviewHoldRecognitionTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData("touchproof[bot]")]

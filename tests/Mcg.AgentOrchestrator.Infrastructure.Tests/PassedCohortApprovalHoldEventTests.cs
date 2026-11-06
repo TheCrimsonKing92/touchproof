@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 
-// Each fixture owns its git repository and stores; the collection isolates landing git hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflowTests
+// Parallel safe: each fixture owns its git repository and stores; landing git hooks are flow-local.
+public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void HeldTick_SecondMemberNeedsApproval_StreamsOnlyWaitingMemberHold()

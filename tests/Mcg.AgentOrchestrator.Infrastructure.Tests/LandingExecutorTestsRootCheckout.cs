@@ -4,8 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static LandingExecutorTests;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsRootCheckout
+public sealed class LandingExecutorTestsRootCheckout : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void TrackedChangeOnIntegrationBranchHoldsWithoutTouchingTheCheckout()

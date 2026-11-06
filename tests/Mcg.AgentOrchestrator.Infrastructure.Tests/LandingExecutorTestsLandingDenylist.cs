@@ -7,8 +7,7 @@ using static LandingExecutorTests;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsLandingDenylist
+public sealed class LandingExecutorTestsLandingDenylist : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Watched = "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs";
     private const string Ordinary = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/LandingDenylistProbe.cs";

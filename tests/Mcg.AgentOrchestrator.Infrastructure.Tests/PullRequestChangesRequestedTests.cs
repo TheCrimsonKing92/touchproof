@@ -5,9 +5,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Private repositories and real attention stores; serialized for LandingExecutor's shared GitRunner seam.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestChangesRequestedTests
+// Parallel safe: repositories and attention stores are private; GitRunner overrides are flow-local.
+public sealed class PullRequestChangesRequestedTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Prefix = "pull request changes requested: ";
 

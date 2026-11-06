@@ -2,9 +2,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Serialized with the Landing lane's shared GitRunner seam; repositories are private.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestDeliveryTrackerOutcomeTests
+// Parallel safe: GitRunner overrides are flow-local; repositories are private.
+public sealed class PullRequestDeliveryTrackerOutcomeTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Closed_unmerged_escalates_once_and_can_later_merge()
