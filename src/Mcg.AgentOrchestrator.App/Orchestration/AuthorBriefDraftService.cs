@@ -116,7 +116,19 @@ internal static class AuthorBriefDraftService
             if (kind == "stale")
             {
                 rounds.Add(new(1, false, null, "stale", staleReason));
-                WriteReceipt(null);
+                string? retirementFailure = null;
+                try
+                {
+                    AuthorStaleRetirement.Retire(new BacklogStore(workspace.BacklogStorePath), item.Id,
+                        staleReason ?? "", evidenceReferences,
+                        candidate => seams.Repository.IsAncestorOfMain(candidate, mainHead!), cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    retirementFailure = $"author-stale-retirement: {ex.GetType().Name}: {ex.Message}";
+                    error.WriteLine($"Error: {retirementFailure}");
+                }
+                WriteReceipt(retirementFailure);
                 output.WriteLine(staleReason);
                 return Outcome(2);
             }
