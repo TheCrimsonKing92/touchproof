@@ -23,8 +23,6 @@ internal static class AcceptanceCheckProcessInvoker
         var progressSink = request.ProgressSink;
         var engineSettings = request.EngineSettings;
         var attemptResultsPrefix = request.AttemptResultsPrefix;
-        var gateInvocationId = request.GateInvocationId;
-        var apparatusReceiptPath = request.ApparatusReceiptPath;
         var heartbeatInterval = request.HeartbeatInterval;
         var progressInterval = request.ProgressInterval;
         var capturePublicationInterval = request.CapturePublicationInterval;
@@ -59,32 +57,16 @@ internal static class AcceptanceCheckProcessInvoker
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
         RegisteredOwnedProcess? process = null;
+        SpawnProcessIdentity? directCommandIdentity = null;
         AcceptanceCommandProcessIdentityTracker? commandIdentityTracker = null;
         var heartbeatFinalized = false;
         var registrationReleased = false;
         var processDisposed = false;
 
-        var directSdk = OperatingSystem.IsWindows() && !forceUtf8ConsoleOutput &&
+        var directLaunch = OperatingSystem.IsWindows() &&
             stdoutPipeName is not null && stderrPipeName is not null &&
-            AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments);
-        ProcessStartInfo? directStartInfo = null;
-        if (directSdk)
-        {
-            directStartInfo = new ProcessStartInfo
-            {
-                FileName = arguments[0],
-                UseShellExecute = startInfo.UseShellExecute,
-                CreateNoWindow = startInfo.CreateNoWindow,
-                WindowStyle = startInfo.WindowStyle,
-                WorkingDirectory = startInfo.WorkingDirectory,
-                StandardInputEncoding = startInfo.StandardInputEncoding,
-                StandardOutputEncoding = startInfo.StandardOutputEncoding,
-                StandardErrorEncoding = startInfo.StandardErrorEncoding
-            };
-            foreach (var argument in arguments.Skip(1)) directStartInfo.ArgumentList.Add(argument);
-            directStartInfo.Environment.Clear();
-            foreach (var pair in startInfo.Environment) directStartInfo.Environment[pair.Key] = pair.Value;
-        }
+            !string.Equals(startInfo.FileName, "cmd.exe", StringComparison.OrdinalIgnoreCase);
+        var directStartInfo = directLaunch ? startInfo : null;
 
         int? startedProcessId = null;
         int? completedProcessId = null;
@@ -133,21 +115,25 @@ internal static class AcceptanceCheckProcessInvoker
             var requestOwnConsole = forceUtf8ConsoleOutput || AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments);
             try
             {
-                if (directStartInfo is null && !requestOwnConsole && resumeObserver is null)
-                {
-                    process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
-                }
-                else
-                {
-                    process = StartAcceptanceProcess(
-                        startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
-                        directStartInfo,
-                        stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
-                        stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
-                        resumeObserver);
-                }
+                process = StartAcceptanceProcess(
+                    startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
+                    directStartInfo,
+                    stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+                    stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
+                    directLaunch ? id =>
+                    {
+                        // The owned root is still suspended, so its PID cannot be recycled
+                        // and even a short-lived command has an identity without a registry.
+                        using var child = Process.GetProcessById(id);
+                        var read = WindowsNativeProcessInspection.ReadLifecycleIdentity(id, child.SafeHandle);
+                        directCommandIdentity = read is { Status: ProcessInspectionStatus.Available,
+                            StartedAt: { } startedAt, ExecutablePath: { Length: > 0 } image }
+                            ? new SpawnProcessIdentity(id, startedAt, image)
+                            : throw new InvalidOperationException($"Direct acceptance command identity unavailable: pid={id}; {read}");
+                        resumeObserver?.Invoke(id);
+                    } : resumeObserver);
             }
-            catch (InvalidOperationException ex) when (directSdk &&
+            catch (InvalidOperationException ex) when (directLaunch &&
                 ex.InnerException is OwnedProcessLaunchException { NativeErrorCode: 2 or 3 or 267 })
             {
                 // Only CreateProcess's missing-image failure permits fallback. Capture-open failures
@@ -159,23 +145,24 @@ internal static class AcceptanceCheckProcessInvoker
                 foreach (var source in captureSources!) source.Dispose();
                 stdoutPipeName = $"mcg-acc-{Guid.NewGuid():N}-out";
                 stderrPipeName = $"mcg-acc-{Guid.NewGuid():N}-err";
-                var fallbackStartInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
+                var fallbackStartInfo = AcceptanceShellProcessStartInfo.Build(
                     arguments, workingDirectory,
-                    $@"\\.\pipe\{stdoutPipeName}", $@"\\.\pipe\{stderrPipeName}", forceUtf8ConsoleOutput);
+                    $@"\\.\pipe\{stdoutPipeName}", $@"\\.\pipe\{stderrPipeName}", forceUtf8ConsoleOutput,
+                    configureEnvironment: null, resolveBareCommand: false, out _, forceShell: true);
                 fallbackStartInfo.Environment.Clear();
                 foreach (var pair in startInfo.Environment) fallbackStartInfo.Environment[pair.Key] = pair.Value;
                 BeginOwnedCapture();
                 process = StartAcceptanceProcess(
                     fallbackStartInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
                     resumeObserver: resumeObserver);
-                directSdk = false;
+                directLaunch = false;
             }
-            if (!directSdk)
+            if (!directLaunch)
             {
                 commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
                 commandIdentityTracker.Start();
             }
-            else if (process.Identity is { } identity)
+            else if ((directCommandIdentity ?? process.Identity) is { } identity)
             {
                 commandIdentityObserver?.Invoke(identity);
             }
@@ -184,7 +171,7 @@ internal static class AcceptanceCheckProcessInvoker
             using var qosSweep = AcceptanceChildQos.StartSweep(process.Id, ownLoop: heartbeatContext is null);
             var sampler = heartbeatContext is null ? null : new LaneSchedulingSampler(process.Id);
             completedProcessId = process.Id;
-            completedProcessStartedAt = process.Identity?.StartedAt;
+            completedProcessStartedAt = directCommandIdentity?.StartedAt ?? process.Identity?.StartedAt;
             ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
             if (captureConnections is not null)
             {
@@ -500,6 +487,18 @@ internal static class AcceptanceCheckProcessInvoker
             // Cross-process rule-(l) control only: replay the former production sequence through the
             // __acceptance-gate-attempt child, and deterministically expose its start-then-attach window.
             // The external test sets this variable only on that one child process.
+            if (directStartInfo is not null)
+            {
+                // The legacy Process.Start path needs the shell to connect the owned pipes.
+                startInfo = AcceptanceShellProcessStartInfo.Build(
+                    [directStartInfo.FileName, .. directStartInfo.ArgumentList], workingDirectory,
+                    stdoutPipePath, stderrPipePath, false,
+                    environment =>
+                    {
+                        environment.Clear();
+                        foreach (var pair in directStartInfo.Environment) environment[pair.Key] = pair.Value;
+                    }, false, out _, forceShell: true);
+            }
             var legacyProcess = ProcessTreeGuiSuppression.Start(startInfo);
             try
             {
