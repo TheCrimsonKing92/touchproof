@@ -12,6 +12,8 @@ internal static class LaneSlotTimingReader
         IReadOnlyDictionary<string, Dictionary<string, double>> WaitsByFile,
         LaneSlotTotals? Totals, string? UnavailableReason)
     {
+        internal IReadOnlyDictionary<string, Dictionary<string, double>> HeldByFile { get; init; } =
+            new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
         internal double WaitFor(string trxPath, string identity) =>
             WaitsByFile.TryGetValue(PathFor(trxPath), out var waits) ? waits.GetValueOrDefault(identity) : 0;
     }
@@ -51,6 +53,7 @@ internal static class LaneSlotTimingReader
     internal static Reading Read(IReadOnlyList<string>? trxPaths)
     {
         var waitsByFile = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
+        var heldByFile = new Dictionary<string, Dictionary<string, double>>(StringComparer.OrdinalIgnoreCase);
         var diagnostics = new List<string>();
         var counts = new SortedSet<int>();
         double totalWait = 0, totalHeld = 0;
@@ -64,6 +67,8 @@ internal static class LaneSlotTimingReader
             if (waitsByFile.ContainsKey(path)) continue;
             var waits = new Dictionary<string, double>(StringComparer.Ordinal);
             waitsByFile[path] = waits;
+            var holds = new Dictionary<string, double>(StringComparer.Ordinal);
+            heldByFile[path] = holds;
             string[] lines;
             try { lines = File.ReadAllLines(path); }
             catch (Exception error)
@@ -93,6 +98,7 @@ internal static class LaneSlotTimingReader
                     if (!double.IsFinite(accumulated) || !double.IsFinite(totalWait + wait) || !double.IsFinite(totalHeld + held))
                     { skipped++; continue; }
                     waits[identity] = accumulated;
+                    holds[identity] = holds.GetValueOrDefault(identity) + held;
                     totalWait += wait;
                     totalHeld += held;
                     counts.Add(count);
@@ -121,7 +127,7 @@ internal static class LaneSlotTimingReader
             diagnostics.Add($"slot-timing-inconsistent-counts:{string.Join(",", counts)}");
         return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max, gitLaunches,
                 gitStartMs, gitWallMs),
-            diagnostics.Count == 0 ? null : string.Join("; ", diagnostics));
+            diagnostics.Count == 0 ? null : string.Join("; ", diagnostics)) { HeldByFile = heldByFile };
     }
 
     private static bool AccumulateOptional(JsonElement row, string key, ref double? total)

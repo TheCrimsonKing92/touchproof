@@ -1,0 +1,8 @@
+<TestRun>
+<TestDefinitions>
+<UnitTest id="LongA"><TestMethod className="Fixture.LongA" name="Test" /></UnitTest>
+<UnitTest id="LongB"><TestMethod className="Fixture.LongB" name="Test" /></UnitTest>
+</TestDefinitions><Results>
+<UnitTestResult testId="LongA" outcome="Passed" duration="00:01:30" startTime="2026-11-06T00:00:00.000Z" endTime="2026-11-06T00:01:30.000Z" />
+<UnitTestResult testId="LongB" outcome="Passed" duration="00:01:30" startTime="2026-11-06T00:01:30.000Z" endTime="2026-11-06T00:03:00.000Z" />
+</Results><ResultSummary outcome="Completed"><Counters total="2" executed="2" notExecuted="0" /></ResultSummary></TestRun>

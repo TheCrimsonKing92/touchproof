@@ -9,10 +9,41 @@ internal static class AcceptanceClassDurationHistoryStore
 {
     internal const string FileName = "acceptance-class-duration-history.json";
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    internal sealed record Sample(string AttemptId, string Lane, string ClassName, double Seconds);
+    internal sealed record Sample(string AttemptId, string Lane, string ClassName, double Seconds,
+        double? SlotHeldSeconds = null, int? SlotCount = null);
     private sealed record Store(int Version, Dictionary<string, List<Sample>> Classes);
 
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), FileName);
+
+    internal static IReadOnlyDictionary<string, AcceptanceLaneWallModel.Input> ReadModelInputs(
+        string worktreePath, int window, out string? failureReason)
+    {
+        failureReason = null;
+        try
+        {
+            return Read(ResolveStorePath(worktreePath)).Classes.Where(pair => pair.Value.Count > 0)
+                .ToDictionary(pair => pair.Key, pair =>
+                {
+                    var samples = pair.Value.TakeLast(window).ToArray();
+                    var held = samples.Where(sample => sample.SlotHeldSeconds.HasValue)
+                        .Select(sample => sample.SlotHeldSeconds!.Value).ToArray();
+                    var slots = samples.Where(sample => sample.SlotCount.HasValue)
+                        .Select(sample => (double)sample.SlotCount!.Value).ToArray();
+                    return new AcceptanceLaneWallModel.Input(AcceptanceBalancedLanePacker.Median(samples.Select(sample => sample.Seconds)),
+                        held.Length == 0 ? null : AcceptanceBalancedLanePacker.Median(held),
+                        slots.Length == 0 ? null : (int)Math.Ceiling(AcceptanceBalancedLanePacker.Median(slots)));
+                }, StringComparer.Ordinal);
+        }
+        catch (Exception error)
+        {
+            failureReason = "class-history-read:" + error.GetType().Name;
+            return new Dictionary<string, AcceptanceLaneWallModel.Input>(StringComparer.Ordinal);
+        }
+    }
+
+    private static bool ValidModelFields(Sample sample) =>
+        (sample.SlotHeldSeconds is null || double.IsFinite(sample.SlotHeldSeconds.Value) && sample.SlotHeldSeconds >= 0) &&
+        (sample.SlotCount is null || sample.SlotCount > 0);
 
     internal static IReadOnlyDictionary<string, double> ReadMedians(string worktreePath, int window) =>
         ReadMedians(worktreePath, window, out _);
@@ -40,7 +71,7 @@ internal static class AcceptanceClassDurationHistoryStore
         if (!completed || !passed || samples.Count == 0) return null;
         if (window is < 1 or > 100 || string.IsNullOrWhiteSpace(attemptId) || samples.Any(sample =>
                 sample.AttemptId != attemptId || string.IsNullOrWhiteSpace(sample.ClassName) ||
-                string.IsNullOrWhiteSpace(sample.Lane) || !double.IsFinite(sample.Seconds) || sample.Seconds < 0))
+                string.IsNullOrWhiteSpace(sample.Lane) || !double.IsFinite(sample.Seconds) || sample.Seconds < 0 || !ValidModelFields(sample)))
             return "class-history-invalid-sample";
         string? temporary = null;
         var acquired = false;
@@ -87,7 +118,7 @@ internal static class AcceptanceClassDurationHistoryStore
             if (store is null || store.Version != 1 || store.Classes is null || store.Classes.Any(pair =>
                     pair.Value is null || pair.Value.Any(sample => sample is null || sample.ClassName != pair.Key ||
                         string.IsNullOrWhiteSpace(sample.AttemptId) || string.IsNullOrWhiteSpace(sample.Lane) ||
-                        !double.IsFinite(sample.Seconds) || sample.Seconds < 0)))
+                        !double.IsFinite(sample.Seconds) || sample.Seconds < 0 || !ValidModelFields(sample))))
                 throw new InvalidDataException("Invalid class duration history store.");
             return store;
         }
