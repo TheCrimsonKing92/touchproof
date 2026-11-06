@@ -54,21 +54,7 @@ internal static class MergeTrainRecheckFixtureTemplate
 
             MergeTrainFixtureObservation.Run(observer, "backlinks", () =>
             {
-                // commondir is relative; repair the two absolute worktree links only in the copy.
-                foreach (var entry in Directory.EnumerateDirectories(Path.Combine(repo, ".git", "worktrees")))
-                {
-                    var backlink = Path.Combine(entry, "gitdir");
-                    var oldGitFile = File.ReadAllText(backlink).Trim();
-                    var relative = Path.GetRelativePath(source.Repo, oldGitFile);
-                    if (Path.IsPathRooted(relative) || relative == ".." ||
-                        relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                        throw new InvalidOperationException($"Recheck template '{mode}' has an external worktree: {oldGitFile}");
-                    var gitFile = Path.Combine(repo, relative);
-                    File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
-                    // Truncate the existing hidden .git file in place, as in CohortCandidateTemplate.
-                    using var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write));
-                    writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
-                }
+                RepairWorktreeLinks(source.Repo, repo, $"Recheck template '{mode}'");
             });
             MergeTrainFixtureObservation.Run(observer, "index-refresh", () => Builder.RefreshIndex(repo));
             return source with { Repo = repo };
@@ -79,6 +65,31 @@ internal static class MergeTrainRecheckFixtureTemplate
             throw;
         }
     }
+
+    // Only copy-side absolute links change; commondir remains relative.
+    internal static IReadOnlyList<string> RepairWorktreeLinks(string sourceRoot, string copyRoot,
+        string description, Func<string, string>? mapRelativePath = null)
+    {
+        var worktrees = new List<string>();
+        foreach (var entry in Directory.EnumerateDirectories(Path.Combine(copyRoot, ".git", "worktrees")))
+        {
+            var backlink = Path.Combine(entry, "gitdir");
+            var oldGitFile = File.ReadAllText(backlink).Trim();
+            var relative = Path.GetRelativePath(sourceRoot, oldGitFile);
+            if (Path.IsPathRooted(relative) || relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new InvalidOperationException($"{description} has an external worktree: {oldGitFile}");
+            var gitFile = Path.Combine(copyRoot, mapRelativePath?.Invoke(relative) ?? relative);
+            File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
+            // Preserve the existing hidden .git file on Windows.
+            using (var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write)))
+                writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
+            worktrees.Add(Path.GetDirectoryName(gitFile)!);
+        }
+        return worktrees;
+    }
+
+    internal static void RefreshIndex(string repo) => Builder.RefreshIndex(repo);
 
     internal sealed record PreparedMember(GoalId GoalId, string Revision);
     internal sealed record PreparedHistory(string Seed, string Main,

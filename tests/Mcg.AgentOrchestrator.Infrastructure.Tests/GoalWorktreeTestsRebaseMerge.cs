@@ -20,15 +20,11 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         try
         {
             var goalId = GoalId.New();
-            var path = GoalWorktrees.Ensure(repo, goalId);
+            var path = CreateGoalBranchScenario(repo, goalId, "feature.txt", "goal work", "Goal work").Worktree;
             CleanupHooks.BuildStorageRoot = CreateIsolatedCleanupContext(repo).Hooks.BuildStorageRoot;
             var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
                 goalId, "cleanup-test", storageRoot: CleanupHooks.BuildStorageRoot);
             Assert.True(Directory.Exists(buildEnvironment.RootPath));
-
-            File.WriteAllText(Path.Combine(path, "feature.txt"), "goal work");
-            RunGit(path, "add", "-A");
-            RunGit(path, "commit", "-m", "Goal work");
 
             var merge = GoalWorktrees.TryFastForwardMerge(repo, goalId);
 
@@ -119,10 +115,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         try
         {
             var goalId = GoalId.New();
-            var path = GoalWorktrees.Ensure(repo, goalId);
-            File.WriteAllText(Path.Combine(path, "blocked-feature.txt"), "must not land");
-            RunGit(path, "add", "-A");
-            RunGit(path, "commit", "-m", "Blocked goal work");
+            var path = CreateGoalBranchScenario(repo, goalId, "blocked-feature.txt", "must not land", "Blocked goal work").Worktree;
             var mainBefore = GitCli.Run(repo, "rev-parse", "HEAD").Output.Trim();
             var checks = 0;
 
@@ -352,12 +345,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            var sourceDirectory = Path.Combine(worktreePath, "src");
-            Directory.CreateDirectory(sourceDirectory);
-            File.WriteAllText(Path.Combine(sourceDirectory, "Change.cs"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "src/Change.cs", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -397,10 +385,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -433,10 +418,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Direct acceptance journal recovery", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", goal.Id.Value[..8]], context));
@@ -471,10 +453,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance lifecycle ordering test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var order = new List<string>();
             var writer = new RecordingGoalLifecycleEventWriter(order);
@@ -527,10 +506,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance stop-host blocker test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var mergeCalled = false;
             var context = new CliExecutionContext(
@@ -658,10 +634,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance verification timeout blocker test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var mergeCalled = false;
             var context = new CliExecutionContext(
@@ -716,10 +689,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance merge blocker test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var context = new CliExecutionContext(
                 kernel,
@@ -776,10 +746,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 goal.Id, obligation.Id, CriterionEvidenceOwner.Operator, staleCandidate, "native-old",
                 "operator observation", true, "Observed only the prior candidate.");
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
             var currentCandidate = RunGitOutput(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             Assert.NotEqual(staleCandidate, currentCandidate);
 
@@ -805,10 +772,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance non-accepted test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
             var stopCalled = false;
             var mergeCalled = false;
             var context = new CliExecutionContext(
@@ -967,10 +931,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -1015,10 +976,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "feature.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -1095,10 +1053,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "policy.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "policy.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -1277,10 +1232,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "skip.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "skip.txt", "goal work", "Goal work").Worktree;
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -1317,10 +1269,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Acceptance stale state test", repo);
-            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
-            File.WriteAllText(Path.Combine(worktreePath, "stale-state.txt"), "goal work");
-            RunGit(worktreePath, "add", "-A");
-            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var worktreePath = CreateGoalBranchScenario(repo, goal.Id, "stale-state.txt", "goal work", "Goal work").Worktree;
 
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
