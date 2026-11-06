@@ -230,20 +230,28 @@ internal sealed class HandleListLaunchedProcess : IDisposable
         catch (ObjectDisposedException) { } // Exit cleanup can close startup diagnostic streams.
         catch (IOException) { }
     }
-    internal void Kill(bool entireProcessTree = false)
+    internal void Kill(bool entireProcessTree = false, Func<Process>? attachProcess = null)
     {
         if (portable is not null) { portable.Kill(entireProcessTree); return; }
         if (HasExited) return;
         if (entireProcessTree)
         {
-            try { Attached.Kill(entireProcessTree: true); }
-            catch (ArgumentException) when (HasExited)
+            Process process;
+            try { process = attachProcess is null ? Attached : attachProcess(); }
+            catch (ArgumentException)
             {
-                // The process can exit between the native check and GetProcessById.
-                // The retained native handle proves that this exact process exited.
+                // A process can disappear from PID lookup before its native handle
+                // signals. Finish cleanup through our retained identity, never a new PID lookup.
+                TerminateOwnedProcess();
+                return;
             }
+            process.Kill(entireProcessTree: true);
         }
-        else if (!TerminateProcess(SafeHandle, uint.MaxValue))
+        else TerminateOwnedProcess();
+    }
+    private void TerminateOwnedProcess()
+    {
+        if (!TerminateProcess(SafeHandle, uint.MaxValue))
         {
             var failure = new Win32Exception(Marshal.GetLastWin32Error());
             // Match Process.Kill: an exit code can be available before the process
