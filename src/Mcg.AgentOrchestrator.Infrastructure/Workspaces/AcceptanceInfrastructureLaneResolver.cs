@@ -8,9 +8,10 @@ internal static class AcceptanceInfrastructureLaneResolver
     {
         if (settings.BalancedLanePool is not { } pool)
             return new(AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, worktreePath), null);
-        var medians = AcceptanceClassDurationHistoryStore.ReadMedians(worktreePath, pool.HistoryWindow, out var failureReason);
+        var inputs = AcceptanceClassDurationHistoryStore.ReadModelInputs(worktreePath, pool.HistoryWindow, out var failureReason);
+        var medians = inputs.ToDictionary(pair => pair.Key, pair => pair.Value.Seconds, StringComparer.Ordinal);
         var expansion = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes,
-            AcceptanceTestClassSourceScanner.Scan(worktreePath), medians, pool);
+            AcceptanceTestClassSourceScanner.Scan(worktreePath), medians, pool, inputs);
         return expansion with { Layout = expansion.Layout! with { HistoryReadFailure = failureReason } };
     }
 

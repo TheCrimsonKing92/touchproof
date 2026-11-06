@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "classes": {
+    "Fixture.LargeA": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 2",
+        "className": "Fixture.LargeA",
+        "seconds": 120,
+        "slotHeldSeconds": 0,
+        "slotCount": 1
+      }
+    ],
+    "Fixture.LargeB": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 2",
+        "className": "Fixture.LargeB",
+        "seconds": 120,
+        "slotHeldSeconds": 0,
+        "slotCount": 1
+      }
+    ],
+    "Fixture.LongA": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 1",
+        "className": "Fixture.LongA",
+        "seconds": 90,
+        "slotHeldSeconds": 90,
+        "slotCount": 1
+      }
+    ],
+    "Fixture.LongB": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 1",
+        "className": "Fixture.LongB",
+        "seconds": 90,
+        "slotHeldSeconds": 90,
+        "slotCount": 1
+      }
+    ],
+    "Fixture.CollectionA": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 2",
+        "className": "Fixture.CollectionA",
+        "seconds": 10,
+        "slotHeldSeconds": 0,
+        "slotCount": 1
+      }
+    ],
+    "Fixture.CollectionB": [
+      {
+        "attemptId": "fixture",
+        "lane": "Balanced 2",
+        "className": "Fixture.CollectionB",
+        "seconds": 10,
+        "slotHeldSeconds": 0,
+        "slotCount": 1
+      }
+    ]
+  }
+}

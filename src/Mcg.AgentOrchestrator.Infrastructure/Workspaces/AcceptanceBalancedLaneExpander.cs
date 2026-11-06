@@ -8,7 +8,8 @@ internal static class AcceptanceBalancedLaneExpander
 
     internal static AcceptanceBalancedLaneExpansion Expand(IReadOnlyList<AcceptanceTestLane> lanes,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, IReadOnlyDictionary<string, double> medians,
-        AcceptanceBalancedLanePoolSettings settings)
+        AcceptanceBalancedLanePoolSettings settings,
+        IReadOnlyDictionary<string, AcceptanceLaneWallModel.Input>? modelInputs = null)
     {
         settings.Validate(lanes);
         var constrained = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, classes)
@@ -24,7 +25,7 @@ internal static class AcceptanceBalancedLaneExpander
         // Collection grouping applies to the remaining pool. Existing constrained filters
         // may split a process-local collection across lanes; only OwnedCollections declares
         // a lane owner, and that membership was resolved above.
-        var layout = AcceptanceBalancedLanePacker.Pack(pool, medians, settings);
+        var layout = AcceptanceBalancedLanePacker.Pack(pool, medians, settings, modelInputs);
         var balanced = layout.Lanes.Select(lane => CreatePoolLane(lane.Name,
             string.Join('|', lane.Members.Select(name => "FullyQualifiedName=" + name)), settings, lane.PredictedSeconds));
         // Complement the scanner, not hand-maintained fragments: every missed class runs,

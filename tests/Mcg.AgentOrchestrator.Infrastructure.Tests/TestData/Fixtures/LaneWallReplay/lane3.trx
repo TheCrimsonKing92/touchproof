@@ -1,0 +1,6 @@
+<TestRun>
+<TestDefinitions>
+<UnitTest id="LargeB"><TestMethod className="Fixture.LargeB" name="Test" /></UnitTest>
+</TestDefinitions><Results>
+<UnitTestResult testId="LargeB" outcome="Passed" duration="00:02:00" startTime="2026-11-06T00:00:00.000Z" endTime="2026-11-06T00:02:00.000Z" />
+</Results><ResultSummary outcome="Completed"><Counters total="1" executed="1" notExecuted="0" /></ResultSummary></TestRun>
