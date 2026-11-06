@@ -105,7 +105,7 @@ public sealed class PlannerBriefAmendmentRequestTests
     }
 
     [Xunit.Fact]
-    public void Parse_multiple_amendments_and_conflicting_questions_are_malformed()
+    public void Parse_duplicate_amendments_and_conflicting_questions_are_malformed()
     {
         var multiple = AgentOutputDirectives.ParseHumanInputRequest(Amendment() + "\n" + Amendment(), AgentRole.Planner);
         var conflict = AgentOutputDirectives.ParseHumanInputRequest(Amendment() + "\nHUMAN_INPUT: Another question?", AgentRole.Planner);
@@ -113,10 +113,157 @@ public sealed class PlannerBriefAmendmentRequestTests
             Amendment() + "\nHUMAN_INPUT: Another question?\n" + Evidence, AgentRole.Planner);
 
         Xunit.Assert.True(multiple.IsMalformed);
-        Xunit.Assert.Contains("one amendment", multiple.Diagnostic);
+        Xunit.Assert.Contains("criterion_index 1", multiple.Diagnostic);
+        Xunit.Assert.Empty(multiple.Directives);
         Xunit.Assert.True(conflict.IsMalformed);
         Xunit.Assert.Contains("conflicts", conflict.Diagnostic);
         Xunit.Assert.Equal("Malformed PLANNER_EVIDENCE_REQUEST: substantive HUMAN_INPUT and Planner evidence are ambiguous; use evidence lines for every requirement.", ambiguity.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Parse_distinct_amendments_preserves_source_order(bool withEvidence)
+    {
+        var output = Amendment() + "\n" + Amendment("criterion_index", "2");
+        if (withEvidence) output += "\n" + Evidence;
+        var result = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+
+        Xunit.Assert.False(result.IsMalformed, result.Diagnostic);
+        Xunit.Assert.Null(result.Directive);
+        Xunit.Assert.Equal(2, result.Directives.Count);
+        Xunit.Assert.Contains("criterion 1", result.Directives[0].Question);
+        Xunit.Assert.Contains("criterion 2", result.Directives[1].Question);
+        Xunit.Assert.NotEqual(result.Directives[0].QuestionFingerprint, result.Directives[1].QuestionFingerprint);
+        Xunit.Assert.Equal(0, result.EvidenceLineCount);
+        var reversed = AgentOutputDirectives.ParseHumanInputRequest(
+            Amendment("criterion_index", "2") + "\n" + Amendment(), AgentRole.Planner);
+        Xunit.Assert.Equal(result.Directives.Reverse(), reversed.Directives);
+    }
+
+    [Xunit.Fact]
+    public void Parse_nonadjacent_duplicates_names_first_repeated_index()
+    {
+        var result = AgentOutputDirectives.ParseHumanInputRequest(string.Join("\n",
+            Amendment("criterion_index", "2"), Amendment(),
+            Amendment("criterion_index", "2"), Amendment()), AgentRole.Planner);
+
+        Xunit.Assert.True(result.IsMalformed);
+        Xunit.Assert.Contains("criterion_index 2", result.Diagnostic);
+        Xunit.Assert.Null(result.Directive);
+        Xunit.Assert.Empty(result.Directives);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Parse_invalid_line_rejects_entire_batch(bool invalidFirst)
+    {
+        var invalid = Amendment("criterion_index", "0");
+        var result = AgentOutputDirectives.ParseHumanInputRequest(invalidFirst
+            ? invalid + "\n" + Amendment() : Amendment() + "\n" + invalid, AgentRole.Planner);
+
+        Xunit.Assert.True(result.IsMalformed);
+        Xunit.Assert.Equal("Malformed PLANNER_BRIEF_AMENDMENT: criterion_index must be a positive 1-based integer.", result.Diagnostic);
+        Xunit.Assert.Empty(result.Directives);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Parse_plural_amendments_rejects_substantive_human_input(bool withEvidence)
+    {
+        var output = Amendment() + "\n" + Amendment("criterion_index", "2") +
+            "\nHUMAN_INPUT: Another question?";
+        if (withEvidence) output += "\n" + Evidence;
+
+        var result = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+
+        Xunit.Assert.True(result.IsMalformed);
+        Xunit.Assert.Empty(result.Directives);
+        Xunit.Assert.Contains(withEvidence ? "ambiguous" : "conflicts", result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void Parse_single_amendment_preserves_fixed_question_and_fingerprint()
+    {
+        var result = AgentOutputDirectives.ParseHumanInputRequest(Amendment(), AgentRole.Planner);
+        var directive = Xunit.Assert.Single(result.Directives);
+
+        Xunit.Assert.Equal(string.Join(Environment.NewLine,
+            "Planner brief amendment requested for criterion 1.",
+            "Defect: Existing regression contradicts the criterion.",
+            "Evidence: tests/ExistingTests.cs:12",
+            "Proposed text: Preserve the existing behavior.",
+            "Fallback: Narrow the criterion.",
+            "What is the ruling on this criterion amendment?"), directive.Question);
+        const string fingerprint = "1497d45de3bb529ccacf7fa5fbff408f5b76b455cfe4f0a53bef162c1946df5d";
+        Xunit.Assert.Equal(fingerprint, directive.QuestionFingerprint);
+        Xunit.Assert.Equal(fingerprint, directive.BlockerFingerprint);
+        Xunit.Assert.Same(directive, result.Directive);
+        Xunit.Assert.Equal(HumanWaitKind.PlannerBriefAmendment, directive.Kind);
+        Xunit.Assert.Equal(1, directive.AmendmentCriterionIndex);
+        Xunit.Assert.Equal(0, result.EvidenceLineCount);
+        Xunit.Assert.False(result.IsMalformed, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public async Task Api_round_records_each_amendment_as_an_independent_question()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Amend independent criteria", [planner]);
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        var provider = new AmendmentProvider(Amendment() + "\n" + Amendment("criterion_index", "2"));
+        var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+        await runner.RunAsync(goal.Id, planner.Id, TestContext.Current.CancellationToken);
+
+        var pending = kernel.GetPendingBlockingHumanInput(goal.Id);
+        Xunit.Assert.Equal(2, pending.Count);
+        Xunit.Assert.Equal(2, pending.Select(item => item.QuestionFingerprint).Distinct().Count());
+        Xunit.Assert.All(pending, item => Xunit.Assert.Equal(HumanWaitKind.PlannerBriefAmendment, item.Kind));
+        Xunit.Assert.Equal(new[] { 1, 2 }, pending.Select(item => item.Amendment!.CriterionIndex).Order());
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Xunit.Assert.NotEqual(GoalStatus.Failed, goal.Status);
+    }
+
+    private sealed class AmendmentProvider(string output) : IModelProvider
+    {
+        public string ProviderName => "OpenAI";
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(new ModelResponse(output, new ModelUsage(1, 1), "stop"));
+    }
+
+    [Xunit.Fact]
+    public void Legacy_amendment_replay_keeps_unanswered_sibling_waiting()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Replay retained amendment directives", [planner]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var output = Amendment() + "\n" + Amendment("criterion_index", "2");
+        // Retained results from before typed amendments carry SpecClarification directives.
+        var directives = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner).Directives
+            .Select(item => item with { Kind = HumanWaitKind.SpecClarification, AmendmentCriterionIndex = null })
+            .ToArray();
+        Xunit.Assert.True(PlannerAmendmentBatchRecorder.Record(kernel, goal, planner, directives,
+            output, workerResultPresent: true, completedRound: 1, workerResultReference: "original-round"));
+        var requests = kernel.GetPendingBlockingHumanInput(goal.Id);
+        Xunit.Assert.Equal(2, requests.Count);
+        var answered = requests.Single(item => item.Question.Contains("criterion 2", StringComparison.Ordinal));
+        var sibling = requests.Single(item => item.Id != answered.Id);
+        kernel.SubmitHumanInput(answered.Id, "Keep the criterion unchanged.");
+
+        Xunit.Assert.True(PlannerAmendmentBatchRecorder.Record(kernel, goal, planner, directives,
+            output, workerResultPresent: true, completedRound: 2, workerResultReference: "replayed-round"));
+
+        Xunit.Assert.Equal(sibling.Id, Xunit.Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id)).Id);
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Xunit.Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskFailed);
+        Xunit.Assert.Equal(2, goal.Timeline.Count(item => item.Kind == ProgressKind.HumanInputRequested));
     }
 
     [Xunit.Theory]
@@ -176,7 +323,8 @@ public sealed class PlannerBriefAmendmentRequestTests
     {
         var template = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0];
         foreach (var fragment in new[] { "PLANNER_BRIEF_AMENDMENT:", "criterion_index (1-based)", "defect", "evidence (path:line)",
-                     "proposed_text", "optional fallback_text", "report the amendment in blockers", "re-emit evidence lines after the ruling", "only the owner question" })
+                     "proposed_text", "optional fallback_text", "report the amendment in blockers", "re-emit evidence lines after the ruling", "only the owner question",
+                     "line per criterion that needs amending", "at most one per criterion" })
             Xunit.Assert.Contains(fragment, template);
     }
 
