@@ -69,6 +69,18 @@ if (args.Length >= 1 && args[0].Equals("repo-process-stop", StringComparison.Ord
     }
 }
 
+// Worker helpers use pre-built code without opening stores or starting a workspace.
+if (args.Length >= 1 && args[0].Equals("worker-build-request", StringComparison.OrdinalIgnoreCase) &&
+    !CliCommandHelp.IsCommandSpecificHelp(args))
+{
+    return CliWorkerHelperCommands.RequestBuild(args, Environment.CurrentDirectory, Console.Out, Console.Error);
+}
+if (args.Length >= 1 && args[0].Equals("submit-worker-result", StringComparison.OrdinalIgnoreCase) &&
+    !CliCommandHelp.IsCommandSpecificHelp(args))
+{
+    return CliWorkerHelperCommands.SubmitResult(args, Console.Out, Console.Error);
+}
+
 // Explicit host setup bypasses workspace and conductor startup, including elevated runs.
 if (CliHostExclusionsCommand.IsCommand(args) && !CliCommandHelp.IsCommandSpecificHelp(args))
 {

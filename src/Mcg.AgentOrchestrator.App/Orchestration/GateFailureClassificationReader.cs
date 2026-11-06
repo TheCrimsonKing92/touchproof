@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -15,7 +17,8 @@ internal static class GateFailureClassificationReader
         IReadOnlyList<GateStatsReader.LaneRun> Runs, string? Log, IReadOnlyList<string> Problems,
         IReadOnlyList<string> ResultProblems, string? Exclusion);
 
-    internal static IReadOnlyList<Attempt> Read(string directory, int last, ICollection<string> problems, out int skipped)
+    internal static IReadOnlyList<Attempt> Read(string directory, int last, ICollection<string> problems, out int skipped,
+        DateTimeOffset? now = null)
     {
         // Match GateStatsWaitsReader.Read's TRX/result/attempt union and ordering.
         // TRX-only discovery would hide identity-stale and pre-test apparatus faults.
@@ -41,19 +44,23 @@ internal static class GateFailureClassificationReader
         catch (DirectoryNotFoundException) { /* No home gate attempts yet. */ }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { problems.Add($"{root}: discovery {ex.GetType().Name}"); }
+        var observedAt = now ?? DateTimeOffset.UtcNow;
         return prefixes.Select(prefix => (Prefix: prefix, Time: Time(prefix)))
             .Where(row => row.Time is not null).OrderByDescending(row => row.Time)
             .ThenBy(row => row.Prefix, StringComparer.Ordinal).Take(last)
-            .Select(row => ReadAttempt(row.Prefix, row.Time)).ToArray();
+            .Select(row => ReadAttempt(row.Prefix, row.Time, observedAt)).ToArray();
     }
 
-    private static Attempt ReadAttempt(string prefix, DateTimeOffset? time)
+    private static Attempt ReadAttempt(string prefix, DateTimeOffset? time, DateTimeOffset now)
     {
         var problems = new List<string>();
         var resultProblems = new List<string>();
-        var result = ReadJson(prefix + ".result.json", resultProblems);
+        var hasMetadata = File.Exists(prefix + ".attempt.json");
+        var hasResult = File.Exists(prefix + ".result.json");
+        var readsResult = hasResult || hasMetadata;
+        var result = readsResult ? ReadJson(prefix + ".result.json", resultProblems, includeRunningHint: hasResult) : default;
         var kind = Text(result, "kind");
-        if (kind is null && resultProblems.Count == 0) resultProblems.Add("result.json: missing or invalid kind");
+        if (readsResult && kind is null && resultProblems.Count == 0) resultProblems.Add("result.json: missing or invalid kind");
         var acceptance = Property(result, "acceptance");
         var passedField = Property(acceptance, "passed");
         bool? passed = passedField.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => null };
@@ -79,7 +86,7 @@ internal static class GateFailureClassificationReader
             resultProblems.Add("result.json: invalid acceptance.checkAttributions");
 
         // attempt.json is optional: the attempt id also records its start stamp and goal prefix.
-        var metadata = File.Exists(prefix + ".attempt.json") ? ReadJson(prefix + ".attempt.json", problems) : default;
+        var metadata = hasMetadata ? ReadJson(prefix + ".attempt.json", problems, includeRunningHint: hasResult) : default;
         // Attempt metadata calls this 'kind' (:130); result artifacts call it
         // 'dispatchKind' (:3566), in ConductorParallelAcceptanceAttempts.cs.
         var dispatch = Text(metadata, "kind") ?? Text(result, "dispatchKind");
@@ -93,15 +100,61 @@ internal static class GateFailureClassificationReader
         var id = Path.GetFileName(prefix);
         var goalPrefix = id.Split('-')[0];
         var runs = GateStatsReader.ReadAttemptRuns(prefix, problems);
+        if (!hasResult) resultProblems.Add(MissingResultReason(prefix, runs, now, problems));
         string? log = null;
         // Early/fault artifacts can precede every lane and legitimately have no log/TRX.
-        if (File.Exists(prefix + ".out.log") || kind == "accepted")
-            log = ReadText(prefix + ".out.log", problems);
+        var ownerMinted = !hasMetadata && Regex.IsMatch(id, @"^(?:operator|[0-9a-f]{8})-gate-\d{17}-[0-9a-f]{32}$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (File.Exists(prefix + ".out.log") || kind == "accepted" && !ownerMinted)
+            log = ReadText(prefix + ".out.log", problems, includeRunningHint: hasResult);
         if (kind == "accepted" && runs.Count == 0 && passed != true)
             problems.Add($"{id} TRX: no readable first-run or rerun test outcomes recorded");
         return new(id, goalPrefix, time, kind, Text(result, "faultKind"), Text(result, "state"),
             Text(result, "earlyOutcomeKind"), Text(result, "infrastructureReasonCode"), passed, checks,
             attributions, runs, log, problems, resultProblems, exclusion);
+    }
+
+    private static string MissingResultReason(string prefix, IReadOnlyList<GateStatsReader.LaneRun> runs,
+        DateTimeOffset now, ICollection<string> problems)
+    {
+        var plan = new OwnerConsoleGateLanePlanReader().Read(prefix + AcceptanceGateLanePlan.ArtifactSuffix,
+            Path.GetFileName(prefix));
+        // Plans name bare lanes; infrastructure shard telemetry slugs the full check name.
+        var missingLane = plan is not null && plan.Scheduled.Any(lane => !runs.Any(run =>
+            run.Run == 0 && (run.Lane == AcceptanceArtifactFileNames.Slug(lane) ||
+                run.Lane == AcceptanceArtifactFileNames.Slug($"infrastructure tests: {lane}")) && run.Results.Count > 0 &&
+            run.Results.All(test => AcceptanceTrxOutcomeTaxonomy.IsFatal(test.Outcome) ||
+                test.Outcome is "Passed" or "NotExecuted" or "Inconclusive" or "Warning" or "Completed")));
+        var freshHeartbeat = HasFreshHeartbeat(prefix, now, problems);
+        if (missingLane)
+            return "possibly-running: scheduled lane TRX is missing or incomplete; attempt may still be running";
+        if (freshHeartbeat)
+            return "possibly-running: fresh gate heartbeat; attempt may be finalizing";
+        return plan is not null
+            ? "finished-without-result-record: scheduled lane TRX is complete and no fresh gate heartbeat exists"
+            : "completion-unknown: no result record and no readable valid lane plan";
+    }
+
+    private static bool HasFreshHeartbeat(string prefix, DateTimeOffset now, ICollection<string> problems)
+    {
+        try
+        {
+            foreach (var path in Directory.GetFiles(Path.GetDirectoryName(prefix)!,
+                         Path.GetFileName(prefix) + "*.gate-heartbeat.json"))
+            {
+                var name = Path.GetFileName(path);
+                var id = Path.GetFileName(prefix);
+                if (name != id + ".gate-heartbeat.json" && !name.StartsWith(id + ".", StringComparison.Ordinal)) continue;
+                var heartbeat = ReadJson(path, problems, includeRunningHint: false);
+                var observed = Text(heartbeat, "lastObservedAt");
+                var timestamp = DateTimeOffset.TryParse(observed, CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var parsed) ? parsed : new DateTimeOffset(File.GetLastWriteTimeUtc(path));
+                if (now - timestamp <= GateLoadContextProbe.LiveGateHeartbeatFreshness) return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { problems.Add($"{Path.GetFileName(prefix)} heartbeat discovery: {ex.GetType().Name}"); }
+        return false;
     }
 
     private static DateTimeOffset? Time(string prefix)
@@ -112,9 +165,9 @@ internal static class GateFailureClassificationReader
             CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time) ? time : null;
     }
 
-    private static JsonElement ReadJson(string path, ICollection<string> problems)
+    private static JsonElement ReadJson(string path, ICollection<string> problems, bool includeRunningHint = true)
     {
-        var text = ReadText(path, problems);
+        var text = ReadText(path, problems, includeRunningHint);
         if (text is null) return default;
         try
         {
@@ -126,7 +179,7 @@ internal static class GateFailureClassificationReader
         return default;
     }
 
-    private static string? ReadText(string path, ICollection<string> problems)
+    private static string? ReadText(string path, ICollection<string> problems, bool includeRunningHint = true)
     {
         try
         {
@@ -136,7 +189,8 @@ internal static class GateFailureClassificationReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            problems.Add($"{Path.GetFileName(path)}: {ex.GetType().Name} (missing, locked or unreadable evidence; attempt may still be running)");
+            var hint = includeRunningHint ? "; attempt may still be running" : "";
+            problems.Add($"{Path.GetFileName(path)}: {ex.GetType().Name} (missing, locked or unreadable evidence{hint})");
             return null;
         }
     }
