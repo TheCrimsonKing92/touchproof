@@ -192,6 +192,36 @@ public sealed class ProjectFleetRollingRestartTests
     }
 
     [Fact]
+    public async Task Restart_PreexistingStopOwnerExits_PreservesRequestAndRestartsNext()
+    {
+        using var harness = new Harness();
+        var stopped = harness.Project("a");
+        var ready = harness.Project("b");
+        var stopFile = stopped.ResolveWorkspace().ConductorStopFilePath;
+        File.WriteAllText(stopFile, "operator request");
+        var ownerExited = false;
+        harness.WriteLive(stopped, 1, () => !ownerExited);
+        harness.ExitAfterStop(ready, 2);
+        harness.Delay = (duration, token) =>
+        {
+            Assert.Empty(harness.Host.Inner.Requests);
+            ownerExited = true;
+            return harness.Clock.Delay(duration, token);
+        };
+
+        var result = await Reported(harness.Coordinator().RunAsync([ready, stopped], "build-commit", default));
+
+        Assert.True(ownerExited);
+        Assert.Equal("failed-stop", result.Projects[0].State);
+        Assert.Contains("pre-existing stop request", result.Projects[0].Error!);
+        Assert.Equal("old-a", result.Projects[0].BuildCommit);
+        Assert.Null(result.Projects[0].NewBuildCommit);
+        Assert.Equal("operator request", File.ReadAllText(stopFile));
+        Assert.Equal("restarted", result.Projects[1].State);
+        Assert.Equal(ready.RootDirectory, Assert.Single(harness.Host.Inner.Requests).WorkingDirectory);
+    }
+
+    [Fact]
     public async Task Restart_MalformedLock_FailedLockProbeAndNextProceeds()
     {
         using var harness = new Harness();

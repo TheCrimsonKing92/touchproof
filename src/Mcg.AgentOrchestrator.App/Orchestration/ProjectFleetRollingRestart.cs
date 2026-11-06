@@ -114,8 +114,11 @@ internal sealed class ProjectFleetRollingRestart
 
             token.ThrowIfCancellationRequested();
             failureState = "failed-stop";
-            // The conductor observes this file but does not remove it on exit.
-            File.Delete(workspace.ConductorStopFilePath);
+            // An existing operator request still forbids restart after its lock owner exits.
+            if (ownedStopFile is null)
+                return Outcome("failed-stop", "A pre-existing stop request prevents restart; explicit operator clearance is required.");
+            // The conductor observes our request but does not remove it on exit.
+            File.Delete(ownedStopFile);
             ownedStopFile = null;
 
             failureState = "failed-start";
