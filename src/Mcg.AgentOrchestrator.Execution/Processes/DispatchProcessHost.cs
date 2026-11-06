@@ -878,7 +878,7 @@ public static class DispatchProcessHost
             startInfo.Environment["PATH"] = currentPath;
         }
 
-        using var process = Process.Start(startInfo)
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
             ?? throw new InvalidOperationException($"Failed to resolve '{commandName}' with {startInfo.FileName}.");
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
@@ -978,7 +978,7 @@ public static class DispatchProcessHost
         }
         startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-        using var process = Process.Start(startInfo);
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo);
         if (process is null)
         {
             throw new InvalidOperationException($"Low-integrity launch preflight failed to start '{commandName} --version'.");

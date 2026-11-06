@@ -10,7 +10,7 @@ public sealed class LaunchLockSummaryFormatterTests
         var snapshot = new LaunchLockSnapshot(
             10, frequency * 4, frequency, frequency * 2, frequency * 4,
             frequency * 8, frequency * 2, frequency * 4, frequency * 6,
-            frequency, [1, 2, 3, 4]);
+            frequency, [1, 2, 3, 4, 0]);
 
         var line = LaunchLockTelemetry.FormatSummary(snapshot, 4242);
 
@@ -19,7 +19,7 @@ public sealed class LaunchLockSummaryFormatterTests
             "wait_ms_total=4000.000 wait_p50_ms=1000.000 wait_p95_ms=2000.000 wait_max_ms=4000.000 " +
             "hold_ms_total=8000.000 hold_p50_ms=2000.000 hold_p95_ms=4000.000 hold_max_ms=6000.000 " +
             "create_ms_total=1000.000 by_entry=AcquireConsoleForChildSpawn:1,AcquireSuppressedChildSpawn:2," +
-            "AcquireErrorModeForChildSpawn:3,Start:4",
+            "AcquireErrorModeForChildSpawn:3,Start:4,GitCli:0",
             line);
     }
 

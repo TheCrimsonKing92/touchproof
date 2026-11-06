@@ -96,7 +96,7 @@ internal static class WorktreeTreeDigest
     internal static WorktreeTreeDigestGitStep RunProcess(
         ProcessStartInfo start, int processTimeoutMilliseconds, int drainTimeoutMilliseconds)
     {
-        using var process = Process.Start(start) ?? throw new IOException("Could not start git.");
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(start) ?? throw new IOException("Could not start git.");
         // Dedicated drains keep output independent of thread-pool availability without blocking the exit wait.
         var outputDrain = PipeDrain.Start(process.StandardOutput, "digest-stdout-drain");
         var errorDrain = PipeDrain.Start(process.StandardError, "digest-stderr-drain");

@@ -10,7 +10,8 @@ internal enum LaunchLockEntryPoint
     AcquireConsoleForChildSpawn,
     AcquireSuppressedChildSpawn,
     AcquireErrorModeForChildSpawn,
-    Start
+    Start,
+    GitCli
 }
 
 internal readonly record struct LaunchLockSample(long WaitTicks, long HoldTicks, long CreateTicks);
@@ -34,7 +35,7 @@ internal sealed class LaunchLockCounters
     private const int BucketCount = 48;
     private readonly long[] waitBuckets = new long[BucketCount];
     private readonly long[] holdBuckets = new long[BucketCount];
-    private readonly long[] byEntry = new long[4];
+    private readonly long[] byEntry = new long[Enum.GetValues<LaunchLockEntryPoint>().Length];
     private long launches;
     private long waitTicksTotal;
     private long waitMaxTicks;

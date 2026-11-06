@@ -482,7 +482,7 @@ internal static partial class LockAttribution
             bool started;
             try
             {
-                started = process.Start();
+                started = ProcessTreeGuiSuppression.StartWithLaunchLock(process);
             }
             catch (Exception exception)
             {

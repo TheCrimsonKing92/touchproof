@@ -80,7 +80,7 @@ internal static class DotnetBuildServerRecovery
         ProcessStartInfo startInfo,
         int timeoutMilliseconds = 10_000)
     {
-        using var process = Process.Start(startInfo);
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo);
         if (process is null)
         {
             var notStarted = new DotnetBuildServerShutdownOutcome(
