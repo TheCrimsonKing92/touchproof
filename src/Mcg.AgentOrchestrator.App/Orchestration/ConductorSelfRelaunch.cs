@@ -414,7 +414,7 @@ internal static partial class ConductorSelfRelaunch
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
+        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {fileName}.");
         IDisposable? launchQos = null;
         try { launchQos = onStarted?.Invoke(process.Id); } catch (Exception) { }

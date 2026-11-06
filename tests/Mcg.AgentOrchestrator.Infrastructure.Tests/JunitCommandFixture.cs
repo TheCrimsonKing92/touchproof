@@ -43,11 +43,11 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
                 WriteReports?.Invoke();
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(ExitCode, "", TimedOut: TimedOut) { StandardOutput = "" });
             }
-            var command = args[^1];
-            Assert.Contains(" parse junit ", command);
-            Assert.Contains(" --tool 'declared-test'", command);
+            Assert.Equal(binary, args[0]);
+            Assert.Equal(new[] { "parse", "junit" }, args[1..3]);
+            Assert.Equal(new[] { "--tool", "declared-test" }, args[4..]);
             var report = Directory.GetFiles(ProjectRoot, "*.xml", SearchOption.AllDirectories)
-                .Single(path => command.Contains("'" + path.Replace("'", "''") + "'", StringComparison.Ordinal));
+                .Single(path => args[3] == path);
             ParsedReports.Add(report);
             var tests = XDocument.Load(report).Descendants("testcase").Select(test => new
             {

@@ -552,6 +552,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             const string intentId = "cohort-running-progress";
             var ticks = new List<BatchTickSummary>();
 
+            AdmissionFactsTestData.Warm(driver, kernel);
             var heldSummary = new ConductorBatchLoop(
                 operatorIntents: new OperatorIntentCoordinator(intentStore),
                 conductEventLogWriter: new ConductEventLogWriter(conductLogPath)).Run(
@@ -831,6 +832,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             var capacity = driver.GetActiveAcceptanceCohortCapacity();
             Assert.Equal(2, capacity.ActiveRootCount);
             BatchTickSummary? tick = null;
+            AdmissionFactsTestData.Warm(driver, kernel);
             new ConductorBatchLoop().Run(
                 kernel,
                 driver,

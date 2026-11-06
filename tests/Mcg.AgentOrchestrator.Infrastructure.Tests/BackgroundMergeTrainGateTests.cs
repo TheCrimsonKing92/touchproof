@@ -43,6 +43,7 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             Assert.Equal(GateReadyCandidateExclusionReason.MergeConflict, projection.Reason);
             Assert.Equal(new[] { conflictPath }, projection.ConflictPaths);
 
+            AdmissionFactsTestData.Warm(driver, kernel);
             var summary = new ConductorBatchLoop().Run(kernel, driver, policy,
                 Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1);
 
@@ -256,6 +257,7 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             starts.Capture(driver);
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
             BatchTickSummary? heldTick = null;
+            AdmissionFactsTestData.Warm(driver, kernel);
             _ = new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1,
                 onTick: summary => heldTick = summary);

@@ -97,7 +97,10 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             }
             else if (goalBranch) Git("switch", "-c", GoalWorktreeLayout.BranchName(GoalId));
             var at = DateTimeOffset.UtcNow;
-            var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
+            // Managed workers need the same pre-built App output as RunHelper; executor
+            // checkouts do not contain an App build under the source-tree default path.
+            var command = managedHost ? "$env:MCG_ORCHESTRATOR_APP_OUTPUT='" + AppContext.BaseDirectory.Replace("'", "''") +
+                "'; & '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
             if (reportWorkerResult)
             {
                 if (!managedHost) throw new ArgumentException("Completion output requires a managed native host.");
@@ -184,6 +187,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         Channel = new WorkerBuildRequestChannel(RepositoryRoot, new RecordingService(service ?? Host(observe, structuralEvaluator), Responses));
         var helper = Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1");
         var start = new ProcessStartInfo(WorkerShell.Executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = RepositoryRoot };
+        start.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = AppContext.BaseDirectory;
         var workerTemp = Path.Combine(Root, "worker-temp");
         Directory.CreateDirectory(workerTemp);
         start.Environment["TEMP"] = workerTemp;

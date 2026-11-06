@@ -208,7 +208,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var requestIdText = GetFlagValue(parts, "--request-id");
             if (!Guid.TryParse(requestIdText, out var requestId))
                 throw new ArgumentException("--request-id requires a GUID.");
-            var disposition = ParseGoalReplacementDisposition(GetFlagValue(parts, "--disposition"));
+            var disposition = GoalReplacementDispositionParser.Parse(GetFlagValue(parts, "--disposition"));
             var replacementObjective = ResolveTextArgument(parts, inlineIndex: 2, usage, "--brief-file");
             var reason = ResolveTextArgument(parts, inlineIndex: 2, usage, "--reason-file").Trim();
             if (string.IsNullOrWhiteSpace(reason))
@@ -1689,6 +1689,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         },
                         handoffOnMaxDuration: supervisedChild ? null : handoff,
                         conductEventLogWriter: conductEventLogWriter,
+                        providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
+                            context.WorkerProfiles, conductEventLogWriter,
+                            () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: false) > 0).ObserveTick,
                         operatorIntents: operatorIntents,
                         progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                         progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
@@ -1833,6 +1836,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             taskId)),
                     (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    providerHoldProbe: ProviderHoldStandaloneProbe.CreateDefault(context.Workspace, context.Agents,
+                        context.WorkerProfiles, new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                        () => conductDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: false) > 0).ObserveTick,
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     prepareOperatorIntentTarget: (wk, goalId) => OperatorIntentTargetPreparation.PrepareLoadedOperatorIntentTarget(
                         context, wk, wk.GetGoal(goalId), watchReaper),
@@ -1917,16 +1923,6 @@ private static string FormatWaivedCriterionText(string text)
     var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     return collapsed.Length > textLimit ? collapsed[..textLimit] + "..." : collapsed;
 }
-
-private static GoalReplacementDisposition ParseGoalReplacementDisposition(string? value) =>
-    value?.Trim().ToLowerInvariant() switch
-    {
-        "zero-work-correction" => GoalReplacementDisposition.ZeroWorkCorrection,
-        "abandon-failed-attempt" => GoalReplacementDisposition.AbandonFailedAttempt,
-        "supersede-unlanded-attempt" => GoalReplacementDisposition.SupersedeUnlandedAttempt,
-        _ => throw new ArgumentException(
-            "--disposition requires one of: zero-work-correction, abandon-failed-attempt, supersede-unlanded-attempt.")
-    };
 
 
     internal static int RefreshTrackedGoalsPreservingCheckpointHolds(

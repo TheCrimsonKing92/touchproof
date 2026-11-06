@@ -5,36 +5,58 @@ param(
     [Parameter(Mandatory = $true)][string]$InputFile
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$toolRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("worker-result-submit-" + [Guid]::NewGuid().ToString('N'))
-$toolBin = Join-Path $toolRoot 'bin'
-$toolProject = Join-Path $PSScriptRoot 'WorkerResultSubmitTool\WorkerResultSubmitTool.csproj'
-$buildLog = Join-Path $toolRoot 'bootstrap.txt'
-$exitCode = 3
+
+# Windows PowerShell 5.1 has no ProcessStartInfo.ArgumentList.
+function ConvertTo-ProcessArgument([string]$Value) {
+    '"' + [regex]::Replace($Value, '(\\*)("|$)', {
+        param($match)
+        $slashes = $match.Groups[1].Value
+        if ($match.Groups[2].Value -eq '"') { $slashes + $slashes + '\"' }
+        else { $slashes + $slashes }
+    }) + '"'
+}
+
+$appDll = ''
+$process = $null
 try {
-    New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
-    & dotnet build $toolProject --nologo --configuration Debug --verbosity minimal --artifacts-path $toolRoot --output $toolBin -maxcpucount:1 -p:BuildInParallel=false -tl:off *> $buildLog
-    if ($LASTEXITCODE -ne 0) {
-        [Console]::Error.WriteLine([System.IO.File]::ReadAllText($buildLog))
-        [Console]::Error.WriteLine('REJECTED: submit tool build failed')
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $appOutput = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_APP_OUTPUT)) {
+        Join-Path $repoRoot 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0'
     } else {
-        $toolDll = Join-Path $toolBin 'WorkerResultSubmitTool.dll'
-        & dotnet $toolDll --worktree $Worktree --task $Task --path $Path --input $InputFile
-        $exitCode = $LASTEXITCODE
+        [System.IO.Path]::GetFullPath($env:MCG_ORCHESTRATOR_APP_OUTPUT)
     }
+    $appDll = Join-Path $appOutput 'Mcg.AgentOrchestrator.App.dll'
+    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) { throw 'App assembly missing' }
+    $arguments = @($appDll, 'submit-worker-result', '--worktree', $Worktree, '--task', $Task, '--path', $Path, '--input', $InputFile)
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = 'dotnet'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.WorkingDirectory = (Get-Location).ProviderPath
+    if ($null -ne $start.PSObject.Properties['ArgumentList']) {
+        foreach ($argument in $arguments) { $start.ArgumentList.Add([string]$argument) }
+    } else {
+        $start.Arguments = (($arguments | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join ' ')
+    }
+    $process = [System.Diagnostics.Process]::Start($start)
+    $process.StandardInput.Close()
+    # Start both drains before waiting. Copy bytes so PowerShell cannot decorate
+    # stderr or change the child's encoding, and redirected parents keep output.
+    $outputCopy = $process.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+    $errorCopy = $process.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+    $process.WaitForExit()
+    $null = $outputCopy.GetAwaiter().GetResult()
+    $null = $errorCopy.GetAwaiter().GetResult()
+    $exitCode = $process.ExitCode
 } catch {
-    if (Test-Path -LiteralPath $buildLog -PathType Leaf) {
-        [Console]::Error.WriteLine([System.IO.File]::ReadAllText($buildLog))
-    }
-    [Console]::Error.WriteLine($_.Exception.Message)
-    [Console]::Error.WriteLine('REJECTED: submit tool build failed')
+    [Console]::Error.WriteLine('REJECTED: submit tool unavailable')
+    $exitCode = 3
 } finally {
-    $resolvedToolRoot = [System.IO.Path]::GetFullPath($toolRoot)
-    $resolvedTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-    if ($resolvedToolRoot.StartsWith($resolvedTempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
-        [System.IO.Path]::GetFileName($resolvedToolRoot).StartsWith('worker-result-submit-') -and
-        (Test-Path -LiteralPath $resolvedToolRoot)) {
-        Remove-Item -LiteralPath $resolvedToolRoot -Recurse -Force
-    }
+    if ($null -ne $process) { $process.Dispose() }
 }
 exit $exitCode

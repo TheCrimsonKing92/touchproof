@@ -128,7 +128,7 @@ internal static class AcceptanceLaneClosureHasher
         };
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
-        if (!process.Start())
+        if (!ProcessTreeGuiSuppression.StartWithLaunchLock(process))
             return null;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

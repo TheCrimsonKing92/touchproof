@@ -36,32 +36,7 @@ public sealed class RuntimeAssemblyArchitectureTests
     private static readonly SanctionedCaller[] ProcessStartAllowlist =
     [
         new("Mcg.AgentOrchestrator.App.Cli.CliStableSlotDotnetCommand", "Stable-slot child for CLI verbs", "src/Mcg.AgentOrchestrator.App/Cli/CliStableSlotDotnetCommand.cs:225"),
-        new("Mcg.AgentOrchestrator.App.Cli.SystemConductorProcessLauncher", "Non-Windows conductor start script behind IConductorProcessLauncher", "src/Mcg.AgentOrchestrator.App/Cli/CliConductorSeams.cs:40"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.SystemConductorSupervisorProcessHost", "Supervised conductor child", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorContinuitySupervisor.cs:839"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.DotnetDumpConductorDiagnosticDumpCapture", "dotnet-dump capture of a frozen conductor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDiagnosticDumpCapture.cs:90"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.ConductorLoopHandoff", "Detached conduct loop successor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs:870"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.ConductorSelfRelaunch", "Successor preparation commands", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorSelfRelaunch.cs:367"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.PanelJudgeProcess", "Blinded shadow judge calls retaining partial raw output on timeout", "src/Mcg.AgentOrchestrator.App/Orchestration/PanelJudgeProcess.cs:27"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.DefaultStateMover", "Bounded Windows mklink /J child behind the compatibility-link seam", "src/Mcg.AgentOrchestrator.App/Orchestration/DefaultStateMover.cs:360"),
-        new("Mcg.AgentOrchestrator.Infrastructure.BackgroundDispatchRunner", "Default start delegate, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs:125"),
-        new("Mcg.AgentOrchestrator.Infrastructure.DefenderPreferenceCmdletAdapter", "Defender preference PowerShell child for the explicit host-exclusions CLI verb", "src/Mcg.AgentOrchestrator.Execution/Processes/DefenderExclusionPreferences.cs:70"),
-        new("Mcg.AgentOrchestrator.Infrastructure.DispatchProcessHost", "where.exe resolution and low-integrity preflight", "src/Mcg.AgentOrchestrator.Execution/Processes/DispatchProcessHost.cs:856,956"),
-        new("Mcg.AgentOrchestrator.Infrastructure.GitCli", "Shared git runner", "src/Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs:111"),
-        new("Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "Handle probe for build-lock attribution", "src/Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs:462"),
-        new("Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression", "Window-suppressing launcher seam", "src/Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs:185,213"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessJobs", "taskkill tree fallback", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs:2396"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessRunner", "Buffered and streaming worker runs", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessRunner.cs:64,130"),
-        new("Mcg.AgentOrchestrator.Infrastructure.IcaclsIntegrityLabeler", "Default start delegate for icacls, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxPreparer.cs:490"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorktreeTreeDigest", "Git tree digest", "src/Mcg.AgentOrchestrator.Execution/Processes/WorktreeTreeDigest.cs:71"),
-        new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceGitTextResolver", "Git text reads for acceptance", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver.cs:26"),
-        new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:131"),
-        new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildServerRecovery", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildServerRecovery.cs:56"),
-        new("Mcg.AgentOrchestrator.Infrastructure.ForgeProcessRunner", "Bounded read-only git and gh queries behind IForgeProcessRunner", "src/Mcg.AgentOrchestrator.Infrastructure/Forge/ForgeProcessRunner.cs:28"),
-        new("Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier", "Git scalar reads", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs:6470"),
-        new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
-        new("Mcg.AgentOrchestrator.Infrastructure.ProcessEnvironmentProbeRunner", "Bounded shell-free environment-contract probes before dispatch or gate admission", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ProcessEnvironmentProbeRunner.cs:32"),
-        new("Mcg.AgentOrchestrator.Infrastructure.ProcessUnitCommandMeasurer", "Explicit project discover --measure dotnet child behind IUnitCommandMeasurer", "src/Mcg.AgentOrchestrator.Infrastructure/Onboarding/ProcessUnitCommandMeasurer.cs:37"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WindowsSandboxAclHelper", "icacls sandbox reset", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.cs:247")
+        new("Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression", "Shared launch-lock policy for managed child creation", "src/Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs:177,195,198")
     ];
 
     // ProcessStartAllowlistDifferences: none. The empty-allowlist control must prove every entry.
@@ -149,13 +124,13 @@ public sealed class RuntimeAssemblyArchitectureTests
         AssertPasses(SanctionedProcessStartRule(ProcessStartAllowlist.Select(entry => entry.FullName)));
 
     [Fact]
-    public void Process_Start_control_detects_GitCli_and_rejects_stale_allowlist_entries()
+    public void Process_Start_control_detects_shared_launcher_and_rejects_stale_allowlist_entries()
     {
-        const string gitCli = "Mcg.AgentOrchestrator.Infrastructure.GitCli";
-        var missingGitCli = Failures(SanctionedProcessStartRule(
-            ProcessStartAllowlist.Select(entry => entry.FullName).Where(name => name != gitCli)));
-        AssertNames(missingGitCli, gitCli);
-        AssertReportedCallers(missingGitCli, [gitCli]);
+        const string sharedLauncher = "Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression";
+        var missingSharedLauncher = Failures(SanctionedProcessStartRule(
+            ProcessStartAllowlist.Select(entry => entry.FullName).Where(name => name != sharedLauncher)));
+        AssertNames(missingSharedLauncher, sharedLauncher);
+        AssertReportedCallers(missingSharedLauncher, [sharedLauncher]);
 
         var allCallers = Failures(SanctionedProcessStartRule([]));
         AssertReportedCallers(allCallers, ProcessStartAllowlist.Select(entry => entry.FullName));

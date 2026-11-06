@@ -5,6 +5,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ProviderBudgetProbeAdmission
 {
+    internal static bool WaitsOnBinding(WorkerSubscriptionPreflightResult result, string binding)
+    {
+        var blocked = result.Findings.Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return blocked.Length == 1 && blocked[0].StartsWith("blocked: code=provider-budget-exhausted;", StringComparison.Ordinal) &&
+            blocked[0].Contains($"binding {binding} (", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static void Apply(AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<TaskId> batch,
         Func<Goal, TaskSpec, IEnumerable<Goal>, WorkerSubscriptionPreflightResult> preflight, DateTimeOffset now)
     {

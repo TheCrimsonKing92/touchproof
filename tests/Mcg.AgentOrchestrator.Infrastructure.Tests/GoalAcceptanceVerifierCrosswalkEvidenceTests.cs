@@ -190,11 +190,11 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         var testCalls = new List<string[]>();
         var verifier = new GoalAcceptanceVerifier(fixture.TestOverrides, (args, _, _, _) =>
         {
-            var command = args.LastOrDefault() ?? "";
-            if (command.StartsWith("& '", StringComparison.Ordinal))
+            var command = args;
+            if (command[0] == fixture.Binary)
             {
                 crosswalkCalls++;
-                return Task.FromResult(fixture.Result(command.Contains("' list '", StringComparison.Ordinal)
+                return Task.FromResult(fixture.Result(command[1] == "list"
                     ? fixture.Discovery : fixture.Output));
             }
             if (args is ["dotnet", "test", ..])
