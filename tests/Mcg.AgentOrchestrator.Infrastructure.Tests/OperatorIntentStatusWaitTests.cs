@@ -9,6 +9,23 @@ public sealed class OperatorIntentStatusWaitTests
     private static readonly DateTimeOffset Start = new(2026, 10, 2, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void WaitPrintsAppliedBlockedDetail()
+    {
+        const string detail = "AppliedBlocked adjudicate; blocked by Failed Developer task c9588c11 " +
+            "(incomplete-scope-declaration); close or route task 2 to proceed";
+        var store = new ScriptedStore(Record(OperatorIntentStatus.Pending),
+            Record(OperatorIntentStatus.Applied) with { Outcome = detail });
+        var clock = new ManualClock();
+        using var output = new StringWriter();
+
+        var code = Run(["operator-intent-status", IntentId, "--wait"], store, output, clock, clock.Advance);
+
+        Assert.Equal(0, code);
+        Assert.Equal(ExpectedLine("Applied", detail), output.ToString());
+        Assert.Equal(2, store.Reads);
+    }
+
+    [Fact]
     public void Wait_ReachesApplied_PrintsOnceAndReturnsZero()
     {
         var store = new ScriptedStore(Record(OperatorIntentStatus.Pending),

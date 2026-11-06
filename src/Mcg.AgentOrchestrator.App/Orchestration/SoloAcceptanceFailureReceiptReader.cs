@@ -84,7 +84,8 @@ internal static class SoloAcceptanceFailureReceiptReader
                             return Refuse("solo-baseline-inherited-or-uncovered");
                         if (baseline.Check.Passed)
                         {
-                            if (!baselineRows.TryGetValue(identity, out var exact) || exact.Outcome != "Passed" ||
+                            var exact = baselineRows.Where(row => row.Key == identity).ToArray();
+                            if (exact.Length != 1 || exact[0].Value.Outcome != "Passed" ||
                                 baselineRows.Any(row => row.Value.Outcome != "Passed")) return Refuse("solo-baseline-green-uncovered");
                         }
                         else if (identity == selector || selected.Any(row => row.Key == AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key)) ||
@@ -94,14 +95,17 @@ internal static class SoloAcceptanceFailureReceiptReader
                     if (rerun is not null)
                     {
                         if (rerun.Outcome != "Failed" || rerun.Error is not null ||
-                            !item.CandidateReruns.TryGetValue(identity, out var artifact) ||
-                            !ReadTrx(artifact, receipt.ResultsRoot).TryGetValue(identity, out var repeated) || repeated.Outcome != "Failed")
+                            !item.CandidateReruns.TryGetValue(identity, out var artifact))
+                            return Refuse("solo-candidate-rerun-unconfirmed");
+                        var repeated = ReadTrx(artifact, receipt.ResultsRoot).Where(row => row.Key == identity).ToArray();
+                        if (repeated.Length != 1 || repeated[0].Value.Outcome != "Failed")
                             return Refuse("solo-candidate-rerun-unconfirmed");
                     }
-                    var message = rows[identity].Message;
+                    var failed = rows.Single(row => row.Key == identity);
+                    var message = failed.Value.Message;
                     var first = message?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n')[0]
                         ?? "(no message)";
-                    feedback[identity] = first.Length <= 2000 ? first : first[..1997] + "...";
+                    feedback[identity] = (first.Length <= 2000 ? first : first[..1997] + "...") + $" (trx: {failed.Path})";
                 }
             }
             return feedback.Count == 0 ? Refuse("solo-failing-tests-absent") : new(
@@ -121,49 +125,64 @@ internal static class SoloAcceptanceFailureReceiptReader
         check.ExecutedTestCount is > 0 && check.CompletionDecision?.TimedOut != true &&
         (check.Passed ? check.ExitCode == 0 : check.ExitCode is > 0);
 
-    private static Dictionary<string, AcceptanceTrxFailure> ReadRows(SoloAcceptanceCheckEvidence check, string root)
+    private sealed record TrxRow(string Key, AcceptanceTrxFailure Value, string Path);
+
+    private static List<TrxRow> ReadRows(SoloAcceptanceCheckEvidence check, string root)
     {
         if (check.Artifacts is not { Count: > 0 }) throw new InvalidDataException("solo-trx-absent");
-        var rows = new Dictionary<string, AcceptanceTrxFailure>(StringComparer.Ordinal);
+        var rows = new List<TrxRow>();
         foreach (var artifact in check.Artifacts)
-            foreach (var row in ReadTrx(artifact, root))
-                if (!rows.TryAdd(row.Key, row.Value)) throw new InvalidDataException("solo-duplicate-test-row");
-        if (rows.Count != check.Check.ExecutedTestCount ||
-            check.Check.DiscoveredTestCount is { } discovered && discovered != rows.Count)
-            throw new InvalidDataException("solo-incomplete-check-rows");
+            rows.AddRange(ReadTrx(artifact, root));
+        RequireUnambiguousFailures(rows, "solo-duplicate-test-row");
+        var executed = rows.Count(row => row.Value.Outcome is "Passed" or "Failed");
+        if (executed != check.Check.ExecutedTestCount)
+            throw new InvalidDataException($"solo-incomplete-check-rows: executed rows={executed}; recorded={check.Check.ExecutedTestCount}");
+        if (check.Check.DiscoveredTestCount is { } discovered && discovered != rows.Count)
+            throw new InvalidDataException($"solo-incomplete-check-rows: discovered rows={rows.Count}; recorded={discovered}");
         if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key), check.Check.FailingTestIdentities ?? []))
             throw new InvalidDataException("solo-failing-tests-mismatch");
         return rows;
     }
 
-    private static Dictionary<string, AcceptanceTrxFailure> ReadTrx(SoloAcceptanceArtifact artifact, string root)
+    private static List<TrxRow> ReadTrx(SoloAcceptanceArtifact artifact, string root)
     {
         using var stream = new MemoryStream(ReadArtifact(artifact, root), writable: false);
         var doc = XDocument.Load(stream);
         if (doc.Root?.Name.LocalName != "TestRun" || string.IsNullOrWhiteSpace(doc.Root.Attribute("id")?.Value))
-            throw new InvalidDataException("solo-trx-run-identity-missing");
+            throw new InvalidDataException("solo-trx-run-identity-missing: identity=(unresolved); outcomes=(unavailable)");
         var definitions = new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
         foreach (var definition in doc.Descendants().Where(e => e.Name.LocalName == "UnitTest"))
             if (definition.Attribute("id")?.Value is not { Length: > 0 } id || !definitions.TryAdd(id, definition))
-                throw new InvalidDataException("solo-trx-ambiguous-definition");
-        var rows = new Dictionary<string, AcceptanceTrxFailure>(StringComparer.Ordinal);
-        // Reuse the retained reader's exact test-name and message interpretation.
-        var failures = AcceptanceTrxFailureReader.Read(doc, artifact.Path).Failures;
+                throw new InvalidDataException($"solo-trx-ambiguous-definition: identity=(unresolved); outcomes=(unavailable); testId={definition.Attribute("id")?.Value ?? "(absent)"}");
+        var rows = new List<TrxRow>();
         foreach (var row in doc.Descendants().Where(e => e.Name.LocalName == "UnitTestResult"))
         {
             if (!definitions.TryGetValue(row.Attribute("testId")?.Value ?? "", out var definition))
-                throw new InvalidDataException("solo-trx-definition-missing");
+                throw new InvalidDataException("solo-trx-definition-missing: " + RowContext(row, null));
             var identity = AcceptanceTrxTestIdentityResolver.Resolve(row, definition);
             var outcome = row.Attribute("outcome")?.Value;
-            if (string.IsNullOrWhiteSpace(identity) || outcome is not ("Passed" or "Failed"))
-                throw new InvalidDataException("solo-trx-nonexecuted-row");
-            var value = outcome == "Passed" ? new AcceptanceTrxFailure(identity, outcome, null, null)
-                : failures.Single(failure => failure.TestName == identity);
-            if (!rows.TryAdd(identity, value)) throw new InvalidDataException("solo-trx-ambiguous-row");
+            if (string.IsNullOrWhiteSpace(identity) || outcome is not ("Passed" or "Failed" or "NotExecuted"))
+                throw new InvalidDataException("solo-trx-nonexecuted-row: " + RowContext(row, identity));
+            rows.Add(new(identity, new(identity, outcome, null, null), artifact.Path));
         }
-        if (rows.Count == 0) throw new InvalidDataException("solo-trx-empty");
-        return rows;
+        if (rows.Count == 0) throw new InvalidDataException("solo-trx-empty: identity=(unavailable); outcomes=(unavailable)");
+        // Prove uniqueness before looking up a failure message by identity.
+        RequireUnambiguousFailures(rows, "solo-trx-ambiguous-row");
+        var failures = AcceptanceTrxFailureReader.Read(doc, artifact.Path).Failures;
+        return rows.Select(row => row.Value.Outcome == "Failed"
+            ? row with { Value = failures.Single(failure => failure.TestName == row.Key) } : row).ToList();
     }
+
+    private static void RequireUnambiguousFailures(IEnumerable<TrxRow> rows, string reason)
+    {
+        foreach (var group in rows.GroupBy(row => row.Key, StringComparer.Ordinal))
+            if (group.Count() > 1 && group.Any(row => row.Value.Outcome == "Failed"))
+                throw new InvalidDataException($"{reason}: identity={group.Key}; outcomes={string.Join(",", group.Select(row => row.Value.Outcome))}");
+    }
+
+    private static string RowContext(XElement row, string? identity) =>
+        $"identity={(string.IsNullOrWhiteSpace(identity) ? "(unresolved)" : identity)}; outcomes={row.Attribute("outcome")?.Value ?? "(absent)"}; " +
+        $"testId={row.Attribute("testId")?.Value ?? "(absent)"}; testName={row.Attribute("testName")?.Value ?? "(absent)"}";
 
     private static byte[] ReadArtifact(SoloAcceptanceArtifact artifact, string root)
     {

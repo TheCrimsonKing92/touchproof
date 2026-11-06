@@ -16,7 +16,7 @@ public sealed class CliCommandResourceHelperCoverageTests
         "RunAppCommand", "WritePlanningBacklog", "WriteCompilationBacklog",
         "WriteConflictingCompilationBacklog", "MakeLeaseOwnerStale", "DirtyGoalWorktree",
         "EnsureGitRepository", "RecordRunningProcess", "WriteIdentityBoundHeartbeat",
-        "CreateAcceptanceRepository", "CreateShortAcceptanceRepository", "CommitGoalWork",
+        "CreateAcceptanceRepository", "CreateShortAcceptanceRepository", "CreateGoalBranchScenario", "CommitGoalWork",
         "CleanupAcceptanceRepository", "RunAppCli", "RunAppCliWithExitTimeout", "RunGit", "RunGitOutput"
     };
 

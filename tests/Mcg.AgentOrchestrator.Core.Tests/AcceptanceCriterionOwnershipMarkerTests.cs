@@ -3,6 +3,27 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class AcceptanceCriterionOwnershipMarkerTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData("The report states the remedy. Developer owns; Reviewer executes.", "reviewer")]
+    [Xunit.InlineData("developer owns; REVIEWER executes. TEST-VERIFIABLE.", "reviewer")]
+    [Xunit.InlineData("Developer owns; Reviewer executes. REAL-WORLD-DEPENDENT.", "reviewer")]
+    [Xunit.InlineData("Developer owns; Tester executes.", "tester")]
+    [Xunit.InlineData("Developer owns; Acceptance executes. TEST-VERIFIABLE.", "acceptance")]
+    [Xunit.InlineData("The Reviewer confirms the report.", "missing")]
+    [Xunit.InlineData("Developer owns; Reviewer executes. Tester owns; Acceptance executes.", "ambiguous")]
+    [Xunit.InlineData("Developer owns; Reviewer executes. Developer owns; Reviewer executes.", "ambiguous")]
+    [Xunit.InlineData("Developer owns; Reviewer executes. The report includes numbers. TEST-VERIFIABLE.", "missing")]
+    [Xunit.InlineData("Developer owns; Reviewer reads. TEST-VERIFIABLE.", "missing")]
+    [Xunit.InlineData("The Developer owns; Reviewer executes.", "missing")]
+    [Xunit.InlineData("Developer owns; Judge executes.", "other-role")]
+    [Xunit.InlineData("Judge owns; Reviewer executes.", "other-role")]
+    [Xunit.InlineData(null, "missing")]
+    [Xunit.InlineData("", "missing")]
+    public void ReadExecutor_ReturnsOutcome(string? criterion, string expected)
+    {
+        Xunit.Assert.Equal(expected, AcceptanceCriterionOwnershipMarker.ReadExecutor(criterion));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("Acceptance executes")]
     [Xunit.InlineData("acceptance\texecutes")]
     [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]

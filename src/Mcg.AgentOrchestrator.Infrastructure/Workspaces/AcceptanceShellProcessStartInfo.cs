@@ -44,7 +44,7 @@ internal static class AcceptanceShellProcessStartInfo
             foreach (var pair in inputs.Overrides) environment[pair.Key] = pair.Value;
         }
         if (timingPath is not null)
-            AcceptanceDeclaredTestSettings.Apply(environment, request.EngineSettings?.DeclaredTestSettings);
+            AcceptanceDeclaredTestSettings.Apply(environment, request.HostTestSettings?.Settings ?? request.EngineSettings?.DeclaredTestSettings);
     }
 
     private static string BuildShellCommand(string[] arguments, Func<string, string> quote) =>

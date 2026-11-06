@@ -10,6 +10,7 @@ internal sealed record AcceptanceProcessRequest
     public GateHeartbeatContext? HeartbeatContext { get; init; } = null;
     public Action<AcceptanceGateProgress>? ProgressSink { get; init; } = null;
     public AcceptanceGateEngineSettings? EngineSettings { get; init; } = null;
+    public AcceptanceHostTestSettings.Binding? HostTestSettings { get; init; }
     public string? AttemptResultsPrefix { get; init; } = null;
     public string? GateInvocationId { get; init; } = null;
     public string? ApparatusReceiptPath { get; init; } = null;
