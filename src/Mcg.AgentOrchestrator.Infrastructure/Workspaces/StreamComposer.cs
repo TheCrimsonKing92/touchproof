@@ -18,6 +18,9 @@ public sealed record StreamCompositionResult(
 
 public static class StreamComposer
 {
+    private static readonly BoundedInsertionOrderMemo<string, string> MergeBaseMemo =
+        new(256, GoalWorktrees.CommitFactKeyComparer);
+
     public static StreamCompositionResult Compose(
         string executionDirectory,
         GoalId parentGoalId,
@@ -109,16 +112,25 @@ public static class StreamComposer
         GoalId goalId, string restoreSubject, Func<string[], GitCli.GitResult> runRebase)
     {
         var priorHead = GoalWorktrees.ResolveRequiredRef(workspacePath, "HEAD");
-        var mergeBase = GitCli.Run(root, "merge-base", baseRevision, candidateRevision);
-        if (mergeBase.ExitCode != 0 || string.IsNullOrWhiteSpace(mergeBase.Output))
-            return new RebaseStep(null, new MergeTrainEjection(goalId,
-                MergeTrainEjectionReason.MaterializationFailure, [], $"merge base unavailable: {mergeBase.Error}"));
+        var key = GoalWorktrees.IsFullObjectId(baseRevision) && GoalWorktrees.IsFullObjectId(candidateRevision)
+            ? GoalWorktrees.CommitFactKey(root, baseRevision, candidateRevision) : null;
+        if (key is null || !MergeBaseMemo.TryGet(key, out var mergeBaseRevision))
+        {
+            var mergeBase = GitCli.Run(root, "merge-base", baseRevision, candidateRevision);
+            if (mergeBase.ExitCode != 0 || string.IsNullOrWhiteSpace(mergeBase.Output))
+                return new RebaseStep(null, new MergeTrainEjection(goalId,
+                    MergeTrainEjectionReason.MaterializationFailure, [], $"merge base unavailable: {mergeBase.Error}"));
+            mergeBaseRevision = mergeBase.Output.Trim();
+            if (key is not null && !mergeBase.DrainTimedOut && mergeBase.ProcessStarted &&
+                GoalWorktrees.IsFullObjectId(mergeBaseRevision))
+                MergeBaseMemo.Store(key, mergeBaseRevision);
+        }
 
-        var replay = MainIntegrationSquash.TryCreate(root, baseRevision, mergeBase.Output.Trim(),
+        var replay = MainIntegrationSquash.TryCreate(root, baseRevision, mergeBaseRevision,
             candidateRevision, goalId, runRebase) ?? candidateRevision;
         var rebase = runRebase([
             .. ConductorGitIdentity.ConductorArguments,
-            "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), replay]);
+            "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBaseRevision, replay]);
         if (rebase.ExitCode != 0)
         {
             var conflicts = GoalWorktrees.ReadMergeTrainConflictPaths(workspacePath);
