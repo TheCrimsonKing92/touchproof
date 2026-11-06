@@ -114,8 +114,8 @@ public sealed class GoalGitFactIndexTests
         {
             GitCli.GitResult GitRunner(string _, IReadOnlyList<string> args) => string.Join(" ", args) switch
             {
-                "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/" =>
-                    new GitCli.GitResult(0, $"{branch} 1111111111111111111111111111111111111111\n", string.Empty),
+                "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main" =>
+                    new GitCli.GitResult(0, $"{branch} 1111111111111111111111111111111111111111\nmain 2222222222222222222222222222222222222222\n", string.Empty),
                 "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/" =>
                     new GitCli.GitResult(0, string.Empty, string.Empty),
                 "worktree list --porcelain" => new GitCli.GitResult(0, string.Empty, string.Empty),
@@ -213,7 +213,7 @@ public sealed class GoalGitFactIndexTests
             var command = string.Join(" ", args);
             return command switch
             {
-                "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/" =>
+                "for-each-ref --format=%(refname:lstrip=2) %(objectname) refs/heads/goal/ refs/heads/main" =>
                     new GitCli.GitResult(
                         0,
                         "goal/present 1111111111111111111111111111111111111111\ngoal/malformed 222 trailing\n",

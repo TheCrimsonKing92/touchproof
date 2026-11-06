@@ -9,6 +9,141 @@ public sealed class HostCapacitySlotGitCensusTests : IDisposable
     private readonly string root = Directory.CreateTempSubdirectory("slot-git-census-").FullName;
 
     [Fact]
+    public async Task Rows_ConcurrentHolds_SumOnlyOwnGitTimings()
+    {
+        var path = Path.Combine(root, "concurrent-times.jsonl");
+        var name = new AsyncLocal<string>();
+        var census = new HostCapacitySlotGitCensus(() => name.Value!);
+        var aOpened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Task.Run(async () =>
+        {
+            name.Value = "A";
+            var window = census.Open("A")!;
+            var samples = new List<GitCli.GitProcessTiming>();
+            RunObserved("--version", samples);
+            aOpened.SetResult();
+            await bFinished.Task.WaitAsync(TimeSpan.FromSeconds(30)); // B's row was emitted.
+            RunObserved("--version", samples);
+            HostCapacitySlotTimingWriter.TryAppend(path, "A", 1, 2, 2, window.Close());
+            return samples;
+        });
+        var b = Task.Run(async () =>
+        {
+            await aOpened.Task.WaitAsync(TimeSpan.FromSeconds(30)); // A's hold is open.
+            name.Value = "B";
+            var window = census.Open("B")!;
+            var samples = new List<GitCli.GitProcessTiming>();
+            RunObserved("--exec-path", samples);
+            HostCapacitySlotTimingWriter.TryAppend(path, "B", 1, 2, 2, window.Close());
+            bFinished.SetResult();
+            return samples;
+        });
+        var observations = await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(30));
+        var rows = File.ReadAllLines(path).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+            .ToDictionary(row => row.GetProperty("test_name").GetString()!);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(2, observations[0].Count);
+        Assert.Single(observations[1]);
+        AssertTimingRow(rows["A"], observations[0]);
+        AssertTimingRow(rows["B"], observations[1]);
+        AssertCensus(rows["A"], new() { ["--version"] = 2 });
+        AssertCensus(rows["B"], new() { ["--exec-path"] = 1 });
+
+        void RunObserved(string command, List<GitCli.GitProcessTiming> samples)
+        {
+            AssertGitSucceeded(GitCli.RunExecutableObserved("git", root, 60_000, subcommand =>
+            {
+                census.Record(subcommand, "test:timing");
+                var sink = census.BeginTiming(subcommand);
+                Assert.NotNull(sink);
+                return timing => { samples.Add(timing); sink(timing); };
+            }, TimeProvider.System, command));
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.0)]
+    [InlineData(0.625)]
+    public void Rows_UnavailableCpu_OmitsMissingAndKeepsReadableSamples(double? readableCpu)
+    {
+        var census = new HostCapacitySlotGitCensus(() => "cpu");
+        var window = census.Open("cpu")!;
+        census.Record("status", "test:cpu");
+        census.BeginTiming("status")!(new("status", 0.125, 1.5, null));
+        census.Record("status", "test:cpu");
+        census.BeginTiming("status")!(new("status", 0.25, 2.5, readableCpu));
+        var path = Path.Combine(root, "cpu.jsonl");
+        HostCapacitySlotTimingWriter.TryAppend(path, "cpu", 1, 2, 1, window.Close());
+        using var row = JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
+        Assert.Equal(0.375, row.RootElement.GetProperty("git_start_ms").GetDouble());
+        Assert.Equal(4, row.RootElement.GetProperty("git_wall_ms").GetDouble());
+        Assert.Equal(4, row.RootElement.GetProperty("git_wall_ms_by_subcommand").GetProperty("status").GetDouble());
+        Assert.Equal(readableCpu.HasValue ? 1 : 2, row.RootElement.GetProperty("git_cpu_unavailable").GetInt32());
+        Assert.Equal(readableCpu.HasValue, row.RootElement.TryGetProperty("git_cpu_ms", out var cpu));
+        if (readableCpu.HasValue) Assert.Equal(readableCpu.Value, cpu.GetDouble());
+    }
+
+    [Fact]
+    public void Windows_LateCompletion_DoesNotEnterNextHold()
+    {
+        var census = new HostCapacitySlotGitCensus(() => "same");
+        var first = census.Open("same")!;
+        var complete = census.BeginTiming("cat-file");
+        Assert.NotNull(complete);
+        Assert.Null(first.Close()!.Timing);
+        var second = census.Open("same")!;
+        complete(new("cat-file", 1, 2, 0));
+        Assert.Null(second.Close()!.Timing);
+        Assert.Null(census.BeginTiming("status"));
+    }
+
+    [Fact]
+    public async Task Release_NoGit_RowKeepsLegacyShape()
+    {
+        var path = Path.Combine(root, "no-git.jsonl");
+        var budget = new HostCapacityTestBudget(1, _ => path);
+        await using (var held = await budget.EnterAsync()) { }
+        using var row = JsonDocument.Parse(Assert.Single(File.ReadAllLines(path)));
+        AssertCensus(row.RootElement, new());
+        foreach (var key in new[] { "git_start_ms", "git_wall_ms", "git_cpu_ms",
+            "git_wall_ms_by_subcommand", "git_cpu_unavailable" })
+            Assert.False(row.RootElement.TryGetProperty(key, out _), key);
+    }
+
+    [Fact]
+    public void Install_UnsetTimingDestination_InstallsNoCompletionObserver()
+    {
+        Func<string, Action<GitCli.GitProcessTiming>?>? observer = null;
+        Assert.False(HostCapacitySlotGitCensus.EnsureTimingInstalled(null, ref observer));
+        Assert.False(HostCapacitySlotGitCensus.EnsureTimingInstalled("", ref observer));
+        Assert.Null(observer);
+        Assert.True(HostCapacitySlotGitCensus.EnsureTimingInstalled("enabled", ref observer));
+        var installed = observer;
+        Assert.NotNull(installed);
+        Assert.False(HostCapacitySlotGitCensus.EnsureTimingInstalled("enabled", ref observer));
+        Assert.Same(installed, observer);
+    }
+
+    private static void AssertTimingRow(JsonElement row, List<GitCli.GitProcessTiming> samples)
+    {
+        Assert.Equal(samples.Sum(sample => sample.StartMs), row.GetProperty("git_start_ms").GetDouble(), 6);
+        Assert.Equal(samples.Sum(sample => sample.WallMs), row.GetProperty("git_wall_ms").GetDouble(), 6);
+        var readable = samples.Where(sample => sample.CpuMs.HasValue).ToArray();
+        Assert.Equal(readable.Length > 0, row.TryGetProperty("git_cpu_ms", out var cpu));
+        if (readable.Length > 0) Assert.Equal(readable.Sum(sample => sample.CpuMs!.Value), cpu.GetDouble(), 6);
+        var unavailable = samples.Count - readable.Length;
+        Assert.Equal(unavailable > 0, row.TryGetProperty("git_cpu_unavailable", out var missing));
+        if (unavailable > 0) Assert.Equal(unavailable, missing.GetInt32());
+        var byCommand = row.GetProperty("git_wall_ms_by_subcommand");
+        Assert.Equal(row.GetProperty("git_subcommands").EnumerateObject().Select(property => property.Name).Order(),
+            byCommand.EnumerateObject().Select(property => property.Name).Order());
+        foreach (var group in samples.GroupBy(sample => sample.Subcommand))
+            Assert.Equal(group.Sum(sample => sample.WallMs), byCommand.GetProperty(group.Key).GetDouble(), 6);
+    }
+
+    [Fact]
     public async Task Release_FourFixtureLaunches_WritesMatchingCensus()
     {
         var path = Path.Combine(root, "uses.jsonl");

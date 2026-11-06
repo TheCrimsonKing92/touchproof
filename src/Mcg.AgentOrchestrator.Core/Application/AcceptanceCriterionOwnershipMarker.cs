@@ -19,6 +19,31 @@ public static partial class AcceptanceCriterionOwnershipMarker
 {
     private const int MaximumTrailingSentences = 4;
 
+    internal static string ReadExecutor(string? criterion)
+    {
+        if (string.IsNullOrWhiteSpace(criterion)) return "missing";
+        var sentences = SentenceBoundaryRegex().Split(criterion.Trim())
+            .Select(sentence => sentence.Trim()).Where(sentence => sentence.Length > 0).ToArray();
+        var declarations = sentences.Select((sentence, index) =>
+            (Match: ExecutorSentenceRegex().Match(sentence), Index: index))
+            .Where(item => item.Match.Success).ToArray();
+        if (declarations.Length > 1) return "ambiguous";
+        if (declarations.Length == 0) return "missing";
+        var declaration = declarations[0];
+        var last = sentences.Length - 1;
+        if (sentences[last].TrimEnd('.').Equals("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
+            sentences[last].TrimEnd('.').Equals("REAL-WORLD-DEPENDENT", StringComparison.OrdinalIgnoreCase))
+            last--;
+        if (declaration.Index != last) return "missing";
+        var owner = declaration.Match.Groups["owner"].Value.ToLowerInvariant();
+        var executor = declaration.Match.Groups["executor"].Value.ToLowerInvariant();
+        return IsKnownExecutionRole(owner) && IsKnownExecutionRole(executor) ? executor : "other-role";
+    }
+
+    private static bool IsKnownExecutionRole(string role) =>
+        Enum.TryParse<AgentRole>(role, ignoreCase: true, out _) ||
+        role is "operator" or "acceptance" or "acceptance gate" or "acceptance-gate" or "gate";
+
     public static AcceptanceCriterionOwnershipMarkerResult Classify(string? criterion)
     {
         var trailingSentences = ExtractTrailingSentences(criterion);
@@ -110,6 +135,11 @@ public static partial class AcceptanceCriterionOwnershipMarker
         @"(?:^|;)\s*(?:the\s+)?(?<owner>operator|developer|researcher|reviewer|tester|planner|acceptance(?:[\s-]+gate)?|gate)\s+(?<verb>owns|executes)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ExplicitOwnerSentenceRegex();
+
+    [GeneratedRegex(
+        @"^(?<owner>[A-Za-z]+(?:[\s-]+gate)?)\s+owns;\s*(?<executor>[A-Za-z]+(?:[\s-]+gate)?)\s+executes\.$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExecutorSentenceRegex();
 
     [GeneratedRegex(@"(?<=[.!?])(?:\s+|$)|[\r\n]+", RegexOptions.CultureInvariant)]
     private static partial Regex SentenceBoundaryRegex();

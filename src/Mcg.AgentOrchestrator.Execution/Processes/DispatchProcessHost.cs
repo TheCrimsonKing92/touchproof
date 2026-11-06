@@ -1220,7 +1220,9 @@ public static void DropToLow() {
 
     internal static void ProtectGitMetadata(
         string worktree,
-        IWorkerIntegrityLabeler integrityLabeler)
+        IWorkerIntegrityLabeler integrityLabeler,
+        Func<string, IReadOnlyDictionary<string, string>?, string?>? commonDirectoryResolver = null,
+        IReadOnlyDictionary<string, string>? gitEnvironment = null)
     {
         var checkoutGitFile = Path.Combine(worktree, ".git");
         if (!File.Exists(checkoutGitFile) && !Directory.Exists(checkoutGitFile))
@@ -1239,16 +1241,22 @@ public static void DropToLow() {
         string? commonDir = null;
         try
         {
-            var commonDirResult = GitCli.Run(worktree, "rev-parse", "--git-common-dir");
-            if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
+            commonDir = commonDirectoryResolver?.Invoke(worktree, gitEnvironment);
+            if (commonDir is null)
             {
-                return;
-            }
+                var commonDirResult = gitEnvironment is null
+                    ? GitCli.Run(worktree, "rev-parse", "--git-common-dir")
+                    : GitCli.RunWithEnvironment(worktree, gitEnvironment, "rev-parse", "--git-common-dir");
+                if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
+                {
+                    return;
+                }
 
-            var commonDirRaw = commonDirResult.Output.Trim();
-            commonDir = Path.IsPathRooted(commonDirRaw)
-                ? commonDirRaw
-                : Path.GetFullPath(Path.Combine(worktree, commonDirRaw));
+                var commonDirRaw = commonDirResult.Output.Trim();
+                commonDir = Path.IsPathRooted(commonDirRaw)
+                    ? commonDirRaw
+                    : Path.GetFullPath(Path.Combine(worktree, commonDirRaw));
+            }
         }
         catch
         {

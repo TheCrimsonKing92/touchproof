@@ -62,7 +62,8 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Goal = CompletedGoal(Kernel, committed: committed);
     }
 
-    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false)
+    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
+        bool collidingPassedRows = false)
     {
         var failedBuilds = 0;
         var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
@@ -87,11 +88,14 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             if (baseline) BaselineRuns++; else CandidateRuns++;
             if (baseline && baselineThrows) throw new InvalidOperationException("Fixture baseline runner failed.");
             var method = Array.IndexOf(args, "--filter-method");
-            string[] names = method < 0 ? [First, Long] : [args[method + 1].Trim('*')];
+            string[] names = method < 0 ? collidingPassedRows ? [First] : [First, Long] : [args[method + 1].Trim('*')];
             Directory.CreateDirectory(args[results + 1]);
             var passed = baseline && !baselineFails;
-            WriteTrx(Path.Combine(args[results + 1], args[filename + 1]), passed, names);
+            var path = Path.Combine(args[results + 1], args[filename + 1]);
+            if (collidingPassedRows && !baseline && method < 0) File.WriteAllText(path, CollisionTrx);
+            else WriteTrx(path, passed, names);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(passed ? 0 : 1,
+                collidingPassedRows && !baseline && method < 0 ? "Failed! - Failed: 1, Passed: 3, Skipped: 2, Total: 6." :
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
         });
@@ -155,15 +159,16 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         return driver;
     }
 
-    internal void Complete(AcceptanceVerificationSummary? summary = null)
+    internal ConductorAdvanceResult Complete(AcceptanceVerificationSummary? summary = null)
     {
         var driver = Driver();
         driver.BeginTick(Kernel, 1);
         var candidate = ConductorParallelAcceptanceCandidate.Create(Goal, 0, [], Context.CandidateSha, Context.MainSha);
-        driver.CompleteParallelLandingAcceptance(candidate, ConductorAutonomyPolicy.Permissive, summary ?? Summary, out _);
+        var result = driver.CompleteParallelLandingAcceptance(candidate, ConductorAutonomyPolicy.Permissive, summary ?? Summary, out _);
         Assert.Equal(GoalStatus.AcceptanceFailed, Goal.Status);
         Assert.Empty(Starts);
         Assert.Equal(0, Goal.AutomaticAcceptanceRetryCount);
+        return result;
     }
 
     internal async Task Restart()
@@ -194,6 +199,57 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Summary = Summary with { SoloFailureReceipt = receipt with
             { Evidence = receipt.Evidence with { Sha256 = SoloAcceptanceFailureEvidenceWriter.Digest(bytes) } } };
     }
+
+    internal SoloAcceptanceArtifact WriteLiteralTrx(string filename, string xml)
+    {
+        var path = Path.Combine(Summary.SoloFailureReceipt!.ResultsRoot, filename);
+        File.WriteAllText(path, xml);
+        return new(path, SoloAcceptanceFailureEvidenceWriter.Digest(File.ReadAllBytes(path)));
+    }
+
+    internal SoloAcceptanceArtifact UseCollisionEvidence()
+    {
+        var artifact = WriteLiteralTrx("collision.trx", CollisionTrx);
+        ReplaceProof(proof => proof with
+        {
+            Checks = proof.Checks.Select(item => item with
+            {
+                Artifacts = [artifact], CandidateReruns = new Dictionary<string, SoloAcceptanceArtifact>(),
+                Check = item.Check with
+                {
+                    ExecutedTestCount = 4, DiscoveredTestCount = 6, FailingTestIdentities = [First],
+                    FailingTestAttributions = item.Check.FailingTestAttributions!.Where(attr => attr.TestIdentity == First)
+                        .Select(attr => attr with { CandidateRerun = null }).ToArray()
+                }
+            }).ToArray(),
+            Bindings = proof.Bindings.Where(binding => binding.TestIdentity == First).ToArray()
+        });
+        return artifact;
+    }
+
+    internal const string CollisionTrx = """
+        <TestRun id="collision-run">
+          <TestDefinitions>
+            <UnitTest id="p1"><TestMethod className="Sample.Tests.SoloTests" name="Theory" /></UnitTest>
+            <UnitTest id="p2"><TestMethod className="Sample.Tests.SoloTests" name="Theory" /></UnitTest>
+            <UnitTest id="p3"><TestMethod className="Sample.Tests.SoloTests" name="Theory" /></UnitTest>
+            <UnitTest id="s1"><TestMethod className="Sample.Tests.SoloTests" name="SkippedOne" /></UnitTest>
+            <UnitTest id="s2"><TestMethod className="Sample.Tests.SoloTests" name="SkippedTwo" /></UnitTest>
+            <UnitTest id="f"><TestMethod className="Sample.Tests.SoloTests" name="Fails" /></UnitTest>
+          </TestDefinitions>
+          <Results>
+            <UnitTestResult testId="p1" testName="Theory(value: &quot;truncated&quot;···)" outcome="Passed" />
+            <UnitTestResult testId="p2" testName="Theory(value: &quot;truncated&quot;···)" outcome="Passed" />
+            <UnitTestResult testId="p3" testName="Theory(value: &quot;truncated&quot;···)" outcome="Passed" />
+            <UnitTestResult testId="s1" testName="SkippedOne" outcome="NotExecuted" />
+            <UnitTestResult testId="s2" testName="SkippedTwo" outcome="NotExecuted" />
+            <UnitTestResult testId="f" testName="Fails" outcome="Failed">
+              <Output><ErrorInfo><Message>exact first line&#13;&#10;second line must stay out</Message></ErrorInfo></Output>
+            </UnitTestResult>
+          </Results>
+          <ResultSummary outcome="Failed"><Counters total="6" executed="4" passed="3" failed="1" notExecuted="2" /></ResultSummary>
+        </TestRun>
+        """;
 
     private string Git(params string[] args)
     {

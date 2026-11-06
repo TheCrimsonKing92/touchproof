@@ -94,6 +94,7 @@ try {
         $response = $responseText | ConvertFrom-Json
         Write-Output "worker_build_invocation=$($response.InvocationId); outcome=$($response.Outcome); $($response.Diagnostic)"
         $structuralStatus = 'Unavailable'
+        $structuralElapsed = 'unavailable'
         $structuralDiagnostic = 'Legacy host response has no structural evidence.'
         $compositeExit = [int]$response.ExitCode
         $compilerExit = 'unavailable'
@@ -110,10 +111,15 @@ try {
                 $response.StructuralStatus -in @('Passed', 'Violation', 'Unavailable', 'NotApplicable')) {
                 $structuralStatus = $response.StructuralStatus
                 $structuralDiagnostic = $response.StructuralDiagnostic
+                if ($response.PSObject.Properties['StructuralElapsedMilliseconds'] -and
+                    $null -ne $response.StructuralElapsedMilliseconds) {
+                    $structuralElapsed = $response.StructuralElapsedMilliseconds.ToString('0.###', [System.Globalization.CultureInfo]::InvariantCulture)
+                }
             }
             if ($structuralStatus -notin @('Passed', 'NotApplicable')) { $compositeExit = 1 }
         }
         Write-Output "compiler_exit=$compilerExit; structural_status=$structuralStatus; verification_exit=$compositeExit; $structuralDiagnostic"
+        Write-Output "structural_elapsed_ms=$structuralElapsed"
         exit $compositeExit
     }
     finally { $writer.Dispose(); $reader.Dispose() }

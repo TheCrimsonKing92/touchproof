@@ -33,10 +33,11 @@ internal static class OwnerConsoleGateFormatter
         return $"{gate.Kind} {members}{progress} {state}";
     }
 
-    internal static string RunLine(OwnerConsoleGateProgress gate) =>
+    internal static string RunLine(OwnerConsoleGateProgress gate, bool shortIdentity = false) =>
         $"{gate.Kind} {string.Join('+', gate.Members.Select(member => member.Id[..Math.Min(8, member.Id.Length)]))} " +
         $"{(gate.Failing ? "failing" : "running")} {CountText(gate)} " +
-        (gate.HasEta ? Remaining(gate.RemainingSeconds) + " left" : "ETA unknown") + Identity(gate);
+        (gate.HasEta ? Remaining(gate.RemainingSeconds) + " left" : "ETA unknown") +
+        (shortIdentity ? ShortIdentity(gate) : Identity(gate));
 
     internal static string CountText(OwnerConsoleGateProgress gate)
     {
@@ -45,6 +46,9 @@ internal static class OwnerConsoleGateFormatter
     }
 
     internal static string Identity(OwnerConsoleGateProgress gate) => gate.ExecutionId is null ? "" : " [" + gate.ExecutionId + "]";
+
+    internal static string ShortIdentity(OwnerConsoleGateProgress gate) => gate.ExecutionId is null ? "" :
+        " [" + gate.ExecutionId[..Math.Min(8, gate.ExecutionId.Length)] + "]";
 
     internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate) => OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.DefaultWidth, false);
 

@@ -5,6 +5,80 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class GitCli
 {
     internal static Action<string>? LaunchObserver;
+    internal static Func<string, Action<GitProcessTiming>?>? CompletionObserver;
+
+    internal readonly record struct GitProcessTiming(string Subcommand, double StartMs, double WallMs, double? CpuMs);
+
+    // One instance per observed process. The sink is selected on the launching thread and retained
+    // through exit, so a later observer replacement cannot redirect an in-flight measurement.
+    internal sealed class ProcessCompletion
+    {
+        private readonly Func<string, Action<GitProcessTiming>?> observer;
+        private readonly string subcommand;
+        private readonly TimeProvider clock;
+        private readonly long beforeStart;
+        private Action<GitProcessTiming>? sink;
+        private double startMs;
+        private int completed;
+
+        private ProcessCompletion(Func<string, Action<GitProcessTiming>?> observer, string subcommand,
+            TimeProvider clock)
+        {
+            this.observer = observer;
+            this.subcommand = subcommand;
+            this.clock = clock;
+            beforeStart = clock.GetTimestamp();
+        }
+
+        internal static ProcessCompletion? Begin(Func<string, Action<GitProcessTiming>?>? observer,
+            string subcommand, TimeProvider clock)
+        {
+            if (observer is null) return null;
+            try { return new(observer, subcommand, clock); }
+            catch (Exception error) { Diagnose(error); return null; }
+        }
+
+        internal void Started()
+        {
+            try
+            {
+                startMs = clock.GetElapsedTime(beforeStart, clock.GetTimestamp()).TotalMilliseconds;
+                sink = observer(subcommand);
+            }
+            catch (Exception error) { Diagnose(error); }
+        }
+
+        internal void CompleteIfExited(Process process)
+        {
+            try { if (process.HasExited) Complete(process); }
+            catch (Exception error) { Diagnose(error); }
+        }
+
+        internal void Complete(Process process)
+        {
+            if (Interlocked.Exchange(ref completed, 1) != 0 || sink is null) return;
+            try
+            {
+                var wallMs = clock.GetElapsedTime(beforeStart, clock.GetTimestamp()).TotalMilliseconds;
+                double? cpuMs = null;
+                try
+                {
+                    var value = process.TotalProcessorTime.TotalMilliseconds;
+                    if (double.IsFinite(value) && value >= 0) cpuMs = value;
+                    else Diagnose(new InvalidOperationException("git processor time is not finite and non-negative"));
+                }
+                catch (Exception error) { Diagnose(error); }
+                sink(new(subcommand, startMs, wallMs, cpuMs));
+            }
+            catch (Exception error) { Diagnose(error); }
+        }
+
+        private static void Diagnose(Exception error)
+        {
+            try { Console.Error.WriteLine($"Git completion telemetry: {error.GetType().Name}: {error.Message}"); }
+            catch (Exception) { /* Telemetry must never change the command result. */ }
+        }
+    }
 
     [ThreadStatic]
     internal static Action<ProcessStartInfo>? StartInfoObserver;
@@ -76,24 +150,34 @@ internal static class GitCli
 
     internal static GitResult RunForRepository(string workingDirectory, params string[] args) =>
         RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System,
             isolateRepository: true);
 
     internal static GitResult RunWithEnvironment(
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
         params string[] args) =>
-        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args, environment);
+        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System, environment);
 
     public static GitResult RunWithStandardInput(
         string workingDirectory, int timeoutMilliseconds, string standardInput, params string[] args) =>
-        RunExecutableCore("git", workingDirectory, timeoutMilliseconds, standardInput, args);
+        RunExecutableCore("git", workingDirectory, timeoutMilliseconds, standardInput, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System);
 
     internal static GitResult RunExecutable(
         string executable,
         string workingDirectory,
         int timeoutMilliseconds,
         params string[] args)
-        => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args);
+        => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System);
+
+    // Explicit observer and clock keep tests independent of the process-global census.
+    internal static GitResult RunExecutableObserved(string executable, string workingDirectory,
+        int timeoutMilliseconds, Func<string, Action<GitProcessTiming>?>? completionObserver,
+        TimeProvider clock, params string[] args) =>
+        RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args, completionObserver, clock);
 
     // Instance-scoped observation for coordinated launch-window tests; no ambient hook.
     internal static GitResult RunExecutable(
@@ -101,6 +185,7 @@ internal static class GitCli
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess, Action? lockContended,
         Action<Process>? processStarted = null)
         => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System,
             errorModeAccess: errorModeAccess, lockContended: lockContended, startedObserver: processStarted);
 
     private static GitResult RunExecutableCore(
@@ -109,6 +194,8 @@ internal static class GitCli
         int timeoutMilliseconds,
         string? standardInput,
         string[] args,
+        Func<string, Action<GitProcessTiming>?>? completionObserver,
+        TimeProvider clock,
         IReadOnlyDictionary<string, string>? environment = null,
         bool isolateRepository = false,
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
@@ -146,11 +233,13 @@ internal static class GitCli
             // never take or block on it; write commands take their required locks regardless.
             ApplyLaunchSettings(startInfo, readCommand: true);
 
+            var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
             using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo,
                 LaunchLockEntryPoint.GitCli, errorModeAccess, lockContended);
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
+            completion?.Started();
             var observer = LaunchObserver;
             if (observer is not null) NotifyLaunch(observer, args);
 
@@ -176,19 +265,23 @@ internal static class GitCli
             catch (AggregateException ex)
             {
                 TryKillTree(process);
+                completion?.CompleteIfExited(process);
                 return new GitResult(1, outputDrain.Text, ex.GetBaseException().Message);
             }
             if (!inputCompleted)
             {
                 TryKillTree(process);
+                completion?.CompleteIfExited(process);
                 return new GitResult(-1, outputDrain.Text, "git stdin write timed out");
             }
 
             if (!process.WaitForExit(timeoutMilliseconds))
             {
                 TryKillTree(process);
+                completion?.CompleteIfExited(process);
                 return new GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
             }
+            completion?.Complete(process);
 
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.

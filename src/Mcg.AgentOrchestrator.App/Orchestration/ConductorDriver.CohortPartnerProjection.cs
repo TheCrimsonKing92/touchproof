@@ -7,19 +7,19 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal GateReadyProjectionCache ProjectionCache { get; } = new();
+    internal PreLandingMergeConflictProbeCache MergeConflictCache { get; } = new();
+    internal PassedCohortApprovalHoldEvaluationCache ApprovalHoldCache { get; } = new();
+    internal Func<Goal, PreLandingMergeConflictProbeCache.Key?>? PreLandingMergeConflictKeyReader { get; set; }
     internal Func<Goal, GateReadyProjectionCache.Heads?>? GateReadyProjectionHeadsReader { get; set; }
 
     internal GateReadyCandidateProjectionResult ProjectGroupedAdmissionCandidate(Goal goal, ConductorAutonomyPolicy policy, AgentOrchestratorKernel? kernelArgument) =>
         GroupedAdmissionCandidateProjection.Project(ProjectCachedGateReadyCandidate(goal, policy), goal,
             (_cohortKernel ?? kernelArgument ?? _conductorTickKernel)?.GetPendingHumanInput(goal.Id) ?? [], ExecutionDirectory);
 
-    private GateReadyCandidateProjectionResult ProjectCachedGateReadyCandidate(Goal goal, ConductorAutonomyPolicy policy)
+    internal GateReadyCandidateProjectionResult ProjectCachedGateReadyCandidate(Goal goal, ConductorAutonomyPolicy policy)
     {
-        if (HasActiveOwnerReviewHold(goal, out _, out _))
-            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
-        if (HasActiveApparatusHold(goal, out _))
-            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
-
+        if (HasActiveOwnerReviewHold(goal, out _, out _)) return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
+        if (HasActiveApparatusHold(goal, out _)) return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
         return ProjectionCache.GetOrProject(goal.Id, ReadKey(),
             () => ProjectGateReadyCandidate(goal, policy), ReadKey);
 
