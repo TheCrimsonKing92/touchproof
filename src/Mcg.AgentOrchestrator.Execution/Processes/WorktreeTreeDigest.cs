@@ -89,14 +89,17 @@ internal static class WorktreeTreeDigest
             start.ArgumentList.Add(arg);
         if (environment is not null)
             foreach (var (key, value) in environment) start.Environment[key] = value;
-        GitCli.ApplyLaunchSettings(start, readCommand: false);
-        return RunProcess(start, 60_000, PipeDrain.DefaultTimeoutMilliseconds);
+        var useConsolePolicy = GitCli.ApplyLaunchSettings(start, readCommand: false);
+        return RunProcess(start, 60_000, PipeDrain.DefaultTimeoutMilliseconds, useConsolePolicy);
     }
 
     internal static WorktreeTreeDigestGitStep RunProcess(
-        ProcessStartInfo start, int processTimeoutMilliseconds, int drainTimeoutMilliseconds)
+        ProcessStartInfo start, int processTimeoutMilliseconds, int drainTimeoutMilliseconds,
+        bool useConsolePolicy = false)
     {
-        using var process = HandleListProcessLauncher.Start(start) ?? throw new IOException("Could not start git.");
+        using var process = (useConsolePolicy
+            ? HandleListProcessLauncher.StartSuppressed(start)
+            : HandleListProcessLauncher.Start(start)) ?? throw new IOException("Could not start git.");
         // Dedicated drains keep output independent of thread-pool availability without blocking the exit wait.
         var outputDrain = PipeDrain.Start(process.StandardOutput, "digest-stdout-drain");
         var errorDrain = PipeDrain.Start(process.StandardError, "digest-stderr-drain");

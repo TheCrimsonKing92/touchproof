@@ -115,7 +115,7 @@ internal static class GitCli
     ]);
 
     // Apply once, after caller arguments and environment, immediately before launch.
-    internal static void ApplyLaunchSettings(ProcessStartInfo startInfo, bool readCommand)
+    internal static bool ApplyLaunchSettings(ProcessStartInfo startInfo, bool readCommand)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         for (var index = 0; index < HardeningArguments.Count; index++)
@@ -123,9 +123,11 @@ internal static class GitCli
         startInfo.CreateNoWindow = true;
         startInfo.UseShellExecute = false;
         if (readCommand) startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        var useConsolePolicy = GitExecutable.Prepare(startInfo);
 
         try { StartInfoObserver?.Invoke(startInfo); }
         catch (Exception) { /* Launch telemetry must not change the git result. */ }
+        return useConsolePolicy;
     }
 
     public readonly record struct GitResult(
@@ -241,11 +243,13 @@ internal static class GitCli
 
             // Read-only commands (status/diff/log) skip the index.lock, so recovery inspection can
             // never take or block on it; write commands take their required locks regardless.
-            ApplyLaunchSettings(startInfo, readCommand: true);
+            var useConsolePolicy = ApplyLaunchSettings(startInfo, readCommand: true);
 
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
-            using var process = HandleListProcessLauncher.Start(startInfo,
-                LaunchLockEntryPoint.GitCli, errorModeAccess);
+            using var process = useConsolePolicy
+                ? HandleListProcessLauncher.StartSuppressed(startInfo,
+                    entry: LaunchLockEntryPoint.GitCli, errorModeAccess: errorModeAccess)
+                : HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.GitCli, errorModeAccess);
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;

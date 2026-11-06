@@ -15,14 +15,16 @@ internal static class CliGateStatsQueryCommand
     {
         if (args.Count < 2) throw Usage();
         var form = args[1].ToLowerInvariant();
-        if (form is not ("lanes" or "classes" or "compare" or "flakes" or "waits" or "failures")) throw Usage();
+        if (form == "replay") { CliGateStatsReplayCommand.Execute(args, Console.Out); return; }
+        if (form is not ("lanes" or "classes" or "compare" or "flakes" or "waits" or "failures" or "failure")) throw Usage();
         var flags = new Dictionary<string, string>(StringComparer.Ordinal);
         var json = false;
         for (var i = 2; i < args.Count; i++)
         {
             var flag = args[i];
             if (flag == "--json") { if (json) throw Usage(); json = true; continue; }
-            var allowed = flag == "--last" || (form == "classes" && flag is "--lane" or "--top") ||
+            var allowed = (form != "failure" && flag == "--last") || (form == "failure" && flag == "--attempt") ||
+                (form == "classes" && flag is "--lane" or "--top") ||
                 (form is "flakes" or "waits" && flag == "--top") ||
                 (form == "compare" && flag is "--before" or "--after");
             if (!allowed || ++i >= args.Count || args[i].StartsWith("--", StringComparison.Ordinal) ||
@@ -30,7 +32,14 @@ internal static class CliGateStatsQueryCommand
         }
         var last = Positive(flags, "--last", form is "flakes" or "failures" ? 20 : 10);
         object report;
-        if (form == "lanes") report = GateStatsReport.Lanes(workspace.OrchestratorDirectory, last);
+        if (form == "failure")
+        {
+            if (!flags.TryGetValue("--attempt", out var attemptId)) throw Usage();
+            var warnings = new List<string>();
+            report = GateFailureDetailReport.Read(workspace.OrchestratorDirectory, attemptId, warnings);
+            foreach (var warning in warnings) Console.Error.WriteLine($"warning: {warning}");
+        }
+        else if (form == "lanes") report = GateStatsReport.Lanes(workspace.OrchestratorDirectory, last);
         else if (form == "failures") report = GateFailureClassificationReport.Read(workspace.OrchestratorDirectory, last);
         else if (form == "waits") report = GateStatsReport.Waits(workspace.OrchestratorDirectory, last,
             Positive(flags, "--top", 20));
@@ -47,8 +56,9 @@ internal static class CliGateStatsQueryCommand
         }
         // The same serialized values back both presentations, preserving numeric precision.
         var serialized = JsonSerializer.Serialize(report, report.GetType(), new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        { PropertyNamingPolicy = form is "flakes" or "failures" ? JsonNamingPolicy.CamelCase : JsonNamingPolicy.SnakeCaseLower });
+        { PropertyNamingPolicy = form is "flakes" or "failures" or "failure" ? JsonNamingPolicy.CamelCase : JsonNamingPolicy.SnakeCaseLower });
         if (json) { Console.WriteLine(serialized); return; }
+        if (report is GateFailureDetailReport detail) { PrintFailure(detail); return; }
         using var document = JsonDocument.Parse(serialized);
         if (form == "failures")
         {
@@ -79,6 +89,28 @@ internal static class CliGateStatsQueryCommand
                 .Where(property => property.Name is not ("rows" or "skipped"))
                 .Select(property => $"{property.Name}={Cell(property.Value.ValueKind == JsonValueKind.Null ? "-" : property.Value.ToString())}")));
         Console.WriteLine($"skipped={document.RootElement.GetProperty("skipped").GetInt32()}");
+    }
+
+    private static void PrintFailure(GateFailureDetailReport report)
+    {
+        Console.WriteLine($"attempt={report.AttemptId}");
+        Console.WriteLine($"cause={report.Cause}");
+        Console.WriteLine($"verdict={Cell(report.VerdictLine)}");
+        if (report.Tests.Count == 0) Console.WriteLine("tests=none");
+        foreach (var test in report.Tests)
+        {
+            Console.WriteLine($"test={Cell(test.FullTestName)}");
+            Console.WriteLine($"  lane={Cell(test.Lane)}");
+            Console.WriteLine($"  firstRunOutcome={Cell(test.FirstRunOutcome ?? "unavailable")}");
+            Console.WriteLine($"  rerunOutcomes={(test.RerunOutcomes.Count == 0 ? "none" : string.Join(", ", test.RerunOutcomes.Select(run => $"{run.Run}:{Cell(run.Outcome ?? "unavailable")}")))}");
+            Console.WriteLine($"  failureMessage={Cell(test.FailureMessage ?? "unavailable")}");
+            if (test.StackTraceLines.Count == 0) Console.WriteLine("  stackTrace=unavailable");
+            foreach (var line in test.StackTraceLines) Console.WriteLine($"  stackTrace={Cell(line)}");
+            Console.WriteLine($"  trxPath={Cell(test.TrxPath ?? "unavailable")}");
+            Console.WriteLine(test.FlakeHistory is { } history
+                ? $"  flakeHistory=attempts={history.Attempts} flakes={history.Flakes} hardFailures={history.HardFailures}"
+                : "  flakeHistory=unavailable");
+        }
     }
 
     private static int Positive(Dictionary<string, string> flags, string name, int fallback)
