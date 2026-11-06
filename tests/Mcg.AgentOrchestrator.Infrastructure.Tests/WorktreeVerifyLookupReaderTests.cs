@@ -225,6 +225,8 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
     private static void AssertOneReader(string repo, Action check)
     {
         Assert.Null(GitRevisionReader.Shared.GetReader(repo));
+        Assert.True(GitRevisionReader.Shared.TryResolve(repo, "HEAD^{commit}", out _));
+        Assert.Null(GitRevisionReader.Shared.GetReader(repo));
         var delta = Observe(() => { for (var i = 0; i < 3; i++) check(); });
         Assert.Equal(1, delta.Subcommands.GetValueOrDefault("cat-file"));
         Assert.NotNull(delta.Callers);

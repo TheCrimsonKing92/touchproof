@@ -34,7 +34,7 @@ public sealed class GitProcessCompletionObserverTests : IDisposable
         Succeeded(GitCli.RunWithEnvironment(root, environment, "init"));
         Succeeded(GitCli.RunWithEnvironment(root, environment, "commit", "--allow-empty", "-m", "seed"));
         using var capture = new Capture();
-        using var reader = new GitRevisionReader(clock: new CountingClock());
+        using var reader = new GitRevisionReader(clock: new CountingClock(), admissionReads: 0);
         string? expected = null;
         for (var index = 0; index < 50; index++)
         {

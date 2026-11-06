@@ -6,8 +6,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTemplate template)
-    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
+public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTemplate template, WorktreeSetupTemplate setupTemplate)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>, IClassFixture<WorktreeSetupTemplate>
 {
 
     [Fact]
@@ -62,7 +62,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
     {
         var copy = template.Copy("exact-train", 3, (preparedRepo, ids) =>
         {
-            AddAcceptanceManifest(preparedRepo);
+            AddAcceptanceManifest(preparedRepo, setupTemplate);
             AddSourceSizeAuthority(preparedRepo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             CreateWorktreeCandidate(preparedRepo, ids[0], "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", "first");
             CreateWorktreeCandidate(preparedRepo, ids[1], "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs", "second");
@@ -271,7 +271,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var repo = CreateAcceptanceCohortRepository();
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             var kernel = new AgentOrchestratorKernel();
             var goals = new[]
             {
@@ -425,7 +425,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
@@ -510,7 +510,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First RED train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second RED train member", repo);
@@ -620,7 +620,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First stale train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second stale train member", repo);
@@ -677,7 +677,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First manifest-failure train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second manifest-failure train member", repo);
@@ -729,7 +729,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTempl
         var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
-            AddAcceptanceManifest(repo);
+            AddAcceptanceManifest(repo, setupTemplate);
             AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 2));
             // Ejecting the oversized member must restore a compliant guarded file,
             // otherwise the shorter train correctly fails for missing source too.

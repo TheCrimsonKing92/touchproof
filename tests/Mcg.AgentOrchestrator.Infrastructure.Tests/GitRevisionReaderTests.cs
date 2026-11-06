@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GitRevisionReaderTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("git-revision-reader-").FullName;
-    private readonly GitRevisionReader reader = new(clock: new ManualClock());
+    private readonly GitRevisionReader reader = new(clock: new ManualClock(), admissionReads: 0);
 
     [Theory]
     [InlineData("HEAD")]
@@ -250,7 +250,7 @@ public sealed class GitRevisionReaderTests : IDisposable
     {
         var repo = CreateRepository();
         var clock = new ManualClock();
-        using var timedReader = new GitRevisionReader(clock: clock);
+        using var timedReader = new GitRevisionReader(clock: clock, admissionReads: 0);
         Assert.True(timedReader.TryResolve(repo, "HEAD^{commit}", out _));
         var process = Assert.IsType<GitRevisionReader.ReaderProcess>(timedReader.GetReader(repo));
         clock.Advance(TimeSpan.FromSeconds(59));
@@ -265,7 +265,7 @@ public sealed class GitRevisionReaderTests : IDisposable
     {
         var repo = CreateRepository();
         var clock = new ManualClock();
-        using var timedReader = new GitRevisionReader(clock: clock);
+        using var timedReader = new GitRevisionReader(clock: clock, admissionReads: 0);
         Assert.True(timedReader.TryResolve(repo, "HEAD^{commit}", out _));
         var process = Assert.IsType<GitRevisionReader.ReaderProcess>(timedReader.GetReader(repo));
         clock.Advance(TimeSpan.FromSeconds(59));

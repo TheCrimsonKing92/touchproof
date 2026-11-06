@@ -15,18 +15,32 @@ internal sealed class GitRevisionReader : IDisposable
     private readonly object gate = new();
     private readonly Dictionary<string, ReaderProcess> readers = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly Dictionary<string, int> qualifyingReads = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    // Gate 208e909d at 0798b6829: CreateProcess mean 201.7ms, one-shot rev-parse
+    // mean wall 360.3ms. With unrecorded batch-query cost bounded below by zero,
+    // ceil(201.7 / (360.3 - 0)) = 1 completed one-shot before admission. The cost
+    // experiment in GitRevisionReaderAdmissionTests reports the unrecorded term;
+    // process lifetime (cat-file's 4936.9ms) is NOT a batch-read/startup cost.
+    internal const int DefaultAdmissionReads = 1;
+    private readonly int admissionReads;
     private readonly int capacity;
     private readonly TimeSpan idleTime;
     private readonly TimeProvider clock;
     private readonly ITimer timer;
     private long activity;
     private bool disposed;
+    // Instance-owned measurement seam: successful file-resolver misses, grouped by Git dir.
+    internal event Action<string>? SuccessfulGitRead;
 
     static GitRevisionReader() => AppDomain.CurrentDomain.ProcessExit += (_, _) => Shared.Dispose();
 
-    internal GitRevisionReader(int capacity = 16, TimeSpan? idleTime = null, TimeProvider? clock = null)
+    internal GitRevisionReader(int capacity = 16, TimeSpan? idleTime = null, TimeProvider? clock = null,
+        int admissionReads = DefaultAdmissionReads)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(admissionReads);
+        this.admissionReads = admissionReads;
         this.capacity = capacity;
         this.idleTime = idleTime ?? TimeSpan.FromSeconds(60);
         if (this.idleTime <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(idleTime));
@@ -97,7 +111,8 @@ internal sealed class GitRevisionReader : IDisposable
     internal static bool TryConfirmWorkTree(string directory)
         => TryConfirmWorkTree(directory, Environment.GetEnvironmentVariable);
 
-    internal static bool TryConfirmWorkTree(string directory, Func<string, string?> environment)
+    internal static bool TryConfirmWorkTree(string directory, Func<string, string?> environment,
+        bool allowIdentityConfiguration = false)
     {
         ArgumentNullException.ThrowIfNull(environment);
         try
@@ -143,9 +158,10 @@ internal sealed class GitRevisionReader : IDisposable
                     if (!HasOrdinaryDirectoryPath(commonDirectory) ||
                         !Directory.Exists(Path.Combine(commonDirectory, "objects")) ||
                         !Directory.Exists(Path.Combine(commonDirectory, "refs")) ||
-                        !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+                        !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out _, allowIdentityConfiguration)) return false;
                     var worktreeConfig = Path.Combine(gitDirectory, "config.worktree");
-                    if (WorkTreeMetadataEntryExists(worktreeConfig) && !HasConclusiveWorkTreeConfig(worktreeConfig)) return false;
+                    if (WorkTreeMetadataEntryExists(worktreeConfig) &&
+                        !HasConclusiveWorkTreeConfig(worktreeConfig, out _, allowIdentityConfiguration)) return false;
 
                     if (OperatingSystem.IsWindows())
                     {
@@ -315,10 +331,10 @@ internal sealed class GitRevisionReader : IDisposable
 
     // Shared layout policy for both positive ref reads and the absence proof.
     internal static bool TryLocateRefStore(string directory, Func<string, string?> environment,
-        out string gitDirectory, out string commonDirectory)
+        out string gitDirectory, out string commonDirectory, bool allowIdentityConfiguration = false)
     {
         gitDirectory = commonDirectory = string.Empty;
-        if (!TryConfirmWorkTree(directory, environment)) return false;
+        if (!TryConfirmWorkTree(directory, environment, allowIdentityConfiguration)) return false;
         // Worktree confirmation permits nested directories; this proof requires the root entry.
         var root = Path.GetFullPath(directory);
         var entry = Path.Combine(root, ".git");
@@ -341,7 +357,7 @@ internal sealed class GitRevisionReader : IDisposable
         if (!HasOrdinaryDirectoryPath(commonDirectory) ||
             WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) ||
             WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable")) ||
-            !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"))) return false;
+            !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out _, allowIdentityConfiguration)) return false;
 
         return true;
     }
@@ -474,7 +490,8 @@ internal sealed class GitRevisionReader : IDisposable
 
     private static bool HasConclusiveWorkTreeConfig(string path) => HasConclusiveWorkTreeConfig(path, out _);
 
-    internal static bool HasConclusiveWorkTreeConfig(string path, out int objectIdLength)
+    internal static bool HasConclusiveWorkTreeConfig(string path, out int objectIdLength,
+        bool allowIdentityConfiguration = false)
     {
         objectIdLength = 40;
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
@@ -545,7 +562,7 @@ internal sealed class GitRevisionReader : IDisposable
                 else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                     value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
             }
-            else return false;
+            else if (!(allowIdentityConfiguration && section == "user" && key is "name" or "email")) return false;
         }
         return !hasObjectFormat || repositoryFormatVersion == "1";
     }
@@ -592,14 +609,22 @@ internal sealed class GitRevisionReader : IDisposable
             {
                 if (CanUseBatch(revision))
                 {
-                    key = NormalizeDirectory(workingDirectory);
-                    reader = Acquire(key);
+                    var gitDirectory = FindGitDirectory(NormalizeDirectory(workingDirectory));
+                    if (gitDirectory is not null)
+                    {
+                        key = NormalizeDirectory(gitDirectory);
+                        reader = Acquire(key);
+                    }
                     if (reader is not null)
                     {
                         var line = reader.Query(revision, Remaining(deadline));
                         if (TryParseObject(line, out objectId))
                         {
-                            if (!IsAbbreviatedRevision(revision, objectId.Length)) return true;
+                            if (!IsAbbreviatedRevision(revision, objectId.Length))
+                            {
+                                ObserveSuccessfulRead(key!);
+                                return true;
+                            }
                         }
                         else if (line == revision + " missing")
                         {
@@ -623,6 +648,9 @@ internal sealed class GitRevisionReader : IDisposable
 
             var result = GitCli.Run(workingDirectory, Remaining(deadline), "rev-parse", "--verify", revision);
             objectId = result.Succeeded ? result.Output.Trim() : string.Empty;
+            if (reader is null && key is not null && IsBranchObjectId(objectId))
+                RecordQualifyingRead(key);
+            if (key is not null && IsBranchObjectId(objectId)) ObserveSuccessfulRead(key);
             return objectId.Length > 0;
         }
         finally
@@ -664,21 +692,39 @@ internal sealed class GitRevisionReader : IDisposable
             if (disposed) return null;
             if (!readers.TryGetValue(key, out var reader))
             {
-                var gitDirectory = FindGitDirectory(key);
-                if (gitDirectory is null) return null;
+                if (qualifyingReads.GetValueOrDefault(key) < admissionReads) return null;
                 if (readers.Count == capacity)
                 {
                     var oldest = readers.MinBy(pair => pair.Value.Activity);
                     readers.Remove(oldest.Key);
                     oldest.Value.Terminate(); // May interrupt an active query; it will fall back.
                 }
-                reader = ReaderProcess.Start(gitDirectory);
+                reader = ReaderProcess.Start(key);
                 readers.Add(key, reader);
+                qualifyingReads.Remove(key);
             }
             reader.Active++;
             reader.Activity = ++activity;
             return reader;
         }
+    }
+
+    private void RecordQualifyingRead(string key)
+    {
+        lock (gate)
+        {
+            if (disposed || readers.ContainsKey(key)) return;
+            if (!qualifyingReads.ContainsKey(key) && qualifyingReads.Count == capacity)
+                qualifyingReads.Remove(qualifyingReads.Keys.First());
+            var completed = qualifyingReads.GetValueOrDefault(key);
+            qualifyingReads[key] = completed < admissionReads ? completed + 1 : completed;
+        }
+    }
+
+    private void ObserveSuccessfulRead(string key)
+    {
+        try { SuccessfulGitRead?.Invoke(key); }
+        catch (Exception) { /* Measurement cannot change revision semantics. */ }
     }
 
     private static string? FindGitDirectory(string workingDirectory)
@@ -748,7 +794,8 @@ internal sealed class GitRevisionReader : IDisposable
     // Tests inspect/terminate only handles owned by their isolated reader, never the OS PID namespace.
     internal ReaderProcess? GetReader(string workingDirectory)
     {
-        lock (gate) return readers.GetValueOrDefault(NormalizeDirectory(workingDirectory));
+        var gitDirectory = FindGitDirectory(NormalizeDirectory(workingDirectory));
+        lock (gate) return gitDirectory is null ? null : readers.GetValueOrDefault(NormalizeDirectory(gitDirectory));
     }
 
     internal int RetainedCount { get { lock (gate) return readers.Count; } }
@@ -762,6 +809,7 @@ internal sealed class GitRevisionReader : IDisposable
             timer.Dispose();
             foreach (var reader in readers.Values) reader.Terminate();
             readers.Clear();
+            qualifyingReads.Clear();
         }
     }
 

@@ -10,7 +10,7 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void ColdRef_ResolvesWithoutGitLaunch(string revision)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         var expected = fixture.Oracle(revision);
         var window = Observe();
         Assert.True(reader.TryResolve(fixture.Repo, revision, out var actual));
@@ -25,7 +25,7 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void MissingBranch_ConfirmsOnlyWhenAbsenceIsUnproven(bool provable)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         if (!provable) File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[user]\nname = Reader\n");
         Assert.Equal(provable, GitRevisionReader.TryConfirmBranchAbsent(fixture.Repo, "absent"));
         var window = Observe();
@@ -41,7 +41,7 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void ObjectExpressions_KeepBatchAndAbbreviationConfirmation(bool abbreviated)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         var head = fixture.Oracle("HEAD");
         var revision = abbreviated ? head[..12] : head + "^{tree}";
         var expected = fixture.Oracle(revision);
@@ -57,7 +57,7 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void BranchCreatedAfterReaderStart_UsesFreshFileEvidence()
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{commit}", out _));
         var process = reader.GetReader(fixture.Repo);
         fixture.Git("branch", "late");

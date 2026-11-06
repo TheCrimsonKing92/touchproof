@@ -72,8 +72,9 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         }
     }
 
-    private protected static void AddAcceptanceManifest(string repo)
+    private protected static void AddAcceptanceManifest(string repo, WorktreeSetupTemplate? template = null)
     {
+        if (template?.TryAddManifest(repo, FakeAcceptanceManifest, path => AddAcceptanceManifest(path)) == true) return;
         Directory.CreateDirectory(Path.Combine(repo, "config"));
         File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), FakeAcceptanceManifest);
         RunGit(repo, "add", "config/acceptance-manifest.json");
