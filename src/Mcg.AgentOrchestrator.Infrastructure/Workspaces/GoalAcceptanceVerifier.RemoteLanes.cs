@@ -120,7 +120,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
-            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, HostTestSettings = hostTestSettings };
+            }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, HostTestSettings = hostTestSettings, OfferOutcomes = new() };
         _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
@@ -174,6 +174,7 @@ public sealed partial class GoalAcceptanceVerifier
         CancellationToken stopToken = default)
     {
         var remote = ResolveGateRemoteLanes(cacheContext);
+        await using var offerSummary = remote?.OfferOutcomes?.BeginBatchSummary(worktreePath, goalId?.Value, _timeProvider, RemoteLaneEarlyOffer.For(remote).DisposeAsync);
         await using var sharedApparatusCancellation = new AcceptanceGateShardCancellation(
             _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken, stopToken, remote);
         cancellationToken = sharedApparatusCancellation.CallerToken;
@@ -287,7 +288,7 @@ public sealed partial class GoalAcceptanceVerifier
             AcceptanceGatePhaseAccountant.RecordCurrentLaneSample(shardElapsed);
             outcomes[shard.Index] = new ShardRunOutcome(result, retried);
             AcceptanceLaneDurationStore.Record(shard.Check, result, shardElapsed);
-            var slowdown = GateLaneReceiptLedger.Record(worktreePath, goalId?.Value, shard.Check.Name, result, shardElapsed, _timeProvider.GetUtcNow(), testSettings: result.TestResultIsExplicitCrossAttemptReuse ? null : AcceptanceGatePhaseAccountant.CurrentLocalTestSettingsFor(shard.Check.Name));
+            var slowdown = GateLaneReceiptLedger.Record(worktreePath, goalId?.Value, shard.Check.Name, result, shardElapsed, _timeProvider.GetUtcNow(), testSettings: result.TestResultIsExplicitCrossAttemptReuse ? null : AcceptanceGatePhaseAccountant.CurrentLocalTestSettingsFor(shard.Check.Name), offer: remote?.OfferOutcomes?.Latest(shard.Check.Name));
             EmitShardTimingProgress(goalId, "shard-complete", shard.Check.Name, primarySlotIndex, shardElapsed, shardConcurrency.Count, _storageRoot, EmitGateProgress, result);
             GateLaneSlowdownDiff.TryEmitProgress(slowdown, goalId?.Value, shard.Check.Name, shardElapsed, EmitGateProgress);
         }
@@ -328,10 +329,7 @@ public sealed partial class GoalAcceptanceVerifier
                 var runnableIndex = pendingShards.FindIndex(shard =>
                     OrderExclusiveResourceKeys(shard.Check.ExclusiveResourceKeys)
                         .All(key => !activeResourceKeys.Contains(key)));
-                if (runnableIndex < 0)
-                {
-                    break;
-                }
+                if (runnableIndex < 0) break;
 
                 var shard = pendingShards[runnableIndex];
                 pendingShards.RemoveAt(runnableIndex);
@@ -386,6 +384,7 @@ public sealed partial class GoalAcceptanceVerifier
                         {
                             try
                             {
+                                remote!.OfferOutcomes?.RecordAccepted(worktreePath, goalId?.Value, accepted, outcome.Request.ExecutorId, remoteDuration, _timeProvider.GetUtcNow(), outcome.Request.TestSettings, outcome.Request.TestSettingsHost);
                                 AcceptanceGatePhaseAccountant.RecordCurrentRemoteLaneSample(remoteDuration);
                                 EmitShardTimingProgress(goalId, "remote-shard-complete", completedRemote.Shard.Check.Name,
                                     primarySlotIndex, remoteDuration, shardConcurrency.Count, _storageRoot, EmitGateProgress, accepted);
