@@ -527,7 +527,9 @@ public static partial class GoalWorktrees
         // Carry the probe evidence into the diagnostic. A bare "not a work tree" message cannot
         // distinguish a genuinely non-git directory from a probe that exited 0 with empty output,
         // timed out, or never started - and those have different causes and different fixes.
-        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
+        var result = GitPathQuery.Run(executionDirectory,
+            () => GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree"),
+            "--is-inside-work-tree");
         if (result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
         {
             return;
