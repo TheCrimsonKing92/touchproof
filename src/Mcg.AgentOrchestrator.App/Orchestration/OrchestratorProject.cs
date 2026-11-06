@@ -9,6 +9,9 @@ public sealed record OrchestratorProject(string Name, string RootDirectory)
     public string IntegrationBranchSource { get; init; } = IntegrationBranchResolution.Default;
     public string? IntegrationBranchNote { get; init; }
     public bool UseLearnedIntegrationBranch { get; init; }
+    /// <summary>Fleet launch is opt-in; legacy entries default to disabled with no tool requirements.</summary>
+    public bool Enabled { get; init; }
+    public IReadOnlyList<ProjectToolRequirement> ToolRequirements { get; init; } = [];
     public string? DataRootDirectory { get; init; }
     public string Delivery { get; init; } = ProjectDelivery.Direct;
     public string? DeliveryDecider { get; init; }
