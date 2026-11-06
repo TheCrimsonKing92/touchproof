@@ -13,7 +13,24 @@ internal static class OwnerProviderHoldNarration
         ownerAction = "No. You can let the conductor continue.";
         switch (evt.EventKind)
         {
+            case "provider-hold-overdue":
+                sentence = $"Provider check overdue: {name} balance unverified";
+                reason = $"The probe became due {OwnerEventFields.Field(evt, "due")}; the last result is historical.";
+                nextStep = "The conductor checks availability when the provider is idle.";
+                return true;
+            case "provider-hold-check":
+                sentence = $"Provider availability check: {name}";
+                reason = $"Outcome: {OwnerEventFields.Field(evt, "outcome")}; reason: {OwnerEventFields.Field(evt, "reason")}.";
+                nextStep = "A successful check clears the hold; other results retain it and schedule another check.";
+                return true;
             case "provider-hold-placed":
+                if (OwnerEventFields.Field(evt, "state") == "probe-overdue")
+                {
+                    sentence = $"Provider check overdue: {name} balance unverified";
+                    reason = $"The probe became due {OwnerEventFields.Field(evt, "due")}; the last result is historical.";
+                    nextStep = "The conductor checks availability when the provider is idle.";
+                    return true;
+                }
                 sentence = $"Provider paused: {name} has no usage balance left";
                 var next = OwnerEventFields.Field(evt, "next_probe");
                 reason = next is not (null or "unavailable")

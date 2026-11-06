@@ -37,12 +37,13 @@ internal static class OwnerFleetDiagram
             owner = hold.Fields();
             lines.Add("│" + new string(' ', width - 1));
             Box([
-                $"Provider {hold.Name}: HELD !",
+                $"Provider {hold.Name}: {(hold.OverdueSince is null ? "HELD !" : "probe-overdue")}",
                 $"binding: {hold.BindingKey}",
                 hold.NextProbeAt is { } nextProbe
-                    ? $"next probe: {Stamp(nextProbe)} attempt {hold.Attempt} ({hold.ResetSource})"
+                    ? $"{(hold.OverdueSince is null ? "next probe" : "probe due")}: {Stamp(nextProbe)} attempt {hold.Attempt} ({hold.ResetSource})"
                     : "next probe: unavailable",
-                $"last probe: {hold.LastProbe ?? "none"}",
+                hold.OverdueSince is null ? $"last probe: {hold.LastProbe ?? "none"}"
+                    : $"balance unverified since {Stamp(hold.LastObservedAt ?? hold.PlacedAt)}",
                 $"held since: {Stamp(hold.PlacedAt)}",
                 $"source: {hold.Source}"
             ], true);

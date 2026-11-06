@@ -122,7 +122,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                         ReadAttentionField<DateTimeOffset>(evt, "OccurredAt")))
                     .Where(evt => evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
                         ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled ||
-                        ProviderBudgetHoldSchedules.TryParseProbe(evt, out _) || ProviderBudgetHoldSchedules.TryParseReset(evt, out _))
+                        ProviderBudgetHoldSchedules.TryParseProbe(evt, out _) || ProviderBudgetHoldSchedules.TryParseReset(evt, out _) ||
+                        ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _))
                     .ToArray();
                 if (tasks.Count > 0 || timeline.Length > 0) providers.Add(new(id, status, tasks, timeline));
             }
