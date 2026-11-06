@@ -6,6 +6,25 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Unlike the slowdown snapshot this reader has no duration floor or top-N truncation.
 internal static class AcceptanceClassDurationResultReader
 {
+    internal static IReadOnlyDictionary<string, AcceptanceLaneWallModel.Input>? ReadModelInputs(IReadOnlyList<string>? paths)
+    {
+        var seconds = Read(paths);
+        if (seconds is null) return null;
+        var timing = LaneSlotTimingReader.Read(paths);
+        // Mirrored TRX files are deduplicated exactly like duration methods above.
+        var holds = timing.HeldByFile.Values.SelectMany(file => file)
+            .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(group => new { Method = group.Key, Held = group.Max(pair => pair.Value) })
+            .Where(item => item.Method.LastIndexOf('.') > 0)
+            .GroupBy(item => item.Method[..item.Method.LastIndexOf('.')], StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.Held) / 1000, StringComparer.Ordinal);
+        // Rows are emitted on slot release, so absence in readable telemetry measures zero.
+        // Missing or invalid telemetry must retain the model's unknown-measurement fallback.
+        double? absentHeld = timing.UnavailableReason is null ? 0 : null;
+        return seconds.ToDictionary(pair => pair.Key, pair => new AcceptanceLaneWallModel.Input(pair.Value,
+            holds.TryGetValue(pair.Key, out var held) ? held : absentHeld, timing.Totals?.SlotCount), StringComparer.Ordinal);
+    }
+
     internal static IReadOnlyDictionary<string, double>? Read(IReadOnlyList<string>? paths)
     {
         if (paths is null || paths.Count == 0) return null;

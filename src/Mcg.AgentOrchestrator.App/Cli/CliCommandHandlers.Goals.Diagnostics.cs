@@ -400,18 +400,18 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
     return false;
 }
 
-internal static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
+internal static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal,
+    Action<string>? reportDegradedRead = null, StartupSqliteRetryOptions? retry = null)
 {
     // Keep the monitoring lifecycle facts, but read clarification items without creating a store.
     var executionDirectory = workspace.ExecutionDirectory;
     var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
     var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
     var collaborationPath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
-    var items = File.Exists(collaborationPath)
-        ? CollaborationItemStore.OpenReadOnly(collaborationPath)
-            .ListAsync(goal.Id.Value).GetAwaiter().GetResult()
-        : Array.Empty<CollaborationItem>();
-    var hasOpenClarification = GoalRefinementService.HasOpenClarification(items);
+    var clarification = GoalClarificationItemsReader.Read(collaborationPath, goal.Id.Value, retry);
+    if (clarification.DegradedRead is { } line)
+        reportDegradedRead?.Invoke(line);
+    var hasOpenClarification = GoalRefinementService.HasOpenClarification(clarification.Items);
     var isBlocked = GoalAcceptanceStatusProjector.HasCurrentBlockingAcceptanceState(goal, executionDirectory, journal) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Failed &&

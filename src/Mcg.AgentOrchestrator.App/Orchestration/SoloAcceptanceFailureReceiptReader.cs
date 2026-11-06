@@ -45,12 +45,28 @@ internal static class SoloAcceptanceFailureReceiptReader
             foreach (var item in proof.Checks)
             {
                 var check = item.Check;
-                if (!Usable(check) || check.Passed || check.Advisory || check.TestResultIsExplicitCrossAttemptReuse ||
-                    check.TestResultAttemptId != receipt.AttemptId || check.FailingTestIdentities is not { Count: > 0 } identities ||
-                    check.FailingTestAttributions is null ||
-                    !SameNames(check.FailingTestAttributions.Select(attr => attr.TestIdentity), identities) ||
-                    check.FailingTestAttributions.Any(attr => attr.Origin != AcceptanceTestFailureOrigin.Introduced))
-                    return Refuse("solo-candidate-not-introduced");
+                if (!Usable(check))
+                    return NotIntroduced("unusable-check", check,
+                        $"passed={check.Passed}; exitCode={check.ExitCode}; executed={check.ExecutedTestCount}; " +
+                        $"classification={DiagnosticValue(check.FailureClassification)}; cause={check.FailureCauseEvidence?.Cause}; " +
+                        $"timedOut={check.CompletionDecision?.TimedOut}");
+                if (check.Passed) return NotIntroduced("passed-check", check);
+                if (check.Advisory) return NotIntroduced("advisory-check", check);
+                if (check.TestResultIsExplicitCrossAttemptReuse) return NotIntroduced("cross-attempt-reuse", check);
+                if (check.TestResultAttemptId != receipt.AttemptId)
+                    return NotIntroduced("foreign-test-attempt", check,
+                        $"testAttempt={DiagnosticValue(check.TestResultAttemptId)}; receiptAttempt={receipt.AttemptId}");
+                if (check.FailingTestIdentities is not { Count: > 0 } identities)
+                    return NotIntroduced("failing-identities-absent", check,
+                        $"identities={(check.FailingTestIdentities is null ? "null" : "empty")}");
+                if (check.FailingTestAttributions is null) return NotIntroduced("attributions-missing", check);
+                if (!SameNames(check.FailingTestAttributions.Select(attr => attr.TestIdentity), identities))
+                    return NotIntroduced("attributions-mismatch", check, AttributionMismatch(check, identities));
+                if (check.FailingTestAttributions.Any(attr => attr.Origin != AcceptanceTestFailureOrigin.Introduced))
+                    return NotIntroduced("non-introduced-origin", check, string.Join("; ",
+                        check.FailingTestAttributions.Where(attr => attr.Origin != AcceptanceTestFailureOrigin.Introduced)
+                            .Select(attr => $"test={DiagnosticValue(attr.TestIdentity)} origin={attr.Origin} " +
+                                $"attribution-evidence=\"{DiagnosticValue(attr.Evidence)}\" rerun={RerunDiagnostic(attr.CandidateRerun)}")));
                 var attribution = summary.CheckAttributions?.Where(attr => attr.CheckName == check.Name).ToArray();
                 if (attribution is not { Length: 1 } || attribution[0].Origin != AcceptanceFailureOrigin.Introduced ||
                     attribution[0].Cause != AcceptanceFailureCause.NotClassified)
@@ -117,6 +133,31 @@ internal static class SoloAcceptanceFailureReceiptReader
         {
             return Refuse("solo-evidence-invalid: " + ex.GetType().Name + ": " + ex.Message);
         }
+    }
+
+    private static SoloAcceptanceFailureRead NotIntroduced(string predicate, AcceptanceCheckResult check, string? detail = null) =>
+        Refuse($"solo-candidate-not-introduced: predicate={predicate}; check={DiagnosticValue(check.Name)}; " +
+            $"tests={(check.FailingTestIdentities is { Count: > 0 } identities ? DiagnosticNames(identities) : "(unavailable)")}" +
+            $"; origins={(check.FailingTestAttributions is { Count: > 0 } attributions
+                ? "[" + string.Join(", ", attributions.Select(attr => attr is null ? "(absent)" :
+                    $"test={DiagnosticValue(attr.TestIdentity)} origin={attr.Origin}")) + "]" : "(unavailable)")}" +
+            (detail is null ? "" : "; " + detail));
+
+    private static string DiagnosticValue(string? value) => value ?? "(absent)";
+
+    private static string DiagnosticNames(IEnumerable<string> names) =>
+        "[" + string.Join(", ", names.Select(DiagnosticValue)) + "]";
+
+    private static string RerunDiagnostic(CandidateFailureRerunEvidence? rerun) => rerun is null ? "(absent)" :
+        $"{DiagnosticValue(rerun.Outcome)}|{DiagnosticValue(rerun.ReceiptPointer)}|{DiagnosticValue(rerun.Error)}";
+
+    private static string AttributionMismatch(AcceptanceCheckResult check, IReadOnlyList<string> identities)
+    {
+        var attributed = check.FailingTestAttributions!.Select(attr => attr.TestIdentity).ToArray();
+        return $"missing={DiagnosticNames(identities.Except(attributed, StringComparer.Ordinal).Order(StringComparer.Ordinal))}; " +
+            $"unexpected={DiagnosticNames(attributed.Except(identities, StringComparer.Ordinal).Order(StringComparer.Ordinal))}; " +
+            $"duplicate={DiagnosticNames(attributed.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1)
+                .Select(group => group.Key).Order(StringComparer.Ordinal))}";
     }
 
     private static bool Usable(AcceptanceCheckResult check) =>

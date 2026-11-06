@@ -1,0 +1,24 @@
+{
+  "gateId": "serial-three-lanes",
+  "receiptsPath": "gate-lane-receipts.jsonl",
+  "lanes": [
+    {
+      "name": "Balanced 1",
+      "trxPaths": [
+        "lane1.trx"
+      ]
+    },
+    {
+      "name": "Balanced 2",
+      "trxPaths": [
+        "lane2.trx"
+      ]
+    },
+    {
+      "name": "Balanced 3",
+      "trxPaths": [
+        "lane3.trx"
+      ]
+    }
+  ]
+}
