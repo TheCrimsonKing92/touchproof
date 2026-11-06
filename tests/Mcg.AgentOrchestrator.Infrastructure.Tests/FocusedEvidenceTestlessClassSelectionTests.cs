@@ -9,7 +9,7 @@ public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocu
 {
     private const string Reason = "declares-no-tests";
     private const string TestedSource = "public class AlphaTests { [Xunit.Fact] public void Runs() {} }";
-    private const string SupportSource = "public class SupportHelper { public void Help() {} }";
+    private const string SupportSource = "public static class SupportHelper { private struct Attributes { internal int Size; } }";
 
     [Fact]
     public void MixedPlan_SelectsOnlyTestedClassAndRecordsDrop()
@@ -42,11 +42,23 @@ public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocu
         Assert.DoesNotContain(call, argument => argument.Contains("SupportHelper", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void StaticSupportWithNestedStruct_DropsSelection()
+    {
+        using var fixture = new Fixture();
+        fixture.Write(SupportSource);
+
+        Assert.Empty(fixture.Plan("SupportHelper", out var coverage));
+        AssertDrop(coverage);
+    }
+
     [Theory]
     [InlineData("public class SupportHelper { [Xunit.Fact] public void A() {} }", "")]
     [InlineData("public class SupportHelper { [Xunit.Theory] public void A(int x) {} }", "")]
     [InlineData("public class SupportHelper : BaseTests { }", "")]
     [InlineData("public class SupportHelper : IDisposable { }", "")]
+    [InlineData("public static class SupportHelper { public class Nested { [Xunit.Fact] public void A() {} } }", "")]
+    [InlineData("public static class SupportHelper { public class Nested : BaseTests {} }", "")]
     [InlineData("public partial class SupportHelper { }", "public partial class SupportHelper { [Xunit.Fact] public void A() {} }")]
     [InlineData("public partial class SupportHelper { }", "public partial class SupportHelper : BaseTests { }")]
     [InlineData("class CustomFactAttribute : Xunit.FactAttribute {} public class SupportHelper { [CustomFact] public void A() {} }", "")]

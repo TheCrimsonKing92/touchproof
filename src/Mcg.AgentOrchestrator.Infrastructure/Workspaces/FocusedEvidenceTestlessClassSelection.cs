@@ -79,8 +79,7 @@ internal static class FocusedEvidenceTestlessClassSelection
             var matches = Declarations.Where(type => QualifiedName(type)
                 .Contains(selector, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (matches.Length == 0) return false;
-            return matches.All(type => type is ClassDeclarationSyntax && type.BaseList is null &&
-                !type.Ancestors().OfType<TypeDeclarationSyntax>().Any() &&
+            return matches.All(type => type.BaseList is null &&
                 !type.SyntaxTree.GetRoot().ContainsDirectives &&
                 !type.Members.OfType<MethodDeclarationSyntax>().SelectMany(method => method.AttributeLists)
                     .SelectMany(list => list.Attributes).Any(attribute => CouldDeclareTest(attribute.Name.ToString())));
