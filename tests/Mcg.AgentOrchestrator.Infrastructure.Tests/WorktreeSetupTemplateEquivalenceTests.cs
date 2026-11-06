@@ -80,6 +80,84 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
         finally { DeleteDirectory(reference); DeleteDirectory(first); DeleteDirectory(second); }
     }
 
+    [Fact]
+    public void LandingCandidateCopies_MatchHandBuiltBranchAndCreateRealWorktrees()
+    {
+        using var template = new WorktreeSetupTemplate();
+        var reference = LandingExecutorTests.CreateGitRepository();
+        var first = LandingExecutorTests.CreateGitRepository();
+        var second = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            var goal = GoalId.New();
+            var branch = GoalWorktrees.BranchName(goal);
+            LandingExecutorTests.AddGoalBranchCommit(reference, branch, "src/delivery.txt", "goal work");
+            template.AddLandingCandidate(first, goal);
+            var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+            Assert.NotEqual("<unknown>", identity);
+            HostCapacitySlotGitCensus.EnsureInstalled(nameof(WorktreeSetupTemplateEquivalenceTests));
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            HostCapacitySlotGitCensus.GitLaunchDelta? delta;
+            try { template.AddLandingCandidate(second, goal); }
+            finally { delta = window.Close(); }
+            Assert.NotNull(delta);
+            Assert.Equal(1, delta.Launches);
+            Assert.Equal(1, delta.Subcommands.GetValueOrDefault("update-index"));
+            AssertEquivalent(reference, first);
+            AssertEquivalent(reference, second);
+            Assert.False(Directory.Exists(Path.Combine(first, GoalWorktrees.DirectoryName)));
+            Assert.False(Directory.Exists(Path.Combine(first, ".git", "worktrees")));
+            var expected = GoalWorktrees.Ensure(reference, goal);
+            var actual = GoalWorktrees.Ensure(first, goal);
+            AssertEquivalent(reference, first);
+            Assert.Equal(actual, GoalWorktrees.TryResolve(first, goal));
+            Assert.Equal(Read(expected, "status", "--porcelain"), Read(actual, "status", "--porcelain"));
+            Assert.Equal(File.ReadAllText(Path.Combine(expected, "src/delivery.txt")),
+                File.ReadAllText(Path.Combine(actual, "src/delivery.txt")));
+            File.WriteAllText(Path.Combine(actual, "src/delivery.txt"), "copy-only mutation");
+            Assert.Equal(Read(reference, "show", branch + ":src/delivery.txt"),
+                Read(second, "show", branch + ":src/delivery.txt"));
+            Assert.Empty(Read(second, "status", "--porcelain"));
+        }
+        finally { DeleteDirectory(reference); DeleteDirectory(first); DeleteDirectory(second); }
+    }
+
+    [Fact]
+    public void BareOriginCopies_MatchHandBuiltStateAndKeepPushesIndependent()
+    {
+        using var template = new WorktreeSetupTemplate();
+        var reference = Directory.CreateTempSubdirectory("bare-reference-").FullName;
+        var first = Directory.CreateTempSubdirectory("bare-copy-").FullName;
+        var second = Directory.CreateTempSubdirectory("bare-copy-").FullName;
+        var client = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            Read(reference, "init", "--bare");
+            template.CopyBareOrigin(first);
+            var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+            Assert.NotEqual("<unknown>", identity);
+            HostCapacitySlotGitCensus.EnsureInstalled(nameof(WorktreeSetupTemplateEquivalenceTests));
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            HostCapacitySlotGitCensus.GitLaunchDelta? delta;
+            try { template.CopyBareOrigin(second); }
+            finally { delta = window.Close(); }
+            Assert.NotNull(delta);
+            Assert.Equal(0, delta.Launches);
+            foreach (var args in new[] { new[] { "config", "--local", "--list" },
+                ["symbolic-ref", "HEAD"], ["for-each-ref"], ["rev-parse", "--is-bare-repository"] })
+            {
+                Assert.Equal(Read(reference, args), Read(first, args));
+                Assert.Equal(Read(reference, args), Read(second, args));
+            }
+            Read(client, "push", reference, "main");
+            Read(client, "push", first, "main");
+            Assert.Equal(Read(reference, "for-each-ref", "--format=%(refname) %(objectname)"),
+                Read(first, "for-each-ref", "--format=%(refname) %(objectname)"));
+            Assert.Empty(Read(second, "for-each-ref"));
+        }
+        finally { DeleteDirectory(reference); DeleteDirectory(first); DeleteDirectory(second); DeleteDirectory(client); }
+    }
+
     private static void AssertEquivalent(string expected, string actual)
     {
         Assert.Equal(Read(expected, "for-each-ref", "--format=%(refname) %(tree) %(subject)"),

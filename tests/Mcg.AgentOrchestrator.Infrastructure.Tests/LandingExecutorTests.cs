@@ -1718,12 +1718,14 @@ public sealed class LandingExecutorTests
     }
 
     internal static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal)
-        CreateAcceptedCandidate(string repo, string fileName)
+        CreateAcceptedCandidate(string repo, string fileName, WorktreeSetupTemplate? setupTemplate = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(repo);
         var (kernel, goal) = CreateVerifiedGoal(repo);
         var goalBranch = GoalWorktrees.BranchName(goal.Id);
-        AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
+        if (setupTemplate is not null && fileName == "src/delivery.txt")
+            setupTemplate.AddLandingCandidate(repo, goal.Id);
+        else AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
         var worktree = GoalWorktrees.Ensure(repo, goal.Id);
         var branchHead = ReadGit(worktree, "rev-parse", "HEAD");
         var mainHead = ReadGit(repo, "rev-parse", "main");

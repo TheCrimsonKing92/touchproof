@@ -8,12 +8,13 @@ using static LandingExecutorTests;
 
 // Private repositories and bare origin; serialized for LandingExecutor's shared GitRunner seam.
 [Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
+public sealed class PullRequestTrunkDriftTests(WorktreeSetupTemplate setupTemplate)
+    : GoalWorktreeTestBase, IClassFixture<WorktreeSetupTemplate>
 {
     [Fact]
     public void Drift_releases_delivery_hold_and_projects_new_trunk_for_admission()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         Assert.NotNull(fixture.Goal.CurrentHold);
         Assert.True(fixture.Coordinator.HasPassedReconciledReceipt(fixture.Goal.Id.Value));
         var trunk = fixture.AdvanceOrigin();
@@ -44,7 +45,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [InlineData("failed")]
     public void Unusable_receipt_or_writer_custody_preserves_delivery_hold(string fault)
     {
-        using var fixture = new Fixture(denyReceiptWriter: fault == "writer");
+        using var fixture = new Fixture(setupTemplate, denyReceiptWriter: fault == "writer");
         var receipt = fixture.Receipt;
         if (fault == "missing") File.Delete(receipt.MetadataPath);
         else
@@ -77,7 +78,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Closed_without_refresh_allows_reopened_pr_to_refresh()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         fixture.Reader.Status = new(PullRequestStatusKind.ClosedUnmerged);
         fixture.Tick();
         Assert.Single(fixture.Decisions(PullRequestLandingDelivery.ClosedUnmergedPrefix));
@@ -102,7 +103,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Closed_without_refresh_allows_later_gated_redelivery()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         fixture.Reader.Status = new(PullRequestStatusKind.ClosedUnmerged);
         fixture.Tick();
         var trunk = fixture.AdvanceOrigin();
@@ -121,7 +122,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Open_without_drift_preserves_delivery_and_throttles_fetch()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var delivery = fixture.Goal.DeliveredForReview;
         var hold = fixture.Goal.CurrentHold;
         var main = fixture.Git("rev-parse", "main");
@@ -140,7 +141,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Drift_pass_republishes_same_branch_with_previous_commit_lease()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         fixture.Tick();
         Assert.Equal(trunk, fixture.Git("rev-parse", "main"));
@@ -170,7 +171,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Failed_refresh_gate_keeps_previous_remote_commit_without_retry()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         fixture.Tick();
         var candidate = fixture.Integrate();
@@ -194,7 +195,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [InlineData(true)]
     public void Divergent_or_guarded_local_trunk_keeps_hold_and_raises_reconcile(bool dirty)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         if (dirty) File.AppendAllText(Path.Combine(fixture.Root, "README.md"), "dirty");
         else AppendCommit(fixture.Root, "local-only.txt", "local divergence");
@@ -214,7 +215,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Active_refresh_keeps_polling_and_coalesces_additional_trunk_movement()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         fixture.Tick();
         Assert.True(fixture.Kernel.BeginGoalAcceptanceVerification(fixture.Goal.Id, "refresh gate started"));
@@ -233,7 +234,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [InlineData(false)]
     public void Terminal_status_during_refresh_prevents_queued_publication(bool merged)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         fixture.Tick();
         var candidate = fixture.Integrate();
@@ -275,7 +276,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Conflicting_refresh_preserves_previous_remote_commit()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         fixture.AdvanceOrigin("src/delivery.txt");
         fixture.Tick();
         Assert.Null(fixture.Goal.CurrentHold);
@@ -291,7 +292,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Rejected_refresh_publication_preserves_delivery_and_records_no_success()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         var trunk = fixture.AdvanceOrigin();
         fixture.Tick();
         var candidate = fixture.Integrate();
@@ -310,7 +311,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
     [Fact]
     public void Direct_delivery_project_does_not_poll_fetch_or_refresh()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(setupTemplate);
         fixture.AdvanceOrigin();
         var before = fixture.Git("rev-parse", "main");
         var tracker = fixture.CreateTracker(fixture.Workspace with { Delivery = ProjectDelivery.Direct });
@@ -346,7 +347,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
 
     private sealed class Fixture : IDisposable
     {
-        private readonly PullRequestLandingTestFixture _delivery = new();
+        private readonly PullRequestLandingTestFixture _delivery;
         private readonly string _origin = Directory.CreateTempSubdirectory("mcg-pr-drift-origin-").FullName;
         private int _advances;
         internal string Root => _delivery.Repository;
@@ -363,9 +364,10 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase
         internal ConductorParallelAcceptanceAttempt Receipt => Coordinator.TryReadLatest(Goal.Id.Value)!;
         private readonly PullRequestDeliveryTracker _tracker;
 
-        internal Fixture(bool denyReceiptWriter = false)
+        internal Fixture(WorktreeSetupTemplate setupTemplate, bool denyReceiptWriter = false)
         {
-            RunGit(_origin, "init", "--bare");
+            _delivery = new(setupTemplate);
+            setupTemplate.CopyBareOrigin(_origin);
             Git("remote", "add", "origin", _origin);
             Git("push", "origin", "main");
             new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).SaveAsync(Kernel).GetAwaiter().GetResult();

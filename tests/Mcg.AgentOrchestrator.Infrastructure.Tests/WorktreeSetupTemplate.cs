@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // xUnit class-fixture lifetime; recipes and every copy have independent writable files.
@@ -51,6 +52,55 @@ public sealed class WorktreeSetupTemplate : IDisposable
             CopyFiles(source, repository);
         }
         if (!OperatingSystem.IsWindows()) MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
+    }
+
+    internal void CopyBareOrigin(string repository)
+    {
+        lock (sync)
+        {
+            const string key = "bare-origin";
+            if (!recipes.TryGetValue(key, out var source))
+            {
+                source = Directory.CreateDirectory(Path.Combine(root, key)).FullName;
+                var result = GitCli.Run(source, "init", "--bare");
+                Assert.True(result.Succeeded, result.Error);
+                recipes.Add(key, source);
+            }
+            CopyFiles(source, repository);
+        }
+    }
+
+    internal void AddLandingCandidate(string repository, GoalId goal)
+    {
+        var git = Path.Combine(repository, ".git");
+        var key = "landing-candidate:" + Fingerprint(git);
+        lock (sync)
+        {
+            if (!recipes.TryGetValue(key, out var source))
+            {
+                source = Path.Combine(root, Guid.NewGuid().ToString("n"));
+                CopyFiles(repository, source, excludeStores: true);
+                LandingExecutorTests.AddGoalBranchCommit(source,
+                    GoalWorktrees.BranchName(GoalBranchScenarioTemplate.TemplateGoalId), "src/delivery.txt", "goal work");
+                recipes.Add(key, source);
+            }
+            var oldBranch = GoalWorktrees.BranchName(GoalBranchScenarioTemplate.TemplateGoalId);
+            var newBranch = GoalWorktrees.BranchName(goal);
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(source, ".git"), "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(source, file);
+                var target = Path.Combine(repository, relative.Replace(oldBranch.Replace('/', Path.DirectorySeparatorChar),
+                    newBranch.Replace('/', Path.DirectorySeparatorChar), StringComparison.Ordinal));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (File.Exists(target)) File.SetAttributes(target, File.GetAttributes(target) & ~FileAttributes.ReadOnly);
+                if (relative.StartsWith(".git" + Path.DirectorySeparatorChar + "objects" + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal) || Path.GetFileName(file) == "index") File.Copy(file, target, overwrite: true);
+                else File.WriteAllText(target, File.ReadAllText(file).Replace(oldBranch, newBranch, StringComparison.Ordinal));
+            }
+        }
+        // The caller's seed files have their own filesystem identity. Refresh that index;
+        // GoalWorktrees.Ensure below the fixture boundary still creates the real worktree.
+        MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
     }
 
     internal static void HandBuildTerminalSeed(string repository)
