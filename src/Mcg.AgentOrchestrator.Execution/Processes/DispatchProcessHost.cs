@@ -878,7 +878,7 @@ public static class DispatchProcessHost
             startInfo.Environment["PATH"] = currentPath;
         }
 
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
+        using var process = HandleListProcessLauncher.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to resolve '{commandName}' with {startInfo.FileName}.");
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
@@ -978,7 +978,7 @@ public static class DispatchProcessHost
         }
         startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo);
+        using var process = HandleListProcessLauncher.Start(startInfo);
         if (process is null)
         {
             throw new InvalidOperationException($"Low-integrity launch preflight failed to start '{commandName} --version'.");
@@ -1290,6 +1290,18 @@ public static void DropToLow() {
         return false;
     }
 
+    internal static bool WaitForIntegrityLabeler(HandleListLaunchedProcess process, TimeSpan timeout)
+    {
+        if (process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            return true;
+        }
+
+        try { process.Kill(entireProcessTree: true); } catch { }
+        try { process.WaitForExit(5000); } catch { }
+        return false;
+    }
+
     private static void WriteLowIntegritySetupArtifact(
         string sandboxRoot,
         string worktree,
@@ -1454,6 +1466,7 @@ public static void DropToLow() {
         var prepStarted = false;
         var prepExitWritten = false;
         Process? worker = null;
+        HandleListLaunchedProcess? workerLaunch = null;
         OwnedProcessGroup? workerGroup = null;
         OwnedProcessGroup.SuspendedRedirectedProcessStart? codexLaunch = null;
         IDisposable? jobQos = null;
@@ -1930,7 +1943,9 @@ public static void DropToLow() {
             {
                 if (codexScratch is null)
                 {
-                    worker = ProcessTreeGuiSuppression.Start(startInfo);
+                    workerGroup = OwnedProcessGroup.Create();
+                    workerLaunch = workerGroup.StartRedirected(startInfo);
+                    worker = workerLaunch.AttachProcess();
                     return worker;
                 }
                 codexLaunch = StartPreparedCodexWorker(startInfo, codexScratch);
@@ -1963,14 +1978,14 @@ public static void DropToLow() {
             try { WriteHeartbeat("launched"); }
             catch (Exception failure) { RecordHeartbeatWriteFailure("launched", failure); }
 
-            WritePromptToWorkerStdin(codexLaunch?.StandardInput ?? worker.StandardInput, parameters);
+            WritePromptToWorkerStdin(codexLaunch?.StandardInput ?? workerLaunch?.StandardInput ?? worker.StandardInput, parameters);
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new RollingLogWriteStream(parameters.StdoutPath, FileMode.Create);
             using var stderr = OpenWorkerStderrStream(parameters.StderrPath);
             using var drainCts = new CancellationTokenSource();
-            var copyOut = (codexLaunch?.StandardOutput ?? worker.StandardOutput).BaseStream.CopyToAsync(stdout, drainCts.Token);
-            var copyErr = (codexLaunch?.StandardError ?? worker.StandardError).BaseStream.CopyToAsync(stderr, drainCts.Token);
+            var copyOut = (codexLaunch?.StandardOutput ?? workerLaunch?.StandardOutput ?? worker.StandardOutput).BaseStream.CopyToAsync(stdout, drainCts.Token);
+            var copyErr = (codexLaunch?.StandardError ?? workerLaunch?.StandardError ?? worker.StandardError).BaseStream.CopyToAsync(stderr, drainCts.Token);
 
             heartbeatTimer.Change(heartbeatInterval, heartbeatInterval);
 
@@ -2086,6 +2101,7 @@ public static void DropToLow() {
                 selectedChild?.Dispose();
                 selectedChild = null;
             }
+            workerLaunch?.Dispose();
             codexLaunch?.Dispose();
         }
 

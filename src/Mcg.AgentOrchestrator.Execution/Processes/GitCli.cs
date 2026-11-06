@@ -54,7 +54,17 @@ internal static class GitCli
             catch (Exception error) { Diagnose(error); }
         }
 
-        internal void Complete(Process process)
+        internal void Complete(Process process) => Complete(() => process.TotalProcessorTime);
+
+        internal void CompleteIfExited(HandleListLaunchedProcess process)
+        {
+            try { if (process.HasExited) Complete(process); }
+            catch (Exception error) { Diagnose(error); }
+        }
+
+        internal void Complete(HandleListLaunchedProcess process) => Complete(() => process.TotalProcessorTime);
+
+        private void Complete(Func<TimeSpan> cpuTime)
         {
             if (Interlocked.Exchange(ref completed, 1) != 0 || sink is null) return;
             try
@@ -63,7 +73,7 @@ internal static class GitCli
                 double? cpuMs = null;
                 try
                 {
-                    var value = process.TotalProcessorTime.TotalMilliseconds;
+                    var value = cpuTime().TotalMilliseconds;
                     if (double.IsFinite(value) && value >= 0) cpuMs = value;
                     else Diagnose(new InvalidOperationException("git processor time is not finite and non-negative"));
                 }
@@ -183,7 +193,7 @@ internal static class GitCli
     internal static GitResult RunExecutable(
         string executable, string workingDirectory, int timeoutMilliseconds, string[] args,
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess, Action? lockContended,
-        Action<Process>? processStarted = null)
+        Action<HandleListLaunchedProcess>? processStarted = null)
         => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
             errorModeAccess: errorModeAccess, lockContended: lockContended, startedObserver: processStarted);
@@ -199,7 +209,7 @@ internal static class GitCli
         IReadOnlyDictionary<string, string>? environment = null,
         bool isolateRepository = false,
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
-        Action? lockContended = null, Action<Process>? startedObserver = null)
+        Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null)
     {
         var processStarted = false;
         try
@@ -234,8 +244,8 @@ internal static class GitCli
             ApplyLaunchSettings(startInfo, readCommand: true);
 
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
-            using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo,
-                LaunchLockEntryPoint.GitCli, errorModeAccess, lockContended);
+            using var process = HandleListProcessLauncher.Start(startInfo,
+                LaunchLockEntryPoint.GitCli, errorModeAccess);
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
@@ -318,7 +328,7 @@ internal static class GitCli
         catch (Exception) { /* Launch telemetry must not change the git result. */ }
     }
 
-    private static void TryKillTree(Process process)
+    private static void TryKillTree(HandleListLaunchedProcess process)
     {
         try { process.Kill(entireProcessTree: true); }
         catch { /* best-effort: process may have already exited */ }

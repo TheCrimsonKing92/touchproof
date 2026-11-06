@@ -219,12 +219,7 @@ internal static class CliStableSlotDotnetCommand
             startInfo.ArgumentList.Add(argument);
         }
 
-        Process process;
-        using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
-        {
-            process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start dotnet process.");
-        }
+        var process = HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.AcquireErrorModeForChildSpawn);
 
         using (process)
         {

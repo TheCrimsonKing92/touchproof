@@ -770,7 +770,7 @@ internal sealed class GitRevisionReader : IDisposable
 
     internal sealed class ReaderProcess
     {
-        private readonly Process process;
+        private readonly HandleListLaunchedProcess process;
         private readonly GitCli.ProcessCompletion? completion;
         private readonly string packedRefsPath;
         private readonly string packedRefsVersion;
@@ -783,7 +783,7 @@ internal sealed class GitRevisionReader : IDisposable
         internal long LastCompleted;
         internal bool HasExited => exited;
 
-        private ReaderProcess(Process process, string packedRefsPath, string packedRefsVersion,
+        private ReaderProcess(HandleListLaunchedProcess process, string packedRefsPath, string packedRefsVersion,
             GitCli.ProcessCompletion? completion)
         {
             this.process = process;
@@ -811,7 +811,7 @@ internal sealed class GitRevisionReader : IDisposable
             GitCli.ApplyLaunchSettings(info, readCommand: true);
             var completion = GitCli.ProcessCompletion.Begin(Volatile.Read(ref GitCli.CompletionObserver),
                 "cat-file", TimeProvider.System);
-            var process = ProcessTreeGuiSuppression.Start(info);
+            var process = HandleListProcessLauncher.Start(info);
             completion?.Started();
             var reader = new ReaderProcess(process, packedRefsPath, packedRefsVersion, completion);
             try

@@ -694,7 +694,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 
 internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 {
-    private readonly Func<ProcessStartInfo, Process?> startProcess;
+    private readonly Func<ProcessStartInfo, Process?>? startProcess;
     private const uint LabelSecurityInformation = 0x00000010;
     private const int SeFileObject = 1;
     private const int ErrorSuccess = 0;
@@ -713,11 +713,11 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     private const int MaximumAclBytes = 64 * 1024;
 
     public IcaclsIntegrityLabeler()
-        : this(info => ProcessTreeGuiSuppression.StartWithLaunchLock(info))
+        : this(null)
     {
     }
 
-    internal IcaclsIntegrityLabeler(Func<ProcessStartInfo, Process?> startProcess)
+    internal IcaclsIntegrityLabeler(Func<ProcessStartInfo, Process?>? startProcess)
     {
         this.startProcess = startProcess;
     }
@@ -968,7 +968,8 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 psi.ArgumentList.Add("/T");
             }
 
-            using var process = startProcess(psi);
+            using var process = startProcess is null ? HandleListProcessLauncher.Start(psi)
+                : startProcess(psi) is { } injected ? new HandleListLaunchedProcess(injected) : null;
             if (process is null)
             {
                 return IntegrityLabelCommandResult.Failed(null);

@@ -111,7 +111,7 @@ public static class WorkerProcessRunner
         using var linkedCts = timeout is null
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
+        using var process = HandleListProcessLauncher.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
         OwnedProcessGroup? processGroup = null;
         try
@@ -182,7 +182,7 @@ public static class WorkerProcessRunner
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var startInfo = BuildPowerShellStartInfo(request.Command, request.WorkingDirectory);
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo)
+        using var process = HandleListProcessLauncher.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start worker process.");
 
         try { process.StandardInput.Close(); } catch { }
@@ -211,7 +211,7 @@ public static class WorkerProcessRunner
     }
 
     private static async Task DrainOutputAsync(
-        Process process,
+        HandleListLaunchedProcess process,
         OwnedProcessGroup? processGroup,
         CancellationTokenSource drainCts,
         Task stdoutTask,
@@ -230,7 +230,7 @@ public static class WorkerProcessRunner
         try { await Task.WhenAny(drainTask, Task.Delay(drainPolicy.CancellationGrace)).ConfigureAwait(false); } catch { }
     }
 
-    private static void TryKillProcessTree(Process process, OwnedProcessGroup? processGroup)
+    private static void TryKillProcessTree(HandleListLaunchedProcess process, OwnedProcessGroup? processGroup)
     {
         try { WorkerProcessJobs.ReadAccountingAndDispose(processGroup, kill: true, captureAccounting: false, out _); } catch { }
         try

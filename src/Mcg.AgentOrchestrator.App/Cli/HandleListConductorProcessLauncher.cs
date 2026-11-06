@@ -27,7 +27,7 @@ internal sealed class HandleListConductorProcessLauncher : IConductorProcessLaun
         {
             stdout = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StdoutPath!);
             stderr = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StderrPath!);
-            using var suppression = ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn();
+            _ = ChildConsoleLaunchPolicy.Prepare();
             // Start must remain detached even when the operator has an attached console.
             // Self-relaunch keeps its existing console policy; only this entry point forces isolation.
             var flags = ConductorLoopHandoff.WindowsSuccessorCreationFlags |

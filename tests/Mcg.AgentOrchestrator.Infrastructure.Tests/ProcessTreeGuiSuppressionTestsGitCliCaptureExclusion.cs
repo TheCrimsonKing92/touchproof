@@ -38,10 +38,11 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
                 if (sharedPolicy)
                 {
                     var result = GitCli.RunExecutable("git", root, 600_000, args, null,
-                        () => attempts.Signal(), child =>
+                        null, child =>
                         {
-                            children[index] = child;
+                            children[index] = child.AttachProcess();
                             launched.Signal();
+                            attempts.Signal();
                         });
                     Assert.True(result.Succeeded, result.Error);
                 }
@@ -81,7 +82,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitCliCaptureExclusion
                     Assert.True(attempts.Wait(TimeSpan.FromSeconds(60)),
                         "Git attempts did not reach the native inheritable-handle window.");
                     if (sharedPolicy)
-                        Assert.Equal(count, launched.CurrentCount); // Every git attempt is blocked at the lock.
+                        Assert.Equal(0, launched.CurrentCount); // Handle-list git launches finish creation inside the capture window.
                 }))
             {
                 native.Resume();

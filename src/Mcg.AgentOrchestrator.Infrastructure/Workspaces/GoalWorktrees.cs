@@ -237,7 +237,7 @@ public sealed class WindowsSandboxAclHelper : ISandboxAclHelper
         startInfo.ArgumentList.Add("/C");
         startInfo.ArgumentList.Add("/Q");
 
-        using var process = ProcessTreeGuiSuppression.StartWithLaunchLock(startInfo);
+        using var process = HandleListProcessLauncher.Start(startInfo);
         if (process is null)
         {
             return;
