@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public static class RetryCorrectionObligationEvidence
 {
     public const string DeclineCode = "structural-obligation-unsatisfied";
-    public const string Marker = "@@MCG_RETRY_OBLIGATION@@";
+    public const string Marker = "@@RETRY_CORRECTION_OBLIGATION@@";
 
     public static string Format(RetryCorrectionObligation obligation, RetryCorrectionConditionVerdict verdict) =>
         $"{Marker} outcome={verdict.ToString().ToLowerInvariant()}; condition={obligation.ConditionIdentity}; " +
