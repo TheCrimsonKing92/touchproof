@@ -7,13 +7,21 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Coordinates persisted gate waits without changing the conductor's hold decisions.
 internal static class ConductorGateAttention
 {
+    internal static void Configure(ConductorDriver driver, OrchestratorWorkspace workspace,
+        IGoalAcceptanceVerifier verifier, Func<Goal, PassedGateHold?> resolvePassedGateHold,
+        OrchestratorProjectRegistry? registry = null)
+    {
+        driver.RepositoryAcceptanceGate = new(workspace, registry ?? OrchestratorProjectRegistry.CreateDefault(), verifier);
+        Configure(driver, workspace.OrchestratorDirectory, resolvePassedGateHold);
+    }
+
     internal static void Configure(
         ConductorDriver driver, string orchestratorDirectory, Func<Goal, PassedGateHold?> resolvePassedGateHold)
     {
         var store = CollaborationItemStore.ForDirectory(orchestratorDirectory);
         driver.PassedGateHoldAttention = new(store, resolvePassedGateHold);
         driver.AwaitingVerificationGateAttention = new(store);
-        driver.MultiRepositoryGateHoldAttention = new(store);
+        driver.MultiRepositoryLandingHoldAttention = new(store, goal => driver.RepositoryAcceptanceGate?.HasCurrentPass(goal) == true);
         driver.StalledEvidenceWaitAttention = new(store,
             goal => (driver._cohortKernel ?? driver._conductorTickKernel)?.GetPendingHumanInput(goal.Id));
     }
@@ -38,7 +46,7 @@ internal static class ConductorGateAttention
         });
         runPhase("reconcile-multi-repository-gate-waits", () =>
         {
-            driver.MultiRepositoryGateHoldAttention?.ReconcileAll(goals);
+            driver.MultiRepositoryLandingHoldAttention?.ReconcileAll(goals);
             return true;
         });
     }
@@ -52,7 +60,7 @@ internal static class ConductorGateAttention
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-outcome",
             () => driver.PassedGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-multi-repository-gate-outcome",
-            () => driver.MultiRepositoryGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
+            () => driver.MultiRepositoryLandingHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-awaiting-verification-outcome",
             () => driver.AwaitingVerificationGateAttention?.Reconcile(kernel.GetGoal(goal.Id),
                 outcome is ConductorAdvanceOutcome.Held { State: GoalLifecycleState.AwaitingVerification }));

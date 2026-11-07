@@ -14,7 +14,7 @@ internal static partial class CliCommandHandlers
 private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
-    if (CliMultiRepositoryGateHold.Apply(context, goal)) return false;
+    if (CliMultiRepositoryAcceptance.Apply(context, goal, runGate: !skipVerify)) return false;
     var owner = $"acceptance:{Environment.ProcessId}:{Guid.NewGuid():N}";
     var lease = new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath)
         .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
@@ -32,6 +32,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
+    if (CliMultiRepositoryAcceptance.Apply(context, goal, runGate: !skipVerify)) return false;
     if (TryReconcileLandedCleanedAcceptance(context, goal, "acceptance retry", out var reconciledDetail))
     {
         Console.WriteLine(reconciledDetail);

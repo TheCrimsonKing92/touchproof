@@ -8,7 +8,7 @@ internal static class ConductorLandingBlockerRecorder
     private static readonly IReadOnlyDictionary<string, (string Actor, string Verb)> NextActions =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)
         {
-            ["multi-repository-gate-not-built"] = ("operator", "wait-for-multi-repository-gate-slice"),
+            ["multi-repository-landing-not-built"] = ("operator", "wait-for-the-landing-slice"),
             ["criterion-evidence-hold"] = ("evidence-owner", "criterion-evidence-record"),
             ["acceptance-apparatus-hold"] = ("operator", "acceptance-retry"),
             ["environmental-apparatus-hold"] = ("operator", "acceptance-retry"),

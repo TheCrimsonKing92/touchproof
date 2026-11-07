@@ -15,7 +15,7 @@ public sealed class GoalRepositoriesCandidateIdentityTests
         var goal = fixture.CreateGoal();
         var home = fixture.CreateHomeWorktree(goal);
         Assert.True(GoalRepositoryDispatchProvisioning.TryProvision(goal, goal.Tasks.Single(), out var failure), failure);
-        var resolve = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace);
+        var resolve = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace, fixture.Registry);
         var before = resolve(goal);
         Assert.True(string.IsNullOrEmpty(before.Failure), before.Failure);
         Assert.NotNull(before.Identity);
@@ -46,7 +46,7 @@ public sealed class GoalRepositoriesCandidateIdentityTests
         GoalRepositoryWorktreeProvisionerFixture.CommitChange(home);
         Assert.True(GoalWorktrees.TryComputeCandidateIdentity(home, "main", out var expected, out var failure,
             projectHomeDirectory: fixture.Workspace.ProjectHomeDirectoryOrNull), failure);
-        var actual = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace)(goal);
+        var actual = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace, fixture.Registry)(goal);
         Assert.True(actual.Identity is not null, actual.Failure);
         Assert.Equal(expected!.Canonical, actual.Identity!.Canonical);
     }
@@ -57,7 +57,7 @@ public sealed class GoalRepositoriesCandidateIdentityTests
         using var fixture = new GoalRepositoriesTestFixture();
         var goal = fixture.CreateGoal();
         fixture.CreateHomeWorktree(goal);
-        var actual = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace)(goal);
+        var actual = GoalWorktreeCandidateContext.Configure(fixture.Kernel, fixture.Workspace, fixture.Registry)(goal);
         Assert.Null(actual.Identity);
         Assert.Equal("crosswalk:missing-worktree", actual.Failure);
     }

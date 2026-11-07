@@ -1098,7 +1098,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var noRecord = HasCliConfirmation(parts, "--no-record");
             var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
-            if (CliMultiRepositoryGateHold.Apply(context, context.CurrentGoal)) return true;
+            if (CliMultiRepositoryAcceptance.Apply(context, context.CurrentGoal, runGate: !skipVerify)) return true;
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
             AutoVerifyFromGitEvidence(context, context.CurrentGoal);
             if (RunAcceptanceWorkspaceMerge(context, skipVerify))
