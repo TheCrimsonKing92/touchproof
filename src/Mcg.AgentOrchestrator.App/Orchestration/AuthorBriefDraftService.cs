@@ -82,7 +82,7 @@ internal static class AuthorBriefDraftService
             AuthorBriefDraftEvaluation Evaluate(string markdown)
             {
                 var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack);
-                var findings = BriefLint.Lint(markdown);
+                var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
                 return new(markdown, [.. draftChecks, .. findings
                     .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
                     .Select(finding => new AuthorBriefDraftCheck($"brief-lint:{finding.Kind}", false, LintDetail(finding)))], findings);

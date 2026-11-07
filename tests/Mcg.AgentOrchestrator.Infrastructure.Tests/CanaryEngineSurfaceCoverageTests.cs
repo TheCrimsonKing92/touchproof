@@ -54,11 +54,12 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
-    [Fact]
-    public void Extracted_focused_method_resolver_triggers_canary()
+    [Theory]
+    [InlineData("FocusedEvidenceMethodResolver")]
+    [InlineData("HeavyFixtureGitLaunchBoundCheck")]
+    public void Direct_acceptance_collaborators_trigger_canary(string helper)
     {
-        const string prefix =
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceMethodResolver";
+        var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;
         var path = prefix + ".cs";
         var result = PostLandingCanaryTrigger.Evaluate([path]);
 

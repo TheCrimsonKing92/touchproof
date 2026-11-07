@@ -31,6 +31,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorSlot
     public async Task MissingSlots_OneRemoteLaneAndOneLocalLane()
     {
         using var scenario = CreateScenario("""[{"id":"one"}]""");
+        var policy = new ConcurrentQueue<string>();
+        TestOverrides.OnRemoteLaneProgressLineForTests = policy.Enqueue;
         var handle = new FakeRemoteLaneExecutor.Handle(scenario.Clock.GetUtcNow());
         var fake = new FakeRemoteLaneExecutor
         {
@@ -45,7 +47,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorSlot
         var localLane = Assert.Single(scenario.LocalStarts);
         Assert.NotEqual($"infrastructure tests: Lane {localLane}", request.Lane);
         Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(scenario.Health(), row => row.Lane == request.Lane).Outcome);
-        Assert.Equal(RemoteLaneOutcomeCode.OfferSkippedNoExecutor, Assert.Single(scenario.Health(), row => row.Lane == $"infrastructure tests: Lane {localLane}").Outcome);
+        Assert.DoesNotContain(scenario.Health(), row => row.Lane == $"infrastructure tests: Lane {localLane}");
+        Assert.Contains(policy, line => line.StartsWith($"REMOTE_LANE_POLICY lane=\"infrastructure tests: Lane {localLane}\" ") &&
+            line.Contains("decision=keep-local reason=capacity"));
         var folder = Path.Combine(scenario.HostRoot, ".orchestrator", "remote-executor-occupancy", "one");
         Assert.Equal("claim.lock", Assert.Single(Directory.GetFiles(folder).Select(Path.GetFileName)));
     }

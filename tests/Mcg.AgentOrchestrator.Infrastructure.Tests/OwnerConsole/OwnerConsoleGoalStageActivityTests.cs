@@ -90,7 +90,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
         var line = JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UnixEpoch, eventType = type,
             taskId = "task1", role = "Reviewer", message = "{raw JSON}" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
-        Assert.Equal(phrase, OwnerActivityNarrator.DetailPhrase(item!, "Console stages"));
+        Assert.Equal(phrase, OwnerLifecycleStageNarration.DetailPhrase(item!, "Console stages"));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
             message = "finding-evidence disposition=evidence-only-round-accepted; finding_id=finding1" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
         Assert.False(OwnerActivityNarrator.Maps(item!));
-        Assert.Null(OwnerActivityNarrator.DetailPhrase(item!, "Console stages"));
+        Assert.Null(OwnerLifecycleStageNarration.DetailPhrase(item!, "Console stages"));
     }
 
     [Fact]

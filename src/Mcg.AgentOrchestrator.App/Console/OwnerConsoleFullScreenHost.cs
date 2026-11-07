@@ -47,7 +47,7 @@ internal static class OwnerConsoleFullScreenHost
         IConductEventSource? events = null;
         OwnerConsoleActivityLoader? activityLoader = null;
         Task? fill = null;
-        using var rebuild = new SemaphoreSlim(1, 1);
+        OwnerRefreshCoordinator? refresh = null;
         using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
@@ -95,82 +95,20 @@ internal static class OwnerConsoleFullScreenHost
                     return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
                 });
-            var opened = clock.GetUtcNow();
-            DateTimeOffset? last = null;
-            var landings = 0;
-            var landingDate = clock.GetLocalNow().Date;
-            var countedLandings = new HashSet<OwnerConductEvent>();
-            var recent = new List<OwnerConductEvent>();
-            IReadOnlyCollection<string> boardIds = [];
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
-            var refreshOperation = new OwnerConsoleScreenOperation(clock,
-                label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
-                message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }));
+            refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
+                activityLoader.ReadNew, () => OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock),
+                timingsFile.Write, action => app.Invoke(action), Post, () => view!);
+            coalescer = new((items, scope) => refresh.RefreshAsync(items, scope: scope));
 
-            async Task RefreshAsync(IReadOnlyList<OwnerConductEvent>? items = null, bool skipIfBusy = false, OwnerConsoleRefreshScope? scope = null)
-            {
-                using var trace = diagnostics?.Begin("refresh-work", detail: skipIfBusy ? "skip-if-busy" : "queued");
-                if (skipIfBusy)
-                {
-                    if (!await rebuild.WaitAsync(0, token)) return;
-                }
-                else await rebuild.WaitAsync(token);
-                try
-                {
-                    if (clock.GetLocalNow().Date != landingDate)
-                    { landingDate = clock.GetLocalNow().Date; landings = 0; countedLandings.Clear(); }
-                    foreach (var item in items ?? [])
-                    {
-                        last = item.Timestamp;
-                        if (OwnerActivityNarrator.IsLanding(item) &&
-                            TimeZoneInfo.ConvertTime(item.Timestamp, clock.LocalTimeZone).Date == landingDate && countedLandings.Add(item)) landings++;
-                        OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
-                    }
-                    last = refreshFilter.FoldLast(last);
-                    var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
-                    await refreshOperation.RunAsync(items is not { Count: > 0 } ? "refresh" : "refresh after conductor event", async stepToken =>
-                    {
-                        using var goalLoads = snapshots.BeginRefresh();
-                        var board = await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken));
-                        boardIds = board.Board.Select(row => row.GoalId).ToArray();
-                        if (boardSource is not null) board = await boardSource.ComposeAsync(board, stepToken);
-                        foreach (var lifecycle in timings.Time("lifecycle-tail", () => activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All).ToArray())) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
-                        var programHealth = OwnerConsoleProgramHealthNotice.Current(recent); app.Invoke(() => { if (!token.IsCancellationRequested) view!.NoticeStrip.SetProgramHealth(programHealth); });
-                        var (decisions, hidden) = await timings.TimeAsync("decisions", () => builder.ReadDecisionsAsync(stepToken));
-                        var landedToday = timings.Time("landed-today", () => OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock));
-                        var model = timings.Time("activity", () => builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
-                            inputs with { RecentEvents = recent.ToArray(),
-                                LandedToday = Math.Max(landings, landedToday) }));
-                        stepToken.ThrowIfCancellationRequested();
-                        Post("refresh-render", () =>
-                        {
-                            if (!token.IsCancellationRequested)
-                                timings.Time("render", () => { view!.Render(model); return true; });
-                        });
-                    }, token);
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-                catch (Exception ex)
-                { app.Invoke(() => view!.ShowNotice(ex.Message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh)); }
-                finally
-                {
-                    rebuild.Release();
-                    diagnostics?.Mark("refresh-loaders", detail: timings.Detail());
-                    timingsFile.Write(timings.Detail());
-                }
-            }
-
-            coalescer = new((items, scope) => RefreshAsync(items, scope: scope));
-
-            rebuild.Wait(token);
+            refresh.HoldForStartup();
             try
             {
                 // Keep Init, initial Render and Run on this host thread. Metadata is
                 // read on the pool before GUI initialization, with the existing bound.
                 var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(async () =>
                 {
-                    var own = await builder.BuildBoardAsync(token);
-                    boardIds = own.Board.Select(row => row.GoalId).ToArray();
+                    var own = refresh.TrackBoard(await builder.BuildBoardAsync(token));
                     return boardSource is null ? own : await boardSource.ComposeAsync(own, token);
                 }, token)
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
@@ -189,19 +127,14 @@ internal static class OwnerConsoleFullScreenHost
                     notifications: notifications,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
-                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
+                view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);
                 var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock);
-                fill = startup.FillAsync(board, model => view.Render(model), new(opened, last, [], 0), loaded =>
-                {
-                    recent = loaded.Recent.Select(builder.EnrichEvent).ToList();
-                    last = loaded.LastActivity;
-                    landings = loaded.LandedToday;
-                    foreach (var landing in loaded.Recent.Where(OwnerActivityNarrator.IsLanding)) countedLandings.Add(landing);
-                }, token, ownBoardGoalIds: boardIds);
+                fill = startup.FillAsync(board, model => view.Render(model), refresh.StartupInputs(), refresh.Seed,
+                    token, ownBoardGoalIds: refresh.BoardIds);
             }
-            catch { rebuild.Release(); throw; }
+            catch { refresh.Release(); throw; }
             using var stop = token.Register(() => app.Invoke(() =>
             {
                 app.RequestStop();
@@ -210,7 +143,7 @@ internal static class OwnerConsoleFullScreenHost
             reader = Task.Run(async () =>
             {
                 try { await fill; }
-                finally { rebuild.Release(); }
+                finally { refresh.Release(); }
                 token.ThrowIfCancellationRequested();
                 events = activityLoader.Events ?? new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
                 await new OwnerConsoleEventPump(events, clock,
@@ -224,7 +157,7 @@ internal static class OwnerConsoleFullScreenHost
                     await Task.Delay(OwnerConsoleLoopOptions.Default.RefreshInterval, clock, token);
                     app.Invoke(() => { if (!token.IsCancellationRequested) view.RefreshStatus(); });
                     // Skip rather than queue another refresh behind startup or an event.
-                    await RefreshAsync(skipIfBusy: true);
+                    await refresh.RefreshAsync(skipIfBusy: true);
                 }
             }, token);
             streamRefresh = Task.Run(() => new OwnerConsoleStreamRefresh(changes,
@@ -267,6 +200,7 @@ internal static class OwnerConsoleFullScreenHost
                 catch (TimeoutException) { }
             }
             view?.Dispose();
+            refresh?.Dispose();
         }
     }
 }

@@ -35,7 +35,7 @@ internal static class OwnerConsoleStartupActivity
                         var enough = horizon is { } oldest ? item!.Timestamp < oldest : recent.Count >= MaxRawEvents;
                         // Count today's landings even when the displayed history is already full.
                         if (enough && item!.Timestamp < midnight) return Snapshot();
-                        if (OwnerActivityNarrator.IsLanding(item!) &&
+                        if (OwnerLandingNarration.IsLanding(item!) &&
                             TimeZoneInfo.ConvertTime(item!.Timestamp, clock.LocalTimeZone).Date == clock.GetLocalNow().Date)
                             todayLandings.Add(item!);
                         if (!enough && IsOperatorEvent(item!) && recent.Count < MaxRawEvents && !recent.Contains(item!)) recent.Add(item!);

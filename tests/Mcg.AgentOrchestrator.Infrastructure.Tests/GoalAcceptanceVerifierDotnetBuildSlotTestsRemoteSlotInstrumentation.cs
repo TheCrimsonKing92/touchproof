@@ -16,16 +16,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
         var accepted = Assert.Single(scenario.Health(), row => row.Outcome == RemoteLaneOutcomeCode.Accepted);
         GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneResourceUsage.AssertUsage(accepted);
         var skipped = scenario.Health().Where(row => row.Outcome == RemoteLaneOutcomeCode.OfferSkippedNoExecutor).ToArray();
-        Assert.Equal(2, skipped.Length);
-        Assert.Equal(2, skipped.Select(row => row.Lane).Distinct().Count());
+        Assert.Single(skipped);
+        Assert.Single(skipped.Select(row => row.Lane).Distinct());
         foreach (var row in skipped)
         {
             Assert.Equal(new RemoteExecutorOccupancyEntry("fixture-executor", 1, 0, 1, 0, 0, "full"), Assert.Single(row.Occupancy!));
             Assert.Equal(1, scenario.LocalStarts.Count(index => scenario.Lane(index) == row.Lane));
         }
         Assert.DoesNotContain(scenario.LocalStarts, index => scenario.Lane(index) == accepted.Lane);
-        Assert.Equal(3, scenario.Events.Count(line => line.StartsWith("REMOTE_LANE_POLICY ") && line.Contains("decision=offer")));
-        Assert.Equal(2, scenario.Events.Count(line => line.StartsWith("REMOTE_LANE ") && line.Contains("outcome=offer-skipped-no-executor")));
+        Assert.Equal(2, scenario.Events.Count(line => line.StartsWith("REMOTE_LANE_POLICY ") && line.Contains("decision=offer")));
+        Assert.Single(scenario.Events, line => line.StartsWith("REMOTE_LANE ") && line.Contains("outcome=offer-skipped-no-executor"));
+        Assert.Contains(scenario.Events, line => line.StartsWith($"REMOTE_LANE_POLICY lane=\"{scenario.Lane(2)}\" ") &&
+            line.Contains("decision=keep-local reason=capacity"));
+        Assert.Contains(2, scenario.LocalStarts);
+        Assert.Equal(2, scenario.LocalStarts.Count);
     }
 
     [Fact]
@@ -162,10 +166,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
             }
             else if (args.Any(arg => arg.EndsWith("/status.json", StringComparison.Ordinal)))
             {
-                // This event fences completion behind both no-slot observations, never a timer.
+                // Fence completion behind the admitted lane's no-slot observation.
                 if (_shadow)
                     try { await _offered.Task.WaitAsync(TimeSpan.FromSeconds(30), token); }
-                    catch (TimeoutException) { throw new TimeoutException("Missing event: both no-slot offers before remote completion"); }
+                    catch (TimeoutException) { throw new TimeoutException("Missing event: no-slot offer before remote completion"); }
                 var job = _jobs.Single(pair => directory.StartsWith(pair.Key + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || directory == pair.Key).Value;
                 var destination = Path.Combine(directory, args[^1]);
                 Directory.CreateDirectory(destination);
@@ -209,7 +213,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
                 AcceptanceGateEngineSettings.Load(Root), options: new(RemoteLaneEventSink: line =>
                 {
                     Events.Enqueue(line);
-                    if (line.Contains("outcome=offer-skipped-no-executor") && Interlocked.Increment(ref _skipped) == 2) _offered.TrySetResult();
+                    if (line.Contains("outcome=offer-skipped-no-executor") && Interlocked.Increment(ref _skipped) == 1) _offered.TrySetResult();
                     if (ThrowSink) throw new InvalidOperationException("fixture sink failed");
                 }));
             return await new GoalAcceptanceVerifier(TestOverrides, Runner).RunOwnedAsync(Root, Goal, null, slot, lease, owner);

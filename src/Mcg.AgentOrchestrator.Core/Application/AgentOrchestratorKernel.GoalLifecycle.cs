@@ -2441,6 +2441,10 @@ public sealed partial class AgentOrchestratorKernel
     public void RecordGoalDeliveredForReview(GoalId goalId, GoalDeliveredForReview delivery) =>
         GetGoal(goalId).RecordDeliveredForReview(delivery, _eventWriter.AppendTimelineEvent);
 
+    public void RecordRemovalReferenceCensus(GoalId goalId, string renderedCensus) =>
+        Append(GetGoal(goalId), null, ProgressKind.RemovalReferenceCensusRecorded,
+            RemovalReferenceCensusBriefSection.StoredPrefix + "\n" + renderedCensus);
+
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);
 
