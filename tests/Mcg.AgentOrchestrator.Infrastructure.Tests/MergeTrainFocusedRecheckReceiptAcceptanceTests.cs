@@ -7,13 +7,15 @@ using Microsoft.Data.Sqlite;
 // Parallel-safe: receipt tampering and landing operate only on a scenario-owned repository.
 public sealed class MergeTrainFocusedRecheckReceiptAcceptanceTests : AcceptanceCohortWorkflowTests
 {
-    [Fact]
-    public void BisectionSourceRetainsTheExistingCompositeReceiptContract()
+    [Theory]
+    [InlineData("bisection")]
+    [InlineData("stack-frame")]
+    public void AttributionSourceRetainsTheExistingCompositeReceiptContract(string source)
     {
         MergeTrainFocusedRecheckTests.WithTrain("green", true, train =>
         {
             var receipt = train.Result.Receipt!;
-            var proof = receipt.Recheck! with { AttributionSource = "bisection" };
+            var proof = receipt.Recheck! with { AttributionSource = source };
             var bisection = receipt with
             {
                 Recheck = proof,

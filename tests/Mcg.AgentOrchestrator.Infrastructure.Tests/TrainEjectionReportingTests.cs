@@ -215,6 +215,7 @@ public sealed class TrainEjectionReportingTests
         {
             var workspace = OrchestratorWorkspace.ForDirectory(_worktree);
             Root = workspace.OrchestratorDirectory;
+            InfrastructureTestSupport.SetUpStateDatabase(workspace.SqliteStatePath);
             Goals = new[] { "b3c41184", "a837a8a0", "42c77c56" }.Select(prefix =>
                 _kernel.CreateGoal(new GoalId(prefix.PadRight(32, '0')), $"Member {prefix}")).ToArray();
             var bindings = Goals.Select((goal, index) => new MergeTrainMemberBinding(goal.Id,

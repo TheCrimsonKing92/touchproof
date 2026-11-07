@@ -6,6 +6,230 @@ using System.Text.Json.Nodes;
 
 public sealed class ReconcileSweepRemediationTests
 {
+    // Independent copy of the schema at base commit c3c949a3f5adf0858dae804238f6d4ebea673239.
+    private static readonly string[] BaselineSchemaStatements =
+    [
+        """
+        CREATE TABLE IF NOT EXISTS reconcile_sweep_remediation (
+            state_key TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL,
+            blocker_kind TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            remedy TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            blocker_emitted INTEGER NOT NULL,
+            escalation_emitted INTEGER NOT NULL,
+            in_flight_owner TEXT NULL,
+            in_flight_at TEXT NULL,
+            last_exit_status INTEGER NULL,
+            last_output TEXT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_reconcile_sweep_goal ON reconcile_sweep_remediation(goal_id, blocker_kind);",
+        """
+        CREATE TABLE IF NOT EXISTS reconcile_acceptance_leases (
+            goal_id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            acquired_at TEXT NOT NULL
+        );
+        """
+    ];
+
+    // These database contract tests use unique temporary roots and no shared state.
+    [Xunit.Fact]
+    public void Setup_FreshDatabase_RecordsStep15AndPreservesBaselineDefinitions()
+    {
+        var dbPath = NewDatabasePath();
+        try
+        {
+            SetUpStateDatabase(dbPath);
+
+            var expected = BaselineSchemaStatements.Select(statement => statement
+                .Replace(" IF NOT EXISTS", "", StringComparison.Ordinal).TrimEnd(';'));
+            Xunit.Assert.Equal(expected, ReadSchemaValues(dbPath, """
+                SELECT sql FROM sqlite_schema
+                WHERE name IN ('reconcile_sweep_remediation', 'reconcile_acceptance_leases', 'ix_reconcile_sweep_goal')
+                ORDER BY CASE name WHEN 'reconcile_sweep_remediation' THEN 0 WHEN 'ix_reconcile_sweep_goal' THEN 1 ELSE 2 END
+                """));
+            AssertStep15Current(dbPath);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Constructor_MissingFile_RequiresSetupWithoutCreatingDirectory()
+    {
+        var root = Path.GetDirectoryName(NewDatabasePath())!;
+        var dbPath = Path.Combine(root, "uncreated", "state.db");
+        try
+        {
+            AssertRequiresSetup(dbPath);
+
+            Xunit.Assert.False(File.Exists(dbPath));
+            Xunit.Assert.False(Directory.Exists(Path.GetDirectoryName(dbPath)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, true)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, true)]
+    public void Constructor_MissingTables_RequiresSetupWithoutWriting(bool dropRemediation, bool dropLeases)
+    {
+        var dbPath = SetUpStateDatabase(NewDatabasePath());
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = (dropRemediation ? "DROP TABLE reconcile_sweep_remediation;" : "") +
+                    (dropLeases ? "DROP TABLE reconcile_acceptance_leases;" : "");
+                command.ExecuteNonQuery();
+            }
+            var tables = ReadSchemaValues(dbPath, "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name");
+            var bytes = File.ReadAllBytes(dbPath);
+
+            AssertRequiresSetup(dbPath);
+
+            Xunit.Assert.Equal(bytes, File.ReadAllBytes(dbPath));
+            Xunit.Assert.Equal(tables, ReadSchemaValues(dbPath,
+                "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Constructor_SetupDatabase_ObservesAndReopensWithoutSchemaChanges()
+    {
+        var dbPath = SetUpStateDatabase(NewDatabasePath());
+        try
+        {
+            var store = new ReconcileSweepRemediationStore(dbPath);
+            var state = store.Observe("state-1", "goal-1", "blocked", "evidence", "remedy");
+            Xunit.Assert.Equal(0, state.AttemptCount);
+            var schema = ReadSchemaValues(dbPath, "SELECT type || ':' || name || ':' || COALESCE(sql, '') FROM sqlite_schema ORDER BY type, name");
+            var migrations = ReadSchemaValues(dbPath, "SELECT COUNT(*) FROM schema_migrations");
+
+            _ = new ReconcileSweepRemediationStore(dbPath);
+
+            Xunit.Assert.Equal(schema, ReadSchemaValues(dbPath,
+                "SELECT type || ':' || name || ':' || COALESCE(sql, '') FROM sqlite_schema ORDER BY type, name"));
+            Xunit.Assert.Equal(migrations, ReadSchemaValues(dbPath, "SELECT COUNT(*) FROM schema_migrations"));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Setup_LiveStep14Schema_RecordsStep15WithoutChangingDefinitionsOrRows()
+    {
+        var dbPath = NewDatabasePath();
+        try
+        {
+            CreateHistoricalReconcileSweepSchema(dbPath, BaselineSchemaStatements);
+            var pending = StateDbMigrations.Plan(dbPath);
+            Xunit.Assert.Equal(14, pending.RecordedVersion);
+            Xunit.Assert.Equal(15, pending.RequiredVersion);
+            Xunit.Assert.True(pending.RequiresMigration);
+            var store = new ReconcileSweepRemediationStore(dbPath);
+            var state = store.Observe("historical", "goal-1", "blocked", "evidence", "remedy");
+            Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", "historical-owner", TimeSpan.FromMinutes(30)));
+            var schema = ReadSchemaValues(dbPath, "SELECT sql FROM sqlite_schema ORDER BY type, name");
+            const string remediationRows = """
+                SELECT json_array(state_key, goal_id, blocker_kind, evidence, remedy, attempt_count,
+                    blocker_emitted, escalation_emitted, in_flight_owner, in_flight_at,
+                    last_exit_status, last_output, updated_at)
+                FROM reconcile_sweep_remediation ORDER BY state_key
+                """;
+            var rows = ReadSchemaValues(dbPath, remediationRows);
+            var leases = ReadSchemaValues(dbPath, "SELECT goal_id || ':' || owner || ':' || acquired_at FROM reconcile_acceptance_leases");
+
+            SetUpStateDatabase(dbPath);
+
+            AssertStep15Current(dbPath);
+            Xunit.Assert.Equal(schema, ReadSchemaValues(dbPath, "SELECT sql FROM sqlite_schema ORDER BY type, name"));
+            Xunit.Assert.Equal(rows, ReadSchemaValues(dbPath, remediationRows));
+            Xunit.Assert.Equal(leases, ReadSchemaValues(dbPath,
+                "SELECT goal_id || ':' || owner || ':' || acquired_at FROM reconcile_acceptance_leases"));
+            Xunit.Assert.Equal(state, new ReconcileSweepRemediationStore(dbPath)
+                .Observe("historical", "goal-1", "blocked", "evidence", "remedy"));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Constructor_WriterHeldWithoutStepOrIndex_ChecksOnlyTables()
+    {
+        var dbPath = SetUpStateDatabase(NewDatabasePath());
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM schema_migrations WHERE migration_number = 15; DROP INDEX ix_reconcile_sweep_goal; BEGIN IMMEDIATE;";
+            command.ExecuteNonQuery();
+
+            _ = new ReconcileSweepRemediationStore(dbPath);
+
+            command.CommandText = "ROLLBACK";
+            command.ExecuteNonQuery();
+            Xunit.Assert.Equal(["0"], ReadSchemaValues(dbPath,
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'ix_reconcile_sweep_goal'"));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        }
+    }
+
+    private static void AssertRequiresSetup(string dbPath)
+    {
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => new ReconcileSweepRemediationStore(dbPath));
+        Xunit.Assert.Contains("run setup", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(nameof(ReconcileSweepRemediationStore), error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(Path.GetFullPath(dbPath), error.Message, StringComparison.Ordinal);
+    }
+
+    private static void AssertStep15Current(string dbPath)
+    {
+        var plan = StateDbMigrations.Plan(dbPath);
+        Xunit.Assert.Equal(15, plan.RecordedVersion);
+        Xunit.Assert.Equal(15, plan.RequiredVersion);
+        Xunit.Assert.Equal("current", plan.Action);
+        Xunit.Assert.Equal(["reconcile-sweep-remediation"], ReadSchemaValues(dbPath,
+            "SELECT name FROM schema_migrations WHERE migration_number = 15"));
+    }
+
+    private static string[] ReadSchemaValues(string dbPath, string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        using var reader = command.ExecuteReader();
+        var values = new List<string>();
+        while (reader.Read())
+            values.Add(reader.IsDBNull(0) ? "" : reader.GetValue(0).ToString()!.Replace("\r\n", "\n", StringComparison.Ordinal));
+        return values.ToArray();
+    }
+
     [Xunit.Fact]
     public void DescriptorRendersOperatorCommandAndBuildsTypedInvocationFromSameGoal()
     {
@@ -50,7 +274,7 @@ public sealed class ReconcileSweepRemediationTests
         var sweep = Sweep(blocker);
         var options = ReconcileSweepOptions.Default;
         var coordinator = new ReconcileSweepRemediationCoordinator(
-            new ReconcileSweepRemediationStore(dbPath),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath)),
             options,
             _ =>
             {
@@ -80,7 +304,7 @@ public sealed class ReconcileSweepRemediationTests
         var calls = 0;
         var blocker = NewAcceptanceBlocker("slot contention then terminal failure");
         var coordinator = new ReconcileSweepRemediationCoordinator(
-            new ReconcileSweepRemediationStore(dbPath),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath)),
             ReconcileSweepOptions.Default,
             _ => ++calls <= 5
                 ? TerminalGoalRemedyExecutionResult.Retryable(75, $"slot unavailable {calls}")
@@ -106,7 +330,7 @@ public sealed class ReconcileSweepRemediationTests
         var dbPath = NewDatabasePath();
         var blocker = NewAcceptanceBlocker("background acceptance in progress");
         var executorCalls = 0;
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
         var coordinator = new ReconcileSweepRemediationCoordinator(
             store,
             ReconcileSweepOptions.Default,
@@ -140,7 +364,7 @@ public sealed class ReconcileSweepRemediationTests
         var dbPath = NewDatabasePath();
         var blocker = NewAcceptanceBlocker("background acceptance in progress");
         var executorCalls = 0;
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
         var coordinator = new ReconcileSweepRemediationCoordinator(
             store,
             ReconcileSweepOptions.Default,
@@ -173,7 +397,7 @@ public sealed class ReconcileSweepRemediationTests
         var calls = 0;
         var successRecheck = -1;
         var coordinator = new ReconcileSweepRemediationCoordinator(
-            new ReconcileSweepRemediationStore(dbPath),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath)),
             ReconcileSweepOptions.Default,
             _ =>
             {
@@ -248,7 +472,7 @@ public sealed class ReconcileSweepRemediationTests
     [Xunit.Fact]
     public void AcceptanceLeaseSerializesManualAndAutomaticEntryPoints()
     {
-        var store = new ReconcileSweepRemediationStore(NewDatabasePath());
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(NewDatabasePath()));
         using var first = store.TryAcquireAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30));
         var overlapping = store.TryAcquireAcceptanceLease("goal-1", "owner-2", TimeSpan.FromMinutes(30));
         var observed = store.TryGetAcceptanceLease("goal-1", TimeSpan.FromMinutes(30));
@@ -273,7 +497,7 @@ public sealed class ReconcileSweepRemediationTests
     public void JournalBackedGoalEvidenceOwnersAreNeverReclaimedByAgeAlone(string heldOwner)
     {
         var dbPath = NewDatabasePath();
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
         const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
         Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
         using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
@@ -302,7 +526,7 @@ public sealed class ReconcileSweepRemediationTests
     public void LegacyAndUnrelatedOwnersRemainEligibleForAgeReclamation(string heldOwner)
     {
         var dbPath = NewDatabasePath();
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
         const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
         Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
         using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
@@ -324,7 +548,7 @@ public sealed class ReconcileSweepRemediationTests
     [Xunit.Fact]
     public void AcceptanceLeaseReplacementIsAtomicAndExpectedOwnerQualified()
     {
-        var store = new ReconcileSweepRemediationStore(NewDatabasePath());
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(NewDatabasePath()));
         Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30)));
 
         Xunit.Assert.False(store.TryReplaceAcceptanceLease("goal-1", "foreign-owner", "owner-2"));
@@ -340,7 +564,7 @@ public sealed class ReconcileSweepRemediationTests
         var clock = new ImmediateLeaseRenewalTimeProvider(
             new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero));
         var store = new ReconcileSweepRemediationStore(
-            NewDatabasePath(),
+            SetUpStateDatabase(NewDatabasePath()),
             busyTimeoutSeconds: 5,
             busyRetryDelay: null,
             writeTelemetryOptions: null,
@@ -369,7 +593,7 @@ public sealed class ReconcileSweepRemediationTests
     public void StoreAndReleasedAcceptanceLeaseDoNotRetainDatabaseFileHandles()
     {
         var dbPath = NewDatabasePath();
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
 
         using (var lease = store.TryAcquireAcceptanceLease(
                    "goal-1",
@@ -389,7 +613,7 @@ public sealed class ReconcileSweepRemediationTests
         var dbPath = NewDatabasePath();
         var diagnosticsPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "release-failures.jsonl");
         var store = new ReconcileSweepRemediationStore(
-            dbPath,
+            SetUpStateDatabase(dbPath),
             busyTimeoutSeconds: 0,
             busyRetryDelay: null,
             writeTelemetryOptions: new SqliteWriteTelemetryOptions
@@ -438,7 +662,7 @@ public sealed class ReconcileSweepRemediationTests
         var permitRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var retryCount = 0;
         var store = new ReconcileSweepRemediationStore(
-            dbPath,
+            SetUpStateDatabase(dbPath),
             busyTimeoutSeconds: 1,
             busyRetryDelay: (_, _, cancellationToken) =>
             {
@@ -490,7 +714,7 @@ public sealed class ReconcileSweepRemediationTests
         var dbPath = NewDatabasePath();
         var diagnosticsPath = Path.Combine(Path.GetDirectoryName(dbPath)!, "release-failures.jsonl");
         var store = new ReconcileSweepRemediationStore(
-            dbPath,
+            SetUpStateDatabase(dbPath),
             busyTimeoutSeconds: 1,
             busyRetryDelay: (_, _, _) => Task.CompletedTask,
             writeTelemetryOptions: new SqliteWriteTelemetryOptions
@@ -547,7 +771,7 @@ public sealed class ReconcileSweepRemediationTests
         string currentSha,
         Action executed) =>
         new(
-            new ReconcileSweepRemediationStore(dbPath),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath)),
             options,
             _ =>
             {

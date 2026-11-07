@@ -6,7 +6,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Xml.Linq;
-
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
@@ -805,6 +804,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         _ = GoalWorktrees.Ensure(root, goal.Id);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var driver = new ConductorDriver(
             kernel,
             workspace,

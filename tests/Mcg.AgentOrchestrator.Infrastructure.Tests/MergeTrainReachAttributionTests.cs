@@ -31,7 +31,7 @@ public sealed class MergeTrainReachAttributionTests
     [Theory]
     [InlineData("shared")]
     [InlineData("unreached")]
-    [InlineData("degraded")]
+    [InlineData("unresolved-later-batch")]
     [InlineData("unreadable")]
     [InlineData("apparatus")]
     [InlineData("guard")]
@@ -48,9 +48,10 @@ public sealed class MergeTrainReachAttributionTests
                 fixture.Write(Fixture.Intermediate, "public class Intermediate { private ChangedSource first; private OtherSource second; }");
                 break;
             case "unreached": paths = Trx(fixture.Root, "UnreachedTests.Fails"); break;
-            case "degraded":
+            case "unresolved-later-batch":
                 var sources = Enumerable.Range(0, 7).Select(index => $"src/Mcg.AgentOrchestrator.App/Source{index}.cs").ToArray();
                 foreach (var source in sources) fixture.Write(source, $"public class {Path.GetFileNameWithoutExtension(source)} {{ }}");
+                File.Delete(Path.Combine(fixture.Root, sources[^1]));
                 members[1] = Member('b', sources);
                 break;
             case "unreadable": paths = [.. paths, Path.Combine(fixture.Root, "missing.trx")]; break;
@@ -75,6 +76,41 @@ public sealed class MergeTrainReachAttributionTests
         }
         Assert.Null(MergeTrainReachAttribution.TryAttribute(paths, fixture.Root, members, out var classes));
         Assert.Empty(classes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConfirmedApparatusAlongsideGenuineFailure_PreservesReach(bool missing)
+    {
+        using var fixture = CreateFixture();
+        var members = new[] { Member('a', Fixture.Source), Member('b', Fixture.Other), Member('c') };
+        var paths = Trx(fixture.Root, ["AlphaTests.Fails", "ApparatusTests.Fails"], "assertion failed");
+        var document = XDocument.Load(paths[0]);
+        var apparatus = document.Descendants().Single(element => element.Name.LocalName == "UnitTestResult" &&
+            (string?)element.Attribute("testName") == "Ns.ApparatusTests.Fails");
+        apparatus.Descendants().Single(element => element.Name.LocalName == "Message").Value =
+            "DotnetBuildSlotsBusyException: Stable dotnet build slots busy";
+        document.Save(paths[0]);
+        var confirmed = new HashSet<string>(StringComparer.Ordinal)
+            { "Ns.AlphaTests.Fails", "Ns.ApparatusTests.Fails" };
+        if (missing) confirmed.Add("Ns.MissingTests.Fails");
+
+        // Apparatus evidence remains present for coverage but cannot become a culprit.
+        var failures = MergeTrainReachAttribution.ReadFailures(paths, confirmed);
+        var result = MergeTrainReachAttribution.TryAttribute(paths, fixture.Root, members, out var classes, confirmed);
+        if (missing)
+        {
+            Assert.Null(failures);
+            Assert.Null(result);
+            Assert.Empty(classes);
+        }
+        else
+        {
+            Assert.Equal("Ns.AlphaTests.Fails", Assert.Single(failures!).TestName);
+            Assert.Same(members[0], result);
+            Assert.Equal(new[] { "AlphaTests" }, classes);
+        }
     }
 
     private static Fixture CreateFixture()

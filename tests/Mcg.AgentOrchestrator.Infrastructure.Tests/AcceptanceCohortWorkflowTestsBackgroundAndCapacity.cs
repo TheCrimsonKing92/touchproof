@@ -540,6 +540,8 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(),
                 cleanupHooks: cleanupContext.Hooks);
+            Task? backgroundGate = null;
+            driver.SetCohortGateBackgroundStartForTests(action => backgroundGate = Task.Run(action));
             var fairnessStore = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             fairnessStore.RecordOvertake(firstGoal.Id);
@@ -637,7 +639,11 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             Assert.True(inFlightTicks.Length >= 2, "Expected in-flight cohort records from at least two completed ticks.");
 
             gateRelease.Set();
-            Assert.True(SpinWait.SpinUntil(ReceiptPersisted, TimeSpan.FromSeconds(10)), "The background cohort receipt was not persisted.");
+            // Receipt persistence precedes worktree disposal and release of the active run.
+            // The next tick can land both members only after that background action completes.
+            Assert.NotNull(backgroundGate);
+            Assert.True(backgroundGate.Wait(TimeSpan.FromSeconds(10)), "The background cohort gate did not complete.");
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             var landedSummary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
@@ -668,16 +674,6 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             Assert.Equal(1, reader.GetInt32(0));
             Assert.Equal(0, reader.GetInt32(1));
             Assert.Equal(1, reader.GetInt32(2));
-
-            bool ReceiptPersisted()
-            {
-                using var receiptConnection = new SqliteConnection(
-                    $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
-                receiptConnection.Open();
-                using var receiptCommand = receiptConnection.CreateCommand();
-                receiptCommand.CommandText = "SELECT COUNT(*) FROM cohort_receipts;";
-                return Convert.ToInt32(receiptCommand.ExecuteScalar()) == 1;
-            }
         }
         finally
         {

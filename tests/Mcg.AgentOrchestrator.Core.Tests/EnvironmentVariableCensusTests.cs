@@ -46,6 +46,94 @@ public sealed class EnvironmentVariableCensusTests
         Xunit.Assert.Equal(new[] { "MCG_A_MISSING", "MCG_Z_MISSING" }, missing);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("setting", "setting", "identity")]
+    [Xunit.InlineData("setting (capacity)", "setting", "identity")]
+    [Xunit.InlineData("identity", "identity", "setting")]
+    [Xunit.InlineData("identity (project)", "identity", "setting")]
+    public void FindUnallowlisted_SettingAndIdentityRows_RequireAllowlistUnderOwnCategory(
+        string category, string ownGroup, string otherGroup)
+    {
+        string[][] rows = [["MCG_SYNTHETIC_NAME", "synthetic.cs:1", category, "absent", "tests", "home"]];
+        var allowlist = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            ["setting"] = new HashSet<string>(StringComparer.Ordinal),
+            ["identity"] = new HashSet<string>(StringComparer.Ordinal)
+        };
+        Xunit.Assert.Single(EnvironmentVariableCensusScanner.FindUnallowlisted(rows, allowlist));
+
+        allowlist[otherGroup] = new HashSet<string>(["MCG_SYNTHETIC_NAME"], StringComparer.Ordinal);
+        Xunit.Assert.Single(EnvironmentVariableCensusScanner.FindUnallowlisted(rows, allowlist));
+
+        allowlist[otherGroup] = new HashSet<string>(StringComparer.Ordinal);
+        allowlist[ownGroup] = new HashSet<string>(["MCG_SYNTHETIC_NAME", "MCG_UNUSED_NAME"], StringComparer.Ordinal);
+        Xunit.Assert.Empty(EnvironmentVariableCensusScanner.FindUnallowlisted(rows, allowlist));
+
+        string[][] unaffected =
+        [
+            ["MCG_HANDOFF", "synthetic.cs:1", "handoff", "absent", "tests", "handoff"],
+            ["MCG_TEST_ONLY", "synthetic.cs:2", "test-only", "absent", "tests", "test seam"]
+        ];
+        Xunit.Assert.Empty(EnvironmentVariableCensusScanner.FindUnallowlisted(unaffected, allowlist));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("setting (capacity)", ".orchestrator/conductor-policy.json")]
+    [Xunit.InlineData("identity (project)", "an explicit argument at the entry point")]
+    public void FindUnallowlisted_UnlistedRow_NamesVariableCategoryAndHome(string category, string home)
+    {
+        string[][] rows = [["MCG_SYNTHETIC_NAME", "synthetic.cs:1", category, "absent", "tests", "obsolete home"]];
+        var violation = Xunit.Assert.Single(EnvironmentVariableCensusScanner.FindUnallowlisted(rows,
+            new Dictionary<string, IReadOnlySet<string>>()));
+
+        Xunit.Assert.Contains("MCG_SYNTHETIC_NAME", violation);
+        Xunit.Assert.Contains(category, violation);
+        Xunit.Assert.Contains(home, violation);
+        Xunit.Assert.Contains("AGENTS.md, Architecture & Design Discipline", violation);
+        Xunit.Assert.Contains("Choose where a value lives by what kind of value it is.", violation);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("not JSON")]
+    [Xunit.InlineData("[]")]
+    [Xunit.InlineData("{}")]
+    [Xunit.InlineData("{\"setting\":[],\"identity\":[],\"other\":[]}")]
+    [Xunit.InlineData("{\"setting\":[],\"setting\":[],\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":null,\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":[1],\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":[\"OTHER_NAME\"],\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":[\"MCG_Z\",\"MCG_A\"],\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":[\"MCG_A\",\"MCG_A\"],\"identity\":[]}")]
+    [Xunit.InlineData("{\"setting\":[\"MCG_A\"],\"identity\":[\"MCG_A\"]}")]
+    public void ReadAllowlist_InvalidDocument_NamesAllowlistFile(string json)
+    {
+        var exception = Xunit.Assert.Throws<FormatException>(() => EnvironmentVariableCensusScanner.ReadAllowlist(json));
+        Xunit.Assert.Contains("config/environment-variable-allowlist.json", exception.Message);
+    }
+
+    // Parallel-safe: reads the explicit candidate root without modifying files or process state.
+    [Xunit.Fact]
+    public void RepositoryCensus_SettingAndIdentityRows_AreAllowlistedAndLegacyLaunchIsAbsent()
+    {
+        var root = VerifiedRepositoryRoot.Find();
+        var table = File.ReadAllText(Path.Combine(root, "docs", "environment-variables.md"));
+        var rows = EnvironmentVariableCensusScanner.ReadRows(table);
+        Xunit.Assert.NotEmpty(rows);
+        var path = Path.Combine(root, "config", "environment-variable-allowlist.json");
+        Xunit.Assert.True(File.Exists(path), $"Missing environment variable allowlist: {path}");
+        var allowlist = EnvironmentVariableCensusScanner.ReadAllowlist(File.ReadAllText(path), path);
+        var violations = EnvironmentVariableCensusScanner.FindUnallowlisted(rows, allowlist);
+        Xunit.Assert.True(violations.Count == 0, string.Join(Environment.NewLine, violations));
+
+        const string removedName = "MCG_GIT_LEGACY_LAUNCH";
+        Xunit.Assert.DoesNotContain(rows, row => row[0] == removedName);
+        Xunit.Assert.All(allowlist.Values, names => Xunit.Assert.DoesNotContain(removedName, names));
+        var files = Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories);
+        Xunit.Assert.NotEmpty(files);
+        Xunit.Assert.All(files, file => Xunit.Assert.False(File.ReadAllText(file).Contains(removedName,
+            StringComparison.Ordinal), $"{removedName} remains in {file}"));
+    }
+
     // Parallel-safe: reads the explicit candidate root without modifying files or process state.
     [Xunit.Fact]
     public void RepositorySources_AllNames_HaveCompleteUniqueCensusRows()

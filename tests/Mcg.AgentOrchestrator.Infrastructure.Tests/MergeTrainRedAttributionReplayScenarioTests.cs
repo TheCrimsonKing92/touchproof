@@ -115,9 +115,13 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
     {
         WithTrain(3, shared: false, ownership: true, scenario =>
         {
-            Assert.Equal(scenario.Goals[1].Id, Assert.Single(scenario.Result.Ejections).GoalId);
-            Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Goals[1].Status);
+            var ejection = Assert.Single(scenario.Result.Ejections);
+            Assert.Equal(scenario.Goals[1].Id, ejection.GoalId);
+            Assert.NotEqual(scenario.Goals[2].Id, ejection.GoalId);
+            Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
+            Assert.Equal(0, scenario.BisectionCalls);
             Assert.Equal(GoalStatus.Verified, scenario.Goals[0].Status);
+            Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Goals[1].Status);
             var events = AttributionEvents(scenario.Repo);
             Assert.NotEmpty(events);
             Assert.All(events, record =>
@@ -333,6 +337,13 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
                 Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")])]);
             var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var bisectionCalls = 0;
+            if (ownership)
+                driver.MergeTrainBisectionRunner = (prefix, _, tests, _) =>
+                {
+                    bisectionCalls++;
+                    return MergeTrainPrefixBisectionTests.Execution(tests, prefix.Count > 0, prefix.Count);
+                };
             // Initial admission requires three; two-member rows replay an already reduced composition.
             var selection = count == 2
                 ? new ConductorMergeTrainSelection(ProjectSelection(driver, goals[0], goals[1]).Members)
@@ -342,10 +353,13 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
             foreach (var member in members.Take(2))
                 Assert.Contains(RepositoryTestImpactPlanner.Plan(member.LandingPaths, memberTree).Checks,
                     check => check.TestProject == RepositoryTestProject.Infrastructure && check.TestClassSelections is null);
-            // Ownership names D while reach names E; observing ownership proves precedence.
+            // Reach names the first member even when ownership names the second.
             Assert.Equal(shared ? null : goals[0].Id,
                 MergeTrainReachAttribution.TryAttribute(paths, memberTree, members, out _)?.GoalId);
-            if (!ownership)
+            if (ownership)
+                Assert.Equal(goals[1].Id,
+                    MergeTrainRedAttribution.TryAttribute(paths, memberTree, members, out _)?.GoalId);
+            else
             {
                 Assert.Null(MergeTrainRedAttribution.TryAttribute(paths, memberTree, members, out _));
                 Assert.Null(MergeTrainImpactAttribution.TryAttribute(paths, memberTree, members, out _));
@@ -364,7 +378,7 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
                     AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
             }
             var result = executingDriver.RunMergeTrain(selection, executingGoals, ConductorAutonomyPolicy.Permissive, gateOnly: gateOnly);
-            assert(new Scenario(repo, driver, selection, goals, result, verifier, kernel, childKernel));
+            assert(new Scenario(repo, driver, selection, goals, result, verifier, kernel, childKernel, bisectionCalls));
         }
         finally { DeleteDirectory(repo); }
     }
@@ -467,5 +481,5 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateT
 
     private sealed record Scenario(string Repo, ConductorDriver Driver, ConductorMergeTrainSelection Selection,
         Goal[] Goals, ConductorMergeTrainRunResult Result, SequenceAcceptanceVerifier Verifier,
-        AgentOrchestratorKernel Kernel, AgentOrchestratorKernel? ChildKernel);
+        AgentOrchestratorKernel Kernel, AgentOrchestratorKernel? ChildKernel, int BisectionCalls);
 }
