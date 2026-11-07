@@ -5,23 +5,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalWorktreeEnsureLaunchBudgetTests(ITestOutputHelper output) : GoalWorktreeTestBase
 {
     [Fact]
-    public void Ensure_AbsentBranch_LaunchesAtMostProbeAndWorktreeAdd()
+    public void Ensure_AbsentBranch_LaunchesOnlyWorktreeAdd()
     {
         var repo = CreateSeededRepository();
         try
         {
             var goal = GoalId.New();
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal)));
-            AssertSeededFileProofsUndecided(repo, GoalWorktrees.BranchName(goal));
+            AssertSeededFileProofs(repo, GoalWorktrees.BranchName(goal), absent: true);
             var (path, launches) = EnsureWithLaunches(repo, goal);
-            AssertBudget(launches, existingBranch: false);
+            AssertBudget(launches);
             Assert.Equal(GoalWorktrees.BranchName(goal), RunGitOutput(path, "branch", "--show-current").Trim());
         }
         finally { DeleteDirectory(repo); }
     }
 
     [Fact]
-    public void Ensure_ExistingBranch_LaunchesOneProbeAndWorktreeAdd()
+    public void Ensure_ExistingBranch_LaunchesOnlyCreationProbeAndWorktreeAdd()
     {
         var repo = CreateSeededRepository();
         try
@@ -31,7 +31,7 @@ public sealed class GoalWorktreeEnsureLaunchBudgetTests(ITestOutputHelper output
             RunGit(repo, "branch", branch);
             Assert.True(BranchExists(repo, branch));
             var expectedHead = RunGitOutput(repo, "rev-parse", "refs/heads/" + branch).Trim();
-            AssertSeededFileProofsUndecided(repo, branch);
+            AssertSeededFileProofs(repo, branch, absent: false);
             var (path, launches) = EnsureWithLaunches(repo, goal);
             AssertBudget(launches, existingBranch: true);
             Assert.Equal(branch, RunGitOutput(path, "branch", "--show-current").Trim());
@@ -81,22 +81,27 @@ public sealed class GoalWorktreeEnsureLaunchBudgetTests(ITestOutputHelper output
         finally { DeleteDirectory(repo); }
     }
 
-    private static void AssertSeededFileProofsUndecided(string repo, string branch)
+    private static void AssertSeededFileProofs(string repo, string branch, bool absent)
     {
         Assert.Contains("[user]", File.ReadAllText(Path.Combine(repo, ".git", "config")));
-        Assert.False(GitRevisionReader.TryConfirmWorkTree(repo));
-        Assert.False(GitRevisionReader.TryResolveRootGitDirectory(repo, out _));
-        Assert.False(GitRevisionReader.TryConfirmBranchAbsent(repo, branch));
+        Assert.True(GitRevisionReader.TryConfirmWorkTree(repo));
+        Assert.True(GitRevisionReader.TryResolveRootGitDirectory(repo, out _));
+        Assert.Equal(absent, GitRevisionReader.TryConfirmBranchAbsent(repo, branch));
     }
 
-    private void AssertBudget(HostCapacitySlotGitCensus.GitLaunchDelta launches, bool existingBranch)
+    private void AssertBudget(HostCapacitySlotGitCensus.GitLaunchDelta launches, bool existingBranch = false)
     {
         int Count(string command) => launches.Subcommands.GetValueOrDefault(command);
         var readers = Count("cat-file");
         output.WriteLine($"creation: rev-parse={Count("rev-parse")}, worktree={Count("worktree")}; post-creation cat-file starts={readers}");
-        Assert.InRange(Count("rev-parse"), existingBranch ? 1 : 0, 1);
+        // The combined creation probe still verifies an existing branch through Git.
+        // File evidence proves absence only; post-creation HEAD reads need no process.
+        Assert.Equal(existingBranch ? 1 : 0, Count("rev-parse"));
+        Assert.Equal(existingBranch ? 1 : 0, (launches.Callers ?? new Dictionary<string, int>())
+            .Where(pair => pair.Key.Contains("GoalWorktreeCreationProbe.Resolve", StringComparison.Ordinal) &&
+                pair.Key.EndsWith("|rev-parse", StringComparison.Ordinal)).Sum(pair => pair.Value));
         Assert.Equal(1, Count("worktree"));
-        Assert.InRange(readers, 0, 2);
+        Assert.Equal(0, readers);
         Assert.Equal(0, Count("status"));
         Assert.Equal(0, Count("merge"));
         Assert.Equal(Count("rev-parse") + Count("worktree") + readers, launches.Launches);

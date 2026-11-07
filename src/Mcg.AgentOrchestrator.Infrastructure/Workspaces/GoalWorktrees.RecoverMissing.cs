@@ -161,12 +161,16 @@ public static partial class GoalWorktrees
             throw new InvalidOperationException("existing directory or registration is incomplete, partial or locked");
         if ((File.GetAttributes(Path.Combine(path, ".git")) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidOperationException("redirected worktree Git link");
-        var expectedCommon = GitCli.Run(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
-        var actualCommon = GitCli.Run(path, "rev-parse", "--path-format=absolute", "--git-common-dir");
-        var topLevel = GitCli.Run(path, "rev-parse", "--show-toplevel");
-        RequireRecoveryGit(expectedCommon, "repository common directory");
-        RequireRecoveryGit(actualCommon, "worktree common directory");
-        RequireRecoveryGit(topLevel, "worktree root");
+        GitCli.GitResult QueryPath(string directory, string operation, params string[] arguments) =>
+            GitPathQuery.Run(directory, () =>
+            {
+                var result = GitCli.Run(directory, ["rev-parse", .. arguments]);
+                RequireRecoveryGit(result, operation);
+                return result;
+            }, arguments);
+        var expectedCommon = QueryPath(repo, "repository common directory", "--path-format=absolute", "--git-common-dir");
+        var actualCommon = QueryPath(path, "worktree common directory", "--path-format=absolute", "--git-common-dir");
+        var topLevel = QueryPath(path, "worktree root", "--show-toplevel");
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (!string.Equals(GoalWorktreeLayout.NormalizePath(expectedCommon.Output.Trim()), GoalWorktreeLayout.NormalizePath(actualCommon.Output.Trim()), comparison) ||
             !string.Equals(GoalWorktreeLayout.NormalizePath(topLevel.Output.Trim()), GoalWorktreeLayout.NormalizePath(path), comparison))
