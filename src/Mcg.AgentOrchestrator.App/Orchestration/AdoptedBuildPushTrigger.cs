@@ -12,8 +12,10 @@ internal sealed class AdoptedBuildPushTrigger(
         ConductorAutonomyPolicy policy;
         void Hold(string reason)
         {
-            append($"ADOPTED_BUILD_PUSH_HELD commit={commit} reason={reason}");
-            attention($"Adopted build publication held: {reason}. Next: push-adopted {commit}");
+            AdoptedBuildPublicationReporting.Try(
+                () => append($"ADOPTED_BUILD_PUSH_HELD commit={commit} reason={reason}"), "trigger-held-event");
+            AdoptedBuildPublicationReporting.Try(
+                () => attention($"Adopted build publication held: {reason}. Next: push-adopted {commit}"), "trigger-held-attention");
         }
         try { policy = readPolicy(); }
         catch (Exception) { Hold("policy-unreadable"); return; }

@@ -13,10 +13,83 @@ public sealed class FleetBuildAdoptionSummaryTests
     public void SummaryAppendFails_DoesNotInvokePublicationCallback()
     {
         using var fixture = new Fixture();
+        var callbacks = new List<string>();
+        var attempts = 0;
         using var summary = fixture.CreateSummary(
-            onFinalized: (_, _, _) => Assert.Fail("An unrecorded summary cannot authorize publication."),
-            append: _ => throw new IOException("fixture write failure"));
-        Assert.Throws<IOException>(() => summary.OnHomeAdopted(C));
+            onFinalized: (commit, _, _) => callbacks.Add(commit),
+            append: _ => { attempts++; throw new IOException("fixture write failure"); });
+        Assert.Null(Record.Exception(() => summary.OnHomeAdopted(C)));
+        summary.OnHomeAdopted(C);
+        Assert.Equal(1, attempts);
+        Assert.Empty(callbacks);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TimerReportingFailure_IsContainedAndLaterAdoptionStillFinalizes(bool appendFails)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var events = new List<string>();
+        var callbacks = new List<string>();
+        using var summary = fixture.CreateSummary(pollInterval: TimeSpan.FromSeconds(5),
+            append: line =>
+            {
+                events.Add(line);
+                if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
+            },
+            onFinalized: (commit, _, _) =>
+            {
+                callbacks.Add(commit);
+                if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
+            });
+        summary.OnHomeAdopted(C);
+        var timer = Assert.IsType<ManualTimer>(fixture.Clock.Timer);
+        fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={C}");
+
+        Assert.Null(Record.Exception(timer.Fire));
+        Assert.True(timer.Disposed);
+        timer.Fire(); // Already queued callbacks cannot replay reporting or publication.
+        Assert.Single(events);
+        Assert.Equal(appendFails ? Array.Empty<string>() : new[] { C }, callbacks);
+
+        summary.OnHomeAdopted(D);
+        fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={D}");
+        Assert.Null(Record.Exception(Assert.IsType<ManualTimer>(fixture.Clock.Timer).Fire));
+        Assert.Equal(2, events.Count);
+        Assert.Equal(1, callbacks.Count(commit => commit == D));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SupersededAdoption_ReportingFailureDoesNotSkipNextCompletedCallback(bool appendFails)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var events = new List<string>();
+        var callbacks = new List<string>();
+        using var summary = fixture.CreateSummary(
+            append: line =>
+            {
+                events.Add(line);
+                if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
+            },
+            onFinalized: (commit, _, _) =>
+            {
+                callbacks.Add(commit);
+                if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
+            });
+        summary.OnHomeAdopted(C);
+        File.Delete(fixture.LockPath("a")); // The next observation has no running fleet and finalizes inline.
+
+        Assert.Null(Record.Exception(() => summary.OnHomeAdopted(D)));
+
+        Assert.Equal(2, events.Count);
+        Assert.Equal(appendFails ? new[] { D } : new[] { C, D }, callbacks);
+        summary.OnHomeAdopted(D);
+        Assert.Equal(2, events.Count);
     }
 
     [Theory]

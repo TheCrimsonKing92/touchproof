@@ -69,17 +69,30 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
                 _timer.Change(_pollInterval, _pollInterval);
             }
         }
-        foreach (var item in completed) _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed);
+        NotifyFinalized(completed);
     }
 
     internal void Tick()
+    {
+        // Timer callbacks have no activation caller to catch observation or reporting failures.
+        AdoptedBuildPublicationReporting.Try(TickCore, "fleet-summary-poll");
+    }
+
+    private void TickCore()
     {
         var completed = new List<(string Commit, string Pending, string Failed)>();
         lock (_gate)
         {
             if (!_disposed && _pending is not null) Evaluate(_time.GetUtcNow(), completed);
         }
-        foreach (var item in completed) _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed);
+        NotifyFinalized(completed);
+    }
+
+    private void NotifyFinalized(List<(string Commit, string Pending, string Failed)> completed)
+    {
+        foreach (var item in completed)
+            AdoptedBuildPublicationReporting.Try(
+                () => _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed), "fleet-finalized-callback");
     }
 
     private bool IsRunning(OrchestratorWorkspace workspace)
@@ -109,9 +122,10 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
             .Where((_, index) => states[index] == state).Select(project => project.Name));
         var elapsed = Math.Max(0, Math.Floor((now - observation.StartedAt).TotalSeconds))
             .ToString(CultureInfo.InvariantCulture);
-        _append($"FLEET_BUILD_ADOPTED commit={observation.Commit} adopted={Names(ProjectState.Adopted)} " +
-            $"pending={Names(ProjectState.Pending)} failed={Names(ProjectState.Failed)} elapsedSeconds={elapsed}");
-        completed.Add((observation.Commit, Names(ProjectState.Pending), Names(ProjectState.Failed)));
+        if (AdoptedBuildPublicationReporting.Try(
+            () => _append($"FLEET_BUILD_ADOPTED commit={observation.Commit} adopted={Names(ProjectState.Adopted)} " +
+                $"pending={Names(ProjectState.Pending)} failed={Names(ProjectState.Failed)} elapsedSeconds={elapsed}"), "fleet-summary-event"))
+            completed.Add((observation.Commit, Names(ProjectState.Pending), Names(ProjectState.Failed)));
     }
 
     private static ProjectState[] Observe(Observation observation, DateTimeOffset now) =>

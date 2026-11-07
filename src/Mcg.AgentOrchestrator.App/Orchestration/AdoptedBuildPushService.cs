@@ -32,10 +32,12 @@ internal sealed class AdoptedBuildPushService(
         }
         bool Hold(string reason, IReadOnlyList<AdoptedBuildLeakScanner.Location>? matches = null)
         {
-            append($"ADOPTED_BUILD_PUSH_HELD commit={commit} remote={destinationName} reason={reason}");
+            AdoptedBuildPublicationReporting.Try(
+                () => append($"ADOPTED_BUILD_PUSH_HELD commit={commit} remote={destinationName} reason={reason}"), "held-event");
             var locations = matches is null ? "" : string.Join("\n", matches.Select(hit => $"{hit.File}:{hit.Line}"));
-            attention($"Adopted build publication held. commit={commit} remote={destinationName} reason={reason}\n" +
-                locations + $"\nNext: push-adopted {commit} --remote {destinationName} --branch {branchName}");
+            AdoptedBuildPublicationReporting.Try(
+                () => attention($"Adopted build publication held. commit={commit} remote={destinationName} reason={reason}\n" +
+                    locations + $"\nNext: push-adopted {commit} --remote {destinationName} --branch {branchName}"), "held-attention");
             return false;
         }
 
@@ -92,7 +94,13 @@ internal sealed class AdoptedBuildPushService(
             var observed = Run("ls-remote", "--refs", "--", destination, $"refs/heads/{branch}");
             if (observed.ExitCode != 0 || observed.Output.Trim() != $"{commit}\trefs/heads/{branch}")
                 return Hold(phase);
-            append($"ADOPTED_BUILD_PUSHED commit={commit} remote={remote} added_lines={scan.AddedLines}");
+            // Publication is already verified. A receipt failure must not turn it into a held push.
+            if (!AdoptedBuildPublicationReporting.Try(
+                () => append($"ADOPTED_BUILD_PUSHED commit={commit} remote={remote} added_lines={scan.AddedLines}"), "pushed-event"))
+                AdoptedBuildPublicationReporting.Try(
+                    () => attention($"Adopted build publication verified. commit={commit} remote={destinationName} " +
+                        "reason=pushed-event-write-failed. The push succeeded; its event could not be recorded. " +
+                        $"Next: push-adopted {commit} --remote {destinationName} --branch {branchName}"), "pushed-attention");
             return true;
         }
         catch (RegexMatchTimeoutException) { return Hold("scan-timeout"); }

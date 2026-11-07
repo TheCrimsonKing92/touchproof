@@ -64,4 +64,32 @@ public sealed class AdoptedBuildPushTriggerTests
         Assert.Contains("push-adopted", Assert.Single(attention));
         Assert.DoesNotContain("private diagnostic", attention[0]);
     }
+
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    public void HoldSinkFailures_DoNotEscapeOrSkipOtherSink(bool policyFails, bool eventFails, bool attentionFails)
+    {
+        var events = new List<string>();
+        var attention = new List<string>();
+        var pushes = 0;
+        var trigger = new AdoptedBuildPushTrigger(
+            () => policyFails ? throw new FormatException("private diagnostic") :
+                ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = true },
+            _ => { pushes++; throw new InvalidOperationException("private diagnostic"); },
+            line => { events.Add(line); if (eventFails) throw new IOException("private diagnostic"); },
+            body => { attention.Add(body); if (attentionFails) throw new Microsoft.Data.Sqlite.SqliteException("private diagnostic", 1); });
+
+        var error = Record.Exception(() => trigger.OnFinalized(new string('c', 40), "", ""));
+
+        Assert.Null(error);
+        Assert.Equal(policyFails ? 0 : 1, pushes);
+        Assert.Contains("reason=" + (policyFails ? "policy-unreadable" : "service-failed"), Assert.Single(events));
+        Assert.Contains("push-adopted", Assert.Single(attention));
+        Assert.DoesNotContain("private diagnostic", string.Join("\n", events.Concat(attention)));
+    }
 }

@@ -100,6 +100,55 @@ public sealed class AdoptedBuildPushServiceTests
         Assert.Contains("push-adopted", Assert.Single(f.Attention));
     }
 
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public void HoldSinkFailures_DoNotEscapeOrRepeatReporting(bool gitThrows, bool eventFails, bool attentionFails)
+    {
+        using var f = new AdoptedBuildPushFixture();
+        var adopted = f.Commit(AdoptedBuildLeakScannerTests.Token);
+        var service = new AdoptedBuildPushService(f.Repository, AdoptedBuildLeakScannerTests.GenericPath, f.OwnerPath,
+            line => { f.Events.Add(line); if (eventFails) throw new IOException("private diagnostic"); },
+            body => { f.Attention.Add(body); if (attentionFails) throw new Microsoft.Data.Sqlite.SqliteException("private diagnostic", 1); },
+            (directory, args) => gitThrows ? throw new InvalidOperationException("private diagnostic") : f.Run(directory, args));
+
+        Assert.False(service.Push(adopted));
+
+        AssertHeld(f, gitThrows ? "validation-failed" : "scan-match");
+        if (!gitThrows) Assert.Contains("payload.txt:1", f.Attention[0]);
+        Assert.DoesNotContain(f.Calls, args => args.Contains("push"));
+        Assert.DoesNotContain(AdoptedBuildLeakScannerTests.Token, string.Join("\n", f.Events.Concat(f.Attention)));
+        Assert.DoesNotContain("private diagnostic", string.Join("\n", f.Events.Concat(f.Attention)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifiedPush_EventSinkFails_RemainsSuccessfulWithoutHeldEvent(bool attentionFails)
+    {
+        using var f = new AdoptedBuildPushFixture();
+        var adopted = f.Commit("adopted");
+        var service = new AdoptedBuildPushService(f.Repository, AdoptedBuildLeakScannerTests.GenericPath, f.OwnerPath,
+            line => { f.Events.Add(line); throw new IOException("private diagnostic"); },
+            body => { f.Attention.Add(body); if (attentionFails) throw new Microsoft.Data.Sqlite.SqliteException("private diagnostic", 1); }, f.Run);
+
+        Assert.True(service.Push(adopted));
+
+        Assert.Equal(adopted, f.RemoteTip);
+        Assert.StartsWith("ADOPTED_BUILD_PUSHED", Assert.Single(f.Events));
+        Assert.DoesNotContain(f.Events, line => line.Contains("ADOPTED_BUILD_PUSH_HELD"));
+        Assert.Single(f.Calls.Where(args => args.Contains("push")));
+        var body = Assert.Single(f.Attention);
+        Assert.Contains("publication verified", body);
+        Assert.Contains("reason=pushed-event-write-failed", body);
+        Assert.Contains("push-adopted", body);
+        Assert.DoesNotContain("private diagnostic", body);
+    }
+
     private static void AssertHeld(AdoptedBuildPushFixture f, string reason)
     {
         Assert.Equal(f.Baseline, f.RemoteTip);
