@@ -14,18 +14,20 @@ internal sealed class OwnerConsoleSelectedGoalSummary(
     private bool _disposed;
     internal Task LastLoad { get; private set; } = Task.CompletedTask;
 
-    internal void Select(string? id, bool refresh = false)
+    // True when this selection published synchronously, including a coalesced refresh.
+    internal bool Select(string? id, bool refresh = false)
     {
         lock (_gate)
         {
-            if (_disposed || id == _goalId && !refresh) return;
+            if (_disposed || id == _goalId && !refresh) return false;
             var selectionChanged = id != _goalId;
             _goalId = id; _revision++; _dirty = true;
             if (selectionChanged) _request?.Cancel();
             apply(new(id, null));
-            if (_running) return;
+            if (_running) return true;
             _running = true;
             LastLoad = Task.Run(RunAsync);
+            return true;
         }
     }
 
