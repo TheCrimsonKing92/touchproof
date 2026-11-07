@@ -19,7 +19,7 @@ internal static class ProjectConductorPolicySeeder
     private static readonly HashSet<string> AllowedKeys = new(StringComparer.Ordinal)
     {
         "name", "maxCriterionRetries", "plannerSampleCount", "acceptanceWidth",
-        "cascadeTesterCheapFirst", "autoPromoteRiskThreshold", "transitionMap"
+        "cascadeTesterCheapFirst", "autoPromoteRiskThreshold", "transitionMap", "features"
     };
 
     internal static string TemplatePath(string homeRoot) =>
