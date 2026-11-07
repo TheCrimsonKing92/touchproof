@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each test owns its prompt directory and mutates no environment.
-public sealed class RetryCorrectionObligationPromptGuardTests
+public sealed class RetryCorrectionObligationPromptDeliveryTests
 {
     private const string Candidate = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
