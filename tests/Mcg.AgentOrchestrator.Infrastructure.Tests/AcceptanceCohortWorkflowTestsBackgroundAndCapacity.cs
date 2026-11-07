@@ -503,12 +503,119 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
 
     [Fact]
     public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
+        => AssertLongCohortGateLandsBothGoals();
+
+    [Fact]
+    public async Task ProductionBatch_LongCohortGateLandsBothGoalsAcrossRepeatedRuns()
+    {
+        // xUnit serializes a class's tests. Run its sibling bodies explicitly, with fresh
+        // fixture state, inside this test's host-capacity slot (one sibling at a time).
+        await using var sibling = new AcceptanceCohortWorkflowTestsBackgroundAndCapacity();
+        Action[] siblingFacts =
+        [
+            sibling.ConductLog_FairnessYield_PersistsTypedDecision,
+            sibling.CohortProgressEvents_AreStructuredForBothMembersWithoutUnknownGoal,
+            sibling.BackgroundCohortGate_MainAdvanceDoesNotLaunchDuplicateForSameMembers,
+            sibling.BackgroundCohortGate_OverlappingMembersAreHeldByActualOwner,
+            sibling.BackgroundCohortGate_SamePairCanRegisterWhenIncumbentCompletesAfterSweep,
+            sibling.IndependentWorkspaceDrivers_OverlapWithoutSharingStorageRoots,
+            sibling.ProductionBatch_TwoLiveCohortRootsFillSharedAcceptanceCapacity,
+            sibling.ProductionBatch_OrdinaryParallelAcceptanceStillStartsPromptlyAndReconcilesLater,
+            sibling.CohortStableSlotLease_RefusesToExceedTrustedHostGateCap
+        ];
+        Func<string, Task> siblingTheory =
+            sibling.BackgroundCohortGate_TerminalRunReleasesMembersWhileDisjointRunRemainsActive;
+        string[] theoryRows = ["succeeded", "failed", "cancelled"];
+        var expectedMethods = GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(method => method.GetCustomAttribute<FactAttribute>() is not null)
+            .Select(method => method.Name)
+            .Except([
+                nameof(ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater),
+                nameof(ProductionBatch_LongCohortGateLandsBothGoalsAcrossRepeatedRuns)
+            ]);
+        Assert.Equal(expectedMethods.Order(StringComparer.Ordinal),
+            siblingFacts.Select(test => test.Method.Name).Append(siblingTheory.Method.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(siblingTheory.Method.GetCustomAttributes<InlineDataAttribute>()
+                .Select(row => Assert.IsType<string>(Assert.Single(row.Data))).Order(StringComparer.Ordinal),
+            theoryRows.Order(StringComparer.Ordinal));
+
+        using var stopSiblings = new CancellationTokenSource();
+        using var cohortHeld = new ManualResetEventSlim();
+        var firstSiblingPass = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completedSiblingPasses = 0;
+        var siblingLoad = Task.Run(async () =>
+        {
+            try
+            {
+                Assert.True(cohortHeld.Wait(TimeSpan.FromMinutes(2)),
+                    "The first scenario did not signal its held cohort gate to sibling tests.");
+                do
+                {
+                    foreach (var test in siblingFacts)
+                    {
+                        try { test(); }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException($"Sibling {test.Method.Name} failed under cohort load.", ex);
+                        }
+                    }
+                    foreach (var row in theoryRows)
+                    {
+                        try { await siblingTheory(row); }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException($"Sibling {siblingTheory.Method.Name}({row}) failed under cohort load.", ex);
+                        }
+                    }
+                    completedSiblingPasses++;
+                    firstSiblingPass.TrySetResult();
+                } while (!stopSiblings.IsCancellationRequested);
+            }
+            catch (Exception ex)
+            {
+                firstSiblingPass.TrySetException(ex);
+                throw;
+            }
+        });
+        try
+        {
+            for (var iteration = 1; iteration <= 20; iteration++)
+            {
+                try
+                {
+                    AssertLongCohortGateLandsBothGoals(iteration, iteration == 1 ? ObserveSiblingOverlap : null);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Long-cohort iteration {iteration}/20 failed.", ex);
+                }
+            }
+        }
+        finally
+        {
+            stopSiblings.Cancel();
+            cohortHeld.Set();
+            await siblingLoad;
+        }
+        Assert.True(completedSiblingPasses > 0, "No complete sibling test pass overlapped the cohort scenarios.");
+
+        void ObserveSiblingOverlap()
+        {
+            cohortHeld.Set();
+            Assert.True(firstSiblingPass.Task.Wait(TimeSpan.FromMinutes(2)),
+                "Sibling tests did not complete their first pass while the cohort gate was held.");
+        }
+    }
+
+    private void AssertLongCohortGateLandsBothGoals(int iteration = 1, Action? whileGateHeld = null)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
         var cleanupContext = CreateIsolatedCleanupContext(repo);
+        ConductorDriver? driver = null;
+        DrainedTeardown teardown;
         try
         {
             AddAcceptanceManifest(repo);
@@ -533,7 +640,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
                     Checks: [new AcceptanceCheckResult("shared-production-gate", true, 0, null)],
                     TestResultPaths: [trx]));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var driver = new ConductorDriver(
+            driver = new ConductorDriver(
                 kernel,
                 workspace,
                 verifier,
@@ -636,18 +743,32 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
                 .ToArray();
             Assert.True(inFlightTicks.Length >= 2, "Expected in-flight cohort records from at least two completed ticks.");
 
+            whileGateHeld?.Invoke();
             gateRelease.Set();
-            Assert.True(SpinWait.SpinUntil(ReceiptPersisted, TimeSpan.FromSeconds(10)), "The background cohort receipt was not persisted.");
+            // Saving the receipt precedes workspace disposal and run completion. The
+            // next tick excludes both members until their background root is terminal.
+            var readiness = ObserveLandingReadiness();
+            var landable = SpinWait.SpinUntil(() =>
+            {
+                readiness = ObserveLandingReadiness();
+                return readiness.Landable;
+            }, TimeSpan.FromSeconds(30));
+            Assert.True(landable, $"Iteration {iteration}: cohort did not become landable: {readiness.Detail}");
+            BatchTickSummary? landingTick = null;
             var landedSummary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Permissive,
                 stopPath,
-                maxIterations: 1);
+                maxIterations: 1,
+                onTick: tick => landingTick = tick);
 
             Assert.Equal(0, fairnessStore.ReadOvertakeCount(firstGoal.Id));
             Assert.Equal(0, fairnessStore.ReadOvertakeCount(secondGoal.Id));
-            Assert.Equal(2, landedSummary.Advanced);
+            Assert.True(landedSummary.Advanced == 2,
+                $"Iteration {iteration}: expected 2 landed goals, advanced={landedSummary.Advanced}; " +
+                $"before tick: {readiness.Detail}; after tick: {ObserveLandingReadiness().Detail}; " +
+                $"landing tick: {string.Join(Environment.NewLine, landingTick?.ProgressLines ?? [])}");
             Assert.True(File.Exists(Path.Combine(
                 repo,
                 "src",
@@ -669,22 +790,39 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             Assert.Equal(0, reader.GetInt32(1));
             Assert.Equal(1, reader.GetInt32(2));
 
-            bool ReceiptPersisted()
+            (bool Landable, string Detail) ObserveLandingReadiness()
             {
                 using var receiptConnection = new SqliteConnection(
                     $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
                 receiptConnection.Open();
                 using var receiptCommand = receiptConnection.CreateCommand();
-                receiptCommand.CommandText = "SELECT COUNT(*) FROM cohort_receipts;";
-                return Convert.ToInt32(receiptCommand.ExecuteScalar()) == 1;
+                receiptCommand.CommandText =
+                    "SELECT COUNT(*), MIN(outcome), MIN(valid_for_landing) FROM cohort_receipts;";
+                using var receiptReader = receiptCommand.ExecuteReader();
+                Assert.True(receiptReader.Read());
+                var count = receiptReader.GetInt32(0);
+                var outcome = receiptReader.IsDBNull(1) ? "missing" : receiptReader.GetString(1);
+                var valid = !receiptReader.IsDBNull(2) && receiptReader.GetInt32(2) == 1;
+                var roots = driver.GetActiveAcceptanceCohortCapacity().ActiveRoots;
+                var membersActive = roots.Any(root =>
+                    root.MemberGoalIds.Contains(firstGoal.Id.Value) || root.MemberGoalIds.Contains(secondGoal.Id.Value));
+                var detail = $"receipt_count={count} outcome={outcome} valid_for_landing={valid} " +
+                    $"members_active={membersActive} active_roots=[{string.Join(';', roots.Select(root =>
+                        $"{root.Key}:{string.Join(',', root.MemberGoalIds.Order(StringComparer.Ordinal))}"))}]";
+                return (count == 1 && outcome == nameof(AcceptanceCohortGateOutcome.Passed) && valid && !membersActive, detail);
             }
         }
         finally
         {
             gateRelease.Set();
-            if (File.Exists(trx)) File.Delete(trx);
-            DeleteDirectory(repo);
+            teardown = RemoveAfterObservedDrain(
+                () => driver is null || driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                "long-cohort background run completed before fixture removal",
+                TimeSpan.FromSeconds(30),
+                () => { if (File.Exists(trx)) File.Delete(trx); },
+                () => DeleteDirectory(repo));
         }
+        teardown.AssertDrained();
     }
 
     [Fact]
