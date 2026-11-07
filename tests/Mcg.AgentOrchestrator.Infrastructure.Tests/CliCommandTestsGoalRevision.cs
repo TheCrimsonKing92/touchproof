@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsGoalRevision : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]

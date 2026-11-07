@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsBriefLint : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData("--brief-file", true)]
     [Xunit.InlineData("--text-file", true)]

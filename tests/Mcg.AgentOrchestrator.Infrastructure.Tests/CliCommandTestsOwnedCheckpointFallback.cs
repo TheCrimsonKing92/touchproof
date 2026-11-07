@@ -9,6 +9,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsOwnedCheckpointFallback : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]

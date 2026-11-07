@@ -3,6 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class TerminalGoalTaskDesyncCandidateTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public async Task SqliteSelectionFindsProtectedTerminalGoalsWithoutWorktreeArtifacts()
     {

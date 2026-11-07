@@ -24,4 +24,16 @@ internal static class ProjectFleetStatusReport
     }
 
     private static string Cell(string value) => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+
+    internal static void WriteFile(string path, IReadOnlyList<ProjectFleetStatusRow> rows)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var writer = new StreamWriter(temporary)) Write(writer, rows);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { File.Delete(temporary); }
+    }
 }

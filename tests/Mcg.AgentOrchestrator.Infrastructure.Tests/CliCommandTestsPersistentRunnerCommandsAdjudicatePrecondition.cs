@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsAdjudicatePrecondition : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public async Task Cli_captures_semantic_precondition_and_keeps_version_for_audit()
     {

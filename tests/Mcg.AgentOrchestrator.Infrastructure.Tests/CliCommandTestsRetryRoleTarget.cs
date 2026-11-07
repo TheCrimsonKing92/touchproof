@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsRetryRoleTarget : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public async Task GoalScopedRoleRetryRequeuesDeveloperAndPreservesPlanner()
     {

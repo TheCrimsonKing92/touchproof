@@ -920,7 +920,8 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by"
+            "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by",
+            "--home-build-blocked-commit"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
