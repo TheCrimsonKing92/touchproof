@@ -2361,9 +2361,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.Equal(0, launcher.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
@@ -2448,9 +2450,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.Equal(0, launcher.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
@@ -2527,9 +2531,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.NotEqual(0, launcher.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
 
