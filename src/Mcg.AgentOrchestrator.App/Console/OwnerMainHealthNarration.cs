@@ -18,7 +18,7 @@ internal static class OwnerMainHealthNarration
                 if (Field(item, "result") != "failed") return false;
                 var checks = evidence?.Invoke(item)?.Checks;
                 var check = Words(Field(item, "tests") ?? checks?.FirstOrDefault(), "the full test run on main");
-                var landingNames = GoalList("Main broke after landing ", recentLanding);
+                var landingNames = OwnerLandingNarration.GoalList("Main broke after landing ", recentLanding);
                 narrated = new(landingNames.Text + (recentLanding.Count == 0 ? "recent work" : "") + $": {check}",
                     "A check of main failed after the work landed.", "Further landings wait while the failure is investigated.",
                     "Yes. Review the failure and decide how to repair main.", landingNames.Spans,

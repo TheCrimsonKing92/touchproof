@@ -51,7 +51,7 @@ internal static class OwnerAcceptanceNarration
     {
         var source = ordered[index];
         var passed = Field(source, "outcome") == "passed" || Field(source, "verdict") == "passed";
-        var named = GoalList(joint ? "Joint test run for " : "", joint ? ids.Select(name).ToArray() : [name(source.GoalId)]);
+        var named = OwnerLandingNarration.GoalList(joint ? "Joint test run for " : "", joint ? ids.Select(name).ToArray() : [name(source.GoalId)]);
         var label = named.Text;
         var spans = named.Spans with { OutcomeStart = label.Length + 2, OutcomeLength = (passed ? "passed" : "failed").Length };
         var goalPrefixes = joint && ids.Length > 1 ? ids.Select(Prefix).ToArray() : null;
@@ -107,7 +107,7 @@ internal static class OwnerAcceptanceNarration
                 "merge" => "the changes could not be added to main",
                 "source-size-preflight" => "a source file exceeded its size limit",
                 _ => checks is not null ? "the check " + Words(checks.Replace('_', ' '), "verification") + " failed" :
-                    test is not null ? Words(test, "") + " failed" : FailureReason(source) is { } rejection ? "plan rejected: " + rejection :
+                    test is not null ? Words(test, "") + " failed" : OwnerLifecycleStageNarration.FailureReason(source) is { } rejection ? "plan rejected: " + rejection :
                     "the failure reason has not been recorded"
             };
     }
