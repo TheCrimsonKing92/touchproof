@@ -1,12 +1,126 @@
 using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 // Parallel-safe: each test owns its registry, data root, logs, clock and PID probe.
 public sealed class FleetBuildAdoptionSummaryTests
 {
     private static readonly string C = new('c', 40);
     private static readonly string D = new('d', 40);
+
+    [Fact]
+    public void SummaryAppendFails_DoesNotInvokePublicationCallback()
+    {
+        using var fixture = new Fixture();
+        var callbacks = new List<string>();
+        var attempts = 0;
+        using var summary = fixture.CreateSummary(
+            onFinalized: (commit, _, _) => callbacks.Add(commit),
+            append: _ => { attempts++; throw new IOException("fixture write failure"); });
+        Assert.Null(Record.Exception(() => summary.OnHomeAdopted(C)));
+        summary.OnHomeAdopted(C);
+        Assert.Equal(1, attempts);
+        Assert.Empty(callbacks);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TimerReportingFailure_IsContainedAndLaterAdoptionStillFinalizes(bool appendFails)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var events = new List<string>();
+        var callbacks = new List<string>();
+        using var summary = fixture.CreateSummary(pollInterval: TimeSpan.FromSeconds(5),
+            append: line =>
+            {
+                events.Add(line);
+                if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
+            },
+            onFinalized: (commit, _, _) =>
+            {
+                callbacks.Add(commit);
+                if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
+            });
+        summary.OnHomeAdopted(C);
+        var timer = Assert.IsType<ManualTimer>(fixture.Clock.Timer);
+        fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={C}");
+
+        Assert.Null(Record.Exception(timer.Fire));
+        Assert.True(timer.Disposed);
+        timer.Fire(); // Already queued callbacks cannot replay reporting or publication.
+        Assert.Single(events);
+        Assert.Equal(appendFails ? Array.Empty<string>() : new[] { C }, callbacks);
+
+        summary.OnHomeAdopted(D);
+        fixture.Event("a", $"ACTIVATION_ADOPTED adoptedCommit={D}");
+        Assert.Null(Record.Exception(Assert.IsType<ManualTimer>(fixture.Clock.Timer).Fire));
+        Assert.Equal(2, events.Count);
+        Assert.Equal(1, callbacks.Count(commit => commit == D));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SupersededAdoption_ReportingFailureDoesNotSkipNextCompletedCallback(bool appendFails)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var events = new List<string>();
+        var callbacks = new List<string>();
+        using var summary = fixture.CreateSummary(
+            append: line =>
+            {
+                events.Add(line);
+                if (appendFails && line.Contains(C)) throw new IOException("fixture write failure");
+            },
+            onFinalized: (commit, _, _) =>
+            {
+                callbacks.Add(commit);
+                if (commit == C) throw new Microsoft.Data.Sqlite.SqliteException("fixture attention failure", 1);
+            });
+        summary.OnHomeAdopted(C);
+        File.Delete(fixture.LockPath("a")); // The next observation has no running fleet and finalizes inline.
+
+        Assert.Null(Record.Exception(() => summary.OnHomeAdopted(D)));
+
+        Assert.Equal(2, events.Count);
+        Assert.Equal(appendFails ? new[] { D } : new[] { C, D }, callbacks);
+        summary.OnHomeAdopted(D);
+        Assert.Equal(2, events.Count);
+    }
+
+    [Theory]
+    [InlineData(true, "adopted", 1)]
+    [InlineData(false, "adopted", 0)]
+    [InlineData(true, "pending", 0)]
+    [InlineData(true, "failed", 0)]
+    public void FinalizedCallback_RecordsSummaryBeforeGatedPush(bool enabled, string state, int expected)
+    {
+        using var fixture = new Fixture();
+        fixture.AddProject("a");
+        var pushes = new List<string>();
+        var trigger = new AdoptedBuildPushTrigger(
+            () => ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = enabled },
+            commit =>
+            {
+                Assert.StartsWith("FLEET_BUILD_ADOPTED", Assert.Single(fixture.Lines()));
+                pushes.Add(commit);
+            }, _ => Assert.Fail("No held event expected for gating."), _ => Assert.Fail("No attention expected."));
+        using var summary = fixture.CreateSummary(onFinalized: trigger.OnFinalized);
+        summary.OnHomeAdopted(C);
+        if (state != "pending") fixture.Event("a", state == "adopted"
+            ? $"ACTIVATION_ADOPTED adoptedCommit={C}" : $"ACTIVATION_REVERTED failedCommit={C}");
+        fixture.Clock.Advance(TimeSpan.FromMinutes(15));
+        summary.Tick();
+        summary.Tick();
+        summary.OnHomeAdopted(C);
+        Assert.Single(fixture.Lines());
+        Assert.Equal(expected, pushes.Count);
+        if (expected != 0) Assert.Equal(C, pushes[0]);
+    }
 
     [Xunit.Fact]
     public void AllRunningProjectsAdopted_WritesExactlyOneSummary()
@@ -339,9 +453,11 @@ public sealed class FleetBuildAdoptionSummaryTests
         internal void Event(string name, string detail, DateTimeOffset? at = null) =>
             new ConductEventLogWriter(LogPath(name)).Append("loop-handoff", null, detail, at ?? Clock.Now);
 
-        internal FleetBuildAdoptionSummary CreateSummary(TimeSpan? pollInterval = null) => new(
-            _registry, line => _homeLog.Append("loop-handoff", null, line, Clock.Now), Clock,
-            pidProbe: _probe, homeRoot: HomeRoot, pollInterval: pollInterval ?? Timeout.InfiniteTimeSpan);
+        internal FleetBuildAdoptionSummary CreateSummary(TimeSpan? pollInterval = null,
+            Action<string, string, string>? onFinalized = null, Action<string>? append = null) => new(
+            _registry, append ?? (line => _homeLog.Append("loop-handoff", null, line, Clock.Now)), Clock,
+            pidProbe: _probe, homeRoot: HomeRoot, pollInterval: pollInterval ?? Timeout.InfiniteTimeSpan,
+            onFinalized: onFinalized);
 
         internal string[] Lines() => !File.Exists(HomeLogPath) ? [] : File.ReadAllLines(HomeLogPath).Select(line =>
         {

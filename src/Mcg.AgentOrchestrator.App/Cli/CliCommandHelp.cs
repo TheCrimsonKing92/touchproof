@@ -795,6 +795,11 @@ internal static class CliCommandHelp
         "Report required Windows Defender exclusions; add missing roots only with --apply while elevated.",
         ["--apply", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry PushAdopted = new(
+        CliPushAdoptedCommand.Usage,
+        "Publish one adopted commit after a leak scan, fast-forward only; holds raise operator attention.",
+        ["--remote", "--branch", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
         "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
@@ -804,6 +809,7 @@ internal static class CliCommandHelp
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["project"] = Flags("--root"),
+            ["push-adopted"] = Flags("--remote", "--branch"),
             ["status"] = Flags("--tasks-only"),
             ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
             ["hermes-acp-trial"] = Flags(
@@ -975,6 +981,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
         Console.WriteLine("  conductor         Start, report or stop the conductor.");
         Console.WriteLine("  host-exclusions   Report or explicitly apply host scan exclusions.");
+        Console.WriteLine("  push-adopted      Scan and publish an exact adopted commit, fast-forward only.");
         Console.WriteLine("  help <command>    Show command-specific help.");
     }
 
@@ -1434,6 +1441,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("host-exclusions", StringComparison.OrdinalIgnoreCase))
         {
             entry = HostExclusions;
+            return true;
+        }
+
+        if (args[0].Equals("push-adopted", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = PushAdopted;
             return true;
         }
 
@@ -1914,7 +1927,7 @@ internal static class CliCommandHelp
             ? CliArgumentParser.SplitCommand(value)
             : [value];
 
-    private static bool IsHelpFlag(string arg) =>
+    internal static bool IsHelpFlag(string arg) =>
         arg.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
         arg.Equals("-h", StringComparison.OrdinalIgnoreCase);
 
