@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -34,7 +35,7 @@ internal static class DeveloperCompletionStructuralPreflight
             : $"{SourceSizeRatchet.SourcePath}: source size authority could not be read or parsed.";
         if (ratchet.HasBlockingViolation)
         {
-            return new DeveloperCompletionStructuralFindings(true, ratchet.Message, complete, applicable, unavailable);
+            return new DeveloperCompletionStructuralFindings(true, ratchet.Message, complete, applicable, unavailable, RetryCorrectionCondition.SourceSizeRatchet);
         }
 
         AcceptanceGateEngineSettings settings;
@@ -148,4 +149,11 @@ internal static class DeveloperCompletionStructuralPreflight
 }
 
 internal sealed record DeveloperCompletionStructuralFindings(bool HasViolation, string Message,
-    bool EvaluationComplete = true, bool IsApplicable = true, string? UnavailableDiagnostic = null);
+    bool EvaluationComplete = true, bool IsApplicable = true, string? UnavailableDiagnostic = null,
+    RetryCorrectionCondition? FailedCondition = null)
+{
+    internal RetryCorrectionObligation? CorrectionFor(string? candidateSha) =>
+        FailedCondition == RetryCorrectionCondition.SourceSizeRatchet &&
+        candidateSha is { Length: 40 or 64 } && candidateSha.All(Uri.IsHexDigit)
+            ? RetryCorrectionObligation.ForSourceSizeRatchet(candidateSha) : null;
+}

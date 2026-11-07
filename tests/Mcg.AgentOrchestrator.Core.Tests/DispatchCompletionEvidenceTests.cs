@@ -128,6 +128,66 @@ public sealed class DispatchCompletionEvidenceTests
             task, verification, workerResultPresent: true, hasCommittedChanges: false));
     }
 
+    [Theory]
+    [InlineData("missing", false)]
+    [InlineData("failed", false)]
+    [InlineData("unavailable", false)]
+    [InlineData("passed", true)]
+    [InlineData("mismatch", true)]
+    [InlineData("semantic", true)]
+    [InlineData("legacy", true)]
+    public void BoundCorrection_NoChangeRequiresCurrentPassingReceipt(string scenario, bool accepted)
+    {
+        var task = DeveloperTask();
+        var goalId = GoalId.New();
+        var retryAt = CompletedAt.AddMinutes(-2);
+        task.RecordRetry(retryAt, RetryCause.NewSourceFinding);
+        task.RecordCriterionRetryFeedback(["alpha.cs exceeds the ceiling"]);
+        var obligation = scenario switch
+        {
+            "legacy" => null,
+            "mismatch" => RetryCorrectionObligation.ForSourceSizeRatchet(BaseCommit),
+            "semantic" => new RetryCorrectionObligation(RetryCorrectionObligationKind.Semantic, ResultCommit, null, ""),
+            _ => RetryCorrectionObligation.ForSourceSizeRatchet(ResultCommit)
+        };
+        task.RecordAcceptedRetryFeedback("alpha.cs exceeds the ceiling", retryAt, obligation: obligation);
+        task.RecordDispatch(Dispatch(ResultCommit, ResultCommit) with
+        {
+            GoalId = goalId,
+            PreDispatchIntegrationReceipt = new PreDispatchIntegrationReceipt(
+                goalId, task.Id, retryAt, BaseCommit, new string('b', 40), ResultCommit)
+        });
+        var error = scenario is "passed" or "failed" or "unavailable"
+            ? RetryCorrectionObligationEvidence.Format(task.AcceptedRetryFeedback!.Obligation!, scenario switch
+            {
+                "passed" => RetryCorrectionConditionVerdict.Passed,
+                "failed" => RetryCorrectionConditionVerdict.Failed,
+                _ => RetryCorrectionConditionVerdict.Unavailable
+            }) : string.Empty;
+        var verification = Verification("NO_CHANGE: old finding repaired\n" + WorkerOutput("pass - Passed: 4; Failed: 0"))
+            with { StandardError = error };
+
+        Assert.Equal(accepted, DispatchCompletionEvidence.IsDeveloperVerifiedNoChangeRound(task, verification, true, false));
+        Assert.Equal(accepted, DispatchCompletionEvidence.HasDispatchCompletionEvidence(task, verification, true, false));
+        if (scenario is "missing" or "failed" or "unavailable")
+            Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess,
+                DispatchFailureClassifier.Classify(task, verification, workerResultPresent: true).Kind);
+    }
+
+    [Fact]
+    public void NewestObligationReceipt_FailureOverridesEarlierPass()
+    {
+        var task = DeveloperTask();
+        task.RecordDispatch(Dispatch(ResultCommit, ResultCommit));
+        task.RecordAcceptedRetryFeedback("current", CompletedAt,
+            obligation: RetryCorrectionObligation.ForSourceSizeRatchet(ResultCommit));
+        var obligation = task.AcceptedRetryFeedback!.Obligation!;
+        var pass = RetryCorrectionObligationEvidence.Format(obligation, RetryCorrectionConditionVerdict.Passed);
+        var fail = RetryCorrectionObligationEvidence.Format(obligation, RetryCorrectionConditionVerdict.Failed);
+        Assert.False(RetryCorrectionObligationEvidence.IsSatisfied(task, pass + "\n" + fail));
+        Assert.True(RetryCorrectionObligationEvidence.IsSatisfied(task, fail + "\n" + pass));
+    }
+
     private static TaskSpec DeveloperTask() =>
         new(TaskId.New(), "Verify completion evidence.", AgentRole.Developer);
 

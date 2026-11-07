@@ -8,20 +8,21 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private static readonly TimeSpan DefaultDeveloperCompletionStructuralPreflightBound = BoundedStructuralPreflight.DefaultBound;
-
     private Func<string, DeveloperCompletionStructuralFindings> _runDeveloperCompletionStructuralPreflight =
         path => DeveloperCompletionStructuralPreflight.Evaluate(path);
-    private Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? _retryDeveloperAfterStructuralPreflight;
+    private Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, RetryCorrectionObligation?, TaskSpec>? _retryDeveloperAfterStructuralPreflight;
+    private Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> RetryDeveloperWithAcceptedFeedback =>
+        _retryDeveloperAfterStructuralPreflight is { } retry
+            ? (goalId, taskId, message, kind, cause) => retry(goalId, taskId, message, kind, cause, null) : _retryTask;
     private Func<string, string, string, TestFirstScopeResult> _readTestFirstScope = TestFirstScopeCheck.Read;
     internal void OverrideTestFirstScopeReaderForTests(Func<string, string, string, TestFirstScopeResult> read) =>
         _readTestFirstScope = read ?? throw new ArgumentNullException(nameof(read));
     private TimeSpan _developerCompletionStructuralPreflightBound = DefaultDeveloperCompletionStructuralPreflightBound;
-
     internal void ConfigureDeveloperCompletionStructuralPreflightRetry(AgentOrchestratorKernel kernel, ConductorConflictIntegration? integration = null)
     {
-        _retryDeveloperAfterStructuralPreflight = (goalId, taskId, message, retryRoundKind, cause) =>
+        _retryDeveloperAfterStructuralPreflight = (goalId, taskId, message, retryRoundKind, cause, obligation) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, cause,
-                retryRoundKind: retryRoundKind, authoritativeRetryFeedback: true);
+                retryRoundKind: retryRoundKind, authoritativeRetryFeedback: true, obligation: obligation);
         if (integration is null) return;
         _conflictIntegration = integration;
         _integrateMainBeforeDeveloperDispatch = integration.IntegrateMainBeforeDeveloperDispatch;
@@ -123,18 +124,17 @@ internal sealed partial class ConductorDriver
                 goalPrefix, policy, fromState, out result);
         }
 
-        return RetryDeveloperAfterPreflight(goal, developerTask, note, goalPrefix, policy, out result);
+        return RetryDeveloperAfterPreflight(goal, developerTask, note, goalPrefix, policy, out result, findings.CorrectionFor(candidateSha));
     }
 
     private bool RetryDeveloperAfterPreflight(Goal goal, TaskSpec developerTask, string note,
-        string goalPrefix, ConductorAutonomyPolicy policy, out ConductorAdvanceResult result)
+        string goalPrefix, ConductorAutonomyPolicy policy, out ConductorAdvanceResult result, RetryCorrectionObligation? obligation = null)
     {
-        (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(goal.Id, developerTask.Id, note,
-            RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
+        if (_retryDeveloperAfterStructuralPreflight is { } retry) retry(goal.Id, developerTask.Id, note, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding, obligation);
+        else _retryTask(goal.Id, developerTask.Id, note, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
         var refreshedGoal = GetCurrentGoal(goal);
         var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
         result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
         return true;
     }
-
 }
