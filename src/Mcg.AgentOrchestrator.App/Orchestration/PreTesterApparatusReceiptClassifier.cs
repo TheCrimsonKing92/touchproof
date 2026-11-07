@@ -29,9 +29,12 @@ internal static class PreTesterApparatusReceiptClassifier
         string? candidateSha, IReadOnlyList<FindingEvidenceSelection> selections,
         Func<IReadOnlyList<string>, bool> everyFailureInsideCandidateChanges)
     {
-        var candidate = (evidence?.Arms ?? []).Select(ConductorDriver.CreateFindingEvidenceArmReceipt)
+        var candidateArm = (evidence?.Arms ?? [])
             .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate &&
                                    string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
+        var candidate = candidateArm is null ? null : ConductorDriver.CreateFindingEvidenceArmReceipt(candidateArm);
+        if (completed && IsAssemblyCleanupOnly(candidateArm))
+            return ("unusable", candidate, [], new(AcceptanceFailureClassifications.AssemblyCleanupFailure, []));
         var baseline = (evidence?.Arms ?? []).Select(ConductorDriver.CreateFindingEvidenceArmReceipt)
             .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
         var failingTests = candidate?.FailingTestIdentities ?? [];
@@ -45,6 +48,13 @@ internal static class PreTesterApparatusReceiptClassifier
         var failure = FirstGreenFailure(evidence, completed, candidate, selections);
         var outcome = failure is null ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable";
         return (outcome, candidate, failingTests, outcome == "unusable" ? failure : null);
+    }
+
+    private static bool IsAssemblyCleanupOnly(FocusedEvidenceArmRunResult? candidate)
+    {
+        var failures = candidate?.Checks.Where(check => !check.Passed).ToArray() ?? [];
+        return failures.Length > 0 && failures.All(check =>
+            check.FailureClassification == AcceptanceFailureClassifications.AssemblyCleanupFailure);
     }
 
     private static PreTesterUnusableReason? FirstGreenFailure(FocusedEvidenceRunResult? evidence,
