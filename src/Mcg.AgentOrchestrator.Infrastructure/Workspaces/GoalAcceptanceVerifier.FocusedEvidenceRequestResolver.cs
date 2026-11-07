@@ -121,7 +121,7 @@ internal static partial class FocusedEvidenceRequestResolver
         }
 
         validated = FocusedEvidenceTraitExcludedSelection.Apply(worktreePath, engineSettings, validated, out var dropped);
-
+        validated = FocusedEvidenceTestlessClassSelection.Apply(worktreePath, validated, dropped, out dropped);
         // Historical rule: more than four focused targets collapsed to one whole-project check per
         // project (and 18 Infrastructure lanes). It optimized process/check count and replaced the
         // earlier hard rejection of mappings over four targets; no filter-length or runner failure

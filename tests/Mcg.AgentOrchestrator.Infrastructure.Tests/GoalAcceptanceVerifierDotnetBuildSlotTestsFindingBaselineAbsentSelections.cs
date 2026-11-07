@@ -119,7 +119,7 @@ internal sealed class FindingBaselineProbeFixture : IDisposable
         File.WriteAllText(Path.Combine(project, "Feature.cs"),
             "public static class Feature { public static bool Enabled => false; }");
         File.WriteAllText(Path.Combine(project, "PreExistingProbeTests.cs"), zeroBaselineTests
-            ? "public sealed class PreExistingProbeTests { }"
+            ? "public sealed class PreExistingProbeTests { [Xunit.Fact(Skip = \"Baseline probe deliberately executes no tests\")] public void BaselineNotExecuted() { } }"
             : "public sealed class PreExistingProbeTests { [Xunit.Fact] public void ExistingBehavior() => Xunit.Assert.False(Feature.Enabled); }");
         if (zeroBaselineTests)
         {

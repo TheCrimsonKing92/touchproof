@@ -83,7 +83,11 @@ public static class PreTesterEvidenceIndexLines
             $"result_path={entry.ResultPath ?? "none"}"
         };
         if (entry.NotRun.Count > 0) lines.Add($"evidence_not_run: {string.Join(',', entry.NotRun)}");
-        if (entry.FailingTests.Count > 0) lines.Add($"evidence_failing_tests: {string.Join(',', entry.FailingTests)}");
+        if (entry.FailingTests.Count > 10)
+            lines.Add($"evidence_failing_tests: total={entry.FailingTests.Count}; " +
+                $"first_10={string.Join(',', entry.FailingTests.Take(10))}; result_path={entry.ResultPath ?? "none"}");
+        else if (entry.FailingTests.Count > 0)
+            lines.Add($"evidence_failing_tests: {string.Join(',', entry.FailingTests)}");
         lines.AddRange(rerunLines);
         return lines;
     }
