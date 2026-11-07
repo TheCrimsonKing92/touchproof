@@ -60,7 +60,6 @@ internal sealed partial class ConductorBatchLoop
     internal const int WorkerAdmissionCapacity = 9;
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
-    internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = true;
     internal const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
@@ -418,7 +417,7 @@ internal sealed partial class ConductorBatchLoop
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
-            $"acceptanceWidth={policy.AcceptanceWidth}" +
+            $"acceptanceWidth={policy.AcceptanceWidth} {policy.Features.ToLogFields()}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)

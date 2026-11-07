@@ -9,9 +9,14 @@ public sealed class ConductorBatchLoopTestsSelfRelaunchDefaultEnablement : Condu
 
     [Xunit.Theory]
     [Xunit.InlineData(null, true)]
+    [Xunit.InlineData("true", true)]
     [Xunit.InlineData("false", false)]
     public void UnsetSettingSchedulesConductorLanding(string? setting, bool expected)
     {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ConductorAutonomyPolicy.Conservative.ToJson())!.AsObject();
+        Assert.True(json.Remove("features"));
+        if (setting is not null) json["features"] = System.Text.Json.Nodes.JsonNode.Parse($"{{\"selfRelaunch\":{setting}}}");
+        var policy = ConductorAutonomyPolicy.ParseJson(json.ToJsonString());
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
         var landed = false;
@@ -36,18 +41,11 @@ public sealed class ConductorBatchLoopTestsSelfRelaunchDefaultEnablement : Condu
                     relaunchCalls++;
                     return new ConductorSelfRelaunchResult(false, "build", "test stop");
                 },
-                selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(setting)).Run(
-                    kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 3));
+                selfRelaunchEnabled: policy.Features.SelfRelaunch).Run(
+                    kernel, driver, policy, NoStopPath(), maxIterations: 3));
 
         Assert.Equal(expected, relaunchCalls > 0);
         Assert.Equal(expected, output.Contains("LOOP_RELAUNCH_SCHEDULED", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact]
-    public void MalformedSettingWarnsAndKeepsDefaultEnabled()
-    {
-        var warnings = new List<string>();
-        Assert.True(ConductorBatchLoop.ResolveSelfRelaunchEnabled("garbage", warnings.Add));
-        Assert.Contains("SELF_RELAUNCH_SETTING_MALFORMED", Assert.Single(warnings), StringComparison.Ordinal);
-    }
 }

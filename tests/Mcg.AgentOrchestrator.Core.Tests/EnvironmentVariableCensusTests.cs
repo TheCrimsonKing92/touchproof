@@ -136,6 +136,34 @@ public sealed class EnvironmentVariableCensusTests
 
     // Parallel-safe: reads the explicit candidate root without modifying files or process state.
     [Xunit.Fact]
+    public void RepositoryCensus_MovedFeatures_AreAbsentFromSourcesCensusAndAllowlist()
+    {
+        var root = VerifiedRepositoryRoot.Find();
+        var table = File.ReadAllText(Path.Combine(root, "docs", "environment-variables.md"));
+        var allowlist = File.ReadAllText(Path.Combine(root, "config", "environment-variable-allowlist.json"));
+        var files = Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories);
+        Xunit.Assert.NotEmpty(files);
+        string[] removed =
+        [
+            "MCG_ORCHESTRATOR_STEWARD_ENABLED", "MCG_ORCHESTRATOR_AUTHOR_ENABLED",
+            "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED", "MCG_MERGE_TRAIN_DISABLED",
+            "MCG_ARCHIVED_SNAPSHOT_COMPRESSION"
+        ];
+        foreach (var name in removed)
+        {
+            Xunit.Assert.DoesNotContain(name, table, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(name, allowlist, StringComparison.Ordinal);
+        }
+        foreach (var file in files)
+        {
+            var source = File.ReadAllText(file);
+            foreach (var name in removed)
+                Xunit.Assert.False(source.Contains(name, StringComparison.Ordinal), $"{name} remains in {file}");
+        }
+    }
+
+    // Parallel-safe: reads the explicit candidate root without modifying files or process state.
+    [Xunit.Fact]
     public void RepositorySources_AllNames_HaveCompleteUniqueCensusRows()
     {
         var root = VerifiedRepositoryRoot.Find();

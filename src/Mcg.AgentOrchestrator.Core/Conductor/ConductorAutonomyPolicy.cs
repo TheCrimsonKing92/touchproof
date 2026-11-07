@@ -64,6 +64,8 @@ public sealed record ConductorAutonomyPolicy(
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
 
+    public ConductorFeatureSwitches Features { get; init; } = ConductorFeatureSwitches.Default;
+
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
 
@@ -228,6 +230,7 @@ public sealed record ConductorAutonomyPolicy(
         var sb = new StringBuilder();
         sb.AppendLine("{");
         sb.AppendLine($"  \"name\": {JsonStr(Name)},");
+        sb.AppendLine($"  \"features\": {JsonSerializer.Serialize(Features, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })},");
         sb.AppendLine($"  \"maxConcurrentPaidWorkers\": {MaxConcurrentPaidWorkers},");
         sb.AppendLine($"  \"maxCriterionRetries\": {MaxCriterionRetries},");
         sb.AppendLine($"  \"maxEmptyOutputDispatchRetries\": {MaxEmptyOutputDispatchRetries},");
@@ -511,7 +514,10 @@ public sealed record ConductorAutonomyPolicy(
                 buildGcConserveMemoryLevel,
                 buildGcHeapCount,
                 buildRootRetentionDays,
-                routingHoldSeconds);
+                routingHoldSeconds)
+            {
+                Features = ParseFeatures(root, src)
+            };
 
             var errors = policy.Validate();
             if (errors.Count > 0)
@@ -521,6 +527,31 @@ public sealed record ConductorAutonomyPolicy(
 
             return policy;
         }
+    }
+
+    private static ConductorFeatureSwitches ParseFeatures(JsonElement root, string src)
+    {
+        if (!root.TryGetProperty("features", out var section))
+            return ConductorFeatureSwitches.Default;
+        if (section.ValueKind != JsonValueKind.Object)
+            throw new FormatException(
+                $"conductor-policy.json{src}: features must be an object (got {section.ValueKind}).");
+
+        bool Read(string key, bool fallback)
+        {
+            if (!section.TryGetProperty(key, out var value))
+                return fallback;
+            if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new FormatException(
+                    $"conductor-policy.json{src}: features.{key} must be true or false (got {value.ValueKind}).");
+            return value.GetBoolean();
+        }
+
+        var defaults = ConductorFeatureSwitches.Default;
+        // Like the root policy, read known keys and ignore unknown properties.
+        return new(Read("steward", defaults.Steward), Read("author", defaults.Author),
+            Read("selfRelaunch", defaults.SelfRelaunch), Read("mergeTrains", defaults.MergeTrains),
+            Read("archivedSnapshotCompression", defaults.ArchivedSnapshotCompression));
     }
 
     // Loads from .orchestrator/conductor-policy.json under rootDirectory.
