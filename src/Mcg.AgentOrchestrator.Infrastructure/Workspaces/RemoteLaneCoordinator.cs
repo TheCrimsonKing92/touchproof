@@ -84,13 +84,18 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         if (!_configuration.Lanes.Contains(check.Name, StringComparer.Ordinal) ||
             !GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _)) return false;
-        if (RemoteLaneResourceEligibility.ExclusionReason(check.ExclusiveResourceKeys,
-                check.RequiresBuildSystemChange, RemoteEligibleResourceKeys) is null) return true;
+        if (IsCandidate(check)) return true;
         bool first;
         lock (_gate) first = _excluded.Add(check.Name);
         if (first) Record(CreateRequest(check, ""), RemoteLaneOutcomeCode.NotEligibleExclusiveResource);
         return false;
     }
+
+    internal bool IsCandidate(Check check) =>
+        _configuration.Lanes.Contains(check.Name, StringComparer.Ordinal) &&
+        GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _) &&
+        RemoteLaneResourceEligibility.ExclusionReason(check.ExclusiveResourceKeys,
+            check.RequiresBuildSystemChange, RemoteEligibleResourceKeys) is null;
 
     internal RemoteLaneExecutorEntry? TryClaimIdleExecutor() => TryClaimIdleExecutor(out _);
 

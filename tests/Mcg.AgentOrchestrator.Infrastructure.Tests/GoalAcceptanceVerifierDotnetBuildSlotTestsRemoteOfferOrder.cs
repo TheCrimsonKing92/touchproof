@@ -98,7 +98,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
 
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
         Assert.StartsWith($"REMOTE_LANE_POLICY lane=\"{remainder.FullName}\" ", scenario.PolicyLines.Last());
-        Assert.Contains("decision=offer reason=fits L=62 Ln=1", scenario.PolicyLines.Last());
+        Assert.Contains("decision=keep-local reason=capacity L=62 Ln=1", scenario.PolicyLines.Last());
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
         AssertPolicyOrder(scenario, expected.Select(lane => lane.FullName).ToArray());
         var lines = scenario.PolicyLines.ToArray();
         for (var index = 0; index < expected.Length; index++)
-            Assert.Contains($"decision=offer reason=fits L={expected[index].Estimate} Ln=0 ", lines[index]);
+            Assert.Contains($"decision={(index < 2 ? "offer reason=fits" : "keep-local reason=capacity")} L={expected[index].Estimate} Ln=0 ", lines[index]);
     }
 
     private Scenario CreateScenario(bool includeKeepLocalLane = false)
@@ -130,7 +130,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = scenario.ConfigurationPath;
         TestOverrides.RemoteLaneOfferHistoryPathForTests = scenario.OfferHistoryPath;
         foreach (var lane in scenario.Lanes)
-            RemoteLaneOfferSeeding.SeedRemote(scenario.OfferHistoryPath, lane.FullName, lane.Filter, 100);
+            RemoteLaneOfferSeeding.SeedRemote(scenario.OfferHistoryPath, lane.FullName, lane.Filter, 50);
         TestOverrides.RemoteLaneTimeProviderForTests = scenario.Clock;
         TestOverrides.RemoteLanePollInterval = TimeSpan.FromMilliseconds(1);
         TestOverrides.OnRemoteLaneProgressLineForTests = line =>

@@ -105,9 +105,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteEarlyOffer :
         {
             Assert.Empty(scenario.Fake.Requests);
             Assert.Equal([0, 1, 2], scenario.LocalStarts.Order());
-            Assert.Equal(3, scenario.Health().Count);
-            foreach (var index in Enumerable.Range(0, 3))
-                Assert.Equal(RemoteLaneOutcomeCode.OfferSkippedNoExecutor, Assert.Single(scenario.Health(), row => row.Lane == Lane(index)).Outcome);
+            Assert.Equal(RemoteLaneOutcomeCode.OfferSkippedNoExecutor, Assert.Single(scenario.Health()).Outcome);
+            Assert.Equal(Lane(0), Assert.Single(scenario.Health()).Lane);
+            foreach (var index in new[] { 1, 2 })
+                Assert.Contains(scenario.PolicyLines(), line => line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(index)}\" ") &&
+                    line.Contains("decision=keep-local reason=capacity"));
         }
         else
         {

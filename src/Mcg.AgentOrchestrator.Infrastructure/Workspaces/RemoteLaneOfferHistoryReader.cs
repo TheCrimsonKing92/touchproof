@@ -21,7 +21,22 @@ internal static class RemoteLaneOfferHistoryReader
                 {
                     using var document = JsonDocument.Parse(line);
                     var root = document.RootElement;
-                    if (root.GetProperty("outcome").GetString() != "accepted") continue;
+                    var outcome = root.GetProperty("outcome").GetString();
+                    if (outcome is null or "not-eligible-exclusive-resource" or "late-after-fallback" or
+                        "executor-busy" or "preempted-by-gate" or "executor-tools-mismatch") continue;
+                    var executor = root.TryGetProperty("executor_id", out var id) ? id.GetString() ?? "" : "";
+                    var observed = root.TryGetProperty("observed_at", out var at) && at.TryGetDateTimeOffset(out var endAt)
+                        ? endAt : DateTimeOffset.MinValue;
+                    DateTimeOffset? started = null;
+                    if (root.TryGetProperty("attempt", out var details) && details.ValueKind == JsonValueKind.Object &&
+                        details.TryGetProperty("steps", out var intervalSteps) && intervalSteps.ValueKind == JsonValueKind.Array)
+                        foreach (var step in intervalSteps.EnumerateArray())
+                            if (step.TryGetProperty("started_at", out var start) && start.TryGetDateTimeOffset(out var startAt) &&
+                                (started is null || startAt < started)) started = startAt;
+                    // Every real attempt occupies an executor, even without a usable duration or binding.
+                    var rowIndex = rows.Count;
+                    rows.Add(new(observed, executor, "", "", outcome, null, null, started));
+                    if (outcome != "accepted") continue;
                     var lane = root.GetProperty("lane").GetString();
                     var filter = root.GetProperty("expected").GetProperty("filter").GetString();
                     if (string.IsNullOrWhiteSpace(lane) || string.IsNullOrWhiteSpace(filter)) continue;
@@ -40,14 +55,35 @@ internal static class RemoteLaneOfferHistoryReader
                     if (seconds is not { } total || !double.IsFinite(total) || total <= 0) continue;
                     var key = JsonSerializer.Serialize(new[] { lane, filter });
                     keys[key] = (lane, filter);
-                    // One aggregate executor combines all hosts; no interval is needed for the report median.
-                    rows.Add(new(DateTimeOffset.MinValue, "offer-history", "", key, "accepted", null, total));
+                    rows[rowIndex] = new(observed, executor, "", key, "accepted", null, total, started);
                 }
                 catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return RemoteExecutorReport.Build([], rows, []).Executors.SelectMany(executor => executor.Lanes)
-            .ToDictionary(lane => keys[lane.Lane]);
+        var timed = rows.Where(HasInterval).ToArray();
+        return rows.Where(row => row.Outcome == "accepted" && row.RemoteSeconds.HasValue).GroupBy(row => row.Lane)
+            .ToDictionary(group => keys[group.Key], group =>
+            {
+                var samples = group.ToArray();
+                bool Concurrent(RemoteExecutorOutcomeRow row) => timed.Any(other => !ReferenceEquals(row, other) &&
+                    other.ExecutorId == row.ExecutorId && other.StartedAt < row.ObservedAt && row.StartedAt < other.ObservedAt);
+                // Preserve the aggregate reader's first-sample LastSeconds while adding interval subsets.
+                return new RemoteExecutorLaneSeconds(group.Key, samples.Length,
+                    Median(samples.Select(row => row.RemoteSeconds!.Value), 1)!.Value, samples[0].RemoteSeconds!.Value,
+                    Median(samples.Where(row => HasInterval(row) && !Concurrent(row)).Select(row => row.RemoteSeconds!.Value)),
+                    Median(samples.Where(row => HasInterval(row) && Concurrent(row)).Select(row => row.RemoteSeconds!.Value)));
+            });
+    }
+
+    private static bool HasInterval(RemoteExecutorOutcomeRow row) =>
+        !string.IsNullOrWhiteSpace(row.ExecutorId) && row.StartedAt is { } start && start < row.ObservedAt;
+
+    private static double? Median(IEnumerable<double> values, int minimum = RemoteLaneOfferPolicy.MinimumSamples)
+    {
+        var sorted = values.Order().ToArray();
+        if (sorted.Length < minimum) return null;
+        var middle = sorted.Length / 2;
+        return sorted.Length % 2 == 1 ? sorted[middle] : sorted[middle - 1] + (sorted[middle] - sorted[middle - 1]) / 2;
     }
 }
