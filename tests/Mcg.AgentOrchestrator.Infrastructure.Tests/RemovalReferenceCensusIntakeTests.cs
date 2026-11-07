@@ -38,7 +38,8 @@ public sealed class RemovalReferenceCensusIntakeTests : CliCommandTestBase
         Assert.True(changed);
         var restored = await repository.LoadAsync();
         var goal = Assert.Single(restored.Goals);
-        Assert.Equal(brief, goal.Objective);
+        // Goal normalizes surrounding whitespace when storing the authoritative brief.
+        Assert.Equal(brief.Trim(), goal.Objective);
         var stored = goal.Timeline.Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.StartsWith(RemovalReferenceCensusBriefSection.StoredPrefix, StringComparison.Ordinal)).ToArray();
         const string expected = """
