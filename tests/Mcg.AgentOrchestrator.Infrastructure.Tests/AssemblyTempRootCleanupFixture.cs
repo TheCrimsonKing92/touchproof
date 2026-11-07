@@ -1,4 +1,5 @@
 using System.Data;
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,9 +12,11 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     private readonly TextWriter? diagnostics;
     private readonly Func<ProcessCommandLineSnapshot> processSnapshot;
     private readonly Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader;
+    private readonly IDisposable? sharedReaders;
 
     public AssemblyTempRootCleanupFixture()
-        : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null)
+        : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null,
+            sharedReaders: ResolveSharedGitReaders())
     {
     }
 
@@ -21,12 +24,31 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
         Func<TempRootDeleteOutcome?> releaseOwnedRoot,
         TextWriter? diagnostics,
         Func<ProcessCommandLineSnapshot>? processSnapshot = null,
-        Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader = null)
+        Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader = null,
+        IDisposable? sharedReaders = null)
     {
         this.releaseOwnedRoot = releaseOwnedRoot;
         this.diagnostics = diagnostics;
         this.processSnapshot = processSnapshot ?? ProcessCommandLines.Snapshot;
         this.currentDirectoryReader = currentDirectoryReader;
+        this.sharedReaders = sharedReaders;
+    }
+
+    // This fixture is also linked into Execution.Tests, which has no Infrastructure reference.
+    internal static IDisposable? ResolveSharedGitReaders()
+    {
+        try
+        {
+            return Type.GetType(
+                    "Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Infrastructure",
+                    throwOnError: false)
+                ?.GetProperty("Shared", BindingFlags.Static | BindingFlags.NonPublic)
+                ?.GetValue(null) as IDisposable;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or FileLoadException or BadImageFormatException)
+        {
+            return null;
+        }
     }
 
     public ValueTask DisposeAsync()
@@ -35,6 +57,22 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
         {
             (diagnostics ?? Console.Error).WriteLine(
                 LaunchLockTelemetry.FormatSummary(LaunchLockTelemetry.Process.Snapshot(), Environment.ProcessId));
+            try
+            {
+                sharedReaders?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    (diagnostics ?? Console.Error).WriteLine(
+                        $"assembly-temp-cleanup-reader-dispose-failed exception={ex.GetType().Name}");
+                }
+                catch
+                {
+                    // Preserve the root-release outcome even if diagnostics fail.
+                }
+            }
             var outcome = releaseOwnedRoot();
             if (outcome?.Status == TempRootDeleteStatus.Failed)
             {
