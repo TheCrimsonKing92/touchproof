@@ -165,11 +165,11 @@ private static void PrintScopeCollisionAdvisory(
         heading);
 }
 
-private static void PrintBriefLintAdvisory(string briefText)
+private static void PrintBriefLintAdvisory(string briefText, string repositoryRoot)
 {
     try
     {
-        BriefLintTextView.PrintBriefLintFindings(BriefLint.Lint(briefText));
+        BriefLintTextView.PrintBriefLintFindings(BriefLint.Lint(briefText, repositoryRoot));
     }
     catch (Exception)
     {
@@ -298,7 +298,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 RejectPipelineForSimpleGoal(goalPipelineRequest);
                 var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple | goal --text-file <path> --simple");
-                PrintBriefLintAdvisory(simpleAliasObjective);
+                PrintBriefLintAdvisory(simpleAliasObjective, context.Workspace.ExecutionDirectory);
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
                 AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file", "--text-file");
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
@@ -327,7 +327,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
                 GoalObjectivePlanTextView.PrintGoalObjectivePlan(runObjectivePlan);
                 PrintScopeCollisionAdvisory(context, runObjective);
-                PrintBriefLintAdvisory(runObjective);
+                PrintBriefLintAdvisory(runObjective, context.Workspace.ExecutionDirectory);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, runSourceBacklogLink?.Item.Id);
@@ -355,14 +355,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 GoalCreationSummaryView.PrintBlocked(goalObjectivePlan);
                 PrintScopeCollisionAdvisory(context, goalObjective);
-                PrintBriefLintAdvisory(goalObjective);
+                PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             }
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
             if (!summary) GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
             PrintScopeCollisionAdvisory(context, goalObjective);
-            PrintBriefLintAdvisory(goalObjective);
+            PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
@@ -559,7 +559,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             if (GetFlagValue(parts, "--brief-file") is not null || GetFlagValue(parts, "--text-file") is not null)
-                PrintBriefLintAdvisory(newBrief);
+                PrintBriefLintAdvisory(newBrief, context.Workspace.ExecutionDirectory);
 
             var resetRefinement = SpecRefinementFailureResetEvaluation.Evaluate(context.Workspace, goal);
             var result = context.Kernel.ReviseGoalBrief(
