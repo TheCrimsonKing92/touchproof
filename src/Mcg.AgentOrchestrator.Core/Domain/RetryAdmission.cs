@@ -5,7 +5,7 @@ using System.Text;
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record AcceptedRetryFeedback(string Message, DateTimeOffset AcceptedAt,
-    CriteriaCorrectionSource Source = CriteriaCorrectionSource.Operator);
+    CriteriaCorrectionSource Source = CriteriaCorrectionSource.Operator, RetryCorrectionObligation? Obligation = null);
 
 public enum RetryCause
 {

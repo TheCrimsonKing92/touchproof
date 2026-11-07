@@ -1002,7 +1002,7 @@ public static class DispatchFailureClassifier
                 authoredFailure,
                 verification,
                 workerResultPresent,
-                hasCommittedChanges);
+                hasCommittedChanges) && RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError);
 
             return BuildOutcome(
                 verifiedNoChange ? TaskOutcomeRules.VerifiedNoChangeRound : authoredFailure.Rule,
