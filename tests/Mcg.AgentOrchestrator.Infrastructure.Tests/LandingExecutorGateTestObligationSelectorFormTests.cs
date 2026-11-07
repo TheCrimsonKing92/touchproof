@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Evidence = ProspectiveEvidenceTrxRowsSelectorFormTests.Evidence;
 
-// Real Git integration: uses the same isolated fixture and collection as other landing tests.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorGateTestObligationSelectorFormTests
+// Parallel safe: real Git repositories are private; the class fixture retains build-root isolation.
+public sealed class LandingExecutorGateTestObligationSelectorFormTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Execute_NestedAndBareSelectors_AdvancesMain() => VerifyLanding(missingNested: false);

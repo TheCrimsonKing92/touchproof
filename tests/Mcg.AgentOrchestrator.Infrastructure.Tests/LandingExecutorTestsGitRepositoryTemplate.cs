@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
+[Xunit.Collection(LandingGitAuthorDateEnvironmentCollection.CollectionName)]
 public sealed class LandingExecutorTestsGitRepositoryTemplate
 {
     [Xunit.Fact]

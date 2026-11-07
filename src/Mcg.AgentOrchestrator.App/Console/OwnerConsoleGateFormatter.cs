@@ -17,6 +17,13 @@ internal static class OwnerConsoleGateFormatter
         if (gate.ConcurrentRuns is { Count: > 1 } runs)
             return compact ? $"gate: {runs.Count} live {StatusRun(runs[0], true)}" + (runs.Any(run => run.Failing) && !runs[0].Failing ? " FAILING" : "") :
                 $"gate: {runs.Count} live: " + string.Join("; ", runs.Select(run => StatusRun(run, false)));
+        if (!gate.Live && gate.FinishedAt is { } finished)
+        {
+            var outcome = gate.Participation ?? gate.FinalOutcome ?? "finished";
+            if (gate.FinalOutcome is { } final && final != outcome && final != "ejected") outcome += " (" + final + ")";
+            var age = gate.FinishedAge is { } elapsed ? $"{(int)elapsed.TotalMinutes}m ago" : finished.ToString("O");
+            return "gate: " + outcome + (gate.FinalOutcome == "ejected" ? ", ejected " : ", finished ") + age;
+        }
         if (!gate.Live) return gate.Participation is { } participation ? "gate: " + participation :
             "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
         return "gate: " + StatusRun(gate, compact);

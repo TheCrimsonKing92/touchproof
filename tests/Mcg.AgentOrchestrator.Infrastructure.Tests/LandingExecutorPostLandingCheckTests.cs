@@ -2,8 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorPostLandingCheckTests
+public sealed class LandingExecutorPostLandingCheckTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Execute_PostLandingCheckLandsAndRemainsAnswerable()

@@ -4,8 +4,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLandingDenylist;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Watched = "src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs";
     private const string Ordinary = "src/Ordinary.cs";

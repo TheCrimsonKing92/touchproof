@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Fixture-owned git repositories and a fake forge; the landing collection isolates static hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class DeliveredForReviewTextOwnerTests
+// Fixture-owned git repositories, a fake forge, and an isolated build-root class fixture.
+public sealed class DeliveredForReviewTextOwnerTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(null, "delivered for review: https://github.com/octo/sample/pull/7")]

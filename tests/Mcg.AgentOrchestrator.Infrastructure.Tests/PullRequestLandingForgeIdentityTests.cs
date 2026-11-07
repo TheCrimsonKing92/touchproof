@@ -2,9 +2,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Real, fixture-owned git repositories; uses the existing landing lane. Forge calls are fakes.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestLandingForgeIdentityTests
+// Parallel safe: real git repositories are fixture-owned; forge calls are fakes.
+public sealed class PullRequestLandingForgeIdentityTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Deliver_ConfiguredIdentity_PersistsActorInRecordHoldAndTimeline()

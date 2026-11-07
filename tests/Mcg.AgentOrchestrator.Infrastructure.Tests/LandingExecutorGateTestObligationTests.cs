@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Real Git integration: uses the same isolated fixture and collection as other landing tests.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorGateTestObligationTests
+// Parallel safe: real Git repositories are private; the class fixture retains build-root isolation.
+public sealed class LandingExecutorGateTestObligationTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void MissingSelector_HoldsAtRungTwoBeforeMutation()

@@ -6,10 +6,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 using static LandingExecutorTests;
 
-// Private repositories and bare origin; serialized for LandingExecutor's shared GitRunner seam.
-[Collection(TestCollections.LandingGitRunner)]
+// Parallel safe: repositories and bare origin are private; GitRunner overrides are flow-local.
 public sealed class PullRequestTrunkDriftTests(WorktreeSetupTemplate setupTemplate)
-    : GoalWorktreeTestBase, IClassFixture<WorktreeSetupTemplate>
+    : GoalWorktreeTestBase, IClassFixture<WorktreeSetupTemplate>, IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Drift_releases_delivery_hold_and_projects_new_trunk_for_admission()

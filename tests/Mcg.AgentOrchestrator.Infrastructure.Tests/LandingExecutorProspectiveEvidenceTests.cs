@@ -2,8 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorProspectiveEvidenceTests
+public sealed class LandingExecutorProspectiveEvidenceTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void WaitIntroducedAtFinalCallbackPreventsIndividualRefPublication()

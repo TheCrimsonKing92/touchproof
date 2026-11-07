@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLandingDenylist;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class AcceptanceCohortWorkflowTestsDenylistIncidentScenario : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsDenylistIncidentScenario : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void MergeTrain_PolicyIncident_HoldsThenLandsExactTrainAfterOwnerApproval()

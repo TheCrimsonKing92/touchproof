@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Real Git integration: uses isolated repositories and the existing landing Git collection.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorGateTestObligationAnsweredRebindTests
+// Parallel safe: real Git repositories are private; the class fixture retains build-root isolation.
+public sealed class LandingExecutorGateTestObligationAnsweredRebindTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(true, "NewNameTests.Check", "Passed", "", true)]

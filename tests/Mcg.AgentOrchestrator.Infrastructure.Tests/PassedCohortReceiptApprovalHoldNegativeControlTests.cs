@@ -5,9 +5,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 
-// Each scenario owns its repository and databases; the collection isolates landing git hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PassedCohortReceiptApprovalHoldNegativeControlTests : AcceptanceCohortWorkflowTests
+// Parallel safe: each scenario owns its repository and databases; landing git hooks are flow-local.
+public sealed class PassedCohortReceiptApprovalHoldNegativeControlTests : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     [Trait("Category", "CrossTick")]

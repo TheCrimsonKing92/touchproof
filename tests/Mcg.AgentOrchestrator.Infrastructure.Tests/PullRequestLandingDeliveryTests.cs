@@ -5,8 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestLandingDeliveryTests
+public sealed class PullRequestLandingDeliveryTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Cli_land_requests_save_and_reloaded_delivery_suppresses_forge_calls()

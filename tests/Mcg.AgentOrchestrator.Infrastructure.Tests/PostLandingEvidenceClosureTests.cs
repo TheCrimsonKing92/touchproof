@@ -5,8 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Uses only the isolated landing fixture and its SQLite intent/state stores.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PostLandingEvidenceClosureTests
+public sealed class PostLandingEvidenceClosureTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(false, false)]

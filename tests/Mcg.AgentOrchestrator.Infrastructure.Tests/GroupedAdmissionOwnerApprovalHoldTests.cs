@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 
-// Each scenario owns its repository and stores; isolate the shared landing git hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class GroupedAdmissionOwnerApprovalHoldTests
+// Parallel safe: each scenario owns its repository and stores; landing git hooks are flow-local.
+public sealed class GroupedAdmissionOwnerApprovalHoldTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Projection_PendingApproval_ExcludesUntilMatchingApprovalRecorded()

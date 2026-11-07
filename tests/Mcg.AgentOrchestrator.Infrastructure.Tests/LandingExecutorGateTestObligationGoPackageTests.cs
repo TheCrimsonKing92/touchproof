@@ -1,9 +1,8 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Landing fixtures share the existing global git-runner isolation and owned temporary roots.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorGateTestObligationGoPackageTests
+// Parallel safe: landing git overrides are flow-local; temporary roots are fixture-owned.
+public sealed class LandingExecutorGateTestObligationGoPackageTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData("Passed")]

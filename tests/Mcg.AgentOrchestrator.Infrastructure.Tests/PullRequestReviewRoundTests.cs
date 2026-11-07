@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Private repositories/stores; serialized for LandingExecutor's shared GitRunner seam.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestReviewRoundTests
+// Parallel safe: repositories and stores are private; GitRunner overrides are flow-local.
+public sealed class PullRequestReviewRoundTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Url = PullRequestLandingTestFixture.Url;
 
