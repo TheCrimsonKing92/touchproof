@@ -2327,15 +2327,13 @@ public sealed class LauncherScriptTests
             ["goal-intake-status", "launcher-key", "--request-key", "launcher-key"],
             expectedRequestKey: "launcher-key");
 
-    private static void AssertStartOrchestratorCommandReceipt(
+    internal static void AssertStartOrchestratorCommandReceipt(
         IReadOnlyList<string> commandArguments,
-        string? expectedRequestKey)
+        string? expectedRequestKey,
+        Action<LauncherScenarioArtifacts>? observeArtifacts = null)
     {
-        var repoRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(repoRoot))
-        {
-            repoRoot = FindRepositoryRoot();
-        }
+        using var sandbox = CreateLauncherRepositorySandbox();
+        var repoRoot = sandbox.RepositoryRoot;
 
         var appDll = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
         var startInfo = new ProcessStartInfo
@@ -2347,6 +2345,7 @@ public sealed class LauncherScriptTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        ConfigureLauncherScenarioEnvironment(startInfo, repoRoot);
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
         startInfo.ArgumentList.Add("Bypass");
@@ -2362,9 +2361,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.Equal(0, launcher.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
@@ -2409,18 +2410,18 @@ public sealed class LauncherScriptTests
 
         Assert.True(File.Exists(stdoutPath), $"Expected launcher log path to exist: {stdoutPath}");
         Assert.True(File.Exists(stderrPath), $"Expected launcher stderr path to exist: {stderrPath}");
+        AssertLauncherScenarioArtifacts(repoRoot, "launcher-json-test", stdoutPath!, stderrPath!, observeArtifacts);
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_forwards_double_dash_arguments_to_background_process")]
     public void StartOrchestratorCommandForwardsDoubleDashArgumentsToBackgroundProcess()
-    {
-        var repoRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(repoRoot))
-        {
-            repoRoot = FindRepositoryRoot();
-        }
+        => AssertStartOrchestratorCommandDoubleDash();
 
+    internal static void AssertStartOrchestratorCommandDoubleDash(
+        Action<LauncherScenarioArtifacts>? observeArtifacts = null)
+    {
         using var sandbox = CreateDoubleDashLauncherSandbox();
+        var repoRoot = sandbox.RepositoryRoot;
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -2430,6 +2431,7 @@ public sealed class LauncherScriptTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        ConfigureLauncherScenarioEnvironment(startInfo, repoRoot);
         startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath;
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
@@ -2448,9 +2450,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.Equal(0, launcher.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
 
@@ -2488,12 +2492,18 @@ public sealed class LauncherScriptTests
         using var childDocument = JsonDocument.Parse(childStdout);
         var childArgs = childDocument.RootElement.EnumerateArray().Select(argument => argument.GetString()).ToArray();
         Assert.Equal(ExpectedDoubleDashArguments, childArgs);
+        AssertLauncherScenarioArtifacts(repoRoot, "launcher-double-dash-test", stdoutPath, stderrPath, observeArtifacts);
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_launch_failure_exits_nonzero_with_error_json_on_stderr")]
     public void StartOrchestratorCommandLaunchFailureExitsNonzeroWithErrorJsonOnStderr()
+        => AssertStartOrchestratorCommandLaunchFailure();
+
+    internal static void AssertStartOrchestratorCommandLaunchFailure(
+        Action<LauncherScenarioArtifacts>? observeArtifacts = null)
     {
-        var repoRoot = FindLauncherSourceRoot();
+        using var sandbox = CreateLauncherRepositorySandbox();
+        var repoRoot = sandbox.RepositoryRoot;
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -2503,8 +2513,9 @@ public sealed class LauncherScriptTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        ConfigureLauncherScenarioEnvironment(startInfo, repoRoot);
         startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Path.Combine(
-            Path.GetTempPath(),
+            repoRoot,
             $"missing-dotnet-{Guid.NewGuid():N}.exe");
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
@@ -2520,9 +2531,11 @@ public sealed class LauncherScriptTests
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
-        var stdout = launcher.StandardOutput.ReadToEnd();
-        var stderr = launcher.StandardError.ReadToEnd();
+        var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+        var stderrTask = launcher.StandardError.ReadToEndAsync();
         Assert.True(launcher.WaitForExit(20000), "Launcher script did not exit within 20 seconds.");
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.NotEqual(0, launcher.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
 
@@ -2540,6 +2553,9 @@ public sealed class LauncherScriptTests
         Assert.Equal(
             new[] { Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"), "goals" },
             root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
+        AssertLauncherScenarioArtifacts(repoRoot, "launcher-failure-test",
+            root.GetProperty("stdoutPath").GetString()!, root.GetProperty("stderrPath").GetString()!,
+            observeArtifacts, logsRequired: false);
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_keeps_AppDll_named_only_and_forwards_remaining_arguments")]
@@ -2623,10 +2639,117 @@ public sealed class LauncherScriptTests
             $"Could not locate launcher source files from source file path '{sourceFilePath}'.");
     }
 
+    internal static LauncherRepositorySandbox CreateLauncherRepositorySandbox(string? sourceRoot = null)
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"launcher-repository-{Guid.NewGuid():N}");
+        CopyLauncherScripts(sourceRoot ?? FindLauncherSourceRoot(), repositoryRoot);
+        return new LauncherRepositorySandbox(repositoryRoot);
+    }
+
+    private static void CopyLauncherScripts(string sourceRoot, string repositoryRoot)
+    {
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        Directory.CreateDirectory(scriptsPath);
+        foreach (var name in new[] { "Invoke-RepoScript.ps1", "Start-OrchestratorCommand.ps1" })
+            File.Copy(Path.Combine(sourceRoot, "scripts", name), Path.Combine(scriptsPath, name));
+    }
+
+    internal static void ConfigureLauncherScenarioEnvironment(ProcessStartInfo startInfo, string repositoryRoot)
+    {
+        var inherited = startInfo.Environment.ToDictionary(pair => pair.Key, pair => pair.Value,
+            StringComparer.OrdinalIgnoreCase);
+        startInfo.Environment.Clear();
+        foreach (var name in new[] { "ComSpec", "PATH", "PATHEXT", "SystemRoot", "WINDIR", "DOTNET_ROOT", "DOTNET_ROOT_X64" })
+        {
+            if (inherited.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
+                startInfo.Environment[name] = value;
+        }
+
+        var tempPath = Path.Combine(repositoryRoot, "temp");
+        Directory.CreateDirectory(tempPath);
+        startInfo.Environment["TEMP"] = tempPath;
+        startInfo.Environment["TMP"] = tempPath;
+        startInfo.Environment["DOTNET_CLI_HOME"] = Path.Combine(repositoryRoot, "dotnet-home");
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRoot;
+        startInfo.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(repositoryRoot, "registry");
+        startInfo.Environment[OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(repositoryRoot, "data");
+    }
+
+    internal static void AssertLauncherScenarioArtifacts(
+        string repositoryRoot, string name, string stdoutPath, string stderrPath,
+        Action<LauncherScenarioArtifacts>? observeArtifacts, bool logsRequired = true, bool journalRequired = false)
+    {
+        var journalPath = Path.Combine(repositoryRoot, ".orchestrator", "last-drive.json");
+        var artifacts = new LauncherScenarioArtifacts(name, repositoryRoot, stdoutPath, stderrPath, journalPath);
+        AssertLauncherPathWithinRoot(repositoryRoot, stdoutPath);
+        AssertLauncherPathWithinRoot(repositoryRoot, stderrPath);
+        Assert.Equal(journalRequired, File.Exists(journalPath));
+        if (journalRequired)
+        {
+            using var journal = JsonDocument.Parse(File.ReadAllText(journalPath));
+            Assert.Equal(name, journal.RootElement.GetProperty("name").GetString());
+            Assert.True(string.Equals(NormalizeLauncherPath(repositoryRoot),
+                NormalizeLauncherPath(journal.RootElement.GetProperty("repoRoot").GetString()!),
+                StringComparison.OrdinalIgnoreCase), "Expected the journal to name its temporary repository root.");
+        }
+        if (logsRequired)
+        {
+            Assert.True(File.Exists(stdoutPath), $"Expected sandbox stdout log: {stdoutPath}");
+            Assert.True(File.Exists(stderrPath), $"Expected sandbox stderr log: {stderrPath}");
+        }
+        observeArtifacts?.Invoke(artifacts);
+    }
+
+    internal static void AssertLauncherPathWithinRoot(string repositoryRoot, string path)
+    {
+        var prefix = Path.TrimEndingDirectorySeparator(NormalizeLauncherPath(repositoryRoot)) + Path.DirectorySeparatorChar;
+        Assert.True(NormalizeLauncherPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase),
+            $"Expected artifact '{path}' under sandbox '{repositoryRoot}'.");
+    }
+
+    // PowerShell can expand an 8.3 TEMP path. Compare the actual long paths, even for
+    // failure receipts whose log files have not been created.
+    internal static string NormalizeLauncherPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
+            return Path.Combine(NormalizeLauncherPath(Path.GetDirectoryName(fullPath)!), Path.GetFileName(fullPath));
+        var buffer = new StringBuilder(32768);
+        if (GetLongPathNameW(fullPath, buffer, buffer.Capacity) == 0)
+            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return Path.TrimEndingDirectorySeparator(buffer.ToString());
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+        ExactSpelling = true, SetLastError = true)]
+    private static extern uint GetLongPathNameW(string shortPath, StringBuilder longPath, int bufferLength);
+
+    internal sealed record LauncherScenarioArtifacts(
+        string Name, string RepositoryRoot, string StdoutPath, string StderrPath, string JournalPath);
+
+    internal sealed class LauncherRepositorySandbox(string repositoryRoot) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static DoubleDashLauncherSandbox CreateDoubleDashLauncherSandbox()
     {
         var sandboxPath = Path.Combine(Path.GetTempPath(), $"launcher-double-dash-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(sandboxPath);
+        CopyLauncherScripts(FindLauncherSourceRoot(), sandboxPath);
 
         var hostPath = Path.Combine(sandboxPath, "fake-dotnet.cmd");
         File.WriteAllText(hostPath, """
@@ -2790,18 +2913,9 @@ public sealed class LauncherScriptTests
     private static StartJournalSandbox CreateStartJournalSandbox()
     {
         var repositoryRoot = Path.Combine(Path.GetTempPath(), $"start-journal-{Guid.NewGuid():N}");
-        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        CopyLauncherScripts(FindLauncherSourceRoot(), repositoryRoot);
         var shimPath = Path.Combine(repositoryRoot, "shim");
-        Directory.CreateDirectory(scriptsPath);
         Directory.CreateDirectory(shimPath);
-
-        var sourceRoot = FindLauncherSourceRoot();
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
-            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Start-OrchestratorCommand.ps1"),
-            Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"));
 
         var invocationPath = Path.Combine(repositoryRoot, "child-invoked.txt");
         var hostPath = Path.Combine(shimPath, "fake-dotnet.cmd");
@@ -3116,6 +3230,7 @@ public sealed class LauncherScriptTests
         string hostPath,
         string echoScriptPath) : IDisposable
     {
+        public string RepositoryRoot { get; } = sandboxPath;
         public string HostPath { get; } = hostPath;
         public string EchoScriptPath { get; } = echoScriptPath;
 
