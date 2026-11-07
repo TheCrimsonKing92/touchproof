@@ -295,7 +295,11 @@ public sealed class TesterRedLabelledInconclusiveScenarioTests
             if (_baseline) driver.InconclusiveRedRoute = (_, _, _) => AttributedFailureRouteDecision.Decline("baseline");
             driver.OverrideDeveloperCompletionStructuralPreflightForTests(
                 _ => new DeveloperCompletionStructuralFindings(false, "clean"), TimeSpan.FromSeconds(5));
-            return driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
+            // These scenarios pin receipt routing and recovery, with retries dispatched immediately.
+            return driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive with
+            {
+                AutomaticRetryOperatorRoutingHoldSeconds = 0
+            });
         }
 
         public void Dispose() => Directory.Delete(_root, recursive: true);
