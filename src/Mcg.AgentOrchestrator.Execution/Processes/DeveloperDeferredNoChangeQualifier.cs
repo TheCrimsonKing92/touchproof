@@ -61,6 +61,8 @@ internal static class DeveloperDeferredNoChangeQualifier
             return Decline("no-worker-result", out declineCode);
         if (result.BlockersStatus != WorkerResultParser.BlockersStatus.None)
             return Decline("blockers", out declineCode);
+        if (!RetryCorrectionObligationEvidence.IsSatisfied(task, standardError))
+            return Decline(RetryCorrectionObligationEvidence.DeclineCode, out declineCode);
         if (result.TestsStatus != WorkerResultParser.TestsStatus.Deferred ||
             !result.Fields.TryGetValue("tests", out var testsField))
             return Decline("tests-not-deferred", out declineCode);

@@ -203,7 +203,7 @@ internal sealed partial class ConductorDriver
         var feedback = AppendActionableCandidateRedFailureDetail(
             FormatActionableCandidateRedMessage(candidateSha!, receiptId, "pre-tester-deferred", failingTests),
             receiptId, failingTests, candidate?.TestResultPaths);
-        (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(
+        RetryDeveloperWithAcceptedFeedback(
             goal.Id, developer.Id, feedback, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
         var refreshed = GetCurrentGoal(goal);
         result = ExecuteDispatchAndStart(

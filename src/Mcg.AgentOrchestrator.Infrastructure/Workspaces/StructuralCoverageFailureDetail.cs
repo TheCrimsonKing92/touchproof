@@ -30,6 +30,11 @@ internal static class StructuralCoverageFailureDetail
         {
             details.Add("meaning: the candidate's discovered test count or main baseline generation does not reconcile; the receipts below give the counts");
         }
+        if (receipts.Any(receipt => receipt.StartsWith("cross-generation-count:", StringComparison.Ordinal)
+            && receipt["cross-generation-count:".Length..].Split(',').Contains("deleted=0", StringComparer.Ordinal)))
+        {
+            details.Add("meaning: no declared test removals were found for the main baseline, so the shortfall is a real count gap");
+        }
 
         AppendList(details, coverage.EmptyPartitions, cap, "empty partitions", name => $"empty partition: {name}");
         AppendList(details, identityMismatches, cap, "identity mismatches", mismatch =>

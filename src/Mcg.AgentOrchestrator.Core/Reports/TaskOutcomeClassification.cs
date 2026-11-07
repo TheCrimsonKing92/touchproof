@@ -30,6 +30,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule DirtyDispatchRecovery = new("dirty-dispatch-recovery", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule PreflightFailure = new("preflight-failure", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule WorkerSandboxRefused = new("worker-sandbox-refused", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule WorkerWriteIntegrityBlocked = new("worker-write-integrity-blocked", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderAuthentication = new("provider-authentication", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
@@ -85,6 +86,7 @@ internal static class TaskOutcomeRules
         DirtyDispatchRecovery,
         PreflightFailure,
         WorkerSandboxRefused,
+        WorkerWriteIntegrityBlocked,
         ProviderAuthentication,
         ProviderConnectivity,
         ProviderInterruption,

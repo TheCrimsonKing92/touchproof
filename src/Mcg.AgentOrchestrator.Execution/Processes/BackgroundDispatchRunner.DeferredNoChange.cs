@@ -4,6 +4,33 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class BackgroundDispatchRunner
 {
+    public Func<string, RetryCorrectionConditionVerdict>? RetryCorrectionConditionOracle { get; init; }
+
+    internal bool AllowsNoChangeCompletion(
+        Goal goal, TaskSpec task, GoalWorktreeDispatchEvidence worktreeEvidence,
+        string standardOutput, string? authoritativeStandardOutput, string standardError, string worktreePath,
+        ref string? diagnostic)
+    {
+        var verdict = WorkerDispatchCompletionClassifier.EvaluateRetryCorrectionObligation(
+            task, worktreeEvidence.Head, worktreeEvidence.IsClean, worktreePath, RetryCorrectionConditionOracle, out var evaluationDiagnostic);
+        if (evaluationDiagnostic is not null) diagnostic = AppendDiagnostic(diagnostic ?? string.Empty, evaluationDiagnostic);
+        if (verdict is { } evaluated)
+        {
+            var marker = RetryCorrectionObligationEvidence.Format(task.AcceptedRetryFeedback!.Obligation!, evaluated);
+            diagnostic = AppendDiagnostic(diagnostic ?? string.Empty, marker);
+            standardError = AppendDiagnostic(standardError, marker);
+            if (evaluated != RetryCorrectionConditionVerdict.Passed)
+            {
+                diagnostic = AppendDiagnostic(diagnostic,
+                    "DEFERRED_NO_CHANGE_DECLINED reason=" + RetryCorrectionObligationEvidence.DeclineCode);
+                return false;
+            }
+        }
+        return _completionClassifier.AllowsNoChangeCompletion(task, standardOutput, standardError) ||
+            (authoritativeStandardOutput is not null && TryAcceptDeferredNoChange(
+                goal, task, worktreeEvidence, authoritativeStandardOutput, standardError, worktreePath, ref diagnostic));
+    }
+
     private bool TryAcceptDeferredNoChange(
         Goal goal,
         TaskSpec task,

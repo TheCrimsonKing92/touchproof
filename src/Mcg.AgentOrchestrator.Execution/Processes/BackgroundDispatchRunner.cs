@@ -68,6 +68,7 @@ public sealed partial class BackgroundDispatchRunner
     public Func<bool>? ExecutionThrottlingOptOut { get; init; }
     public Func<IReadOnlyList<DeclaredToolHome>>? DeclaredToolHomes { get; init; }
     public Func<string, NodeDependencyInstall?>? NodeDependencyInstall { get; init; }
+    internal IWorkerIntegrityLabeler WriteIntegrityLabeler { get; init; } = new IcaclsIntegrityLabeler();
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -1668,11 +1669,11 @@ public sealed partial class BackgroundDispatchRunner
                     _completionClassifier.HasReportedFailingVerification(decisionStandardOutput, decisionStandardError);
                 var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
-                var allowsNoChangeCompletion = _completionClassifier.AllowsNoChangeCompletion(
-                    task, decisionStandardOutput, decisionStandardError) ||
-                    (fullStandardOutput.Content is not null && TryAcceptDeferredNoChange(
-                        kernel.GetGoal(goalId), task, worktreeEvidence, authoritativeStandardOutput,
-                        decisionStandardError, processRecord.WorkingDirectory, ref standardErrorDiagnostic));
+                var allowsNoChangeCompletion = AllowsNoChangeCompletion(
+                    kernel.GetGoal(goalId), task, worktreeEvidence,
+                    decisionStandardOutput, fullStandardOutput.Content is not null ? authoritativeStandardOutput : null,
+                    decisionStandardError, processRecord.WorkingDirectory,
+                    ref standardErrorDiagnostic);
                 // A typed premise stop awaits clarification, so it need not manufacture a change.
                 // Preserve failed exits and let the dispatch classifier retain fault precedence.
                 var hasPremiseInvalidStop = exitCode == 0 && workerResultPresent &&
@@ -1830,14 +1831,11 @@ public sealed partial class BackgroundDispatchRunner
             : (long?)null;
         // The bounded snapshot is diagnostic evidence only. A scope declaration can steer a
         // Developer into a bounded revision, so it must come from the authoritative artifact.
-        bool assignedScopeComplete = false;
-        var hasAssignedScopeComplete = fullStandardOutput.Content is { } assignedScopeOutput &&
-            WorkerResultBlockers.TryGetAssignedScopeComplete(
-                assignedScopeOutput,
-                out assignedScopeComplete,
-                out _);
+        var assignedScopeComplete = fullStandardOutput.Content is { } assignedScopeOutput &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(assignedScopeOutput, out var scopeComplete, out _)
+                ? scopeComplete : (bool?)null;
 
-        var verification = new TaskVerificationRecord(
+        var verification = WorkerWriteIntegrityObservationProducer.Enrich(task, WriteIntegrityLabeler, new TaskVerificationRecord(
             processRecord.Command,
             processRecord.WorkingDirectory,
             exitCode,
@@ -1867,11 +1865,11 @@ public sealed partial class BackgroundDispatchRunner
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
             FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
             PlannerCandidateDivergence: plannerCandidateDivergence,
-            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null,
+            AssignedScopeComplete: assignedScopeComplete,
             EvidenceSource: VerificationEvidenceSource.Dispatch,
             // Planner evidence binds its brief through host dispatch provenance as well.
             DispatchAttemptAt: requiresTerminalContract || task.RequiredRole == AgentRole.Planner
-                ? dispatchAttempt?.DispatchedAt : null);
+                ? dispatchAttempt?.DispatchedAt : null));
 
         var outcome = new DispatchRefreshOutcome(
             completed,

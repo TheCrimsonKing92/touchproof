@@ -81,6 +81,8 @@ internal static class DispatchCompletionEvidence
             return true;
         }
 
+        if (!RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError)) return false;
+
         if (HasPassingVerificationEvidence(verification))
         {
             return true;
@@ -142,6 +144,7 @@ internal static class DispatchCompletionEvidence
         !hasCommittedChanges &&
         task.RequiredRole == AgentRole.Developer &&
         (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
+        RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError) &&
         HasVerifiedNoNewCommitWorkerResult(task, verification);
 
     internal static bool IsDeveloperVerifiedNoChangeRound(
@@ -158,6 +161,7 @@ internal static class DispatchCompletionEvidence
         var earlyConvergenceSatisfied = dispatch?.ContextPackageReceipt?.HasEarlyConvergenceEvidenceFor(
             dispatch.BaseCommit) == true;
         if (task.RequiredRole != AgentRole.Developer ||
+            !RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError) ||
             hasCommittedChanges ||
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||

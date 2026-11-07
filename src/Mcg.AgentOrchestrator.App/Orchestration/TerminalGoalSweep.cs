@@ -441,6 +441,7 @@ internal static partial class TerminalGoalSweep
         dispatchRunner ??= new BackgroundDispatchRunner(completionBuildEvidence:
             new CompletionBuildEvidenceCoordinator(reconciliationStatePath, executionDirectory))
         {
+            RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(reconciliationStatePath, executionDirectory),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };

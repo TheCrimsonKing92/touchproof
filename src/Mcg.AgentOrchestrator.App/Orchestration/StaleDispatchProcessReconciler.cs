@@ -11,7 +11,7 @@ internal static class StaleDispatchProcessReconciler
 
     internal static int Reconcile(AgentOrchestratorKernel kernel, OrchestratorWorkspace? workspace = null) =>
         Reconcile(kernel, workspace is null
-            ? new BackgroundDispatchRunner()
+            ? new BackgroundDispatchRunner { RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate }
             : OperatorCancelAwareDispatchRunner.ForWorkspace(workspace));
 
     internal static int Reconcile(

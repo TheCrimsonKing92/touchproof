@@ -823,6 +823,7 @@ internal sealed partial class GoalDispatchOperations
                 : null,
             completionBuildEvidence: new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
+            RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory,
                 projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch),
             NodeDependencyInstall = WorkerNodeDependencyInstallSource.For(workspace.ProjectHomeDirectoryOrNull),
@@ -871,7 +872,7 @@ internal sealed partial class GoalDispatchOperations
         Goal goal,
         BackgroundDispatchRunner? runner = null)
     {
-        runner ??= new BackgroundDispatchRunner();
+        runner ??= new BackgroundDispatchRunner { RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate };
         var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.RefreshDispatches);
         var refreshed = new List<TaskSpec>();
         var outcomes = new List<DispatchRefreshOutcome>();

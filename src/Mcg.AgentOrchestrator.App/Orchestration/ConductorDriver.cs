@@ -782,7 +782,7 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, _retryDeveloperAfterStructuralPreflight!, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull).IntegrateMainBeforeDeveloperDispatch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull)).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, RetryDeveloperWithAcceptedFeedback, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull).IntegrateMainBeforeDeveloperDispatch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull)).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
@@ -1077,7 +1077,8 @@ internal sealed partial class ConductorDriver
         Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
         AgentOrchestratorKernel? findingStagnationKernel = null,
         Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null,
-        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null)
+        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>? runAcceptanceVerificationWithOptions = null)
     {
         _prepareMissingWorkspace = prepareMissingWorkspace;
         _findingStagnationKernel = findingStagnationKernel;
@@ -1104,11 +1105,10 @@ internal sealed partial class ConductorDriver
         _buildServerShutdown = buildServerShutdown is null
             ? RunRetryOnlyRemediation
             : timeout => RunBoundedBuildServerShutdown(buildServerShutdown, timeout);
-        _runAcceptanceVerification = runAcceptanceVerificationWithLease is not null
-            ? ((goal, slot, lease, token, _) => runAcceptanceVerificationWithLease(goal, slot, lease, token))
-            : (runAcceptanceVerificationWithSlot is not null
-                ? ((goal, slot, _, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
-                : ((goal, _, _, _, _) => runAcceptanceVerification(goal)));
+        _runAcceptanceVerification = runAcceptanceVerificationWithOptions ?? ((goal, slot, lease, token, _) =>
+            runAcceptanceVerificationWithLease is not null ? runAcceptanceVerificationWithLease(goal, slot, lease, token) :
+            runAcceptanceVerificationWithSlot is not null ? runAcceptanceVerificationWithSlot(goal, slot) :
+            runAcceptanceVerification(goal));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
