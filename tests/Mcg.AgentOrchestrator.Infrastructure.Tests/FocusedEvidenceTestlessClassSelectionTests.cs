@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
-// Each case owns its source/TRX tree; the collection supplies isolated build roots.
-[Collection("IsolatedProcessSpawningRemainderC")]
+// Parallel safe: each case owns its source/TRX tree and stubs command execution.
 public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocusedEvidenceFixture
 {
     private const string Reason = "declares-no-tests";
