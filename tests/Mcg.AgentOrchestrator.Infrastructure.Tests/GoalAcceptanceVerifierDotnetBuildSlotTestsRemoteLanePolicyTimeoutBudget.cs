@@ -6,7 +6,7 @@ using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 
 // JobAccounting owns shared build-slot state; the runner and workspace are fixtures.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTimeoutBudget : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicyTimeoutBudget : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Theory]
     [Xunit.InlineData(null, 3103)]
