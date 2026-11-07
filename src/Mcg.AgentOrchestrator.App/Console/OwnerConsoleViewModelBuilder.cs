@@ -30,7 +30,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     {
         var (decisions, hidden) = await ReadDecisionsAsync(cancellationToken);
         var model = await BuildBoardAsync(cancellationToken);
-        return WithActivity(WithDecisions(model, decisions, hidden), inputs);
+        var evidence = new OwnerActivityEvidenceLoader(testEvidence).Resolve(inputs.RecentEvents);
+        return WithActivity(WithDecisions(model, decisions, hidden), inputs, evidence);
     }
 
     internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
@@ -144,14 +145,16 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             Status = model.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } };
     }
 
-    internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs)
+    internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs,
+        IReadOnlyDictionary<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null)
     {
         var planned = OwnerConsoleStopClassifier.Classify(inputs.RecentEvents);
         OwnerConductEvent[] observed;
         OwnerAttentionObservation[] attention;
         lock (_observationGate) { observed = _observed.ToArray(); attention = _attention.Snapshot(); }
         var activity = OwnerActivityNarrator.Narrate(inputs.RecentEvents.Concat(observed)
-            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title, testEvidence, attention, item =>
+            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title,
+            evidence is null ? null : item => evidence.GetValueOrDefault(item), attention, item =>
             {
                 var matches = _goals.Values.Where(goal => item.GoalId is not null &&
                     goal.Id.Value.StartsWith(item.GoalId, StringComparison.OrdinalIgnoreCase)).ToArray();

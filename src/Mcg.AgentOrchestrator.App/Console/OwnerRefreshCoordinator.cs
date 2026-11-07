@@ -7,8 +7,10 @@ internal sealed class OwnerRefreshCoordinator(TimeProvider clock, CancellationTo
     OwnerConsoleEventRefreshFilter refreshFilter, OwnerConsoleInputDiagnostics? diagnostics,
     Func<IReadOnlyCollection<string>, OwnerConsoleRefreshScope, IReadOnlyList<OwnerConductEvent>> readLifecycle,
     Func<int> landedToday, Action<string> writeTimings, Action<Action> invoke,
-    Action<string, Action> post, Func<OwnerConsoleFullScreenView> view) : IDisposable
+    Action<string, Action> post, Func<OwnerConsoleFullScreenView> view,
+    OwnerActivityEvidenceLoader? evidence = null) : IDisposable
 {
+    private readonly OwnerActivityEvidenceLoader _evidence = evidence ?? new(null);
     private readonly SemaphoreSlim _rebuild = new(1, 1);
     internal DateTimeOffset Opened { get; } = clock.GetUtcNow();
     internal DateTimeOffset? Last { get; private set; }
@@ -95,12 +97,19 @@ internal sealed class OwnerRefreshCoordinator(TimeProvider clock, CancellationTo
         invoke(() => { if (!token.IsCancellationRequested) view().NoticeStrip.SetProgramHealth(programHealth); });
         var (decisions, hidden) = await timings.TimeAsync("decisions", () => builder.ReadDecisionsAsync(stepToken));
         var landed = timings.Time("landed-today", landedToday);
-        var model = timings.Time("activity", () => builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
-            inputs with { RecentEvents = _recent.ToArray(), LandedToday = Math.Max(Landings, landed) }));
+        long ticket = 0;
+        var model = timings.Time("activity", () =>
+        {
+            ticket = _evidence.Begin();
+            var resolved = _evidence.Resolve(_recent);
+            return builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
+                inputs with { RecentEvents = _recent.ToArray(), LandedToday = Math.Max(Landings, landed) }, resolved);
+        });
         stepToken.ThrowIfCancellationRequested();
+        if (!_evidence.IsCurrent(ticket)) return;
         post("refresh-render", () =>
         {
-            if (!token.IsCancellationRequested)
+            if (!token.IsCancellationRequested && _evidence.IsCurrent(ticket))
                 timings.Time("render", () => { view().Render(model); return true; });
         });
     }

@@ -3,8 +3,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // Owns progressive startup and independent pane failures. UI mutations are dispatched as one merged snapshot.
 internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder builder,
     IOwnerConsoleActivityLoader activity, Action<Action> dispatch, TimeProvider? clock = null,
-    OwnerConsoleLoopOptions? options = null)
+    OwnerConsoleLoopOptions? options = null, OwnerActivityEvidenceLoader? evidence = null)
 {
+    private readonly OwnerActivityEvidenceLoader _evidence = evidence ?? new(null);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly OwnerConsoleLoopOptions _options = options ?? OwnerConsoleLoopOptions.Default;
 
@@ -25,13 +26,16 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         OwnerConsoleViewInputs inputs, Action<OwnerConsoleActivityLoad> activityLoaded, CancellationToken token,
         IReadOnlyCollection<string>? ownBoardGoalIds = null)
     {
+        var ticket = _evidence.Begin();
         var sync = new object();
         OwnerConsoleViewInputs? loadedInputs = null;
+        IReadOnlyDictionary<OwnerConductEvent, OwnerActivityTestEvidence?>? loadedEvidence = null;
         void Update(Func<OwnerConsoleViewModel, OwnerConsoleViewModel> change)
         {
+            if (!_evidence.IsCurrent(ticket)) return;
             dispatch(() =>
             {
-                if (token.IsCancellationRequested) return;
+                if (token.IsCancellationRequested || !_evidence.IsCurrent(ticket)) return;
                 lock (sync) { model = change(model); renderUpdate(model); }
             });
         }
@@ -44,7 +48,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
                 Update(current =>
                 {
                     var updated = builder.WithDecisions(current, rows, hidden) with { DecisionsState = null };
-                    return loadedInputs is null ? updated : builder.WithActivity(updated, loadedInputs);
+                    return loadedInputs is null ? updated : builder.WithActivity(updated, loadedInputs, loadedEvidence);
                 });
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -54,15 +58,20 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         {
             try
             {
-                var loaded = await LoadBoundedAsync(step => activity.LoadAsync(
-                    ownBoardGoalIds ?? model.Board.Where(row => !row.IsForeign && !row.IsDiagnostic)
-                        .Select(row => row.GoalId).ToArray(), step), "activity", token);
+                var (loaded, resolved) = await LoadBoundedAsync(async step =>
+                {
+                    var result = await activity.LoadAsync(
+                        ownBoardGoalIds ?? model.Board.Where(row => !row.IsForeign && !row.IsDiagnostic)
+                            .Select(row => row.GoalId).ToArray(), step);
+                    return (result, _evidence.Resolve(result.Recent));
+                }, "activity", token);
                 token.ThrowIfCancellationRequested();
                 activityLoaded(loaded);
                 Update(current =>
                 {
                     loadedInputs = inputs with { RecentEvents = loaded.Recent, LastConductEvent = loaded.LastActivity, LandedToday = loaded.LandedToday };
-                    return builder.WithActivity(current, loadedInputs) with { ActivityState = null };
+                    loadedEvidence = resolved;
+                    return builder.WithActivity(current, loadedInputs, loadedEvidence) with { ActivityState = null };
                 });
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
