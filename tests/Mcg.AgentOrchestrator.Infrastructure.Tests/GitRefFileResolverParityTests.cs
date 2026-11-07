@@ -4,6 +4,37 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GitRefFileResolverParityTests
 {
     [Theory]
+    [InlineData(false, "uppercase")]
+    [InlineData(false, "wrong-length")]
+    [InlineData(true, "uppercase")]
+    [InlineData(true, "wrong-length")]
+    public void NoncanonicalRawIds_UseGitWithoutRecursivePeeling(bool sha256, string shape)
+    {
+        using var fixture = new Fixture(sha256);
+        var original = fixture.Oracle("HEAD");
+        var revision = shape == "uppercase" ? original.ToUpperInvariant()
+            : sha256 ? original[..40] : original + new string('0', 24);
+        Assert.NotEqual(original, revision);
+        if (shape == "uppercase") Assert.Contains(revision, char.IsAsciiLetterUpper);
+        else Assert.NotEqual(original.Length, revision.Length);
+
+        foreach (var suffix in new[] { "", "^{commit}", "^{tree}" })
+        {
+            var expression = revision + suffix;
+            var expected = GitCli.Run(fixture.Repo, "rev-parse", "--verify", expression);
+            Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, expression, out var fileValue));
+            Assert.Empty(fileValue);
+            using var reader = new GitRevisionReader();
+            var observed = 0;
+            reader.SuccessfulGitRead += _ => observed++;
+            Assert.Equal(expected.Succeeded, reader.TryResolve(fixture.Repo, expression, out var actual));
+            Assert.Equal(expected.Succeeded ? expected.Output.Trim() : string.Empty, actual);
+            Assert.Equal(expected.Succeeded ? 1 : 0, observed);
+            Assert.Null(reader.GetReader(fixture.Repo));
+        }
+    }
+
+    [Theory]
     [InlineData("packed")]
     [InlineData("replacement")]
     [InlineData("ambiguous")]

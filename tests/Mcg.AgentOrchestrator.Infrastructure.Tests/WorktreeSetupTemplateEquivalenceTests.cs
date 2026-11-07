@@ -132,7 +132,7 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
         var client = LandingExecutorTests.CreateGitRepository();
         try
         {
-            Read(reference, "init", "--bare");
+            RunGit(reference, "init", "--bare");
             template.CopyBareOrigin(first);
             var identity = HostCapacitySlotTimingWriter.CurrentTestName();
             Assert.NotEqual("<unknown>", identity);

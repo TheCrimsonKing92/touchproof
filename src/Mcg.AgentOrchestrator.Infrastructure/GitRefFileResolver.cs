@@ -115,6 +115,9 @@ internal static class GitRefFileResolver
         }
         else
         {
+            // A raw ID outside this repository's canonical format belongs to Git.
+            // Sending it back through TryResolve would peel the same ID recursively.
+            if (IsBranchObjectId(basis)) return false;
             if (!TryResolve(directory, basis, out commit, environment)) return false;
         }
         // A tree is already peeled. Git accepts <tree-id>^{tree}, which is common when

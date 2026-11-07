@@ -62,8 +62,7 @@ public sealed class WorktreeSetupTemplate : IDisposable
             if (!recipes.TryGetValue(key, out var source))
             {
                 source = Directory.CreateDirectory(Path.Combine(root, key)).FullName;
-                var result = GitCli.Run(source, "init", "--bare");
-                Assert.True(result.Succeeded, result.Error);
+                InfrastructureTestSupport.RunGitWithCommitPostcondition(source, ["init", "--bare"]);
                 recipes.Add(key, source);
             }
             CopyFiles(source, repository);
