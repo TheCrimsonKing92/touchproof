@@ -208,7 +208,6 @@ public sealed record OrchestratorWorkspace(
 
     public string ConductEventsLogPath => Path.Combine(LogDirectory, ConductEventLogWriter.CurrentFileName);
 
-    public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");
 
 
     // Append-only advisory log of semantic-acceptance verdicts (one JSON object per line), kept in

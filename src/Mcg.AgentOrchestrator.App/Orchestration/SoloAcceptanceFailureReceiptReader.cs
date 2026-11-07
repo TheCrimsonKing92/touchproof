@@ -117,7 +117,7 @@ internal static class SoloAcceptanceFailureReceiptReader
                         if (repeated.Length != 1 || repeated[0].Value.Outcome != "Failed")
                             return Refuse("solo-candidate-rerun-unconfirmed");
                     }
-                    var failed = rows.Single(row => row.Key == identity);
+                    var failed = rows.First(row => row.Key == identity && row.Value.Outcome == "Failed");
                     var message = failed.Value.Message;
                     var first = message?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n')[0]
                         ?? "(no message)";
@@ -171,16 +171,33 @@ internal static class SoloAcceptanceFailureReceiptReader
     private static List<TrxRow> ReadRows(SoloAcceptanceCheckEvidence check, string root)
     {
         if (check.Artifacts is not { Count: > 0 }) throw new InvalidDataException("solo-trx-absent");
-        var rows = new List<TrxRow>();
-        foreach (var artifact in check.Artifacts)
-            rows.AddRange(ReadTrx(artifact, root));
-        RequireUnambiguousFailures(rows, "solo-duplicate-test-row");
-        var executed = rows.Count(row => row.Value.Outcome is "Passed" or "Failed");
+        var artifactRows = check.Artifacts.Select(artifact => ReadTrx(artifact, root)).ToArray();
+        var rows = artifactRows.SelectMany(artifact => artifact).ToList();
+        var repeatedFailure = false;
+        foreach (var group in rows.GroupBy(row => row.Key, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1 && group.Any(row => row.Value.Outcome == "Failed")))
+        {
+            // Listing the same artifact twice is not evidence of a second execution.
+            if (group.Select(row => row.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != group.Count())
+                RequireUnambiguousFailures(group, "solo-duplicate-test-row");
+            if (group.Any(row => row.Value.Outcome == "Passed"))
+                throw new InvalidDataException($"solo-repeated-execution-flake: identity={group.Key}; " +
+                    $"outcome={AcceptanceLaneRerunEvidence.Flake}; outcomes={string.Join(",", group.Select(row => row.Value.Outcome))}");
+            if (group.Any(row => row.Value.Outcome != "Failed"))
+                RequireUnambiguousFailures(group, "solo-duplicate-test-row");
+            repeatedFailure = true;
+        }
+        // Narrowed reruns (AcceptanceLaneRerunNarrowing.ComposeResult) record per-run maxima,
+        // not sums. Repeated failures identify that shape; other multi-TRX checks retain sums.
+        var executedCounts = artifactRows.Select(artifact => artifact.Count(row => row.Value.Outcome is "Passed" or "Failed")).ToArray();
+        var executed = repeatedFailure ? executedCounts.Max() : executedCounts.Sum();
+        var discoveredRows = repeatedFailure ? artifactRows.Max(artifact => artifact.Count) : rows.Count;
         if (executed != check.Check.ExecutedTestCount)
             throw new InvalidDataException($"solo-incomplete-check-rows: executed rows={executed}; recorded={check.Check.ExecutedTestCount}");
-        if (check.Check.DiscoveredTestCount is { } discovered && discovered != rows.Count)
-            throw new InvalidDataException($"solo-incomplete-check-rows: discovered rows={rows.Count}; recorded={discovered}");
-        if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key), check.Check.FailingTestIdentities ?? []))
+        if (check.Check.DiscoveredTestCount is { } discovered && discovered != discoveredRows)
+            throw new InvalidDataException($"solo-incomplete-check-rows: discovered rows={discoveredRows}; recorded={discovered}");
+        if (!SameNames(rows.Where(row => row.Value.Outcome == "Failed").Select(row => row.Key).Distinct(StringComparer.Ordinal),
+            check.Check.FailingTestIdentities ?? []))
             throw new InvalidDataException("solo-failing-tests-mismatch");
         return rows;
     }

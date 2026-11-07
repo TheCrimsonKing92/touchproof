@@ -63,7 +63,7 @@ public sealed class CliStatusAgentReadEnvelopeContractTests : CliTaskQueryTestSu
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
             var human = CaptureConsole(() => CliStatusQueryCommand.Execute(["status", "abcdef12"],
-                new QueryOnlyStateRepository(kernel), workspace, new InMemoryModelProviderRegistry([]), null,
+                new QueryOnlyStateRepository(kernel), workspace, new InMemoryModelProviderRegistry([]),
                 ref agents, ref profiles, ref currentGoal));
             var statusLine = Assert.Single(human.Split(Environment.NewLine),
                 line => line.StartsWith("Status: ", StringComparison.Ordinal));
@@ -125,7 +125,7 @@ public sealed class CliStatusAgentReadEnvelopeContractTests : CliTaskQueryTestSu
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
             var human = CaptureConsole(() => CliStatusQueryCommand.Execute(["status", "abcdef12"],
-                new QueryOnlyStateRepository(kernel), workspace, new InMemoryModelProviderRegistry([]), null,
+                new QueryOnlyStateRepository(kernel), workspace, new InMemoryModelProviderRegistry([]),
                 ref agents, ref profiles, ref currentGoal));
             Assert.Contains($"Status: Landed{Environment.NewLine}", human);
             var monitoringState = GoalLifecycle.ResolveState(goal,

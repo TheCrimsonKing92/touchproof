@@ -992,7 +992,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("build_phase_ms=", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("Infrastructure.OperatorComms=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Execution=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
@@ -1004,7 +1003,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains(BuiltProjectsReceipt(cacheableProjects), firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=hit", secondOutput, StringComparison.Ordinal);
-            Assert.Contains("Infrastructure.OperatorComms=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Execution=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);

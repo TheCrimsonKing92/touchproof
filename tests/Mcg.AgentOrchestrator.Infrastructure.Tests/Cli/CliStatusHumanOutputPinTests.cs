@@ -39,7 +39,7 @@ public sealed class CliStatusHumanOutputPinTests : CliTaskQueryTestSupport
             Goal? currentGoal = null;
             string[] args = tasksOnly ? ["status", "abc12345", "--tasks-only"] : ["status", "abc12345"];
             var output = CaptureConsole(() => CliStatusQueryCommand.Execute(args, new QueryOnlyStateRepository(kernel),
-                OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]), null,
+                OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
                 ref agents, ref profiles, ref currentGoal));
             var lines = tasksOnly ? new[]
             {

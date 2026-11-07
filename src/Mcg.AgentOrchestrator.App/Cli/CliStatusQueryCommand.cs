@@ -21,7 +21,6 @@ internal static class CliStatusQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -32,7 +31,7 @@ internal static class CliStatusQueryCommand
         var (kernel, goal) = ResolveGoal(stateQueries, prefix, currentGoal?.Id);
         var commandCurrentGoal = goal;
         var changed = CliCommandDispatcher.ExecuteCommand(args, kernel, workspace, ref agents,
-            providers, ref workerProfiles, ref commandCurrentGoal, channel);
+            providers, ref workerProfiles, ref commandCurrentGoal);
         if (changed)
             throw new InvalidOperationException("Status query attempted to mutate orchestrator state through its read-only route.");
 

@@ -14,7 +14,6 @@ internal static class CliProvenanceQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles)
     {
@@ -35,7 +34,7 @@ internal static class CliProvenanceQueryCommand
             completedGoalIds.Where(id => snapshots.ContainsKey(id.Value))
                 .Select(id => snapshots[id.Value]).ToArray(), []));
         Goal? localGoal = null;
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref localGoal);
     }
 }

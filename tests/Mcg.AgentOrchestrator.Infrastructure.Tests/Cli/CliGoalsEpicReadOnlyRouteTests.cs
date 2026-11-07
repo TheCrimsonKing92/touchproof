@@ -234,7 +234,7 @@ public sealed class CliGoalsEpicReadOnlyRouteTests : CliTaskQueryTestSupport, ID
         return CaptureConsole(() =>
         {
             var handled = CliReadOnlyCommandRunner.TryExecute(args, probe, workspace,
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref current, out var changed);
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref current, out var changed);
             Assert.Equal(expectedHandled, handled);
             Assert.False(changed);
         });

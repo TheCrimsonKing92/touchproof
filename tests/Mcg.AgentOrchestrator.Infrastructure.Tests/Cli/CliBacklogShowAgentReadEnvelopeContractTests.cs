@@ -276,7 +276,7 @@ public sealed class CliBacklogShowAgentReadEnvelopeContractTests : CliTaskQueryT
         var profiles = WorkerProfileCatalog.Default();
         Goal? current = null;
         Assert.True(CliReadOnlyCommandRunner.TryExecute(args, probe, workspace,
-            new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref current, out var changed));
+            new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref current, out var changed));
         Assert.False(changed);
     }
 

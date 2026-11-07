@@ -24,7 +24,6 @@ internal static class CliNextFullQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -34,7 +33,7 @@ internal static class CliNextFullQueryCommand
             args = [args[0], CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id).Value];
 
         return CliNextGoalQueryRoute.TryExecute(args, args.Count == 2 ? args[1] : args[2],
-            stateQueries, workspace, providers, channel,
+            stateQueries, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
     }
 }

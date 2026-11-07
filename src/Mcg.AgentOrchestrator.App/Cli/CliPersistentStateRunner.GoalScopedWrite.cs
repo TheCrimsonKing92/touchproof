@@ -19,7 +19,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel,
         out bool changed)
     {
         changed = false;
@@ -78,7 +77,6 @@ internal static partial class CliPersistentStateRunner
                 providers,
                 ref commandProfiles,
                 ref commandGoal,
-                channel,
                 () => stateRepository.LoadGoalsAsync(loadedGoalIds).GetAwaiter().GetResult(),
                 registerStateOutboxMessage: outboxMessages.Add,
                 registerPostCommitFailure: failure => postCommitFailure ??= failure);

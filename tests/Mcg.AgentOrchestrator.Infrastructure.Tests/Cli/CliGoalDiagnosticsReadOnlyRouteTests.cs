@@ -48,7 +48,7 @@ public sealed class CliGoalDiagnosticsReadOnlyRouteTests : CliTaskQueryTestSuppo
             var output = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    providers, ref agents, ref profiles, ref currentGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
 
@@ -93,7 +93,7 @@ public sealed class CliGoalDiagnosticsReadOnlyRouteTests : CliTaskQueryTestSuppo
             var output = CaptureConsole(() =>
             {
                 Xunit.Assert.False(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    providers, ref agents, ref profiles, ref currentGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
             Xunit.Assert.Equal(string.Empty, output);
@@ -133,7 +133,7 @@ public sealed class CliGoalDiagnosticsReadOnlyRouteTests : CliTaskQueryTestSuppo
             var args = new[] { "goal-diagnostics", "abc10000" };
             Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             var output = CaptureConsole(() => Xunit.Assert.False(CliReadOnlyCommandRunner.TryExecute(
-                args, repository, workspace, providers, null,
+                args, repository, workspace, providers,
                 ref agents, ref profiles, ref currentGoal, out _)));
             Xunit.Assert.Equal(string.Empty, output);
             Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);

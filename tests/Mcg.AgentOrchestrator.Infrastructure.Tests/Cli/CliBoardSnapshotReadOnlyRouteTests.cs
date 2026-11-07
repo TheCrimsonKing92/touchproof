@@ -107,7 +107,7 @@ public sealed class CliBoardSnapshotReadOnlyRouteTests : CliTaskQueryTestSupport
             CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal,
                     out var changed));
                 Assert.False(changed);
             });
@@ -144,7 +144,7 @@ public sealed class CliBoardSnapshotReadOnlyRouteTests : CliTaskQueryTestSupport
             Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(["loop-health"]));
             Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             Assert.False(CliReadOnlyCommandRunner.TryExecute(args, repository,
-                OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]), null,
+                OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
                 ref agents, ref profiles, ref currentGoal, out var changed));
             Assert.False(changed);
             Assert.Equal(0, repository.BoardSnapshotLoads);

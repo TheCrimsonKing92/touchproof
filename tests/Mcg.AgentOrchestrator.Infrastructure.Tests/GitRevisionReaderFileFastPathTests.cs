@@ -7,11 +7,20 @@ public sealed class GitRevisionReaderFileFastPathTests
     [Theory]
     [InlineData("HEAD")]
     [InlineData("refs/heads/fixture-main")]
+    [InlineData("fixture-main")]
+    [InlineData("HEAD^{commit}")]
+    [InlineData("HEAD^{tree}")]
+    [InlineData("fixture-main^{commit}")]
+    [InlineData("refs/heads/fixture-main^{tree}")]
     public void ColdRef_ResolvesWithoutGitLaunch(string revision)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
+        fixture.Git("config", "user.name", "Reader");
+        fixture.Git("config", "user.email", "reader@example.test");
         var expected = fixture.Oracle(revision);
+        Assert.True(GitRefFileResolver.TryResolve(fixture.Repo, revision, out var fileValue));
+        Assert.Equal(expected, fileValue);
         var window = Observe();
         Assert.True(reader.TryResolve(fixture.Repo, revision, out var actual));
         AssertCommands(window);
@@ -25,8 +34,8 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void MissingBranch_ConfirmsOnlyWhenAbsenceIsUnproven(bool provable)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
-        if (!provable) File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[user]\nname = Reader\n");
+        using var reader = new GitRevisionReader(admissionReads: 0);
+        if (!provable) File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[reader-unsupported]\nvalue = true\n");
         Assert.Equal(provable, GitRevisionReader.TryConfirmBranchAbsent(fixture.Repo, "absent"));
         var window = Observe();
         Assert.False(reader.TryResolve(fixture.Repo, "refs/heads/absent", out var actual));
@@ -41,9 +50,9 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void ObjectExpressions_KeepBatchAndAbbreviationConfirmation(bool abbreviated)
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         var head = fixture.Oracle("HEAD");
-        var revision = abbreviated ? head[..12] : head + "^{tree}";
+        var revision = abbreviated ? head[..12] : head + "~0^{tree}";
         var expected = fixture.Oracle(revision);
         Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, revision, out _));
         var window = Observe();
@@ -57,9 +66,9 @@ public sealed class GitRevisionReaderFileFastPathTests
     public void BranchCreatedAfterReaderStart_UsesFreshFileEvidence()
     {
         using var fixture = new Fixture();
-        using var reader = new GitRevisionReader();
-        Assert.True(reader.TryResolve(fixture.Repo, "HEAD^{commit}", out _));
-        var process = reader.GetReader(fixture.Repo);
+        using var reader = new GitRevisionReader(admissionReads: 0);
+        Assert.True(reader.TryResolve(fixture.Repo, "HEAD~0", out _));
+        var process = Assert.IsType<GitRevisionReader.ReaderProcess>(reader.GetReader(fixture.Repo));
         fixture.Git("branch", "late");
         var expected = fixture.Oracle("refs/heads/late");
         var window = Observe();
@@ -67,6 +76,39 @@ public sealed class GitRevisionReaderFileFastPathTests
         AssertCommands(window);
         Assert.Equal(expected, actual);
         Assert.Same(process, reader.GetReader(fixture.Repo));
+    }
+
+    [Theory]
+    [InlineData("plain")]
+    [InlineData("linked")]
+    [InlineData("separate")]
+    [InlineData("sha256")]
+    public void LooseCommitExpressions_MatchGitWithoutAdmittingReader(string layout)
+    {
+        using var fixture = new Fixture(sha256: layout == "sha256");
+        using var reader = new GitRevisionReader();
+        var directory = fixture.Repo;
+        if (layout == "linked")
+        {
+            directory = Path.Combine(fixture.Root, "linked");
+            fixture.Git("worktree", "add", "-b", "linked", directory);
+        }
+        else if (layout == "separate")
+            fixture.Git("init", "--separate-git-dir=" + Path.Combine(fixture.Root, "metadata"));
+        var head = GitCli.Run(directory, "rev-parse", "HEAD").Output.Trim();
+        foreach (var revision in new[] { "HEAD^{commit}", "HEAD^{tree}", "fixture-main^{commit}",
+            head, head + "^{commit}", head + "^{tree}",
+            GitCli.Run(directory, "rev-parse", "HEAD^{tree}").Output.Trim(),
+            GitCli.Run(directory, "rev-parse", "HEAD^{tree}").Output.Trim() + "^{tree}" })
+        {
+            var expected = GitCli.Run(directory, "rev-parse", "--verify", revision);
+            Assert.True(expected.Succeeded, expected.Error);
+            var window = Observe();
+            Assert.True(reader.TryResolve(directory, revision, out var actual));
+            AssertCommands(window);
+            Assert.Equal(expected.Output.Trim(), actual);
+            Assert.Null(reader.GetReader(directory));
+        }
     }
 
     private static HostCapacitySlotGitCensus.Window Observe()

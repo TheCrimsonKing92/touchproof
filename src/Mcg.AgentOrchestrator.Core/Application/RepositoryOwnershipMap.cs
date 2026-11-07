@@ -44,6 +44,7 @@ public static class RepositoryOwnershipMap
                 ["Diagnostics", "Persistence", "Processes", "Verification", "Workers", "Workspaces"]),
             ["Mcg.AgentOrchestrator.Execution"] = ("infrastructure", ["Persistence", "Processes", "Verification", "Workers"]),
             ["Mcg.AgentOrchestrator.Infrastructure.Providers"] = ("infrastructure.providers", []),
+            // Preserve ownership of historical paths, including deletions of the retired project.
             ["Mcg.AgentOrchestrator.Infrastructure.OperatorComms"] = ("infrastructure.operatorcomms", [])
         };
 

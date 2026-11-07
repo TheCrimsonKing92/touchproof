@@ -88,7 +88,7 @@ public sealed class CliAttentionPostLandingDutyReadTests : Xunit.IClassFixture<I
         var served = false;
 
         var output = AsyncLocalConsoleRouter.Capture(() => served = CliAttentionQueryCommand.TryExecute(args, queries,
-            fixture.Workspace, new InMemoryModelProviderRegistry([]), null,
+            fixture.Workspace, new InMemoryModelProviderRegistry([]),
             ref agents, ref profiles, ref currentGoal));
 
         Assert.True(served);
@@ -120,7 +120,7 @@ public sealed class CliAttentionPostLandingDutyReadTests : Xunit.IClassFixture<I
         var providers = new InMemoryModelProviderRegistry([]);
 
         var output = AsyncLocalConsoleRouter.Capture(() => Assert.True(
-            CliAttentionQueryCommand.TryExecute(args, queries, fixture.Workspace, providers, null,
+            CliAttentionQueryCommand.TryExecute(args, queries, fixture.Workspace, providers,
                 ref agents, ref profiles, ref currentGoal)));
 
         Assert.Equal(2, queries.LoadCalls.Count);

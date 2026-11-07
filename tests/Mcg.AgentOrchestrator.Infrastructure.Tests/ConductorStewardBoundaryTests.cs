@@ -38,8 +38,10 @@ public sealed class ConductorStewardBoundaryTests
         (type.HasElementType && type.GetElementType() is { } element && ForbiddenType(element)) ||
         (type.IsGenericType && type.GetGenericArguments().Any(ForbiddenType));
 
+    private sealed class DiscordNegativeControl { }
+
     private sealed class ForbiddenFieldNegativeControl
     {
-        private readonly RecordingControlPlaneMessageTransport? _store;
+        private readonly DiscordNegativeControl? _store;
     }
 }

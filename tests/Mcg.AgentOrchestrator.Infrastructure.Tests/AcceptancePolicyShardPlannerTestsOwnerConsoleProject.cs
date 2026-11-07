@@ -32,7 +32,6 @@ public sealed class AcceptancePolicyShardPlannerTestsOwnerConsoleProject
     [Theory]
     [InlineData("src/Mcg.AgentOrchestrator.Core/Probe.cs")]
     [InlineData("src/Mcg.AgentOrchestrator.Infrastructure.Providers/Probe.cs")]
-    [InlineData("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Probe.cs")]
     [InlineData("src/Mcg.AgentOrchestrator.Execution/Probe.cs")]
     [InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Probe.cs")]
     [InlineData("src/Mcg.AgentOrchestrator.App/Probe.cs")]

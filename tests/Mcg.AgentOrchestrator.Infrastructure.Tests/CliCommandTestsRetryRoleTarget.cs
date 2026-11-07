@@ -35,14 +35,13 @@ public sealed class CliCommandTestsRetryRoleTarget : CliCommandTestBase
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
-            var channel = NullOperatorChannel.Instance;
 
             CaptureConsole(() =>
             {
                 Assert.False(CliPersistentStateRunner.ExecuteCommand(
                     ["retry", "--goal", goal.Id.Value[..8], "developer", "--cause",
                         "NewSourceFinding", "Rework developer"],
-                    repository, workspace, ref agents, providers, ref profiles, ref currentGoal, channel));
+                    repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
             });
 
             var store = SqliteOperatorIntentStore.ForDirectories(

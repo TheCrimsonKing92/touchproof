@@ -26,7 +26,7 @@ public sealed class CliTimelineReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     args, repository, OrchestratorWorkspace.ForDirectory(root),
-                    new InMemoryModelProviderRegistry([]), null,
+                    new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -89,7 +89,7 @@ public sealed class CliTimelineReadOnlyRouteTests : CliTaskQueryTestSupport
                 {
                     Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                         args, repository, OrchestratorWorkspace.ForDirectory(root),
-                        new InMemoryModelProviderRegistry([]), null,
+                        new InMemoryModelProviderRegistry([]),
                         ref agents, ref profiles, ref currentGoal, out var changed));
                     Xunit.Assert.False(changed);
                 });

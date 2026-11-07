@@ -44,7 +44,7 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
             var newOutput = CaptureConsole(() =>
             {
                 var claimed = CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref readAgents, ref readProfiles, ref readCurrentGoal, out var changed);
+                    providers, ref readAgents, ref readProfiles, ref readCurrentGoal, out var changed);
                 Xunit.Assert.True(claimed);
                 Xunit.Assert.False(changed);
             });
@@ -78,7 +78,7 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
             var repository = new ProbeStateRepository(kernel);
             var newError = Xunit.Assert.Throws<KeyNotFoundException>(() =>
                 CliReadOnlyCommandRunner.TryExecute(args, repository, workspace, providers,
-                    null, ref agents, ref profiles, ref currentGoal, out _));
+                    ref agents, ref profiles, ref currentGoal, out _));
             Xunit.Assert.Equal(oldError.Message, newError.Message);
         }
         finally

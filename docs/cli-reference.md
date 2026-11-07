@@ -524,7 +524,7 @@ When all three gates pass the goal moves to `Merged`, then to `Recorded` (writte
 
 ### Operator notifications
 
-Escalations use `IOperatorChannel`, which currently composes `NullOperatorChannel` for every catalog. Notifications remain available in the local operator inbox: run `operator-inbox` to inspect items and `operator-inbox-ack` to acknowledge them.
+Escalations are recorded in the local operator inbox: run `operator-inbox` to inspect items and `operator-inbox-ack` to acknowledge them.
 
 ## Next Slices
 

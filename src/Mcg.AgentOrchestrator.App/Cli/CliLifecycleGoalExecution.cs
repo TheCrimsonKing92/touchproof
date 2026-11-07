@@ -19,7 +19,6 @@ internal static class CliLifecycleGoalExecution
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog profiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createContext = null)
     {
         var kernel = repository.LoadAsync().GetAwaiter().GetResult();
@@ -36,7 +35,7 @@ internal static class CliLifecycleGoalExecution
         kernel.SetCandidatePatchEquivalence(new GoalWorktreeCandidatePatchEquivalence(
             workspace.ExecutionDirectory, workspace.IntegrationBranch));
         var context = createContext?.Invoke(kernel, persist) ?? new CliExecutionContext(
-            kernel, workspace, providers, agents, profiles, selected, channel,
+            kernel, workspace, providers, agents, profiles, selected,
             reloadKernel: () => repository.LoadAsync().GetAwaiter().GetResult(), persistKernel: persist)
         {
             EventWriter = writer,

@@ -14,7 +14,6 @@ internal sealed class PullRequestDeliveryTracker
     private readonly IForgeProcessRunner _runner;
     private readonly ICollaborationItemStore _attention;
     private readonly IGoalLifecycleEventWriter? _events;
-    private readonly IOperatorChannel? _channel;
     private readonly IClock _clock;
     private readonly Func<TimeSpan> _elapsed;
     private readonly Action<GoalId>? _refreshJournal;
@@ -29,7 +28,7 @@ internal sealed class PullRequestDeliveryTracker
 
     internal PullRequestDeliveryTracker(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IPullRequestStatusReader reader, IForgeProcessRunner runner, ICollaborationItemStore attention,
-        IGoalLifecycleEventWriter? eventWriter = null, IOperatorChannel? channel = null, IClock? clock = null,
+        IGoalLifecycleEventWriter? eventWriter = null, IClock? clock = null,
         Func<TimeSpan>? elapsed = null, Action<GoalId>? refreshJournal = null, Func<string?>? mutationBlocker = null,
         Action<ConductorLandingReceipt>? landingSink = null,
         ConductorParallelAcceptanceAttemptCoordinator? acceptanceAttempts = null, PullRequestReviewConflictCheck? conflictCheck = null)
@@ -40,7 +39,6 @@ internal sealed class PullRequestDeliveryTracker
         _runner = runner;
         _attention = attention;
         _events = eventWriter;
-        _channel = channel;
         _clock = clock ?? new SystemClock();
         var start = Stopwatch.GetTimestamp();
         _elapsed = elapsed ?? (() => Stopwatch.GetElapsedTime(start));
@@ -106,7 +104,7 @@ internal sealed class PullRequestDeliveryTracker
                 var reason = PullRequestLandingDelivery.ClosedUnmergedPrefix + delivery.Url;
                 if (goal.Timeline.Any(item => item.Kind == ProgressKind.GoalPolicyDecision &&
                     item.OccurredAt >= delivery.DeliveredAt && item.Message == reason)) return;
-                OperatorInbox.RecordLandingEscalation(_workspace, goal, reason, _workspace.IntegrationBranch, _channel);
+                OperatorInbox.RecordLandingEscalation(_workspace, goal, reason, _workspace.IntegrationBranch);
                 _events?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, _workspace.IntegrationBranch);
                 _kernel.RecordGoalPolicyDecision(goal.Id, reason);
                 return;

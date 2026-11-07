@@ -1208,11 +1208,11 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
                     .Select(row => new GoalId(row.Id)).ToArray();
                 var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
                 Goal? currentGoal = null;
-                CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, null,
+                CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
                     ref agents, ref profiles, ref currentGoal);
             }
             else
-                CliBacklogQueryCommand.Execute(args, repository, workspace, providers, null, ref agents, ref profiles);
+                CliBacklogQueryCommand.Execute(args, repository, workspace, providers, ref agents, ref profiles);
         });
         return new(text, events, GC.GetAllocatedBytesForCurrentThread() - before);
     }

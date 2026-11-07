@@ -44,7 +44,7 @@ public sealed class CliAttentionNextGoldenOutputTests : CliTaskQueryTestSupport
             var read = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref readAgents, ref readProfiles, ref readGoal, out var changed));
+                    providers, ref readAgents, ref readProfiles, ref readGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
             Xunit.Assert.Equal(Encoding.UTF8.GetBytes(fixture), Encoding.UTF8.GetBytes(read));
@@ -88,7 +88,7 @@ public sealed class CliAttentionNextGoldenOutputTests : CliTaskQueryTestSupport
             var read = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref readAgents, ref readProfiles, ref readGoal, out var changed, clock));
+                    providers, ref readAgents, ref readProfiles, ref readGoal, out var changed, clock));
                 Xunit.Assert.False(changed);
             });
             Xunit.Assert.Equal(Encoding.UTF8.GetBytes(CliAttentionNextGoldenFixtures.NextFull),

@@ -18,8 +18,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel)
+        ref Goal? currentGoal)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -31,7 +30,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
         if (changed)

@@ -225,7 +225,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
                 var queryOutput = CaptureConsole(() =>
                 {
                     Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                        command, queryRepository, workspace, new InMemoryModelProviderRegistry([]), null,
+                        command, queryRepository, workspace, new InMemoryModelProviderRegistry([]),
                         ref agents, ref profiles, ref selectedGoal, out var changed, clock));
                     Xunit.Assert.False(changed);
                 });
@@ -359,7 +359,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     ["readiness"], repository, OrchestratorWorkspace.ForDirectory(root),
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal,
                     out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -421,7 +421,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     ["readiness"], repository, OrchestratorWorkspace.ForDirectory(root),
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal,
                     out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -557,7 +557,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     ["readiness", goal.Id.Value[..8]], repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal,
                     out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -641,7 +641,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             Goal? currentGoal = null;
             var providers = new InMemoryModelProviderRegistry([]);
             var output = CaptureConsole(() => Xunit.Assert.False(CliReadOnlyCommandRunner.TryExecute(
-                args, repository, workspace, providers, null,
+                args, repository, workspace, providers,
                 ref agents, ref profiles, ref currentGoal, out _)));
             Xunit.Assert.Equal(string.Empty, output);
 
@@ -680,7 +680,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             var providers = new InMemoryModelProviderRegistry([]);
             var args = new[] { "next", "--full", goal.Id.Value[..8] };
             var output = CaptureConsole(() => Xunit.Assert.False(CliReadOnlyCommandRunner.TryExecute(
-                args, repository, workspace, providers, null,
+                args, repository, workspace, providers,
                 ref agents, ref profiles, ref currentGoal, out _)));
             Xunit.Assert.Equal(string.Empty, output);
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>

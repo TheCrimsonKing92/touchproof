@@ -17,7 +17,6 @@ internal static class AcceptanceStableSlotTestSupport
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         CliPersistentStateRunner.OperatorIntentSubmissionSource operatorIntentSubmissionSource = CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli,
         WorktreeCleanupContext? acceptanceCleanupContext = null)
@@ -32,7 +31,6 @@ internal static class AcceptanceStableSlotTestSupport
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             acceptanceVerifier,
             operatorIntentSubmissionSource,
             acceptanceCleanupContext,

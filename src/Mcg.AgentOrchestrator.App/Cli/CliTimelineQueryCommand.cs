@@ -27,7 +27,6 @@ internal static class CliTimelineQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -47,7 +46,7 @@ internal static class CliTimelineQueryCommand
         var kernel = stateQueries.LoadGoalsAsync([goalId]).GetAwaiter().GetResult();
         currentGoal = kernel.Goals.SingleOrDefault(goal => goal.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
     }
 

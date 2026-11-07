@@ -18,10 +18,9 @@ public sealed class RuntimeAssemblyArchitectureTests
     private static readonly ReflectionAssembly InfrastructureAssembly = typeof(GoalAcceptanceVerifier).Assembly;
     private static readonly ReflectionAssembly ExecutionAssembly = typeof(CohortAcceptanceStore).Assembly;
     private static readonly ReflectionAssembly ProvidersAssembly = typeof(ProviderSmokeTester).Assembly;
-    private static readonly ReflectionAssembly OperatorCommsAssembly = typeof(NullOperatorChannel).Assembly;
     private static readonly ReflectionAssembly AppAssembly = typeof(SubscriptionPlanBuilder).Assembly;
     private static readonly ReflectionAssembly[] RuntimeAssemblies =
-        [CoreAssembly, InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly];
+        [CoreAssembly, InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, AppAssembly];
 
     // Parallel-safe: immutable assembly inputs and one published, shared architecture; no external I/O seam.
     private static int architectureLoadCount;
@@ -52,7 +51,7 @@ public sealed class RuntimeAssemblyArchitectureTests
             "Mcg.AgentOrchestrator.Core", "Mcg.AgentOrchestrator.Infrastructure",
             "Mcg.AgentOrchestrator.Execution",
             "Mcg.AgentOrchestrator.Infrastructure.Providers",
-            "Mcg.AgentOrchestrator.Infrastructure.OperatorComms", "Mcg.AgentOrchestrator.App"
+            "Mcg.AgentOrchestrator.App"
         ];
         Assert.Equal(expected.Order(StringComparer.Ordinal),
             RuntimeAssemblies.Select(assembly => assembly.GetName().Name!).Order(StringComparer.Ordinal));
@@ -65,7 +64,7 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     [Fact]
     public void Core_has_no_outward_runtime_dependencies() => AssertPasses(LayeringRule(
-        [CoreAssembly], [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly]));
+        [CoreAssembly], [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, AppAssembly]));
 
     [Fact]
     public void Core_layering_control_detects_App_dependency_on_Infrastructure() =>
@@ -73,7 +72,7 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     [Fact]
     public void Infrastructure_assemblies_do_not_depend_on_App() => AssertPasses(LayeringRule(
-        [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly], [AppAssembly]));
+        [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly], [AppAssembly]));
 
     [Fact]
     public void Execution_types_do_not_depend_on_Infrastructure_or_App() => AssertPasses(LayeringRule(

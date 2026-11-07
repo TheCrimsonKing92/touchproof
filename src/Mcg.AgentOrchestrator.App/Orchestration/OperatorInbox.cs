@@ -78,15 +78,13 @@ internal sealed record LandingEscalationWriteResult(
     long JsonElapsedMilliseconds,
     string JsonOutcome,
     long CollaborationElapsedMilliseconds,
-    string CollaborationOutcome,
-    long ChannelElapsedMilliseconds,
-    string ChannelOutcome)
+    string CollaborationOutcome)
 {
     internal static LandingEscalationWriteResult CompletedWithoutExternalSinks { get; } =
-        new(0, "ok", 0, "skipped", 0, "skipped");
+        new(0, "ok", 0, "skipped");
 
     internal static LandingEscalationWriteResult Error { get; } =
-        new(0, "error", 0, "skipped", 0, "skipped");
+        new(0, "error", 0, "skipped");
 }
 
 internal static partial class OperatorInbox
@@ -111,7 +109,6 @@ internal static partial class OperatorInbox
     private static readonly TimeSpan DefaultLandingEscalationLockTimeout =
         TimeSpan.FromTicks(LandingEscalationLockBackoff.Ticks * MaxLandingEscalationLockAttempts);
     private static readonly TimeSpan DefaultCollaborationRaiseTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan DefaultChannelSendTimeout = TimeSpan.FromSeconds(5);
     internal const int MaxHoldWriteRetries = 5;
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
@@ -556,10 +553,8 @@ internal static partial class OperatorInbox
         Goal goal,
         string reason,
         string integrationBranch,
-        IOperatorChannel? channel = null,
         ICollaborationItemStore? collaborationStore = null,
         TimeSpan? collaborationRaiseTimeout = null,
-        TimeSpan? channelSendTimeout = null,
         TimeSpan? landingEscalationLockTimeout = null,
         CancellationToken cancellationToken = default)
     {
@@ -582,7 +577,7 @@ internal static partial class OperatorInbox
             // Pending raises and resolutions share this lock, including the awaited store operation.
             if (record.AttributionPendingIdentity is not null)
                 return new LandingEscalationWriteResult(ElapsedMilliseconds(jsonClock.Elapsed),
-                    "lock-timeout", 0, "skipped", 0, "skipped");
+                    "lock-timeout", 0, "skipped");
             jsonOutcome = "lock-timeout";
             Console.Error.WriteLine(
                 $"warning: landing escalation JSON record was not written for goal {goal.Id.Value[..8]} " +
@@ -607,8 +602,6 @@ internal static partial class OperatorInbox
                     return new LandingEscalationWriteResult(
                         ElapsedMilliseconds(jsonClock.Elapsed),
                         "skipped-stale",
-                        0,
-                        "skipped",
                         0,
                         "skipped");
                 }
@@ -648,7 +641,6 @@ internal static partial class OperatorInbox
         }
         jsonClock.Stop();
 
-        var goalPrefix = goal.Id.Value[..8];
         if (pendingRaiseOutcome is null) collaborationClock.Start();
         var collaborationOutcome = pendingRaiseOutcome ?? RunBoundedOnBackground(
             () => store.RaiseAsync(
@@ -662,47 +654,11 @@ internal static partial class OperatorInbox
             collaborationRaiseTimeout ?? DefaultCollaborationRaiseTimeout);
         collaborationClock.Stop();
 
-        if (channel is null or NullOperatorChannel)
-        {
-            return new LandingEscalationWriteResult(
-                ElapsedMilliseconds(jsonClock.Elapsed),
-                jsonOutcome,
-                ElapsedMilliseconds(collaborationClock.Elapsed),
-                collaborationOutcome,
-                0,
-                "skipped");
-        }
-
-        var command = BuildEscalationCommand(goalPrefix, integrationBranch);
-        var actionLabel = integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase)
-            ? "Resolve Escalation"
-            : "Promote to Main";
-        var requiresConfirm = command.StartsWith("land ", StringComparison.OrdinalIgnoreCase)
-            || command.StartsWith("acceptance ", StringComparison.OrdinalIgnoreCase);
-        var escalation = new OperatorEscalation(
-            itemId,
-            goal.Id.Value,
-            goalPrefix,
-            "LandingEscalation",
-            $"Landing parked on {integrationBranch}",
-            OperatorEscalationProjection.FormatSummary(
-                goal.Objective,
-                reason,
-                BuildEscalationSuggestedAction(integrationBranch)),
-            $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
-            [new OperatorEscalationAction(actionLabel, command, RequiresConfirm: requiresConfirm, RequiresInput: command.Contains('<'))]);
-        var channelClock = Stopwatch.StartNew();
-        var channelOutcome = RunBoundedAsync(
-            () => channel.SendEscalationAsync(escalation),
-            channelSendTimeout ?? DefaultChannelSendTimeout);
-        channelClock.Stop();
         return new LandingEscalationWriteResult(
             ElapsedMilliseconds(jsonClock.Elapsed),
             jsonOutcome,
             ElapsedMilliseconds(collaborationClock.Elapsed),
-            collaborationOutcome,
-            ElapsedMilliseconds(channelClock.Elapsed),
-            channelOutcome);
+            collaborationOutcome);
     }
 
     private static string LandingEscalationSourceKey(LandingEscalationRecord record)
@@ -741,36 +697,6 @@ internal static partial class OperatorInbox
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
-            return "timeout";
-        }
-        catch
-        {
-            return "error";
-        }
-    }
-
-    private static string RunBoundedAsync(Func<Task> action, TimeSpan timeout)
-    {
-        Task? task = null;
-        try
-        {
-            task = action();
-            task
-                .WaitAsync(timeout)
-                .GetAwaiter()
-                .GetResult();
-            return "ok";
-        }
-        catch (TimeoutException)
-        {
-            if (task is not null)
-            {
-                _ = task.ContinueWith(
-                    static faulted => _ = faulted.Exception,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-            }
             return "timeout";
         }
         catch
@@ -975,8 +901,7 @@ internal static partial class OperatorInbox
     public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(
         OrchestratorWorkspace workspace,
         Goal goal,
-        IReadOnlyList<OwnershipHoldRequest> holdRequests,
-        IOperatorChannel? channel = null)
+        IReadOnlyList<OwnershipHoldRequest> holdRequests)
     {
         if (holdRequests.Count == 0)
         {
@@ -1035,7 +960,6 @@ internal static partial class OperatorInbox
             }
 
             SaveOwnershipHoldsWithRetry(workspace, records);
-            SendEscalations(channel, raised);
             return raised;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -1340,32 +1264,6 @@ internal static partial class OperatorInbox
     private static void Add(Dictionary<string, OperatorInboxItem> items, OperatorInboxItem item)
     {
         items.TryAdd(item.Id, item);
-    }
-
-    private static void SendEscalations(IOperatorChannel? channel, IReadOnlyList<OperatorInboxItem> items)
-    {
-        if (channel is null or NullOperatorChannel)
-        {
-            return;
-        }
-
-        foreach (var item in items)
-        {
-            var escalation = OperatorEscalationProjection.Project(item);
-            if (escalation is null)
-            {
-                continue;
-            }
-
-            try
-            {
-                channel.SendEscalationAsync(escalation).GetAwaiter().GetResult();
-            }
-            catch
-            {
-                // The persisted inbox item is authoritative; channel delivery is best-effort.
-            }
-        }
     }
 
     private static List<Goal> ResolveGoals(AgentOrchestratorKernel kernel, string? goalPrefix)

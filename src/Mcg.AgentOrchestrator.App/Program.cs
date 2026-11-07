@@ -479,24 +479,6 @@ if (IsGoalEventsFollowCommand(startupArgs))
 var (providers, agentFallback) = StartupProviderComposition.Create(commandCapability == CliCommandCapability.Execution);
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
-IOperatorChannel operatorChannel;
-if (commandCapability != CliCommandCapability.Execution)
-{
-    operatorChannel = NullOperatorChannel.Instance;
-}
-else
-{
-    try
-    {
-        operatorChannel = OperatorChannelComposition.Create(operatorCatalog, workspace.OrchestratorDirectory);
-    }
-    catch
-    {
-        operatorChannel = NullOperatorChannel.Instance;
-    }
-}
-
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison.OrdinalIgnoreCase))
 {
     var objective = startupArgs.Count > 1 ? string.Join(' ', startupArgs.Skip(1)) : "Create a Windows-based agent orchestrator";
@@ -531,8 +513,7 @@ if (TrialCompareCliCommand.RequiresHistoricalState(startupArgs))
             workspace,
             ref agents,
             providers,
-            ref workerProfiles,
-            operatorChannel);
+            ref workerProfiles);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -557,7 +538,7 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     Goal? commandCurrentGoal = null;
     try
     {
-        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel, cleanupContext: cleanupContext);
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, cleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -639,8 +620,7 @@ if (startupArgs.Count > 0)
     try
     {
         CliReadOnlyStartupHydration.ExecuteStartupCommand(startupArgs, stateRepository, workspace,
-            ref agents, providers, ref workerProfiles, ref currentGoal, stateHydrated,
-            operatorChannel, acceptanceCleanupContext: cleanupContext, startupLoopLease: startupLoopLease,
+            ref agents, providers, ref workerProfiles, ref currentGoal, stateHydrated, acceptanceCleanupContext: cleanupContext, startupLoopLease: startupLoopLease,
             onReadOnlyDeclined: CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs)
                 ? () => ProgramStartupLifecycle.InitializeWorkerProcessTracking(
                     RunsStartupCleanup(startupArgs),
@@ -771,7 +751,7 @@ while (true)
             continue;
         }
 
-        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
+        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceCleanupContext: cleanupContext);
     }
     catch (Exception ex)
     {
