@@ -73,17 +73,18 @@ public sealed class WorkerSandboxPreparerMediumDescendantTests
     }
 
     [Theory]
-    [InlineData(3, false)]
-    [InlineData(4, true)]
-    public void Prepare_FileAndExcludedEntriesAtBudgetBoundary_ReuseOnlyWithinBudget(
+    [InlineData(2, false)]
+    [InlineData(3, true)]
+    public void Prepare_DirectoriesAtBudgetBoundary_ReuseOnlyWithinBudget(
         int budget, bool receiptHit)
     {
         using var tree = new TestTree();
+        tree.Directory("src", "project", "nested");
+        tree.Directory(".git", "objects");
         tree.File("source.txt");
         var preparer = new WorkerSandboxPreparer(tree.Labels, maxDescendantEntries: budget);
         Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).WorktreeRecursiveRelabel);
-        // Exactly four entries: source.txt, marker, receipt and the excluded sandbox directory.
-        Assert.Equal(4, System.IO.Directory.EnumerateFileSystemEntries(tree.Root).Count());
+        // Only src, project and nested consume the budget; files and exclusions do not.
         Assert.True(tree.Labels.Query(tree.Root).Low);
         tree.Labels.SetCalls.Clear();
 
@@ -96,6 +97,29 @@ public sealed class WorkerSandboxPreparerMediumDescendantTests
         else
             Assert.Equal((tree.Root, WorkerSandboxPreparer.LowInheritableLevel, true),
                 Assert.Single(tree.Labels.SetCalls));
+    }
+
+    [Fact]
+    public void Prepare_FileHeavyLowTree_ReusesReceiptWithoutRelabel()
+    {
+        using var tree = new TestTree();
+        var project = tree.Directory("project");
+        for (var index = 0; index < 4097; index++)
+            tree.File("project", $"source-{index}.txt");
+        Assert.Equal(4097, System.IO.Directory.EnumerateFiles(project).Count());
+        var preparer = new WorkerSandboxPreparer(tree.Labels);
+        Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).WorktreeRecursiveRelabel);
+        tree.Labels.SetCalls.Clear();
+        tree.Labels.Queries.Clear();
+
+        var result = preparer.Prepare(tree.Root, tree.Sandbox);
+
+        Assert.True(result.PrepReceiptHit);
+        Assert.False(result.WorktreeRecursiveRelabel);
+        Assert.False(result.SandboxRecursiveRelabel);
+        Assert.Empty(tree.Labels.SetCalls);
+        Assert.Contains(project, tree.Labels.Queries);
+        Assert.All(tree.Labels.Queries, path => Assert.True(System.IO.Directory.Exists(path), path));
     }
 
     [Fact]
