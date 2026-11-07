@@ -143,7 +143,9 @@ internal static class SourceSizeRatchet
             // Goal 387027bb adds three integration lines for the separately owned acceptance retry hold gate.
             // Goal 5ca3f5c0: six property/construction lines wire the separately owned PR tracker and landing receipt.
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1681),
+            // Goal 871a6f45 adds seven lines to open the attributed-failure routing hold between retry
+            // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1688),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -562,7 +564,9 @@ internal static class SourceSizeRatchet
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
             // Goal 0d141bc6 adds the immutable merge-train feature option at its existing admission consumer;
             // extracting only that option would separate it from the dependency checks it gates (+2 lines).
-            new SourceClassCeiling("ConductorDriver", 14246, 70),
+            // Goal 871a6f45 keeps retry, hold opening and dispatch ordered in the shared attributed-failure
+            // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
+            new SourceClassCeiling("ConductorDriver", 14253, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
