@@ -6,7 +6,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorStewardHost
 {
-    internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_STEWARD_ENABLED";
     private readonly ConductorStewardTriggerStore _triggers;
     private readonly ConductorStewardTriggerDetector _detector;
     private readonly IConductorStewardModelRound _model;
@@ -91,10 +90,9 @@ internal sealed partial class ConductorStewardHost
             throw new InvalidOperationException("Steward model round did not drain after conductor shutdown cancellation.");
     }
 
-    internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace,
+    internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace, bool enabled,
         Func<Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy>? policy = null)
     {
-        var enabledSetting = Environment.GetEnvironmentVariable(EnabledEnvironmentVariable);
         var caseDSources = ConductorStewardCaseDSources.CreateDefault(workspace);
         var solo = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
@@ -122,8 +120,7 @@ internal sealed partial class ConductorStewardHost
             goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch),
             new ConductEventLogWriter(workspace.ConductEventsLogPath),
-            enabled: !string.Equals(enabledSetting, "false", StringComparison.OrdinalIgnoreCase) &&
-                     enabledSetting != "0",
+            enabled: enabled,
             deterministicRoute: new ConductorStewardDeterministicRoute(
                 new GitConductorStewardTrackedFileLister(),
                 new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull)),

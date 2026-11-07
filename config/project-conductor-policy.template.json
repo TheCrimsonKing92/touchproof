@@ -1,5 +1,12 @@
 {
   "name": "ProjectPermissive",
+  "features": {
+    "steward": true,
+    "author": true,
+    "selfRelaunch": true,
+    "mergeTrains": true,
+    "archivedSnapshotCompression": false
+  },
   "maxCriterionRetries": 2,
   "plannerSampleCount": 1,
   "acceptanceWidth": 1,

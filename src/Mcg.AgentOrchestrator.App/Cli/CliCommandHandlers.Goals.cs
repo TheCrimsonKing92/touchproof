@@ -1413,7 +1413,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
-                    cleanupHooks: context.CleanupHooks);
+                    cleanupHooks: context.CleanupHooks)
+                {
+                    MergeTrainsFeatureEnabled = loopPolicy.Features.MergeTrains
+                };
                 loopDriver.EnvironmentGate?.ProbeAtStart(context.Kernel.Goals);
                 if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                     loopDriver.EnableOwnedGroupedGateAttempts();
@@ -1475,7 +1478,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new WindowsWorkerSandboxReader(),
                         new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
                 var programHealthMonitor = ConductorProgramHealthMonitor.ForWorkspace(context.Workspace, conductEventLogWriter);
-                var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
+                var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace,
+                    loopPolicy.Features.ArchivedSnapshotCompression);
                 var remoteExecutorProbe = new ConductorRemoteExecutorProbe(AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
                     RemoteLaneExecutorConfiguration.ResolveStorePath(context.Workspace.ExecutionDirectory), TimeProvider.System,
                     GoalAcceptanceVerifier.RunRemoteLaneTransportAsync, RemoteExecutorOccupancy.DefaultStartTime, conductEventLogWriter);
@@ -1698,9 +1702,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         selfRelaunch: selfRelaunch is null ? null : supervisorSetup.DelegateSelfRelaunchToSupervisor
                                 ? SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace)
                                 : selfRelaunch,
-                        selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
-                            Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
-                            Console.Error.WriteLine),
+                        selfRelaunchEnabled: loopPolicy.Features.SelfRelaunch,
                         homeBuildAdoption: supervisorSetup.HomeBuildAdoption,
                         homeBuildRelaunch: supervisorSetup.HomeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
                         postLandingCanary: postLandingCanary,
@@ -1713,13 +1715,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: supervisorSetup.HomeBuildAdoption is null),
-                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
+                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, loopPolicy.Features.Steward, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                         .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace,
                             () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy,
                             () => terminalSweepCache.ObservedMainSha))
-                        .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
+                        .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace, loopPolicy.Features.Author))
                         .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
@@ -1782,7 +1784,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                      recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
-                     cleanupHooks: context.CleanupHooks);
+                     cleanupHooks: context.CleanupHooks)
+            {
+                MergeTrainsFeatureEnabled = conductPolicy.Features.MergeTrains
+            };
             conductDriver.EnvironmentGate?.ProbeAtStart([context.CurrentGoal]);
             if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
                 conductDriver.EnableOwnedGroupedGateAttempts();
@@ -1851,10 +1856,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                         adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                             goalIds => context.ReloadKernel(goalIds))),
-                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
+                    selfRelaunchEnabled: conductPolicy.Features.SelfRelaunch,
+                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, conductPolicy.Features.Steward, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                     .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                     .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
-                    .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
+                    .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace, conductPolicy.Features.Author))
                     .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),

@@ -99,7 +99,8 @@ public abstract class ConductorBatchLoopTests
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
         Func<DateTimeOffset>? utcNow = null,
         string? executionDirectory = null,
-        Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null) =>
+        Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
+        bool mergeTrainsEnabled = true) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -143,7 +144,10 @@ public abstract class ConductorBatchLoopTests
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
             utcNow: utcNow,
             executionDirectory: executionDirectory,
-            readAcceptanceEngineHealth: readAcceptanceEngineHealth);
+            readAcceptanceEngineHealth: readAcceptanceEngineHealth)
+        {
+            MergeTrainsFeatureEnabled = mergeTrainsEnabled
+        };
 
     // Returns a path to a stop file that does NOT exist yet.
     private protected static string NoStopPath() =>

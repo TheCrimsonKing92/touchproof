@@ -29,21 +29,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Xunit.Assert.True(sanitized.Length > 40);
     }
 
-    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_on_and_only_false_disables")]
-    [Xunit.InlineData(null, true)]
-    [Xunit.InlineData("", true)]
-    [Xunit.InlineData("false", false)]
-    [Xunit.InlineData("0", false)]
-    [Xunit.InlineData("1", true)]
-    [Xunit.InlineData("true", true)]
-    public void BatchLoopSelfRelaunchActivationSwitchDefaultsOnAndOnlyFalseDisables(
-        string? configuredValue,
-        bool expected)
-    {
-        Assert.True(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
-        Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
-    }
-
     [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_policy_worker_caps_and_verified_journal_mode")]
     public void BatchLoopLoopStartReportsPolicyWorkerCapsAndVerifiedJournalMode()
     {
@@ -51,7 +36,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         var policy = ConductorAutonomyPolicy.Conservative with
         {
             Name = "OperatorTuned",
-            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 2
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 2,
+            Features = new(false, false, false, false, true)
         };
         var driver = MakeDriver(hasGateReadyGoal: () => true);
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
@@ -73,6 +59,12 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.Contains("reservedGateSlots=1", output, StringComparison.Ordinal);
         Assert.Contains("effectiveWorkerCap=8", output, StringComparison.Ordinal);
         Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
+        var start = Assert.Single(output.Split('\n'), line => line.Contains("LOOP_START ", StringComparison.Ordinal));
+        Assert.Contains("features.steward=false", start, StringComparison.Ordinal);
+        Assert.Contains("features.author=false", start, StringComparison.Ordinal);
+        Assert.Contains("features.selfRelaunch=false", start, StringComparison.Ordinal);
+        Assert.Contains("features.mergeTrains=false", start, StringComparison.Ordinal);
+        Assert.Contains("features.archivedSnapshotCompression=true", start, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_loop_start_truncates_compact_journal_mode_token")]

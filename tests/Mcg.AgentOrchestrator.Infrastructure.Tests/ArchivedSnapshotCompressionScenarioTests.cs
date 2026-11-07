@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -22,6 +23,29 @@ public sealed class ArchivedSnapshotCompressionScenarioTests
         BytesBefore: 0, BytesAfter: 0, VacuumRequested: false, VacuumCompleted: false, VacuumDeferred: false);
     private static readonly StorageRetentionResult SuccessfulSweep = new(0, 0, 0, 0, 0, 0, "fixture-sweep", []);
     private static string Json<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public async Task DueCadence_PolicyEnablement_ControlsSnapshotCompression(string? setting, bool expected)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ConductorAutonomyPolicy.Default.ToJson())!.AsObject();
+        Assert.True(json.Remove("features"));
+        if (setting is not null)
+            json["features"] = System.Text.Json.Nodes.JsonNode.Parse($"{{\"archivedSnapshotCompression\":{setting}}}");
+        var policy = ConductorAutonomyPolicy.ParseJson(json.ToJsonString());
+        using var fixture = new Fixture();
+        await fixture.SeedAsync();
+        var result = fixture.Run(Now, enabled: policy.Features.ArchivedSnapshotCompression);
+        Assert.True(result.Attempted);
+        Assert.False(result.Failed);
+        Assert.StartsWith($"ARCHIVED_SNAPSHOT_COMPRESSION status={(expected ? "completed" : "disabled")} ",
+            Assert.Single(fixture.Details("archived-snapshot-compression")));
+        var rows = fixture.ArchiveRows();
+        Assert.Equal(5, rows.Count);
+        Assert.All(rows.Values, row => Assert.Equal(expected ? "blob" : "text", row.Type));
+    }
 
     [Fact]
     public async Task DueCadence_Enabled_CompressesLegacyRowsAndPreservesSnapshots()

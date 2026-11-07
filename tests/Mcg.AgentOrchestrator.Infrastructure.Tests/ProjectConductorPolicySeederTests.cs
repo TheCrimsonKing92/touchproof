@@ -72,10 +72,35 @@ public sealed class ProjectConductorPolicySeederTests
         var keys = document.RootElement.EnumerateObject().Select(p => p.Name)
             .Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(new[] { "acceptanceWidth", "autoPromoteRiskThreshold", "cascadeTesterCheapFirst",
-            "maxConcurrentPaidWorkers", "maxCriterionRetries", "name", "plannerSampleCount",
+            "features", "maxConcurrentPaidWorkers", "maxCriterionRetries", "name", "plannerSampleCount",
             "transitionMap" }, keys);
         Assert.Equal(ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers,
             document.RootElement.GetProperty("maxConcurrentPaidWorkers").GetInt32());
+    }
+
+    [Fact]
+    public void Seed_NonDefaultFeatures_PreservesEveryConfiguredValue()
+    {
+        using var fixture = new Fixture();
+        var template = JsonNode.Parse(File.ReadAllText(fixture.Template))!.AsObject();
+        template["features"] = JsonNode.Parse("""
+            {
+              "steward": false,
+              "author": false,
+              "selfRelaunch": false,
+              "mergeTrains": false,
+              "archivedSnapshotCompression": true
+            }
+            """);
+        File.WriteAllText(fixture.Template, template.ToJsonString());
+
+        var result = ProjectConductorPolicySeeder.Seed(fixture.Template, fixture.Destination);
+
+        Assert.Equal(ProjectConductorPolicySeeder.Outcome.Seeded, result.Outcome);
+        Assert.Empty(result.DroppedKeys);
+        var policy = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
+            new DirectoryInfo(fixture.Destination));
+        Assert.Equal(new ConductorFeatureSwitches(false, false, false, false, true), policy.Features);
     }
 
     [Theory]
