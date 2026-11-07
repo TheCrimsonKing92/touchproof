@@ -782,7 +782,7 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, _retryDeveloperAfterStructuralPreflight!, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull).IntegrateMainBeforeDeveloperDispatch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull)).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, RetryDeveloperWithAcceptedFeedback, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull).IntegrateMainBeforeDeveloperDispatch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull)).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;

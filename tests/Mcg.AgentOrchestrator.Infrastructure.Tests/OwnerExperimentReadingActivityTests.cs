@@ -32,7 +32,7 @@ public sealed class OwnerExperimentReadingActivityTests
                 Assert.Contains($"experiment-decide {ExperimentPrefix}", text);
                 Assert.Contains("record the result", text);
             }
-            var detail = OwnerActivityNarrator.ExplainWithFields(item);
+            var detail = OwnerActivityExplanation.ExplainWithFields(item);
             var diagnosticsStart = detail.Text.IndexOf("\n\nDiagnostics\n", StringComparison.Ordinal);
             Assert.True(diagnosticsStart >= 0, "Activity detail must separate narration from diagnostic evidence.");
             // Internal tokens belong in exact evidence, outside the owner-facing narration.

@@ -169,6 +169,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoTestJsonGateReceipt",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HeavyFixtureGitLaunchBoundCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandEnvironmentInputs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",

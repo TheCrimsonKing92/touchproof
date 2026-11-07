@@ -38,7 +38,7 @@ public sealed class ActivityEventStructuredFieldsTests
     {
         var outcome = Escalation() with { Reason = new string('x', 700) + " real spaces 日本語" };
         var source = WriteRead(outcome, ConductorBatchLoop.FormatGoalProgressLine("abcdef12", outcome, 2));
-        var detail = OwnerActivityNarrator.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
+        var detail = OwnerActivityExplanation.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
         var original = detail.Text[detail.Text.IndexOf("\n\nOriginal event\n", StringComparison.Ordinal)..];
         Assert.Contains("\nGoal ID: abcdef1234567890\n", original);
         Assert.Contains("\nResult: escalated\nState: Failed\nSlot: 2\nReason: " + outcome.Reason, original);
@@ -78,7 +78,7 @@ public sealed class ActivityEventStructuredFieldsTests
         const string raw = "GOAL goal=abcdef12 result=escalated state=Failed reason=Goal_is_in_Failed_state;_rule=opaque empty= token=a=b";
         var source = Read(raw);
         Assert.Null(source.GoalProgress);
-        var detail = OwnerActivityNarrator.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
+        var detail = OwnerActivityExplanation.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
         Assert.Contains("Result: escalated\nState: Failed\nReason: Goal is in Failed state; rule=opaque", detail.Text);
         Assert.EndsWith("Raw event: " + raw, detail.Text);
         Assert.Equal("Goal is in Failed state; rule=opaque", detail.Fields.Fields.Single(field => field.Label == "Reason").Value);
@@ -92,7 +92,7 @@ public sealed class ActivityEventStructuredFieldsTests
         var source = Read("GOAL goal=legacy result=escalated state=Failed reason=legacy_rule=wrong",
             new GoalProgressEventFields(Result: "held", Reason: "  ", Slot: 0,
                 Failure: new("", null, [new("worker_build_applicability", "", " ")])));
-        var detail = OwnerActivityNarrator.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
+        var detail = OwnerActivityExplanation.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title")));
         Assert.Equal("held", detail.Fields.Fields.Single(field => field.Key == "event/0/result").Value);
         Assert.Equal("0", detail.Fields.Fields.Single(field => field.Key == "event/0/slot").Value);
         Assert.DoesNotContain(detail.Fields.Fields, field => field.Key is "event/0/state" or "event/0/reason" or "event/0/rule" or "event/0/failure-kind" || field.Key.StartsWith("event/0/legacy/", StringComparison.Ordinal));

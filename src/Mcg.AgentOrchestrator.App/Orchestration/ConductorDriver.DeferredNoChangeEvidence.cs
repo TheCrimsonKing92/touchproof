@@ -181,7 +181,7 @@ internal sealed partial class ConductorDriver
             : $"DEFERRED_NO_CHANGE_EVIDENCE_UNUSABLE candidate_sha={outcome.CandidateSha}; " +
               $"receipt_id={receiptId}; not_run={string.Join(',', notRun)}; " +
               $"requested_classes={string.Join(',', outcome.TestClasses)}. Repair the class declaration or test evidence.";
-        (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(
+        RetryDeveloperWithAcceptedFeedback(
             goal.Id, developer.Id, feedback, RetryRoundKind.Mechanical, RetryCause.NewTestFinding);
         var refreshed = GetCurrentGoal(goal);
         result = ExecuteDispatchAndStart(

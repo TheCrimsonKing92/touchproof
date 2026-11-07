@@ -849,7 +849,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks[index] = attributedChecks[index];
         }
 
-        phaseAccountant.BalancedPlan?.AddResidualSummary(checks);
+        phaseAccountant.BalancedPlan?.AddResidualSummary(checks); if (HeavyFixtureGitLaunchBoundCheck.Evaluate(checks) is { } gitBound) checks.Add(gitBound);
         if (ownerProtectedDecision.Pass is { } ownerProtectedPass) checks.Add(ownerProtectedPass);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);

@@ -595,6 +595,16 @@ public static class DispatchFailureClassifier
         }
 
         if (task.RequiredRole == AgentRole.Developer &&
+            verification.WriteIntegrityObservation is { EstablishesAboveLow: true } writeIntegrity)
+        {
+            return BuildOutcome(TaskOutcomeRules.WorkerWriteIntegrityBlocked, task, verification,
+                workerResultPresent, hasCommittedChanges,
+                new DispatchOutcome(DispatchOutcomeKind.UnknownFailure, exitCode, hasZeroByteOutput,
+                    null, null, RecoveryRecommendation.OperatorNeeded,
+                    $"Worker write integrity blocked: path={writeIntegrity.WorktreeRelativePath} label={writeIntegrity.ObservedLabel}"));
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
             WorkerResultBlockers.GetAssignedScopeComplete(verification) is false)
         {
             return BuildOutcome(
@@ -1002,7 +1012,7 @@ public static class DispatchFailureClassifier
                 authoredFailure,
                 verification,
                 workerResultPresent,
-                hasCommittedChanges);
+                hasCommittedChanges) && RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError);
 
             return BuildOutcome(
                 verifiedNoChange ? TaskOutcomeRules.VerifiedNoChangeRound : authoredFailure.Rule,

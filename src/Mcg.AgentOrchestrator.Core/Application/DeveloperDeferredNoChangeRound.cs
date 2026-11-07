@@ -10,6 +10,7 @@ internal static class DeveloperDeferredNoChangeRound
     {
         var output = verification.AuthoritativeStandardOutput;
         if (!verification.Succeeded || !workerResultPresent || hasCommittedChanges ||
+            !RetryCorrectionObligationEvidence.IsSatisfied(task, verification.StandardError) ||
             output is null ||
             task.RequiredRole != AgentRole.Developer ||
             (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0 &&
