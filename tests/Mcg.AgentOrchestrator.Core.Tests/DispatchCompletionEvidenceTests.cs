@@ -141,7 +141,7 @@ public sealed class DispatchCompletionEvidenceTests
         var task = DeveloperTask();
         var goalId = GoalId.New();
         var retryAt = CompletedAt.AddMinutes(-2);
-        task.RecordRetry(retryAt, RetryCause.NewSourceFinding);
+        task.RecordRetry(retryAt, RetryCause.MainDriftConflict);
         task.RecordCriterionRetryFeedback(["alpha.cs exceeds the ceiling"]);
         var obligation = scenario switch
         {
@@ -157,6 +157,7 @@ public sealed class DispatchCompletionEvidenceTests
             PreDispatchIntegrationReceipt = new PreDispatchIntegrationReceipt(
                 goalId, task.Id, retryAt, BaseCommit, new string('b', 40), ResultCommit)
         });
+        Assert.True(task.LastDispatch!.PreDispatchIntegrationReceipt!.Matches(goalId, task, ResultCommit));
         var error = scenario is "passed" or "failed" or "unavailable"
             ? RetryCorrectionObligationEvidence.Format(task.AcceptedRetryFeedback!.Obligation!, scenario switch
             {

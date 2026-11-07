@@ -7,9 +7,8 @@ using static DeveloperResumedDeferredNoChangeQualifierTests;
 // Parallel-safe: every filesystem and SQLite resource is under a unique fixture root.
 public sealed class RetryCorrectionObligationCompletionTests
 {
-    private const string OldFindingOutput = "NO_CHANGE: the old rename finding was repaired at the earlier commit.\n" +
-        "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - ClassA\ncommit: none\n" +
-        "blockers: none\nassigned_scope_complete: true\nEND_WORKER_RESULT";
+    private static readonly string OldFindingOutput = Output.Replace(Rationale,
+        "NO_CHANGE: the old rename finding was repaired at the earlier commit.", StringComparison.Ordinal);
 
     [Xunit.Theory]
     [Xunit.InlineData(false, false)]
@@ -34,6 +33,9 @@ public sealed class RetryCorrectionObligationCompletionTests
                 }
             };
             var output = oldFinding ? OldFindingOutput : Output;
+            Xunit.Assert.True(WorkerResultParser.TryParseResult(output, out _, out _));
+            var (_, baselineGoal, baselineTask) = Scenario(null);
+            Xunit.Assert.True(Qualify(baselineGoal, baselineTask, output, string.Empty, out _));
             string? diagnostic = null;
             var accepted = runner.AllowsNoChangeCompletion(
                 goal, task, Evidence(), output, output, string.Empty, root, ref diagnostic);
@@ -127,9 +129,11 @@ public sealed class RetryCorrectionObligationCompletionTests
                 kernel = AgentOrchestratorKernel.FromSnapshot(
                     JsonSerializer.Deserialize<OrchestratorSnapshot>(json.ToJsonString())!);
             }
-            var repository = new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db"));
+            var databasePath = Path.Combine(root, "state.db");
+            _ = StateDbMigrations.EnsureUpToDate(databasePath);
+            var repository = new SqliteOrchestratorStateRepository(databasePath);
             await repository.SaveAsync(kernel);
-            var loaded = await new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db")).LoadAsync();
+            var loaded = await new SqliteOrchestratorStateRepository(databasePath).LoadAsync();
             var restored = loaded.GetTask(goal.Id, task.Id);
             Xunit.Assert.NotNull(restored.AcceptedRetryFeedback);
             Xunit.Assert.Equal(scenario != "legacy", restored.AcceptedRetryFeedback.Obligation is not null);
@@ -152,6 +156,12 @@ public sealed class RetryCorrectionObligationCompletionTests
     public void LaterAcceptedFeedback_DoesNotInheritAnOlderObligation()
     {
         var (kernel, goal, task) = Scenario(RetryCorrectionObligation.ForSourceSizeRatchet(Candidate));
+        var dispatch = task.LastDispatch!;
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id,
+            new TaskProcessRecord(123, dispatch.Command, dispatch.WorkingDirectory, "out", "err", "exit",
+                dispatch.DispatchedAt, dispatch.DispatchedAt, 0), null);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Correction round finished.");
+        Xunit.Assert.NotEqual(WorkTaskStatus.Running, task.Status);
         kernel.RetryTaskAutomatically(goal.Id, task.Id, "Later accepted review correction", RetryCause.NewSourceFinding,
             authoritativeRetryFeedback: true);
         Xunit.Assert.NotNull(task.AcceptedRetryFeedback);
