@@ -523,10 +523,10 @@ public sealed partial class AgentOrchestratorKernel
         RetryCause retryCause,
         bool invalidateDownstream = true,
         RetryRoundKind? retryRoundKind = null,
-        bool authoritativeRetryFeedback = false) =>
+        bool authoritativeRetryFeedback = false, RetryCorrectionObligation? obligation = null) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
             authoritativeRetryFeedback: authoritativeRetryFeedback, preserveEquivalentPendingRetry: true,
-            correctionSource: CriteriaCorrectionSource.Escalation);
+            correctionSource: CriteriaCorrectionSource.Escalation, obligation: obligation);
 
     private TaskSpec RetryTaskCore(
         GoalId goalId,
@@ -537,7 +537,7 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind,
         bool authoritativeRetryFeedback,
         bool preserveEquivalentPendingRetry = false,
-        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator, CriteriaCorrectionSource? retryFeedbackSource = null)
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator, CriteriaCorrectionSource? retryFeedbackSource = null, RetryCorrectionObligation? obligation = null)
     {
         var goal = GetGoal(goalId);
         EnsureGoalCanResumeWork(goal);
@@ -587,7 +587,7 @@ public sealed partial class AgentOrchestratorKernel
             if (authoritativeRetryFeedback)
             {
                 task.RecordCriterionRetryFeedback([retryMessage], previousRetryAt);
-                task.RecordAcceptedRetryFeedback(retryMessage, retryAt, retryFeedbackSource ?? correctionSource);
+                task.RecordAcceptedRetryFeedback(retryMessage, retryAt, retryFeedbackSource ?? correctionSource, obligation);
             }
             else
             {

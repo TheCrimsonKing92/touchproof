@@ -12,6 +12,7 @@ public static class OperatorCancelAwareDispatchRunner
         new(completionBuildEvidence: completionBuildEvidence ?? new CompletionBuildEvidenceCoordinator(
             workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
+            RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory,
                 projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, integrationBranch: workspace.IntegrationBranch),
             ExecutionThrottlingOptOut = () => DispatchJobExecutionQos.IsEnabled(workspace.SqliteStatePath),

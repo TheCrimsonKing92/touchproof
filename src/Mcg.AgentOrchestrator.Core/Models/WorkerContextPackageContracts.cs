@@ -341,7 +341,11 @@ public sealed record WorkerRetryFeedbackPromptReceipt(
     string TypedArtifactSha256,
     string RenderedProjectionSha256,
     string GeneratedPromptSha256,
-    ContextDeliveryMode DeliveryMode);
+    ContextDeliveryMode DeliveryMode,
+    string? ObligationFeedbackSha256 = null,
+    string? ObligationCandidateSha = null,
+    string? ObligationCondition = null,
+    string? ObligationProjectionSha256 = null);
 
 public enum EarlyConvergenceEvidenceKind
 {

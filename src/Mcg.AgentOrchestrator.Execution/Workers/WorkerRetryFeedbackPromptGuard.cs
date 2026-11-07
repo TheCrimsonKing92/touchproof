@@ -54,6 +54,16 @@ internal static class WorkerRetryFeedbackPromptGuard
             throw Failure(task, "the generated prompt does not contain the exact typed retry-feedback projection");
         }
 
+        var obligation = acceptedRetry.Obligation;
+        var obligationProjection = obligation is null ? null :
+            RetryCorrectionObligationBriefSection.Projection(obligation, acceptedRetry.Message);
+        if (obligation is not null &&
+            (obligation.FeedbackSha256 != RetryCorrectionObligation.HashFeedback(acceptedRetry.Message) ||
+             !promptText.Contains(obligationProjection!, StringComparison.Ordinal)))
+        {
+            throw Failure(task, "the generated prompt does not contain the candidate-bound correction obligation");
+        }
+
         return (receipt ?? throw Failure(task, "context-package receipt is absent")) with
         {
             RetryFeedbackPromptReceipt = new WorkerRetryFeedbackPromptReceipt(
@@ -64,7 +74,11 @@ internal static class WorkerRetryFeedbackPromptGuard
                 artifact.ContentHash,
                 WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(projection)),
                 WorkerContextArtifact.Hash(promptBytes),
-                artifact.DeliveryMode)
+                artifact.DeliveryMode,
+                obligation?.FeedbackSha256,
+                obligation?.CandidateSha,
+                obligation?.ConditionIdentity,
+                obligationProjection is null ? null : WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(obligationProjection)))
         };
     }
 

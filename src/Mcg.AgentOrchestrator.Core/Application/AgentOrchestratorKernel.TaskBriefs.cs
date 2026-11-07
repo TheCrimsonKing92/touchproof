@@ -241,6 +241,7 @@ public sealed partial class AgentOrchestratorKernel
             "# Agent Task Brief",
             string.Empty
         };
+        headerLines.AddRange(RetryCorrectionObligationBriefSection.RenderCurrent(task));
         headerLines.AddRange(BuildAccumulatedRetryFeedbackBriefBlock(goal, task, workingDirectory, targetBranchName, targetHeadCommit));
         FindingEvidenceBriefProjection.AppendContinuation(headerLines, goal, task);
         headerLines.AddRange(PreTesterEvidenceIndexLines.ForTester(goal, task, targetHeadCommit));
@@ -497,16 +498,7 @@ public sealed partial class AgentOrchestratorKernel
                 collapsePriority: 50));
         }
 
-        if (task.CriterionRetryFeedback.Count > 0)
-        {
-            var feedbackLines = new List<string>
-            {
-                "## Unmet acceptance criteria from the prior attempt - fix these:"
-            };
-            feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {item}"));
-            feedbackLines.Add(string.Empty);
-            segments.Add(TaskBriefSegment.Projected("task/criterion-retry-feedback.json", feedbackLines));
-        }
+        segments.AddRange(RetryCorrectionObligationBriefSection.RenderRetryFeedbackProjection(task));
 
         if (pendingInput.Count > 0)
         {
@@ -1021,7 +1013,7 @@ public sealed partial class AgentOrchestratorKernel
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "## Accumulated retry/review feedback",
             $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. The latest canonical actionable findings and their evidence provenance are emitted once below for every retry-capable provider.",
-            "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
+            task.AcceptedRetryFeedback?.Obligation is null ? "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests." : "Historical retry and review context; the current correction obligation above owns this round.",
         };
 
         if (latestRetry is not null)
