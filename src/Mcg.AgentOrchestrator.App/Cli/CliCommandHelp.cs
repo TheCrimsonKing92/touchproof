@@ -141,6 +141,7 @@ internal static class CliCommandHelp
             "--stall-warning-seconds",
             "--stall-warning-minutes",
             "--unscoped-stall-ticks",
+            "--home-build-blocked-commit",
             ConductorContinuitySupervisor.ChildFlag,
             ConductorContinuitySupervisor.ExitArtifactFlag,
             "--help",
