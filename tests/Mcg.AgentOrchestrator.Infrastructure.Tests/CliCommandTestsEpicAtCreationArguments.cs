@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Drive the same argument normalization and flag validation as Program before dispatch.
 public sealed class CliCommandTestsEpicAtCreationArguments : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

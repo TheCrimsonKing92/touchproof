@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliReadOnlyStartupFallbackTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public void DeclinedReadRouteHydratesBeforeRunningNormalCommand()
     {

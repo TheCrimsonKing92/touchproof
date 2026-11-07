@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class SourceBacklogSiblingCreationTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_active_slice_owner_allows_sibling_goal")]
     public async Task PersistentRunnerActiveSliceOwnerAllowsSiblingGoal()
     {

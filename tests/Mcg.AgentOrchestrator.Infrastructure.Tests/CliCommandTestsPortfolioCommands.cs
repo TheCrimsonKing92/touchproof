@@ -3,6 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsPortfolioCommands : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "Cli_epic_and_project_commands_assign_members_and_print_rollups")]
     public void EpicAndProjectCommandsAssignMembersAndPrintRollups()
     {

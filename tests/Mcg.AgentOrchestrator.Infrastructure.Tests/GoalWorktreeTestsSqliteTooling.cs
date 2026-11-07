@@ -1655,6 +1655,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
 
 public sealed class GoalWorktreeTestsCleanupHookDelegates : GoalWorktreeTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "DeleteDirectory_removes_tree_containing_read_only_files")]
     public void DeleteDirectoryRemovesTreeContainingReadOnlyFiles()
     {

@@ -31,6 +31,9 @@ internal sealed record ConductorActivationBuild(
 internal sealed partial class ConductorContinuitySupervisor
 {
     private FleetBuildAdoptionSummary? _fleetBuildAdoptionSummary;
+    private FleetBuildRollingRestartTrigger? _fleetRollingRestartTrigger;
+    internal Func<FleetBuildRollingRestartTrigger>? FleetRollingRestartTriggerFactory { get; init; }
+    internal Func<FleetBuildAdoptionSummary>? FleetAdoptionSummaryFactory { get; init; }
 
     internal const string ActivationHealthyTicksEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_HEALTHY_TICKS";
     internal const int DefaultActivationHealthyTicks = 3;
@@ -353,7 +356,7 @@ internal sealed partial class ConductorContinuitySupervisor
         {
             try
             {
-                (_fleetBuildAdoptionSummary ??= new FleetBuildAdoptionSummary(
+                (_fleetBuildAdoptionSummary ??= FleetAdoptionSummaryFactory?.Invoke() ?? new FleetBuildAdoptionSummary(
                     OrchestratorProjectRegistry.CreateDefault(), TryAppendConductEvent, _timeProvider,
                     homeRoot: OrchestratorHome.ResolveForProcess().SourceRootDirectory))
                     .OnHomeAdopted(primaryBuild.CommitSha, now);
@@ -362,6 +365,16 @@ internal sealed partial class ConductorContinuitySupervisor
                 System.Text.Json.JsonException or ArgumentException or InvalidOperationException)
             {
                 TryAppendConductEvent($"FLEET_BUILD_ADOPTION_SUMMARY_FAILED commit={primaryBuild.CommitSha} reason={Sanitize(ex.Message)}");
+            }
+            try
+            {
+                (_fleetRollingRestartTrigger ??= FleetRollingRestartTriggerFactory?.Invoke()
+                    ?? FleetBuildRollingRestartTrigger.CreateDefault(TryAppendConductEvent))
+                    .OnHomeAdopted(primaryBuild.CommitSha, primaryBuild.CommandPrefix);
+            }
+            catch (Exception ex)
+            {
+                TryAppendConductEvent($"FLEET_ROLLING_RESTART_FAILED commit={primaryBuild.CommitSha} reason={Sanitize(ex.Message)}");
             }
         }
     }

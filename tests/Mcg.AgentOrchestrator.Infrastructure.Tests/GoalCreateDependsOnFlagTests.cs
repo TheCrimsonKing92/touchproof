@@ -7,6 +7,8 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public async Task Creation_PersistsEdgeInInitialWriteAndHoldsDispatch()
     {

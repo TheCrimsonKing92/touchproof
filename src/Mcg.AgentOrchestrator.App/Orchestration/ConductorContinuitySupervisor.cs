@@ -328,20 +328,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                     }
                 }
             }
-            var childArgs = args
-                .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
-                .Where(arg => !arg.StartsWith("--home-build-blocked-commit=", StringComparison.Ordinal))
-                .Concat([
-                    $"--project={projectName}",
-                    $"--tenant={tenantName}",
-                    ChildFlag,
-                    ExitArtifactFlag,
-                    artifactPath
-                ])
-                .Concat(homeBuildFollower is not null && blockedActivationCommit is not null
-                    ? new[] { $"--home-build-blocked-commit={blockedActivationCommit}" } : Array.Empty<string>())
-                .Concat(activeChild is null && pendingSuccessor is not null ? new[] { "--require-current-stores" } : Array.Empty<string>())
-                .ToArray();
+            var childArgs = ComposeChildArguments(args, projectName, tenantName, artifactPath,
+                homeBuildFollower is not null ? blockedActivationCommit : null,
+                requireCurrentStores: activeChild is null && pendingSuccessor is not null);
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
@@ -909,6 +898,23 @@ internal sealed partial class ConductorContinuitySupervisor(
             currentBuild.Lease?.Dispose();
         }
     }
+
+    internal static string[] ComposeChildArguments(IReadOnlyList<string> args, string projectName,
+        string tenantName, string exitArtifactPath, string? blockedHomeBuildCommit, bool requireCurrentStores) =>
+        args
+            .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
+            .Where(arg => !arg.StartsWith("--home-build-blocked-commit=", StringComparison.Ordinal))
+            .Concat([
+                $"--project={projectName}",
+                $"--tenant={tenantName}",
+                ChildFlag,
+                ExitArtifactFlag,
+                exitArtifactPath
+            ])
+            .Concat(blockedHomeBuildCommit is not null
+                ? new[] { $"--home-build-blocked-commit={blockedHomeBuildCommit}" } : Array.Empty<string>())
+            .Concat(requireCurrentStores ? new[] { "--require-current-stores" } : Array.Empty<string>())
+            .ToArray();
 
     private static IDisposable? TryAcquireRunDirectoryLease(string appDll)
     {
