@@ -19,7 +19,12 @@ public sealed class HeavyFixtureGitLaunchReductionTests(ITestOutputHelper output
         var baseline = new (Type Class, int Launches, int Rows)[]
         {
             (typeof(AcceptanceCohortWorkflowTestsTrainRedAttribution), 1530, 43),
-            (typeof(MergeTrainFocusedRecheckReceiptAcceptanceTests), 1349, 31),
+            (typeof(MergeTrainFocusedRecheckReceiptContractTests), 174, 4),
+            (typeof(MergeTrainFocusedRecheckRedReceiptRefusalTests), 218, 5),
+            (typeof(MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests), 218, 5),
+            (typeof(MergeTrainFocusedRecheckAttemptRefusalTests), 217, 5),
+            (typeof(MergeTrainFocusedRecheckSelectionRefusalTests), 217, 5),
+            (typeof(MergeTrainFocusedRecheckCompositionRefusalTests), 305, 7),
             (typeof(AcceptanceCohortWorkflowTestsMergeTrain), 1042, 20),
             (typeof(PullRequestTrunkDriftTests), 959, 20),
             (typeof(CliCommandTestsTerminalSweepCommands), 930, 55)

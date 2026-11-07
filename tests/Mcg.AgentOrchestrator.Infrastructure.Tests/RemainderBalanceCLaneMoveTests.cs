@@ -42,15 +42,29 @@ public sealed class RemainderBalanceCLaneMoveTests
         "WorkerBuildRequestStructuralFailureTests",
         "WorkerBuildRequestStructuralIntegrationTests"
     ];
+    // Owner-approved split membership, answer afa420c1522442b8a33fcadd2d672ab7.
+    private static readonly string[] SplitClassNames =
+    [
+        "SettledSuccessExitReconcileBuildTests",
+        "PendingEvidenceExitReconcileBuildTests",
+        "DispatchIdentityRejectionExitReconcileBuildTests",
+        "InvocationRecordRejectionExitReconcileBuildTests",
+        "ForeignStoreExitReconcileBuildTests",
+        "FocusedEvidenceUnionPlanningLaunchGroupingTests",
+        "FocusedEvidenceUnionPlanningExclusionScopeTests",
+        "FocusedEvidenceUnionPlanningCommandConstructionTests",
+        "FocusedEvidenceUnionPlanningUnsupportedOperatorTests",
+        "FocusedEvidenceUnionPlanningMalformedRequestTests"
+    ];
     private static readonly string[] MovedClassNames =
     [
         .. ApprovedStructuralClassNames,
+        .. SplitClassNames,
         "WorkerBuildRequestScopeBindingTests",
         "WorkerBuildRequestScopeOwnershipTests",
         "WorkerBuildRequestIntegrationTests",
         "WorkerBuildRequestAuthorityTests",
         "WorkerBuildRequestRecoveryTests",
-        "ExitReconcileBuildControlTests",
         "ExitReconcileBuildCompositionTests",
         "ExitReconcileBuildDispositionTests",
         "CompletionBuildOriginPredicateTests",
@@ -62,7 +76,6 @@ public sealed class RemainderBalanceCLaneMoveTests
         "WorkerBuildScopeDispatchBindingTests",
         "WorkerBuildScopeDispatchOwnershipTests",
         "WorkerBuildScopeDispatchPersistenceTests",
-        "FocusedEvidenceUnionPlanningTests",
         "MergeTrainDeferralFixtureEquivalenceTests",
         "MergeTrainRedAttributionReplayScenarioTests",
         "LifecycleGoalEpicInheritanceTests",
@@ -155,7 +168,7 @@ public sealed class RemainderBalanceCLaneMoveTests
     public void NegativeControls_DetectDoubleAndMissingMembership()
     {
         var loaded = LoadLanes();
-        var moved = Assert.Single(RunnableTypes(), type => type.Name == "ExitReconcileBuildControlTests");
+        var moved = Assert.Single(RunnableTypes(), type => type.Name == "ExitReconcileBuildCompositionTests");
         const string exclusion = "&FullyQualifiedName!~ExitReconcileBuild";
         const string inclusion = "|FullyQualifiedName~ExitReconcileBuild";
         var remainder = Assert.Single(loaded, lane => lane.Name == Remainder);
@@ -188,7 +201,7 @@ public sealed class RemainderBalanceCLaneMoveTests
         Assert.Empty(balanceC.OwnedCollections);
         Assert.Equal(415.6, Assert.Single(lanes, lane => lane.Name == Remainder).EstimatedSerialSeconds);
         Assert.Equal(string.Join("|", Substrings.Select(substring => $"FullyQualifiedName~{substring}")
-                .Concat(ApprovedStructuralClassNames.Select(name => $"FullyQualifiedName~{name}"))),
+                .Concat(ApprovedStructuralClassNames.Concat(SplitClassNames).Select(name => $"FullyQualifiedName~{name}"))),
             balanceC.Filter);
 
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(

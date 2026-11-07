@@ -252,7 +252,7 @@ public sealed class FocusedEvidenceMatchedClassBudgetTests
         Assert.Equal("AlphaTests", selection.ContainingClass);
         Assert.Equal("FullyQualifiedName~AlphaTests." + method, selection.CanonicalToken);
         Assert.Equal(" FullyQualifiedName~" + method, selection.OriginalToken);
-        var arguments = FocusedEvidenceUnionPlanningTests.Argv(check);
+        var arguments = FocusedEvidenceUnionPlanningSupport.Argv(check);
         var index = Array.IndexOf(arguments, "--filter-method");
         Assert.True(index >= 0);
         Assert.Equal("*AlphaTests." + method + "*", arguments[index + 1]);

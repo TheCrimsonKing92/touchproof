@@ -19,6 +19,11 @@ public sealed class GoalWorktreeCleanupLaneSplitTests
         string[] expectedClasses =
         [
             "AcceptanceCohortWorkflowTests",
+            "AcceptanceCohortWorkflowTestsBackgroundGateMembership",
+            "AcceptanceCohortWorkflowTestsProgressRecording",
+            "AcceptanceCohortWorkflowTestsCapacityIsolation",
+            "AcceptanceCohortWorkflowTestsProductionBatchReconciliation",
+            "AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns",
             "AcceptanceVerdictCarryForwardTests",
             "GoalWorktreeTestsAcceptanceLanding",
             "GoalWorktreeTestsCleanupHookDelegates",
@@ -27,7 +32,15 @@ public sealed class GoalWorktreeCleanupLaneSplitTests
             "GoalWorktreeTestsRemoveCleanup"
         ];
 
-        Xunit.Assert.Equal("AcceptanceCohortWorkflowTests", Xunit.Assert.Single(cohortClasses));
+        Xunit.Assert.Equal(new[]
+        {
+            "AcceptanceCohortWorkflowTests",
+            "AcceptanceCohortWorkflowTestsBackgroundGateMembership",
+            "AcceptanceCohortWorkflowTestsProgressRecording",
+            "AcceptanceCohortWorkflowTestsCapacityIsolation",
+            "AcceptanceCohortWorkflowTestsProductionBatchReconciliation",
+            "AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns"
+        }, cohortClasses);
         Xunit.Assert.Empty(cohortClasses.Intersect(gitClasses, StringComparer.Ordinal));
         Xunit.Assert.Equal(
             expectedClasses.OrderBy(name => name, StringComparer.Ordinal),

@@ -2,50 +2,9 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: all negative stimuli affect only fixture-owned files and canonical state.
-public sealed class ExitReconcileBuildControlTests
+internal static class ExitReconcileBuildControlSupport
 {
-    [Theory]
-    [InlineData("batch", false)]
-    [InlineData("batch", true)]
-    [InlineData("preflight", false)]
-    [InlineData("preflight", true)]
-    public async Task OrderedReconcilers_SettledSuccess_IsConsumedAndCompletedOnce(
-        string other, bool terminalFirst)
-    {
-        using var fixture = new ExitReconcileBuildFixture();
-        var invocation = await fixture.CompleteNativeDispatch();
-        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
-        int Other() => other == "batch" ? fixture.BatchRecovery() : fixture.DispatchPreflight();
-
-        Assert.Equal(1, terminalFirst ? fixture.TerminalSweep() : Other());
-        fixture.AssertSuccess(invocation);
-        var completion = Assert.Single(fixture.Task.VerificationHistory);
-        var head = fixture.Build.Git("rev-parse", "HEAD");
-        fixture.Save();
-        fixture.Reload();
-
-        Assert.Equal(0, terminalFirst ? Other() : fixture.TerminalSweep());
-        // Repeating the same entry point is also inert after reloading its settled state.
-        Assert.Equal(0, fixture.TerminalSweep());
-
-        fixture.AssertSuccess(invocation);
-        Assert.Equal(completion.CompletedAt, Assert.Single(fixture.Task.VerificationHistory).CompletedAt);
-        Assert.Equal(head, fixture.Build.Git("rev-parse", "HEAD"));
-        Assert.Single(fixture.Goal.Timeline.Where(evt => evt.TaskId == fixture.Build.TaskId &&
-            evt.Kind == ProgressKind.TaskCompleted));
-    }
-
-    [Theory]
-    [InlineData("missing", "missing-current-candidate-outcome")]
-    [InlineData("prior-dispatch", "history-invalid")]
-    [InlineData("other-dispatch", "history-invalid")]
-    [InlineData("tree", "missing-current-candidate-outcome")]
-    [InlineData("scope", "scope-invalid")]
-    [InlineData("coverage", "history-invalid")]
-    [InlineData("worktree", "history-invalid")]
-    [InlineData("invalid-apparatus", "history-invalid")]
-    public async Task TerminalSweep_InapplicableBuild_RejectsWithoutConsumption(
+    internal static async Task TerminalSweep_InapplicableBuild_RejectsWithoutConsumption(
         string control, string diagnostic)
     {
         using var fixture = new ExitReconcileBuildFixture();
@@ -155,69 +114,7 @@ public sealed class ExitReconcileBuildControlTests
         }
     }
 
-    [Fact]
-    public async Task TerminalSweep_CompilerFailure_RemainsCandidateFailure()
-    {
-        using var fixture = new ExitReconcileBuildFixture(compilerFailure: true);
-        var invocation = await fixture.CompleteNativeDispatch();
-        Assert.Equal(WorkerBuildOutcome.CompilerFailure, invocation.Outcome);
-
-        Assert.Equal(1, fixture.TerminalSweep());
-
-        AssertRejected(fixture, "outcome=CompilerFailure");
-        Assert.Null(fixture.Task.LastVerification!.OrchestratorFailureReason);
-        Assert.True(fixture.StoredInvocation().Consumed);
-        Assert.Equal(invocation.Version + 1, fixture.StoredInvocation().Version);
-    }
-
-    [Theory]
-    [InlineData("terminal")]
-    [InlineData("batch")]
-    [InlineData("preflight")]
-    public async Task ProductionComposition_SeparateStore_CannotBorrowNativeSuccess(string path)
-    {
-        using var fixture = new ExitReconcileBuildFixture();
-        var invocation = await fixture.CompleteNativeDispatch();
-        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
-        var foreignRoot = Path.Combine(fixture.Build.Root, "foreign-authority");
-        Directory.CreateDirectory(foreignRoot);
-        var foreign = fixture.Workspace with
-        {
-            OrchestratorDirectory = foreignRoot,
-            SqliteStatePath = Path.Combine(foreignRoot, "state.db"),
-            LogDirectory = Path.Combine(foreignRoot, "logs")
-        };
-        var snapshot = fixture.Kernel.ExportGoalSnapshot(fixture.Build.GoalId);
-        var foreignKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([
-            snapshot with { Tasks = snapshot.Tasks.Select(task => task with { WorkerBuildInvocations = [] }).ToArray() }
-        ], []));
-        _ = StateDbMigrations.EnsureUpToDate(foreign.SqliteStatePath);
-        await new SqliteOrchestratorStateRepository(foreign.SqliteStatePath).SaveAsync(foreignKernel);
-
-        fixture.Kernel = foreignKernel;
-        int Reconcile() => path switch
-        {
-            "terminal" => fixture.TerminalSweep(foreign),
-            "batch" => fixture.BatchRecovery(foreign),
-            _ => fixture.DispatchPreflight(foreign)
-        };
-
-        Assert.Equal(1, Reconcile());
-        AssertRejected(fixture, "worker_build_host=enrollment-invalid");
-        Assert.Null(fixture.Task.CompletionBuildEvidence);
-        var repository = new SqliteOrchestratorStateRepository(foreign.SqliteStatePath);
-        await repository.SaveAsync(fixture.Kernel);
-        fixture.Kernel = await repository.LoadGoalsAsync([fixture.Build.GoalId]);
-        Assert.Equal(0, Reconcile());
-        AssertRejected(fixture, "worker_build_host=enrollment-invalid");
-        Assert.Null(fixture.Task.CompletionBuildEvidence);
-        Assert.False(fixture.StoredInvocation().Consumed);
-        Assert.Equal(invocation.Version, fixture.StoredInvocation().Version);
-        Assert.Empty((await new SqliteOrchestratorStateRepository(foreign.SqliteStatePath)
-            .LoadGoalsAsync([fixture.Build.GoalId])).GetTask(fixture.Build.GoalId, fixture.Build.TaskId).WorkerBuildInvocations);
-    }
-
-    private static void AssertRejected(ExitReconcileBuildFixture fixture, string diagnostic)
+    internal static void AssertRejected(ExitReconcileBuildFixture fixture, string diagnostic)
     {
         Assert.NotNull(fixture.Task.LastVerification);
         Assert.False(fixture.Task.LastVerification.Succeeded, fixture.Describe());
