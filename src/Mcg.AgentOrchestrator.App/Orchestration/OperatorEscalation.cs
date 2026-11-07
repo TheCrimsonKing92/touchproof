@@ -17,16 +17,3 @@ public sealed record OperatorEscalation(
     string Summary,
     string KeyEvidence,
     IReadOnlyList<OperatorEscalationAction> Actions);
-
-public sealed record OperatorDecision(
-    string InboxItemId,
-    int ActionIndex,
-    string? FreeText,
-    string ActorId,
-    string IdempotencyKey);
-
-public interface IOperatorChannel
-{
-    string ChannelType { get; }
-    Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default);
-}

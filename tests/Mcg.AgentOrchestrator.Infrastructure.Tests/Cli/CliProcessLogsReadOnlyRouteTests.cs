@@ -112,7 +112,7 @@ public sealed class CliProcessLogsReadOnlyRouteTests : CliTaskQueryTestSupport
             Goal? currentGoal = null;
             CaptureConsole(() => Assert.False(CliReadOnlyCommandRunner.TryExecute(
                 args, probe, OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
-                null, ref agents, ref profiles, ref currentGoal, out _)));
+                ref agents, ref profiles, ref currentGoal, out _)));
             Assert.Equal(0, probe.ListGoalMetadataCount);
             Assert.Equal(0, probe.LoadGoalsCount);
             Assert.Equal(0, probe.FullLoadAttempts);

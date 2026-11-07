@@ -38,7 +38,7 @@ public sealed class CliGoalTimingRouteParityTests : CliTaskQueryTestSupport
             var read = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                    providers, null, ref readAgents, ref readProfiles, ref readGoal, out var changed, clock));
+                    providers, ref readAgents, ref readProfiles, ref readGoal, out var changed, clock));
                 Xunit.Assert.False(changed);
             });
 

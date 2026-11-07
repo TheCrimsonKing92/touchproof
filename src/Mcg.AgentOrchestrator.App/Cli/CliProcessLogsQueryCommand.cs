@@ -47,7 +47,6 @@ internal static class CliProcessLogsQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -68,7 +67,7 @@ internal static class CliProcessLogsQueryCommand
 
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(goals, requests));
         var commandGoal = currentGoal;
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref commandGoal);
         currentGoal = commandGoal;
     }

@@ -17,7 +17,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
         fixture.Complete();
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         Assert.Single(fixture.Starts);
         var task = fixture.Goal.Tasks.Single();
         AttributedFailureAutoRouteScenarioTests.CompleteRecordedProcess(fixture.Kernel, fixture.Goal, task);
@@ -69,7 +69,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
         fixture.BeforeStart = () => throw new InvalidOperationException("Interrupted before process start");
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        var interruption = Assert.Throws<InvalidOperationException>(() => driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive));
+        var interruption = Assert.Throws<InvalidOperationException>(() => driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }));
         Assert.Equal("Interrupted before process start", interruption.Message);
         Assert.Single(MarkerRetries(fixture.Goal));
         Assert.Empty(fixture.Starts);
@@ -110,7 +110,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
         fixture.BeforeStart = () => throw new InvalidOperationException("Interrupted before dispatch preparation");
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        Assert.Throws<InvalidOperationException>(() => driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive));
+        Assert.Throws<InvalidOperationException>(() => driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }));
         Assert.Empty(fixture.Starts);
         Assert.Single(MarkerRetries(fixture.Goal));
         await fixture.Restart();

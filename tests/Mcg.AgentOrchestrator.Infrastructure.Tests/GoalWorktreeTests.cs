@@ -261,6 +261,10 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         {
             var destinationFile = Path.Combine(destination, Path.GetRelativePath(source, sourceFile));
             File.Copy(sourceFile, destinationFile);
+            // Windows Git uses creation time as ctime. Preserve the seed index's stat
+            // identity so a cached setup overlay does not require another Git refresh.
+            if (OperatingSystem.IsWindows()) File.SetCreationTimeUtc(destinationFile, File.GetCreationTimeUtc(sourceFile));
+            File.SetLastWriteTimeUtc(destinationFile, File.GetLastWriteTimeUtc(sourceFile));
         }
     }
 

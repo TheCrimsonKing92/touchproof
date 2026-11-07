@@ -25,7 +25,9 @@ public static partial class GoalWorktrees
         GoalId goalId,
         Func<string, string[], GitCli.GitResult>? gitRunner = null)
     {
-        gitRunner ??= static (workingDirectory, args) => GitCli.Run(workingDirectory, args);
+        gitRunner ??= static (workingDirectory, args) => args.Length > 1 && args[0] == "rev-parse"
+            ? GitPathQuery.Run(workingDirectory, () => GitCli.Run(workingDirectory, args), args[1..])
+            : GitCli.Run(workingDirectory, args);
 
         if (!TryReadStatus(worktreePath, gitRunner, out var statusOutput, out var failure))
         {

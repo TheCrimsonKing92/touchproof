@@ -150,8 +150,46 @@ public sealed class BriefLintTests
     [Xunit.Fact]
     public void RemovalDeclarationSuppressesAdvisory()
     {
-        Xunit.Assert.Empty(BriefLint.Lint("This removes three facts.\n  - test-removal: Example.OldFact"));
+        Xunit.Assert.Empty(BriefLint.Lint("This removes three facts.\n## Acceptance criteria\n  - test-removal: Example.OldFact"));
         Xunit.Assert.Single(BriefLint.Lint("This drops tests.\nMention test-removal: Example.OldFact in prose."));
+    }
+
+    [Xunit.Fact]
+    public void RemovalBulletOutsideAcceptanceCriteriaIsAdvisory()
+    {
+        const string text = "## What to build\n- test-removal: `Example.OldFact`\n- test-removal: `Example.OldFact`\n## Acceptance criteria\n1. The remaining facts run.";
+
+        var findings = BriefLint.Lint(text);
+
+        Xunit.Assert.Equal(2, findings.Count);
+        Xunit.Assert.All(findings, finding =>
+        {
+            Xunit.Assert.Equal("test-removal-outside-acceptance-criteria", finding.Kind);
+            Xunit.Assert.Equal(BriefLintSeverity.Advisory, finding.Severity);
+            Xunit.Assert.Equal("advisory", finding.SeverityToken);
+            Xunit.Assert.Contains("Move", finding.Remedy, StringComparison.Ordinal);
+            Xunit.Assert.Contains("acceptance criteria", finding.Remedy, StringComparison.Ordinal);
+        });
+        Xunit.Assert.Equal(findings, BriefLint.Lint(text.Replace("\n", "\r\n")));
+    }
+
+    [Xunit.Fact]
+    public void RemovalBulletInsideAcceptanceCriteriaIsSilent()
+    {
+        Xunit.Assert.Empty(BriefLint.Lint("## What to build\nUpdate the suite.\n## Acceptance criteria\n- test-removal: `Example.OldFact`"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance criteria:")]
+    [Xunit.InlineData("## Acceptance")]
+    [Xunit.InlineData("## ACCEPTANCE CRITERIA")]
+    public void RemovalPlacementUsesExistingParserSections(string heading)
+    {
+        var findings = BriefLint.Lint($"{heading}\n- test-removal: Example.OldFact\nVerification:\n- test-removal: Example.OtherFact");
+
+        var finding = Xunit.Assert.Single(findings);
+        Xunit.Assert.Equal("test-removal-outside-acceptance-criteria", finding.Kind);
+        Xunit.Assert.Contains("Example.OtherFact", finding.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

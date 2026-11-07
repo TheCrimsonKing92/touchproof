@@ -33,14 +33,17 @@ public sealed class GitProcessCompletionObserverTests : IDisposable
         var environment = GitEnvironment();
         Succeeded(GitCli.RunWithEnvironment(root, environment, "init"));
         Succeeded(GitCli.RunWithEnvironment(root, environment, "commit", "--allow-empty", "-m", "seed"));
+        // An ancestry expression bypasses the ref-file resolver, including loose commit peeling.
+        const string revision = "HEAD~0";
+        Assert.False(GitRefFileResolver.TryResolve(root, revision, out _));
+        var oracle = GitCli.Run(root, "rev-parse", "--verify", revision);
+        Succeeded(oracle);
+        var expected = oracle.Output.Trim();
         using var capture = new Capture();
-        using var reader = new GitRevisionReader(clock: new CountingClock());
-        string? expected = null;
+        using var reader = new GitRevisionReader(clock: new CountingClock(), admissionReads: 0);
         for (var index = 0; index < 50; index++)
         {
-            // A peel bypasses the ref-file resolver so this exercises the batch process.
-            Assert.True(reader.TryResolve(root, "HEAD^{commit}", out var actual));
-            expected ??= actual;
+            Assert.True(reader.TryResolve(root, revision, out var actual));
             Assert.Equal(expected, actual);
         }
         var batch = reader.GetReader(root);

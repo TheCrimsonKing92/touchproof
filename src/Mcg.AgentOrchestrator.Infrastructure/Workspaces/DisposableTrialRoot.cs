@@ -235,8 +235,10 @@ internal sealed class DisposableTrialRoot
             throw new InvalidOperationException("Trial clone does not own a standalone .git directory.");
         }
 
-        AssertGitPathBelowRoot(root, RunGitRequired(root, "rev-parse", "--git-dir").Output.Trim(), "git directory");
-        AssertGitPathBelowRoot(root, RunGitRequired(root, "rev-parse", "--git-common-dir").Output.Trim(), "git common directory");
+        AssertGitPathBelowRoot(root, GitPathQuery.Run(root,
+            () => RunGitRequired(root, "rev-parse", "--git-dir"), "--git-dir").Output.Trim(), "git directory");
+        AssertGitPathBelowRoot(root, GitPathQuery.Run(root,
+            () => RunGitRequired(root, "rev-parse", "--git-common-dir"), "--git-common-dir").Output.Trim(), "git common directory");
 
         if (File.Exists(Path.Combine(gitDirectory, "objects", "info", "alternates")))
         {

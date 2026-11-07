@@ -39,7 +39,6 @@ internal static class CliFindingQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -58,7 +57,7 @@ internal static class CliFindingQueryCommand
         }
         var commandCurrentGoal = currentGoal;
         var changed = CliCommandDispatcher.ExecuteCommand(args, kernel, workspace, ref agents,
-            providers, ref workerProfiles, ref commandCurrentGoal, channel);
+            providers, ref workerProfiles, ref commandCurrentGoal);
         if (changed)
             throw new InvalidOperationException("Finding query attempted to mutate orchestrator state through its read-only route.");
     }

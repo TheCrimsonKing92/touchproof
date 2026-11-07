@@ -593,7 +593,7 @@ public sealed class CollaborationItemStoreTests
         // Producer: landing escalation raises a Decision item.
         OperatorInbox.RecordLandingEscalation(
             workspace, goal, "merge conflict", "integration",
-            channel: null, collaborationStore: fakeStore);
+            collaborationStore: fakeStore);
 
         Xunit.Assert.Single(fakeStore.Items);
         var raised = fakeStore.Items[0];
@@ -620,7 +620,7 @@ public sealed class CollaborationItemStoreTests
 
         OperatorInbox.RecordLandingEscalation(
             workspace, goal, "conflict", "integration",
-            channel: null, collaborationStore: fakeStore);
+            collaborationStore: fakeStore);
 
         var correlationKey = fakeStore.Items[0].CorrelationKey!;
         var first = await fakeStore.TryResolveAsync(correlationKey, "land prefix");
@@ -649,7 +649,6 @@ public sealed class CollaborationItemStoreTests
             goal,
             "merge conflict",
             "integration",
-            channel: null,
             collaborationStore: fakeStore,
             // This is the product deadline whose expiry produces the asserted outcome.
             collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25));
@@ -686,7 +685,6 @@ public sealed class CollaborationItemStoreTests
                 goal,
                 "merge conflict",
                 "integration",
-                channel: null,
                 collaborationStore: store,
                 // This is the product deadline whose expiry produces the asserted outcome.
                 collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25));
@@ -703,29 +701,6 @@ public sealed class CollaborationItemStoreTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "LandingEscalation_channel_timeout_is_bounded_and_attributed")]
-    public void LandingEscalationChannelTimeoutIsBoundedAndAttributed()
-    {
-        var fakeStore = new FakeCollaborationItemStore();
-        var channel = new PendingOperatorChannel();
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Channel timeout");
-
-        var record = OperatorInbox.RecordLandingEscalation(
-            workspace,
-            goal,
-            "merge conflict",
-            "integration",
-            channel,
-            fakeStore,
-            channelSendTimeout: TimeSpan.FromMilliseconds(25));
-
-        Xunit.Assert.True(channel.SendStarted.IsSet);
-        Xunit.Assert.Equal("timeout", record.ChannelOutcome);
-        channel.Completion.SetResult();
-    }
 
     [Xunit.Fact(DisplayName = "LandingEscalation_lock_exhaustion_degrades_to_best_effort")]
     public void LandingEscalationLockExhaustionDegradesToBestEffort()
@@ -750,7 +725,6 @@ public sealed class CollaborationItemStoreTests
                 goal,
                 "merge conflict",
                 "integration",
-                channel: null,
                 collaborationStore: fakeStore,
                 collaborationRaiseTimeout: Timeout.InfiniteTimeSpan,
                 landingEscalationLockTimeout: TimeSpan.Zero));
@@ -1142,21 +1116,5 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
             decidedAt);
         _audits.Add(audit);
         return audit;
-    }
-}
-
-internal sealed class PendingOperatorChannel : IOperatorChannel
-{
-    public string ChannelType => "pending-test";
-    public ManualResetEventSlim SendStarted { get; } = new();
-    public TaskCompletionSource Completion { get; } =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public Task SendEscalationAsync(
-        OperatorEscalation escalation,
-        CancellationToken cancellationToken = default)
-    {
-        SendStarted.Set();
-        return Completion.Task;
     }
 }

@@ -183,7 +183,7 @@ internal sealed partial class ConductorDriver
                     null,
                     null,
                     CancellationToken.None,
-                    new AcceptanceRunExecutionOptions(AttemptMemberGoalIds: [goal.Id])));
+                    SoloLandingGateExecutionOptions.Create(goal)));
         if (gateStart.DeferralKind is null)
         {
             return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, gateStart.Summary!);

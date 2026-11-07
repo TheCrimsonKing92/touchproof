@@ -74,7 +74,7 @@ public sealed class ObligationRebindVerbTests
         var output = InfrastructureTestSupport.CaptureConsole(() =>
         {
             Assert.True(CliReadOnlyCommandRunner.TryExecute(["attention", "show", f.Goal.Id.Value[..8]],
-                repository, f.Workspace, new InMemoryModelProviderRegistry([]), null,
+                repository, f.Workspace, new InMemoryModelProviderRegistry([]),
                 ref agents, ref profiles, ref selected, out var changed));
             Assert.False(changed);
         });

@@ -306,8 +306,7 @@ internal sealed partial class ConductorDriver
                 goal,
                 escalationClock.Elapsed,
                 $"json_ms={sinkResult.JsonElapsedMilliseconds} json={sinkResult.JsonOutcome} " +
-                $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome} " +
-                $"channel_ms={sinkResult.ChannelElapsedMilliseconds} channel={sinkResult.ChannelOutcome}");
+                $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome}");
         }
     }
 

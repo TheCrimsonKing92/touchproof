@@ -40,7 +40,7 @@ public sealed class CliFailureClustersReadOnlyRouteTests : CliTaskQueryTestSuppo
             string Run(string[] command) => CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(command, repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             });
             var table = Run(args);

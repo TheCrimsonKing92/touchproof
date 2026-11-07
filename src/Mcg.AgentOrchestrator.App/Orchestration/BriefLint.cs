@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -47,10 +48,23 @@ public static partial class BriefLint
             Add("skill-definition-file", BriefLintSeverity.BlocksDispatch, skillOffset, "SKILL.md".Length,
                 "Include the exact .agents/skills path when a repository skill is the intended target.");
 
+        var declaredRemovals = AcceptanceCriteriaParser.Parse(text)
+            .Where(criterion => criterion.Type == "test-removal")
+            .Select(criterion => criterion.TestIdentity)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var inAcceptanceCriteria = false;
         var lineOffset = 0;
         foreach (var line in text.Split('\n'))
         {
+            var trimmed = line.TrimStart();
+            if (TestRemovalBullet().IsMatch(line) &&
+                AcceptanceCriteriaParser.TryGetTestRemovalIdentity(trimmed[2..], out var identity) &&
+                !declaredRemovals.Contains(identity))
+                Add("test-removal-outside-acceptance-criteria", BriefLintSeverity.Advisory,
+                    lineOffset + line.Length - trimmed.Length, trimmed.Length,
+                    "Move this - test-removal: bullet into the acceptance criteria section; gates credit removals declared only there.",
+                    deduplicate: false);
+
             var heading = SectionHeading().Match(line);
             if (heading.Success)
                 inAcceptanceCriteria = heading.Groups[1].Value == "##" &&

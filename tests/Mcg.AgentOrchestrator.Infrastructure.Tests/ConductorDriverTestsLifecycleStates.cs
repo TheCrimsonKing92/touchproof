@@ -268,7 +268,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             writeEscalationWithResult: (_, _, _) =>
             {
                 escalated = true;
-                return new LandingEscalationWriteResult(0, "ok", 0, "ok", 0, "ok");
+                return new LandingEscalationWriteResult(0, "ok", 0, "ok");
             });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -301,7 +301,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             writeEscalationWithResult: (_, _, reason) =>
             {
                 escalationReason = reason;
-                return new LandingEscalationWriteResult(2, "ok", 25, "timeout", 3, "error");
+                return new LandingEscalationWriteResult(2, "ok", 25, "timeout");
             });
         driver.PhaseTimingSink = phaseTimings.Add;
 
@@ -321,8 +321,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
             phaseTimings,
             line => line.Contains("phase=escalation-write", StringComparison.Ordinal) &&
                     line.Contains("json_ms=2 json=ok", StringComparison.Ordinal) &&
-                    line.Contains("collab_ms=25 collab=timeout", StringComparison.Ordinal) &&
-                    line.Contains("channel_ms=3 channel=error", StringComparison.Ordinal));
+                    line.Contains("collab_ms=25 collab=timeout", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_dispatch_remediation_runs_once_per_tick_and_rearms")]

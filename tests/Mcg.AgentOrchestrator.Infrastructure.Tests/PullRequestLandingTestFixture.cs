@@ -15,14 +15,14 @@ internal sealed class PullRequestLandingTestFixture : IDisposable
     public string Main { get; }
     public Runner Forge { get; } = new();
 
-    public PullRequestLandingTestFixture()
+    public PullRequestLandingTestFixture(WorktreeSetupTemplate? setupTemplate = null)
     {
-        var prepared = LandingExecutorTests.CreateAcceptedCandidate(Repository, "src/delivery.txt");
+        var prepared = LandingExecutorTests.CreateAcceptedCandidate(Repository, "src/delivery.txt", setupTemplate);
         Workspace = prepared.Workspace with { IsProjectScoped = true, ProjectName = "sample", Delivery = ProjectDelivery.PullRequest };
         Kernel = prepared.Kernel;
         Goal = prepared.Goal;
-        Candidate = LandingExecutorTests.ReadGit(Repository, "rev-parse", GoalWorktreeLayout.BranchName(Goal.Id));
-        Main = LandingExecutorTests.ReadGit(Repository, "rev-parse", "main");
+        Candidate = ReadRef(GoalWorktreeLayout.BranchName(Goal.Id));
+        Main = ReadRef("main");
         var directory = Path.Combine(Workspace.OrchestratorDirectory, "acceptance-gate-attempts", Goal.Id.Value);
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, Attempt + ".attempt.json"), JsonSerializer.Serialize(new
@@ -39,6 +39,14 @@ internal sealed class PullRequestLandingTestFixture : IDisposable
             summary, Candidate, Main, null, null);
         File.WriteAllText(Path.Combine(directory, Attempt + ".result.json"),
             JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        string ReadRef(string revision)
+        {
+            if (setupTemplate is null) return LandingExecutorTests.ReadGit(Repository, "rev-parse", revision);
+            Assert.True(GitRevisionReader.Shared.TryResolve(Repository, revision, out var value),
+                $"Prepared pull-request fixture must resolve {revision}.");
+            return value;
+        }
     }
 
     public LandingResult Land() => LandingExecutor.Execute(Kernel, Goal, Workspace,

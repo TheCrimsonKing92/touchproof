@@ -25,7 +25,7 @@ public sealed class SoloAttributedFailureRouteScenarioTests
         await fixture.Restart();
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         var retry = Assert.Single(MarkerRetries(fixture.Goal));
         Assert.Equal(fixture.Goal.Tasks.Single().Id, Assert.Single(fixture.Starts));
         Assert.Equal(RetryCause.NewTestFinding, fixture.Goal.Tasks.Single().PendingRetryCause);

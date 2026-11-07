@@ -26,7 +26,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     public static IReadOnlySet<string> ProductAssemblyNames { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         "Mcg.AgentOrchestrator.Core", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.Execution",
-        "Mcg.AgentOrchestrator.Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
+        "Mcg.AgentOrchestrator.Infrastructure",
         "Mcg.AgentOrchestrator.Infrastructure.Providers"
     }.ToFrozenSet(StringComparer.Ordinal);
 

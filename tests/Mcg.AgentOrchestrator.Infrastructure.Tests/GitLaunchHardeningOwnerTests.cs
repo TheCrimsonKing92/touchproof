@@ -64,7 +64,7 @@ public sealed class GitLaunchHardeningOwnerTests : IDisposable
     {
         var repo = CreateRepository();
         var expected = Probe(repo, "rev-parse", "HEAD");
-        using var reader = new GitRevisionReader();
+        using var reader = new GitRevisionReader(admissionReads: 0);
         var launches = CaptureLaunches(() =>
         {
             Assert.True(reader.TryResolve(repo, "HEAD^{commit}", out var actual));

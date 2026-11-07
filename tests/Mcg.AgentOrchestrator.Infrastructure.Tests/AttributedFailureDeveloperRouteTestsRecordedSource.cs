@@ -37,7 +37,7 @@ public sealed class AttributedFailureDeveloperRouteTestsRecordedSource
             var driver = harness.Configure();
 
             driver.BeginTick(kernel, 1);
-            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
 
             Assert.False(result.WasEscalated);
             AssertRoute(goal, goal.Tasks.Single(), harness, "train-red", Candidate, ["AlphaTests", "ZebraTests"]);

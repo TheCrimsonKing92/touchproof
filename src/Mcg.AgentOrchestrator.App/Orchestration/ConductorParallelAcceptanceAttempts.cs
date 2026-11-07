@@ -1371,7 +1371,6 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     DotnetBuildEnvironmentManager.CaptureStorageRoot(), workspace.OrchestratorDirectory),
                 agents,
                 profiles,
-                NullOperatorChannel.Instance,
                 providers,
                 cleanupHooks: WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
@@ -1805,6 +1804,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 RunId: attempt.AttemptId,
                 ResultsPrefix: prefix,
                 LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id],
+                MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers([(candidate.Goal.Id, candidate.Goal.Objective)]),
                 LaneWaitSink: observations => PersistLaneWaits(attempt, observations)));
     }
 

@@ -10,7 +10,6 @@ internal static class CliReadOnlyQueryExecutor
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -18,7 +17,7 @@ internal static class CliReadOnlyQueryExecutor
         BacklogQueryReadContext? backlogReads = null)
     {
         var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles,
-            currentGoal, channel) { IsReadOnlyQuery = true, DiagnosticsClock = diagnosticsClock,
+            currentGoal) { IsReadOnlyQuery = true, DiagnosticsClock = diagnosticsClock,
                 BacklogReads = backlogReads };
         try
         {

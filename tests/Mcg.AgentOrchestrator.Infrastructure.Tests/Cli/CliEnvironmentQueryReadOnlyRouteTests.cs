@@ -27,7 +27,7 @@ public sealed class CliEnvironmentQueryReadOnlyRouteTests : CliTaskQueryTestSupp
             var actual = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(args, probe, workspace, providers,
-                    null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    ref agents, ref profiles, ref currentGoal, out var changed));
                 Assert.False(changed);
             });
             var expected = CaptureConsole(() => Assert.False(CliCommandDispatcher.ExecuteCommand(

@@ -16,7 +16,7 @@ public sealed partial class GoalAcceptanceVerifier
         try
         {
             root = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar);
-            var gitRoot = GitCli.Run(root, "rev-parse", "--show-toplevel");
+            var gitRoot = GitPathQuery.Run(root, () => GitCli.Run(root, "rev-parse", "--show-toplevel"), "--show-toplevel");
             if (!GitGateInspectionSucceeded(gitRoot))
             {
                 EmitGateWorktreeSkippedIfTopLevel(root, goalId, gitRoot.Error);

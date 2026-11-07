@@ -18,14 +18,13 @@ internal static class CliBacklogQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles)
     {
         CliCommandHelp.ThrowIfInvalidFlags(args);
         var kernel = new AgentOrchestratorKernel();
         Goal? commandGoal = null;
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref commandGoal,
             backlogReads: new BacklogQueryReadContext(stateQueries));
     }

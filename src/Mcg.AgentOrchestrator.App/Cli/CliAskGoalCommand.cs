@@ -23,8 +23,7 @@ internal static class CliAskGoalCommand
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel)
+        ref Goal? currentGoal)
     {
         if (CliCommandHelp.TryPrintStartupHelp(args)) return false;
         var invocation = CliArgumentParser.ParseAskGoalArgs(args);
@@ -42,7 +41,7 @@ internal static class CliAskGoalCommand
         {
             var commandGoal = currentGoalId is null ? null : kernel.Goals.SingleOrDefault(goal => goal.Id == currentGoalId);
             var shouldSave = CliCommandDispatcher.ExecuteCommand(args, kernel, workspace,
-                ref nextAgents, providers, ref nextProfiles, ref commandGoal, channel);
+                ref nextAgents, providers, ref nextProfiles, ref commandGoal);
             nextCurrentGoal = commandGoal;
             return Task.FromResult((shouldSave, shouldSave));
         }).GetAwaiter().GetResult();

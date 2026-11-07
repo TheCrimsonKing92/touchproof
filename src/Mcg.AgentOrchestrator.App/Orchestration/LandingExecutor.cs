@@ -68,7 +68,6 @@ internal static partial class LandingExecutor
         AgentOrchestratorKernel kernel,
         Goal goal,
         OrchestratorWorkspace workspace,
-        IOperatorChannel? channel = null,
         ConductorAutonomyPolicy? policy = null,
         IGoalLifecycleEventWriter? eventWriter = null,
         Func<string?>? mutationBlocker = null,
@@ -90,7 +89,6 @@ internal static partial class LandingExecutor
                 workspace,
                 goalPrefix,
                 goalBranch,
-                channel,
                 eventWriter) is { } completedLanding)
         {
             return completedLanding;
@@ -101,7 +99,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter) is { } interruptedLanding)
         {
             return interruptedLanding;
@@ -132,8 +129,7 @@ internal static partial class LandingExecutor
                 workspace,
                 goal,
                 diffDecision.Reason,
-                IntegrationBranchName,
-                channel);
+                IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(
                 goal.Id,
                 GoalLifecycleState.Verified,
@@ -179,7 +175,6 @@ internal static partial class LandingExecutor
                     workspace,
                     goalPrefix,
                     goalBranch,
-                    channel,
                     eventWriter) is { } concurrentlyCompletedLanding)
             {
                 return concurrentlyCompletedLanding;
@@ -190,7 +185,7 @@ internal static partial class LandingExecutor
             {
                 Decision = PassedGateHoldEvidence.Attach(decision.ToRecord(), prospectiveEvidence.HoldDescription)
             };
-            OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, acceptanceDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {acceptanceDecision.Reason}");
@@ -214,7 +209,7 @@ internal static partial class LandingExecutor
             var decision = EvaluateLanding(3);
             evidenceDiagnostic = decision.Reason;
             var evidenceDecision = new LandingDecision.Escalate(evidenceDiagnostic) { Decision = decision.ToRecord() };
-            OperatorInbox.RecordLandingEscalation(workspace, goal, evidenceDiagnostic, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, evidenceDiagnostic, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(
                 goal.Id,
                 GoalLifecycleState.Verified,
@@ -242,7 +237,7 @@ internal static partial class LandingExecutor
             landingFacts = landingFacts with { AttributableHoldRequestCount = holdRequests.Count };
             if (holdRequests.Count > 0)
             {
-                OperatorInbox.RecordOwnershipHolds(workspace, goal, holdRequests, channel);
+                OperatorInbox.RecordOwnershipHolds(workspace, goal, holdRequests);
                 var decision = EvaluateLanding(4);
                 var reason = decision.Reason;
                 var holdDecision = new LandingDecision.Escalate(reason) { Decision = decision.ToRecord() };
@@ -254,7 +249,7 @@ internal static partial class LandingExecutor
             var unknownPolicyDecision = EvaluateLanding(5);
             var unknownReason = unknownPolicyDecision.Reason;
             var unknownDecision = new LandingDecision.Escalate(unknownReason) { Decision = unknownPolicyDecision.ToRecord() };
-            OperatorInbox.RecordLandingEscalation(workspace, goal, unknownReason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, unknownReason, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, unknownReason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, unknownDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {unknownReason}");
@@ -262,8 +257,7 @@ internal static partial class LandingExecutor
 
         if (PullRequestLandingDelivery.Applies(workspace))
             return PullRequestLandingDelivery.Deliver(kernel, goal, workspace, evidenceCandidateSha,
-                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()),
-                channel, eventWriter, mutationBlocker, promotionClock ?? new SystemClock());
+                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker, promotionClock ?? new SystemClock());
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         var integrationDiverged = previousIntegrationRevision is not null &&
@@ -276,7 +270,7 @@ internal static partial class LandingExecutor
         {
             var decision = EvaluateLanding(6);
             var reason = decision.Reason;
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason) { Decision = decision.ToRecord() }, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {reason}");
@@ -289,7 +283,7 @@ internal static partial class LandingExecutor
             boundMainRevision, evidenceCandidateSha, changedFiles);
         if (!denylistApproval.Approved)
         {
-            OperatorInbox.RecordLandingEscalation(workspace, goal, denylistApproval.HoldReason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, denylistApproval.HoldReason, IntegrationBranchName);
             return BuildMutationBlockedResult(goal, goalPrefix, denylistApproval.HoldReason);
         }
 
@@ -319,7 +313,7 @@ internal static partial class LandingExecutor
                     out var preparationFailure))
             {
                 var conflictReason = $"landing candidate preparation failed for {goalBranch} from bound main {boundMainRevision}: {preparationFailure}";
-                OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
+                OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName);
                 eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, conflictReason, IntegrationBranchName);
                 return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(conflictReason), IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {conflictReason}");
@@ -329,7 +323,7 @@ internal static partial class LandingExecutor
                 GitRunner, executionDirectory, workspace.IntegrationBranch, boundMainRevision, candidateRevision!);
             if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.Hold)
             {
-                OperatorInbox.RecordLandingEscalation(workspace, goal, checkoutInspection.Reason!, IntegrationBranchName, channel);
+                OperatorInbox.RecordLandingEscalation(workspace, goal, checkoutInspection.Reason!, IntegrationBranchName);
                 return BuildMutationBlockedResult(goal, goalPrefix, checkoutInspection.Reason!);
             }
 
@@ -337,7 +331,7 @@ internal static partial class LandingExecutor
             if (anchor.ExitCode != 0)
             {
                 var anchorReason = $"landing candidate anchor update failed: {FormatGitFailure(anchor)}";
-                OperatorInbox.RecordLandingEscalation(workspace, goal, anchorReason, IntegrationBranchName, channel);
+                OperatorInbox.RecordLandingEscalation(workspace, goal, anchorReason, IntegrationBranchName);
                 eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, anchorReason, IntegrationBranchName);
                 return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(anchorReason), IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {anchorReason}");
@@ -392,7 +386,7 @@ internal static partial class LandingExecutor
                 $"integration ref update failed after landing intent write: {FormatGitFailure(integrationWrite)}");
             DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
             var reason = $"integration ref update failed: {FormatGitFailure(integrationWrite)}";
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {reason}");
@@ -414,7 +408,7 @@ internal static partial class LandingExecutor
                 DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
             }
             var reason = $"main ref update failed: {FormatGitFailure(mainWrite)}; {rollbackDetail}";
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {reason}");
@@ -464,7 +458,6 @@ internal static partial class LandingExecutor
         OrchestratorWorkspace workspace,
         string goalPrefix,
         string goalBranch,
-        IOperatorChannel? channel,
         IGoalLifecycleEventWriter? eventWriter)
     {
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
@@ -491,7 +484,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 $"could not check whether revision {landingRevision} is reachable from main: {exception.Message}");
         }
@@ -507,7 +499,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 detail);
         }
@@ -533,7 +524,6 @@ internal static partial class LandingExecutor
         Goal goal,
         OrchestratorWorkspace workspace,
         string goalPrefix,
-        IOperatorChannel? channel,
         IGoalLifecycleEventWriter? eventWriter,
         string detail)
     {
@@ -542,8 +532,7 @@ internal static partial class LandingExecutor
             workspace,
             goal,
             reason,
-            IntegrationBranchName,
-            channel);
+            IntegrationBranchName);
         eventWriter?.AppendGoalEscalated(
             goal.Id,
             GoalLifecycleState.Merged,
@@ -564,7 +553,6 @@ internal static partial class LandingExecutor
         Goal goal,
         OrchestratorWorkspace workspace,
         string goalPrefix,
-        IOperatorChannel? channel,
         IGoalLifecycleEventWriter? eventWriter)
     {
         var intent = GoalOperationJournal.TryGetLatestLandingIntent(
@@ -587,7 +575,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 $"reachability check for recovered publication {intent.MergeCommitSha} timed out while draining git output");
         }
@@ -650,7 +637,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 "incomplete landing intent lacks a bound main predecessor and was left unchanged for operator recovery");
         }
@@ -661,7 +647,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 $"incomplete landing intent bound main {intent.BoundMainRevision}, but main is now {currentMain}; refs were left unchanged");
         }
@@ -687,7 +672,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 $"incomplete landing intent expected integration {intent.MergeCommitSha}, but found {currentIntegration ?? "<absent>"}; refs were left unchanged");
         }
@@ -703,7 +687,6 @@ internal static partial class LandingExecutor
                 goal,
                 workspace,
                 goalPrefix,
-                channel,
                 eventWriter,
                 $"incomplete landing integration rollback failed: {FormatGitFailure(rollback)}");
         }

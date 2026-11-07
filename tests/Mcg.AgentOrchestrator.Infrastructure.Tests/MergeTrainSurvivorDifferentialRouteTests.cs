@@ -110,7 +110,10 @@ public sealed class MergeTrainSurvivorDifferentialRouteTests(CohortCandidateTemp
                 Assert.IsNotType<GateReadyCandidateProjectionResult.Ready>(candidates[2].ProjectionResult);
                 Assert.DoesNotContain(ConductorMergeTrainSelector.Select(candidates)?.Members ?? [], member => member.GoalId == scenario.Dropped.Id);
                 Assert.DoesNotContain(ConductorAcceptanceCohortSelector.Select(candidates).Selection?.Members ?? [], member => member.GoalId == scenario.Dropped.Id);
-                routing.AdvanceOnce(scenario.Dropped, ConductorAutonomyPolicy.Permissive);
+                routing.AdvanceOnce(scenario.Dropped, ConductorAutonomyPolicy.Permissive with
+                {
+                    AutomaticRetryOperatorRoutingHoldSeconds = 0
+                });
                 Assert.Equal(2, scenario.Runs());
             }
             Assert.Empty(harness.Escalations);

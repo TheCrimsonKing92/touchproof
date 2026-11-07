@@ -24,19 +24,21 @@ public sealed class AssemblyTempRootCleanupFixtureSharedReaderTests
             foreach (var args in new[]
                      {
                          new[] { "init", "--initial-branch=fixture-main" },
-                         new[] { "commit", "--allow-empty", "-m", "seed" }
+                         new[] { "commit", "--allow-empty", "-m", "seed" },
+                         new[] { "commit", "--allow-empty", "-m", "second" }
                      })
             {
                 var result = GitCli.RunWithEnvironment(repo, environment, args);
                 Assert.True(result.Succeeded, result.Error);
             }
 
-            // This expression bypasses in-process ref resolution. Keep reading until
+            // HEAD~1 requires ancestry resolution, which the file resolver declines.
+            // These reads reach Git. Keep reading until
             // admission creates a persistent reader, with a bound that fails loudly.
             const int maximumAdmissionReads = 32;
             for (var attempt = 0; attempt < maximumAdmissionReads && readers.GetReader(repo) is null; attempt++)
             {
-                Assert.True(readers.TryResolve(repo, "HEAD^{commit}", out _));
+                Assert.True(readers.TryResolve(repo, "HEAD~1", out _));
             }
             var process = Assert.IsType<GitRevisionReader.ReaderProcess>(readers.GetReader(repo));
             Assert.False(process.HasExited);
