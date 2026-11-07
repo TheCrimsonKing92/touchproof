@@ -38,6 +38,8 @@
     <Compile Remove="Fixtures\SupervisorLaunchProbe\**\*.cs" />
     <Compile Remove="Fixtures\WorktreeSerializationProbe\**\*.cs" />
     <Compile Include="Fixtures\ConsoleIoProbe\ConsoleHostCensus.cs" />
+    <Compile Include="Fixtures\SupervisorLaunchProbe\ProcessImagePathResolver.cs" />
+    <Compile Include="Fixtures\SupervisorLaunchProbe\ConductorStartCallerProbe.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="Always" />

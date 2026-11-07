@@ -118,9 +118,9 @@ public sealed class OwnerConsoleViewModelBuilderTests
         Assert.Equal(now.AddSeconds(5), model.Activity[^1].Timestamp);
         Assert.All(model.Activity, item => { Assert.Equal("outcome", item.Tag); Assert.Equal("acceptance", item.Kind); });
         Assert.Equal(model.Activity.OrderByDescending(item => item.Timestamp), model.Activity);
-        Assert.False(OwnerActivityNarrator.IsLanding(events[1]));
-        Assert.True(OwnerActivityNarrator.IsLanding(new(now, "loop-relaunch", "11111111", "LOOP_RELAUNCH_SCHEDULED")));
-        Assert.False(OwnerActivityNarrator.IsLanding(new(now, "acceptance", null, "result=passed-later")));
+        Assert.False(OwnerLandingNarration.IsLanding(events[1]));
+        Assert.True(OwnerLandingNarration.IsLanding(new(now, "loop-relaunch", "11111111", "LOOP_RELAUNCH_SCHEDULED")));
+        Assert.False(OwnerLandingNarration.IsLanding(new(now, "acceptance", null, "result=passed-later")));
     }
 
     private static OwnerConsoleViewInputs Inputs(OwnerConsoleHarness harness) => new(harness.Clock.GetUtcNow(), null, [], 0);
