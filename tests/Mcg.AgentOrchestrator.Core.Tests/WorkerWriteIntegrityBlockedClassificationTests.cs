@@ -43,14 +43,17 @@ public sealed class WorkerWriteIntegrityBlockedClassificationTests
     }
 
     [Fact]
-    public void EarlierBuildFailureKeepsPrecedence()
+    public void EarlierFailingTestsKeepPrecedence()
     {
         var verification = Verification(new("src/Feature.cs", WorkerWriteIntegrityLabel.Medium, true)) with
         {
-            StandardError = DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)
+            StandardOutput = Verification(null).StandardOutput.Replace(
+                "tests: deferred - conductor", "tests: fail - focused regression failed", StringComparison.Ordinal)
         };
         var outcome = DispatchFailureClassifier.Classify(Developer(), verification);
-        Assert.Equal("worker-build-check-failed", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+        Assert.Equal("succeeded-worker-result-failing-tests", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+        Assert.Equal(TaskOutcomeClass.RealFailure, outcome.OutcomeClass);
+        Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
 
     [Fact]
