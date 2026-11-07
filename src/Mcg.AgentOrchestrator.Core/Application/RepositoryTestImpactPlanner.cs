@@ -202,6 +202,7 @@ public static partial class RepositoryTestImpactPlanner
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/") &&
             !StartsWith(file.Path, acceptanceTestsPrefix));
         var coreTestFilter = BuildChangedTestClassFilter(

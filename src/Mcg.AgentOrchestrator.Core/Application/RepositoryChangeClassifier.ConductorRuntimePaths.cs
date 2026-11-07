@@ -70,8 +70,11 @@ public static partial class RepositoryChangeClassifier
             return "launcher-entry";
         }
 
+        // Removal diffs can still contain the retired project's paths; they require a relaunch
+        // even though the project is no longer in the active App reference closure above.
         return ConductorSourceRoots.Any(root =>
-            file.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            file.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) ||
+            file.Path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase)
             ? "conductor-source"
             : "outside-conductor-sources";
     }
