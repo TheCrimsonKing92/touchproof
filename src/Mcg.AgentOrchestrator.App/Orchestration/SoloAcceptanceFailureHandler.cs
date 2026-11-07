@@ -72,8 +72,10 @@ internal sealed class SoloAcceptanceFailureHandler(
     {
         var failure = goal.LatestAcceptanceFailure ?? goal.RetainedAcceptanceFailure;
         var receipt = failure?.SoloFailureReceipt;
+        var next = SoloHoldNextAction.For(reason);
         var detail = $"Solo acceptance correction held: {reason}; attempt={failure?.AttemptId ?? "absent"}; " +
-            $"evidence={receipt?.Evidence?.Path ?? "absent"}; sha256={receipt?.Evidence?.Sha256 ?? "absent"}";
+            $"evidence={receipt?.Evidence?.Path ?? "absent"}; sha256={receipt?.Evidence?.Sha256 ?? "absent"}" +
+            $"; mechanism: {next.Mechanism}; owner: {next.Owner}; next action: {next.NextAction}";
         recordEscalation(goal, GoalLifecycleState.AcceptanceFailed, detail);
         return new(goal.Id.Value, prefix, policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.AcceptanceFailed, detail)
