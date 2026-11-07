@@ -33,6 +33,8 @@ internal sealed class HomeBuildRelaunchCoordinator(
         awaitCanaries();
         // Waiting can yield. Re-read authority and all blockers at the action boundary.
         if (!Revalidate()) return null;
+        // Schema upgrades consume this proof from the exited child's stdout.
+        ConductorBatchLoop.EmitProgress($"LOOP_RELAUNCH_REBUILD tick={tick} goal={request.GoalId} active=0 admitting=false reason=home-build-adopted commit={request.HomeBuildTarget!.AdoptedCommit}");
         var result = relaunch(request);
         if (result.HandedOff) return result;
         if (!result.IncumbentCanContinue)
