@@ -10,6 +10,72 @@ public sealed class ProjectConductorHomeBuildRelaunchTests : ConductorBatchLoopT
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
+    public void FollowerOutput_OnlyIdleHandoffProvesSchemaUpgradeQuiescence(bool busy)
+    {
+        using var fixture = new HomeBuildAdoptionFixture();
+        var handoffs = 0;
+        var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(
+            homeBuildAdoption: fixture.Detector(), countLiveGroupedGates: () => busy ? 1 : 0,
+            homeBuildRelaunch: request =>
+            {
+                handoffs++;
+                return ConductorSelfRelaunch.CreateSupervisorDelegated()(request);
+            }).Run(new AgentOrchestratorKernel(), MakeDriver(), ConductorAutonomyPolicy.Conservative,
+                Path.Combine(fixture.Root, "stop"), maxIterations: 1));
+
+        Assert.Equal(busy ? 0 : 1, handoffs);
+        Assert.DoesNotContain("LOOP_RELAUNCH_DRAIN ", text, StringComparison.Ordinal);
+        if (busy)
+        {
+            Assert.Contains("blockers=gate-holders:1", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_RELAUNCH_REBUILD ", text, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("LOOP_RELAUNCH_REBUILD ", text, StringComparison.Ordinal);
+            Assert.True(text.IndexOf("LOOP_RELAUNCH_REBUILD ", StringComparison.Ordinal) <
+                text.IndexOf("LOOP_HANDOFF ", StringComparison.Ordinal));
+        }
+        var stdoutPath = Path.Combine(fixture.Root, "child.out.log");
+        File.WriteAllText(stdoutPath, text);
+        Assert.Equal(busy ? "quiescence" : "", ConductorHandoffSchemaUpgrade.DrainFailure(stdoutPath));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Revalidation_AuthorityOrWorkChangesEmitNoQuiescenceProof(bool revert)
+    {
+        using var fixture = new HomeBuildAdoptionFixture();
+        var handoffs = 0;
+        var blockers = Array.Empty<string>();
+        var coordinator = new HomeBuildRelaunchCoordinator(fixture.Detector(), _ =>
+        {
+            handoffs++;
+            throw new InvalidOperationException("A changed reservation cannot hand off");
+        });
+        var text = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            var request = coordinator.TryReserve(1, () => blockers);
+            Assert.NotNull(request);
+            Assert.Null(coordinator.TryHandoff(request, 1, () => blockers, () =>
+            {
+                if (revert) fixture.Publish(fixture.Candidate with { Status = "reverted" });
+                else blockers = ["gate-holders:1"];
+            }));
+        });
+
+        Assert.Equal(0, handoffs);
+        Assert.Contains("LOOP_RELAUNCH_SCHEDULED ", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("LOOP_RELAUNCH_REBUILD ", text, StringComparison.Ordinal);
+        var stdoutPath = Path.Combine(fixture.Root, "child.out.log");
+        File.WriteAllText(stdoutPath, text);
+        Assert.Equal("quiescence", ConductorHandoffSchemaUpgrade.DrainFailure(stdoutPath));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
     public void IdleFirstTickSchedulesExactHomeBuildAndCarriesItThroughExitArtifact(bool delegateRelaunch)
     {
         using var fixture = new HomeBuildAdoptionFixture();

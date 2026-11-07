@@ -8,6 +8,8 @@ using Xunit;
 // Parallel-safe: each case owns its workspace and databases; console capture is AsyncLocal.
 public sealed class CliCommandTestsBacklogPremiseCheck : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public async Task CheckPrintsAllRulesSkimAndExactSummary()
     {

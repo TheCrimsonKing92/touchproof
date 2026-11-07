@@ -13,6 +13,25 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
 
     public ConductorBatchLoopTestsRelaunchGateAdmission(ITestOutputHelper output) : base(output) { }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void FleetDrainHoldsAdmissionAndReleasesReadyGates(bool grouped)
+    {
+        using var fixture = new AdmissionFixture("docs/admission-control.md", grouped);
+        var hold = FleetRestartAdmissionHold.Acquire(fixture.Root, new string('a', 40), DateTimeOffset.UnixEpoch.AddHours(1));
+        var output = fixture.Run();
+        Assert.Contains("reason=fleet-restart-drain", output);
+        Assert.Empty(fixture.AcceptanceCalls);
+        Assert.Equal(0, fixture.CohortCalls);
+        AssertWaitingGoalsUnattempted(fixture);
+        Assert.True(hold.IsDrainedAcknowledgement(fixture.Root));
+        hold.Release(fixture.Root);
+        fixture.Run();
+        if (grouped) Assert.Equal(1, fixture.CohortCalls);
+        else Assert.Equal(fixture.WaitingGoals.Single().Id, Assert.Single(fixture.AcceptanceCalls));
+    }
+
     [Xunit.Fact]
     public void ReconciliationLanding_WithRelaunch_HoldsReadyCohortInSameTick()
     {

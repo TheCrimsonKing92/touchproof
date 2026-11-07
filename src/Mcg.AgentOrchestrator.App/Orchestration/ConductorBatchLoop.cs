@@ -884,10 +884,14 @@ internal sealed partial class ConductorBatchLoop
 
             var admissionClock = StartDiagnosticTimer();
             var admissionCpuStart = ReadProcessCpu();
+            var admissionHold = new ConductorAcceptanceAdmissionHold(_workspace?.OrchestratorDirectory ?? leaseDirectory,
+                _utcNow, line => EmitProgress(line), () =>
+                { var active = BuildMaxDurationAcceptanceSnapshot(kernel, driver, null); return active.Failure is null ? active.Attempts.Count : -1; }, nextTick);
             var hasParkedAcceptanceToReconcile = ConductorTickStepLedger.Measure("admission-pre-batch", () => scopedGoals.Any(goal => goal.IsExplicitlyParked &&
                 driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0));
             if (eligible.Length == 0 && !hasParkedAcceptanceToReconcile)
             {
+                admissionHold.Acknowledge();
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
                 {
                     totalTicks++;
@@ -1132,17 +1136,8 @@ internal sealed partial class ConductorBatchLoop
             var tickDone = 0;
             var dispatchRecordWriteSkippedGoals = new HashSet<string>(StringComparer.Ordinal);
             var dispatchRecordWriteBoundGoalIds = new HashSet<GoalId>();
-            var selfRelaunchAdmissionHoldEmitted = false;
-            bool SuppressNewAcceptanceAdmission()
-            {
-                if (pendingSelfRelaunch is not null && !selfRelaunchAdmissionHoldEmitted)
-                {
-                    selfRelaunchAdmissionHoldEmitted = true;
-                    EmitProgress(ConductorSelfRelaunchAdmissionHold.Format(totalTicks));
-                }
-
-                return isDeferringMaxDurationStop || pendingSelfRelaunch is not null;
-            }
+            bool SuppressNewAcceptanceAdmission() =>
+                admissionHold.Suppress(isDeferringMaxDurationStop, pendingSelfRelaunch is not null);
             ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
@@ -1158,6 +1153,7 @@ internal sealed partial class ConductorBatchLoop
                 changedGoalLines,
                 changedGoalIds,
                 suppressNewAcceptanceAdmission: SuppressNewAcceptanceAdmission);
+            admissionHold.Acknowledge();
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
@@ -1356,6 +1352,8 @@ internal sealed partial class ConductorBatchLoop
                                 changedGoalIds.Add(goal.Id);
                             }
 
+                            if (goal.Status == GoalStatus.Verified && admissionHold.FleetHeld())
+                                return ParallelAcceptanceHeld(goal, policy, "Fleet restart is draining acceptance.");
                             var engineHealth = _acceptanceEngineCircuit?.Read();
                             return IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth)
                                 ? ParallelAcceptanceHeld(

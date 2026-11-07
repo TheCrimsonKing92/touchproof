@@ -21,7 +21,7 @@ public static class HostCapacitySlotTimingWriter
     }
 
     public static void TryAppend(string destination, string? testName, double waitMs, double heldMs, int slotCount,
-        HostCapacitySlotGitCensus.GitLaunchDelta? git = null)
+        HostCapacitySlotGitCensus.GitLaunchDelta? git = null, bool unslotted = false)
     {
         try
         {
@@ -33,6 +33,7 @@ public static class HostCapacitySlotTimingWriter
                 ["wait_ms"] = waitMs, ["held_ms"] = heldMs,
                 ["slot_count"] = slotCount, ["process_id"] = Environment.ProcessId
             };
+            if (unslotted) row["unslotted"] = true;
             if (git is not null)
             {
                 row["git_launches"] = git.Launches;

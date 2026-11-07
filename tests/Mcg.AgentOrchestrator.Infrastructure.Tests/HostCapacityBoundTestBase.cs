@@ -11,6 +11,7 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     private readonly object capacityGate = new();
     private Task<IAsyncDisposable>? capacityAcquisition;
     private Task? capacityDisposal;
+    private HostCapacitySlotGitCensus.UnslottedWatch? unslottedWatch;
     private bool disposed;
 
     /// <summary>
@@ -23,9 +24,35 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     // Keep the declaration with the fixture, rather than maintaining a central census list.
     private protected virtual bool UsesGit => true;
 
+    private protected virtual string? SlotTimingDestination =>
+        Environment.GetEnvironmentVariable(HostCapacitySlotTimingWriter.VariableName);
+
     // Yield the runner thread while queued. Synchronous git observers must never acquire:
     // blocked launch threads can prevent the async disposal that returns capacity.
-    public virtual ValueTask InitializeAsync() => UsesGit ? EnsureHostCapacityAsync() : ValueTask.CompletedTask;
+    public virtual ValueTask InitializeAsync() => UsesGit ? EnsureHostCapacityAsync() : WatchUnslottedLaunches();
+
+    private ValueTask WatchUnslottedLaunches()
+    {
+        lock (capacityGate)
+        {
+            if (disposed || unslottedWatch is not null) return ValueTask.CompletedTask;
+            try
+            {
+                var destination = SlotTimingDestination;
+                var testName = HostCapacitySlotTimingWriter.CurrentTestName();
+                if (!string.IsNullOrEmpty(destination) && testName != "<unknown>")
+                {
+                    HostCapacitySlotGitCensus.EnsureInstalled(destination);
+                    unslottedWatch = HostCapacitySlotGitCensus.Shared.OpenUnslotted(testName, destination);
+                }
+            }
+            catch (Exception error)
+            {
+                HostCapacitySlotTimingWriter.Diagnose("unslotted git watch", error.GetType().Name + ": " + error.Message);
+            }
+        }
+        return ValueTask.CompletedTask;
+    }
 
     /// <summary>One per-test acquisition shared by concurrent initialization calls.</summary>
     private async ValueTask EnsureHostCapacityAsync()
@@ -54,6 +81,7 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
         lock (capacityGate)
         {
             disposed = true;
+            unslottedWatch?.Close();
             return new ValueTask(capacityDisposal ??= ReleaseCapacityAsync(capacityAcquisition));
         }
     }

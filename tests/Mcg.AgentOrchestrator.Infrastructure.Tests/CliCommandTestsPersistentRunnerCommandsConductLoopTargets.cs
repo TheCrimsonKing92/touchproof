@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopTargets : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
