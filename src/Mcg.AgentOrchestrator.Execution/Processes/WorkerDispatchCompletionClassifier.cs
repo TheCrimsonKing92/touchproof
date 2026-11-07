@@ -378,6 +378,7 @@ internal sealed class WorkerDispatchCompletionClassifier
 
     internal bool AllowsNoChangeCompletion(TaskSpec task, string standardOutput, string standardError)
     {
+        if (!RetryCorrectionObligationEvidence.IsSatisfied(task, standardError)) return false;
         if (task.RequiredRole != AgentRole.Developer)
         {
             return HasExplicitNoChangeRationale(standardOutput, standardError);
@@ -409,6 +410,25 @@ internal sealed class WorkerDispatchCompletionClassifier
         return !integrationSatisfied ||
             (result.Fields.TryGetValue("tests", out var tests) &&
              FreshVerificationEvidence.HasNonZeroTestCount(tests));
+    }
+
+    internal static RetryCorrectionConditionVerdict? EvaluateRetryCorrectionObligation(
+        TaskSpec task, string head, bool clean, string worktreePath,
+        Func<string, RetryCorrectionConditionVerdict>? oracle, out string? diagnostic)
+    {
+        diagnostic = null;
+        var obligation = task.AcceptedRetryFeedback?.Obligation;
+        var candidate = task.LastDispatch?.BaseCommit;
+        if (task.RequiredRole != AgentRole.Developer || obligation?.AppliesToSizeRatchet(candidate) != true ||
+            !clean || !string.Equals(head, candidate, StringComparison.OrdinalIgnoreCase)) return null;
+        if (obligation.FeedbackSha256 != RetryCorrectionObligation.HashFeedback(task.AcceptedRetryFeedback!.Message))
+            return RetryCorrectionConditionVerdict.Unavailable;
+        try { return oracle?.Invoke(worktreePath) ?? RetryCorrectionConditionVerdict.Unavailable; }
+        catch (Exception error)
+        {
+            diagnostic = $"Retry correction evaluation unavailable: {error.GetType().Name}: {error.Message}";
+            return RetryCorrectionConditionVerdict.Unavailable;
+        }
     }
 
     internal string? ClassifyReconciliationOriginRule(
