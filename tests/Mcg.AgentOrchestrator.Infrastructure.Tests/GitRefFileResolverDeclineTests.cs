@@ -77,6 +77,14 @@ public sealed class GitRefFileResolverDeclineTests
     [Theory]
     [InlineData("fixture-main")]
     [InlineData("HEAD^{commit}")]
+    public void SupportedRevisionForms_MatchGit(string revision)
+    {
+        using var fixture = new Fixture();
+        Assert.True(GitRefFileResolver.TryResolve(fixture.Repo, revision, out var actual));
+        Assert.Equal(fixture.Oracle(revision), actual);
+    }
+
+    [Theory]
     [InlineData("HEAD~1")]
     [InlineData("refs/tags/topic")]
     [InlineData("refs/remotes/origin/main")]

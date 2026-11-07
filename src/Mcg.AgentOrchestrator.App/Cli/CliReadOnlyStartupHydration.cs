@@ -26,15 +26,13 @@ internal static class CliReadOnlyStartupHydration
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         bool hydrated,
-        IOperatorChannel? channel = null,
         WorktreeCleanupContext? acceptanceCleanupContext = null,
         Action? onReadOnlyDeclined = null,
         ConductorLoopLeaseController? startupLoopLease = null)
     {
         if (!hydrated)
         {
-            if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers,
-                channel, ref agents, ref workerProfiles, ref currentGoal, out var changed))
+            if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, ref agents, ref workerProfiles, ref currentGoal, out var changed))
                 return changed;
 
             onReadOnlyDeclined?.Invoke();
@@ -43,7 +41,7 @@ internal static class CliReadOnlyStartupHydration
         }
 
         return CliPersistentStateRunner.ExecuteCommand(args, stateRepository, workspace, ref agents,
-            providers, ref workerProfiles, ref currentGoal, channel,
+            providers, ref workerProfiles, ref currentGoal,
             acceptanceCleanupContext: acceptanceCleanupContext,
             skipReadOnlyRoute: !hydrated, startupLoopLease: startupLoopLease);
     }

@@ -258,7 +258,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
         var served = false;
         var changed = false;
         var output = CaptureConsole(() => served = CliReadOnlyCommandRunner.TryExecute(
-            args, repository, workspace, new InMemoryModelProviderRegistry([]), null,
+            args, repository, workspace, new InMemoryModelProviderRegistry([]),
             ref agents, ref profiles, ref currentGoal, out changed));
         return (served, changed, output, currentGoal);
     }

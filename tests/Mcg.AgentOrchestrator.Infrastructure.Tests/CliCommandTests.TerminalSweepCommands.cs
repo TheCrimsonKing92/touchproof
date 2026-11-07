@@ -8,7 +8,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
-public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
+public sealed class CliCommandTestsTerminalSweepCommands(WorktreeSetupTemplate setupTemplate)
+    : CliCommandTestBase, IClassFixture<WorktreeSetupTemplate>
 {
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_closes_task_idempotently")]
     public void TerminalGoalSweepCompletedWithAssignedTaskClosesTaskIdempotently()
@@ -688,12 +689,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     public void TerminalGoalSweepCompletedAssignedTaskWithDirtyWorktreeBlocksWithoutReopening()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "CLI Tests");
-        File.WriteAllText(Path.Combine(root, "README.md"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        setupTemplate.CopyTerminalSeed(root);
 
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);

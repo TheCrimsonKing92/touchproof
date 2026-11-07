@@ -57,7 +57,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
         var driver = harness.Configure();
         driver.BeginTick(kernel, 1);
 
-        var result = driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive);
+        var result = driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
 
         Assert.False(result.WasEscalated);
         AssertRoute(second, second.Tasks.Single(), harness, IncidentPartition, Candidate, IncidentNames);
@@ -107,7 +107,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 1);
-        Assert.False(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).WasEscalated);
+        Assert.False(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }).WasEscalated);
         AssertRoute(goal, goal.Tasks.Single(), harness, IncidentPartition, Candidate, IncidentNames);
         Assert.Contains("first message", Assert.Single(MarkerRetries(goal)).Message);
 
@@ -157,7 +157,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
         var driver = harness.Configure();
         driver.BeginTick(resumed, 1);
 
-        Assert.False(driver.AdvanceOnce(restored, ConductorAutonomyPolicy.Permissive).WasEscalated);
+        Assert.False(driver.AdvanceOnce(restored, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }).WasEscalated);
         AssertRoute(restored, restored.Tasks.Single(), harness,
             spacedNames ? IncidentPartition : "partition-1", Candidate, names);
         Assert.DoesNotContain("\nreproduced ", Assert.Single(MarkerRetries(restored)).Message);
@@ -198,7 +198,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
         var harness = new RouteHarness(resumed);
         var driver = harness.Configure();
         driver.BeginTick(resumed, 1);
-        Assert.False(driver.AdvanceOnce(restored, ConductorAutonomyPolicy.Permissive).WasEscalated);
+        Assert.False(driver.AdvanceOnce(restored, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }).WasEscalated);
 
         AssertRoute(restored, restored.Tasks.Single(), harness, IncidentPartition, Candidate, IncidentNames);
         var feedback = Assert.Single(MarkerRetries(restored)).Message;

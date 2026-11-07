@@ -349,10 +349,12 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
         }
     }
 
-    [Fact]
-    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree(bool warmCopy)
     {
-        const string key = "stale-indexes";
+        var key = $"stale-indexes-{warmCopy}";
         const string path = "existing.txt";
         byte[]? rootIndex = null;
         byte[]? memberIndex = null;
@@ -370,9 +372,29 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             memberIndex = File.ReadAllBytes(Path.GetFullPath(
                 RunGitOutput(worktree, "rev-parse", "--git-path", "index").Trim(), worktree));
         });
+        if (warmCopy)
+        {
+            DeleteDirectory(copy.Repo);
+            copy = template.Copy(key, 1, (_, _) => throw new InvalidOperationException("Recipe rebuilt for warm copy."));
+        }
         try
         {
             var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
+            var source = template.TemplatePath(key);
+            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(source, copy.GoalIds[0]));
+            var sourceMemberIndex = Path.GetFullPath(
+                RunGitOutput(sourceWorktree, "rev-parse", "--git-path", "index").Trim(), sourceWorktree);
+            Assert.NotNull(rootIndex);
+            Assert.NotNull(memberIndex);
+            // Preparation must refresh the private index, leaving the stale recipe byte-for-byte intact.
+            Assert.Equal(rootIndex, File.ReadAllBytes(Path.Combine(source, ".git", "index")));
+            Assert.Equal(memberIndex, File.ReadAllBytes(sourceMemberIndex));
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(rootIndex.SequenceEqual(File.ReadAllBytes(Path.Combine(copy.Repo, ".git", "index"))));
+                var copyMemberIndex = Assert.Single(Directory.GetDirectories(Path.Combine(copy.Repo, ".git", "worktrees")));
+                Assert.False(memberIndex.SequenceEqual(File.ReadAllBytes(Path.Combine(copyMemberIndex, "index"))));
+            }
             var baseline = RunGitOutput(copy.Repo, "rev-parse", "HEAD").Trim();
             var candidate = copy.Revisions[0];
             // No preparatory refresh: the returned copy must already support read-tree.
@@ -385,13 +407,8 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             Assert.Equal("before", File.ReadAllText(Path.Combine(worktree, path)));
             Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
 
-            var source = template.TemplatePath(key);
-            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(source, copy.GoalIds[0]));
-            Assert.NotNull(rootIndex);
-            Assert.NotNull(memberIndex);
             Assert.Equal(rootIndex, File.ReadAllBytes(Path.Combine(source, ".git", "index")));
-            Assert.Equal(memberIndex, File.ReadAllBytes(Path.GetFullPath(
-                RunGitOutput(sourceWorktree, "rev-parse", "--git-path", "index").Trim(), sourceWorktree)));
+            Assert.Equal(memberIndex, File.ReadAllBytes(sourceMemberIndex));
             Assert.Equal(baseline, RunGitOutput(source, "rev-parse", "main").Trim());
             Assert.Equal(candidate, RunGitOutput(sourceWorktree, "rev-parse", "HEAD").Trim());
             Assert.Equal("before", File.ReadAllText(Path.Combine(source, path)));

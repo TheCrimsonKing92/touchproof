@@ -30,8 +30,7 @@ internal static class CliGoalReplacementExecution
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
             throw new InvalidOperationException("goal-replace requires a state repository with durable outbox support.");
@@ -560,7 +559,6 @@ internal static class CliGoalReplacementExecution
                 providers,
                 ref workerProfiles,
                 ref currentGoal,
-                channel,
                 () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
                 eventWriter: deferredEventWriter,
                 refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,

@@ -20,8 +20,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         if (CliCommandHandlers.IsStopParkAlias(args))
         {
@@ -73,8 +72,7 @@ internal static partial class CliPersistentStateRunner
                 ref agents,
                 providers,
                 ref workerProfiles,
-                ref currentGoal,
-                channel);
+                ref currentGoal);
         }
 
         CliCommandHelp.ThrowIfInvalidFlags(args);

@@ -44,7 +44,7 @@ public sealed class CliGoalTimingReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     args, repository, OrchestratorWorkspace.ForDirectory(root),
-                    new InMemoryModelProviderRegistry([]), null,
+                    new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out var changed, new FixedClock()));
                 Xunit.Assert.False(changed);
             });

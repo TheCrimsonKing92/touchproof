@@ -47,7 +47,6 @@ internal static class CliReadOnlyCommandRunner
         IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -94,14 +93,13 @@ internal static class CliReadOnlyCommandRunner
                 workspace,
                 ref agents,
                 providers,
-                ref workerProfiles,
-                channel);
+                ref workerProfiles);
             return true;
         }
 
         if (CliFindingQueryCommand.IsFindingQueryCommand(args))
         {
-            CliFindingQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliFindingQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -114,7 +112,6 @@ internal static class CliReadOnlyCommandRunner
                 stateRepository,
                 workspace,
                 providers,
-                channel,
                 ref agents,
                 ref workerProfiles,
                 ref currentGoal);
@@ -124,7 +121,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliTimelineQueryCommand.IsTimelineQueryCommand(args))
         {
-            CliTimelineQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliTimelineQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -132,7 +129,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliGoalReportQueryCommand.IsGoalReportQueryCommand(args))
         {
-            CliGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -140,7 +137,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliSingleGoalReportQueryCommand.IsSingleGoalReportQueryCommand(args))
         {
-            CliSingleGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliSingleGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
             changed = false;
             return true;
@@ -155,7 +152,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliStatusQueryCommand.IsStatusQueryCommand(args))
         {
-            CliStatusQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliStatusQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -163,7 +160,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliReadinessQueryCommand.IsReadinessQueryCommand(args))
         {
-            CliReadinessQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliReadinessQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -198,7 +195,7 @@ internal static class CliReadOnlyCommandRunner
         }
 
         if (CliAttentionQueryCommand.IsAttentionQueryCommand(args) &&
-            CliAttentionQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
+            CliAttentionQueryCommand.TryExecute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal))
         {
             changed = false;
@@ -206,7 +203,7 @@ internal static class CliReadOnlyCommandRunner
         }
 
         if (CliNextFullQueryCommand.IsNextFullQueryCommand(args) &&
-            CliNextFullQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
+            CliNextFullQueryCommand.TryExecute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock))
         {
             changed = false;
@@ -214,7 +211,7 @@ internal static class CliReadOnlyCommandRunner
         }
 
         if (CliNextAutonomyQueryCommand.IsNextAutonomyQueryCommand(args) &&
-            CliNextAutonomyQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
+            CliNextAutonomyQueryCommand.TryExecute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock))
         {
             changed = false;
@@ -237,7 +234,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliInspectionQueryCommand.IsInspectionQueryCommand(args))
         {
-            CliInspectionQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliInspectionQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles);
             changed = false;
             return true;
@@ -245,7 +242,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliBacklogQueryCommand.IsBacklogQueryCommand(args))
         {
-            CliBacklogQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliBacklogQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles);
             changed = false;
             return true;
@@ -260,7 +257,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliProvenanceQueryCommand.IsProvenanceQueryCommand(args))
         {
-            CliProvenanceQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliProvenanceQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles);
             changed = false;
             return true;
@@ -268,7 +265,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args))
         {
-            CliBoardSnapshotQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+            CliBoardSnapshotQueryCommand.Execute(args, stateRepository, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
@@ -284,8 +281,7 @@ internal static class CliReadOnlyCommandRunner
         OrchestratorWorkspace workspace,
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
-        ref WorkerProfileCatalog workerProfiles,
-        IOperatorChannel? channel = null)
+        ref WorkerProfileCatalog workerProfiles)
     {
         var commandKernel = new AgentOrchestratorKernel();
         Goal? commandCurrentGoal = null;
@@ -297,7 +293,6 @@ internal static class CliReadOnlyCommandRunner
             providers,
             ref workerProfiles,
             ref commandCurrentGoal,
-            channel,
             reloadKernelForGoals: requestedGoalIds => stateRepository.LoadGoalsAsync(
                 requestedGoalIds.Select(goalId => new GoalId(goalId)).ToArray()).GetAwaiter().GetResult());
         if (changed)

@@ -228,11 +228,6 @@ public sealed class LauncherScriptTests
             "src",
             "Mcg.AgentOrchestrator.Infrastructure",
             "Mcg.AgentOrchestrator.Infrastructure.csproj"));
-        var operatorCommsProject = File.ReadAllText(Path.Combine(
-            repoRoot,
-            "src",
-            "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
-            "Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj"));
 
         Assert.DoesNotContain("dotnetArguments = @(\"run\"", helper, StringComparison.Ordinal);
         Assert.Contains("Test-OrchestratorArtifactFreshness.ps1", helper, StringComparison.Ordinal);
@@ -253,13 +248,10 @@ public sealed class LauncherScriptTests
         Assert.DoesNotContain("<NuGetAudit>false</NuGetAudit>", buildProps, StringComparison.Ordinal);
         Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", project, StringComparison.Ordinal);
         Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", infrastructureProject, StringComparison.Ordinal);
-        Assert.Contains("Microsoft.Data.Sqlite\" Version=\"9.0.19\"", operatorCommsProject, StringComparison.Ordinal);
         Assert.DoesNotContain("9.0.6", project, StringComparison.Ordinal);
         Assert.DoesNotContain("9.0.6", infrastructureProject, StringComparison.Ordinal);
-        Assert.DoesNotContain("9.0.6", operatorCommsProject, StringComparison.Ordinal);
         Assert.DoesNotContain("NU1903", project, StringComparison.Ordinal);
         Assert.DoesNotContain("NU1903", infrastructureProject, StringComparison.Ordinal);
-        Assert.DoesNotContain("NU1903", operatorCommsProject, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

@@ -42,7 +42,7 @@ public sealed class SharedArchitectureCacheTests
         {
             ready.Signal();
             await release.Task;
-            return cache.GetOrBuild(typeof(ProviderSmokeTester).Assembly, typeof(NullOperatorChannel).Assembly);
+            return cache.GetOrBuild(typeof(ProviderSmokeTester).Assembly, typeof(CohortAcceptanceStore).Assembly);
         })).ToArray();
         bool reachedGate;
         try
@@ -59,7 +59,7 @@ public sealed class SharedArchitectureCacheTests
         Assert.Equal(16, results.Length);
         Assert.All(results, result => Assert.Same(results[0], result));
         Assert.Equal(1, builds);
-        Assert.Equal(1, cache.BuildCount(typeof(ProviderSmokeTester).Assembly, typeof(NullOperatorChannel).Assembly));
+        Assert.Equal(1, cache.BuildCount(typeof(ProviderSmokeTester).Assembly, typeof(CohortAcceptanceStore).Assembly));
     }
 
     [Fact]
@@ -72,21 +72,21 @@ public sealed class SharedArchitectureCacheTests
             return new ArchLoader().LoadAssemblies(assemblies).Build();
         });
         var providers = typeof(ProviderSmokeTester).Assembly;
-        var operatorComms = typeof(NullOperatorChannel).Assembly;
+        var execution = typeof(CohortAcceptanceStore).Assembly;
         var providerModel = cache.GetOrBuild(providers);
-        var operatorModel = cache.GetOrBuild(operatorComms);
-        var combinedModel = cache.GetOrBuild(providers, operatorComms);
+        var executionModel = cache.GetOrBuild(execution);
+        var combinedModel = cache.GetOrBuild(providers, execution);
 
-        Assert.NotSame(providerModel, operatorModel);
+        Assert.NotSame(providerModel, executionModel);
         Assert.NotSame(providerModel, combinedModel);
-        Assert.NotSame(operatorModel, combinedModel);
+        Assert.NotSame(executionModel, combinedModel);
         Assert.Equal(3, builds);
         Assert.Equal(1, cache.BuildCount(providers));
-        Assert.Equal(1, cache.BuildCount(operatorComms));
-        Assert.Equal(1, cache.BuildCount(providers, operatorComms));
+        Assert.Equal(1, cache.BuildCount(execution));
+        Assert.Equal(1, cache.BuildCount(providers, execution));
         Assert.NotEmpty(providerModel.Types);
         Assert.All(providerModel.Types, type => Assert.Equal(providers.FullName, type.Assembly.FullName));
-        Assert.Equal(new[] { providers.FullName, operatorComms.FullName }.Order(StringComparer.Ordinal),
+        Assert.Equal(new[] { providers.FullName, execution.FullName }.Order(StringComparer.Ordinal),
             combinedModel.Types.Select(type => type.Assembly.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
     }
 

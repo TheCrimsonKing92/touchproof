@@ -106,7 +106,7 @@ public sealed class SoloAcceptanceFailureReceiptReaderTests
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Read_CrossArtifactCollision_RefusesOnlyFailingIdentity(bool failingIdentity)
+    public async Task Read_CrossArtifactCollision_RefusesFlakeOnlyForFailingIdentity(bool failingIdentity)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce();
@@ -135,9 +135,145 @@ public sealed class SoloAcceptanceFailureReceiptReaderTests
         else
         {
             Assert.Null(read.Failure);
-            Assert.Contains("solo-duplicate-test-row: identity=" + SoloAttributedFailureRouteFixture.First, read.Reason);
+            Assert.Contains("identity=" + SoloAttributedFailureRouteFixture.First, read.Reason);
+            Assert.Contains("outcome=" + AcceptanceLaneRerunEvidence.Flake, read.Reason);
             Assert.Contains("outcomes=Failed,Passed", read.Reason);
+            Assert.DoesNotContain("solo-duplicate-test-row", read.Reason);
         }
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Read_RepeatedFailures_RetainsFirstMessageAndPath(int rerunCount)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        var artifact = fixture.UseCollisionEvidence();
+        var reruns = Enumerable.Range(1, rerunCount)
+            .Select(index => WriteExecution(fixture, $"rerun-{index}.trx", "Failed")).ToArray();
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with
+            { Artifacts = new[] { artifact }.Concat(reruns).ToArray() }).ToArray() });
+        fixture.Complete();
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+
+        AssertValidated(read, artifact.Path);
+        foreach (var rerun in reruns) Assert.DoesNotContain(rerun.Path, read.Failure!.ReproductionDetail);
+        Assert.DoesNotContain("rerun line", read.Failure!.ReproductionDetail);
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(4, 6, null)]
+    [InlineData(4, null, null)]
+    [InlineData(3, 6, "executed rows=4; recorded=3")]
+    [InlineData(4, 5, "discovered rows=6; recorded=5")]
+    [InlineData(5, 7, "executed rows=4; recorded=5")]
+    [InlineData(4, 7, "discovered rows=6; recorded=7")]
+    public async Task Read_RepeatedFailureCounts_RequiresPerArtifactMaxima(
+        int executed, int? discovered, string? refusal)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        var artifact = fixture.UseCollisionEvidence();
+        var rerun = WriteExecution(fixture, "rerun.trx", "Failed");
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with
+        {
+            Artifacts = [artifact, rerun],
+            Check = item.Check with { ExecutedTestCount = executed, DiscoveredTestCount = discovered }
+        }).ToArray() });
+        fixture.Complete();
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+
+        if (refusal is null) AssertValidated(read, artifact.Path);
+        else
+        {
+            Assert.Null(read.Failure);
+            Assert.Contains("solo-incomplete-check-rows: " + refusal, read.Reason);
+        }
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 2)]
+    public async Task Read_MixedExecutions_RefusesFlakeRegardlessOfOrderAndCount(
+        bool passedFirst, int failedExecutions)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        var artifact = fixture.UseCollisionEvidence();
+        var passed = WriteExecution(fixture, "passed.trx", "Passed");
+        var artifacts = new List<SoloAcceptanceArtifact> { artifact };
+        if (failedExecutions > 1) artifacts.Add(WriteExecution(fixture, "failed.trx", "Failed"));
+        if (passedFirst) artifacts.Insert(0, passed);
+        else artifacts.Add(passed);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with
+            { Artifacts = artifacts }).ToArray() });
+        fixture.Complete();
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+
+        Assert.Null(read.Failure);
+        Assert.Contains("identity=" + SoloAttributedFailureRouteFixture.First, read.Reason);
+        Assert.Contains("outcome=" + AcceptanceLaneRerunEvidence.Flake, read.Reason);
+        Assert.DoesNotContain("solo-duplicate-test-row", read.Reason);
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData("NotExecuted", false)]
+    [InlineData("Failed", true)]
+    public async Task Read_UnsupportedRepetitions_RetainsDuplicateRefusal(
+        string outcome, bool sameArtifact)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        var artifact = fixture.UseCollisionEvidence();
+        var extra = sameArtifact ? artifact : WriteExecution(fixture, "extra.trx", outcome);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with
+            { Artifacts = [artifact, extra] }).ToArray() });
+        fixture.Complete();
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+
+        Assert.Null(read.Failure);
+        Assert.Contains("solo-duplicate-test-row: identity=" + SoloAttributedFailureRouteFixture.First, read.Reason);
+        Assert.Contains("outcomes=Failed," + outcome, read.Reason);
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData("Failed")]
+    [InlineData("Passed")]
+    [InlineData("NotExecuted")]
+    public async Task Read_AmbiguousRerunArtifact_RetainsTrxAmbiguityRefusal(string outcome)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        var artifact = fixture.UseCollisionEvidence();
+        var rerun = WriteExecution(fixture, "rerun.trx", "Failed", outcome);
+        fixture.ReplaceProof(proof => proof with { Checks = proof.Checks.Select(item => item with
+            { Artifacts = [artifact, rerun] }).ToArray() });
+        fixture.Complete();
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+
+        Assert.Null(read.Failure);
+        Assert.Contains("solo-trx-ambiguous-row", read.Reason);
+        Assert.Contains("identity=" + SoloAttributedFailureRouteFixture.First, read.Reason);
+        Assert.Contains("outcomes=Failed," + outcome, read.Reason);
+    }
+
+    private static SoloAcceptanceArtifact WriteExecution(
+        SoloAttributedFailureRouteFixture fixture, string filename, params string[] outcomes)
+    {
+        var document = new XDocument(new XElement("TestRun", new XAttribute("id", filename),
+            new XElement("TestDefinitions", new XElement("UnitTest", new XAttribute("id", "f"),
+                new XElement("TestMethod", new XAttribute("className", "Sample.Tests.SoloTests"), new XAttribute("name", "Fails")))),
+            new XElement("Results", outcomes.Select(outcome => new XElement("UnitTestResult",
+                new XAttribute("testId", "f"), new XAttribute("testName", "Fails"), new XAttribute("outcome", outcome),
+                new XElement("Output", new XElement("ErrorInfo", new XElement("Message", "rerun line"))))))));
+        return fixture.WriteLiteralTrx(filename, document.ToString());
     }
 
     private static void AssertValidated(SoloAcceptanceFailureRead read, string path)

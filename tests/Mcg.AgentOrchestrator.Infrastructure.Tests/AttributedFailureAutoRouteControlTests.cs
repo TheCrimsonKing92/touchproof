@@ -40,7 +40,7 @@ public sealed class AttributedFailureAutoRouteControlTests
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 1);
-        driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         driver.BeginTick(kernel, 2);
         driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive);
         Assert.Single(MarkerRetries(second));
@@ -60,7 +60,7 @@ public sealed class AttributedFailureAutoRouteControlTests
         RecordCohortFailure(resumed, goal, Main);
         replay.CurrentCandidate = Main;
         replayDriver.BeginTick(resumed, 4);
-        replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         Assert.Equal(2, MarkerRetries(goal).Length);
         Assert.Contains("candidate_sha=" + Main, MarkerRetries(goal)[1].Message);
         Assert.Single(replay.Dispatches);
@@ -82,7 +82,7 @@ public sealed class AttributedFailureAutoRouteControlTests
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 2);
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         Assert.Single(MarkerRetries(goal));
         CompleteWithoutNewCommit(kernel, goal);
         RecordTesterResult(kernel, goal, tester, fail: true, overrideFinding: finding, reportFinding: false);

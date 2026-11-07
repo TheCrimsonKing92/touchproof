@@ -304,7 +304,7 @@ public sealed class GateStatsFlakeTests : CliTaskQueryTestSupport
             var text = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, Workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             });
             Assert.Empty(repository.ObservedWriteOperationTags);

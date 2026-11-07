@@ -27,7 +27,8 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, strin
     {
         var main = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}")).Trim();
         var head = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "HEAD^{commit}")).Trim();
-        var root = Require(GitCli.Run(repositoryRoot, "rev-parse", "--show-toplevel")).Trim();
+        var root = Require(GitPathQuery.Run(repositoryRoot,
+            () => GitCli.Run(repositoryRoot, "rev-parse", "--show-toplevel"), "--show-toplevel")).Trim();
         var wrongRoot = !Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)).Equals(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)), StringComparison.OrdinalIgnoreCase);
         if (wrongRoot || head != main)

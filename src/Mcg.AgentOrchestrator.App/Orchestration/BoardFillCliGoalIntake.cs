@@ -74,7 +74,6 @@ internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : 
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
         Goal? currentGoal = null;
         _ = CliPersistentStateRunner.ExecuteCommand(args, new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
-            workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
-            NullOperatorChannel.Instance);
+            workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal);
     }
 }

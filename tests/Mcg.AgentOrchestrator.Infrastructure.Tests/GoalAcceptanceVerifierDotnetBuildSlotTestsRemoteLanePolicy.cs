@@ -6,6 +6,28 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(null, 3103, 2400)]
+    [Xunit.InlineData(30, 1800, 1800)]
+    public async Task Policy_LaneEstimate_PreservesExplicitOrScalesDefaultTimeout(
+        int? timeoutMinutes, int laneSeconds, int shortLaneSeconds)
+    {
+        using var scenario = CreateScenario([45, 2068.631, 150],
+            timeoutMinutes: timeoutMinutes, defaultMinutes: 40);
+        scenario.HoldRemoteUntilLocalStarts = true;
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(TimeSpan.FromSeconds(laneSeconds), scenario.LocalTimeouts[1]);
+        Assert.Equal(TimeSpan.FromSeconds(shortLaneSeconds), scenario.LocalTimeouts[0]);
+        Assert.Equal(
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=2068.631 Ln=3 R=4152.262 Rn=0 F=2068.631 Fn=0 DeadlineSeconds={laneSeconds} CheckTimeoutSeconds={laneSeconds}",
+            Assert.Single(scenario.Progress.Where(line =>
+                line.StartsWith($"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" ", StringComparison.Ordinal))));
+    }
+
     [Xunit.Fact]
     public async Task Policy_OffersPriorWithinProbeBandWithoutRemoteHistory()
     {
@@ -265,7 +287,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(800, rows[(Lane(0), GoalAcceptanceVerifier.ShortHash("changed-filter"))].MedianSeconds);
     }
 
-    private Scenario CreateScenario(double[] local, bool keyed = false, string[]? lanes = null)
+    private Scenario CreateScenario(double[] local, bool keyed = false, string[]? lanes = null,
+        int? timeoutMinutes = 5, int? defaultMinutes = null)
     {
         SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
@@ -284,6 +307,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
             {
               "version": 1,
               "engine": {
+                {{(defaultMinutes is { } minutes ? $"\"timeouts\": {{\"defaultMinutes\": {minutes}}}," : "")}}
                 "maxConcurrentShards": 3,
                 "infrastructureTestLanes": {{JsonSerializer.Serialize(rows)}},
                 "mtpInvocations": [{
@@ -295,7 +319,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
               },
               "checks": [{
                 "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "timeoutMinutes": 5
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                {{(timeoutMinutes is { } explicitMinutes ? $", \"timeoutMinutes\": {explicitMinutes}" : "")}}
               }], "forbiddenChangedPathGlobs": []
             }
             """);
@@ -357,6 +382,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         internal ManualRemoteLaneClock Clock { get; } = new();
         internal FakeRemoteLaneExecutor Fake { get; } = new();
         internal ConcurrentQueue<int> LocalStarts { get; } = new();
+        internal ConcurrentDictionary<int, TimeSpan> LocalTimeouts { get; } = new();
         internal ConcurrentQueue<string> Progress { get; } = new();
         internal bool HoldRemoteUntilLocalStarts { get; set; }
         internal bool CheckUnusedSlots { get; set; }
@@ -375,7 +401,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
             return await verifier.RunOwnedAsync(Root, Goal, null, slot, lease, executionOwner);
         }
 
-        private Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string directory, CancellationToken token)
+        private Task<GoalAcceptanceVerifier.CommandResult> Runner(
+            string[] args, string directory, TimeSpan timeout, CancellationToken token)
         {
             if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
             {
@@ -390,6 +417,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
                     Assert.NotNull(slot2);
                     Interlocked.Increment(ref _slotChecks);
                 }
+                LocalTimeouts[index] = timeout;
                 LocalStarts.Enqueue(index);
                 WriteMtpTrx(args, 1, [$"Lane{index}Tests.Executes"]);
                 if (HoldRemoteUntilLocalStarts && LocalStarts.Count == 2) _handle!.Publish(_remoteResult!);

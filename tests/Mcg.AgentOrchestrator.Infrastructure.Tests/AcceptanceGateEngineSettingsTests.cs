@@ -503,7 +503,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.Equal(["candidate-resource"], lane.ExclusiveResourceKeys);
             var testCall = Xunit.Assert.Single(calls);
             Xunit.Assert.Contains("FullyQualifiedName~CandidateLaneTests", testCall.Arguments);
-            Xunit.Assert.Equal(TimeSpan.FromMinutes(3), testCall.Timeout);
+            Xunit.Assert.Equal(TimeSpan.FromSeconds(186), testCall.Timeout); // ceil(123.5 * 1.5) exceeds the 3-minute default.
         }
         finally
         {

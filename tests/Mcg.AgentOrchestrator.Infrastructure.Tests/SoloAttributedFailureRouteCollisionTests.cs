@@ -26,7 +26,7 @@ public sealed class SoloAttributedFailureRouteCollisionTests
 
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
 
         var retry = Assert.Single(MarkerRetries(fixture.Goal));
         var task = Assert.Single(fixture.Goal.Tasks);

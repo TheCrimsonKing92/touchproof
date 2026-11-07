@@ -94,7 +94,7 @@ public sealed class CliRoundValueByCheckRouteTests : CliTaskQueryTestSupport
         var profiles = WorkerProfileCatalog.Default();
         Goal? goal = null;
         Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, OrchestratorWorkspace.ForDirectory(root),
-            new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+            new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
         Assert.False(changed);
     });
 

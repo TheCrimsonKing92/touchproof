@@ -286,7 +286,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 CliCommandHelp.ThrowIfInvalidFlags(args);
                 Assert.Equal(expectsReadOnly, CliReadOnlyCommandRunner.TryExecute(args,
                     new ProbeStateRepository(kernel) { ThrowOnOutbox = true }, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref selected,
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref selected,
                     out var changed));
                 Assert.False(changed);
                 Assert.Null(selected);
@@ -337,7 +337,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             Assert.True(CliReadOnlyCommandRunner.TryExecute(args, new ProbeStateRepository(kernel) { ThrowOnOutbox = true },
-                workspace, new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                workspace, new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
             Assert.False(changed);
             Assert.Null(goal);
         });

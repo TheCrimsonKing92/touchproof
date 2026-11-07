@@ -1717,12 +1717,14 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
     }
 
     internal static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal)
-        CreateAcceptedCandidate(string repo, string fileName)
+        CreateAcceptedCandidate(string repo, string fileName, WorktreeSetupTemplate? setupTemplate = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(repo);
         var (kernel, goal) = CreateVerifiedGoal(repo);
         var goalBranch = GoalWorktrees.BranchName(goal.Id);
-        AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
+        if (setupTemplate is not null && fileName == "src/delivery.txt")
+            setupTemplate.AddLandingCandidate(repo, goal.Id);
+        else AddGoalBranchCommit(repo, goalBranch, fileName, "goal work");
         var worktree = GoalWorktrees.Ensure(repo, goal.Id);
         var branchHead = ReadGit(worktree, "rev-parse", "HEAD");
         var mainHead = ReadGit(repo, "rev-parse", "main");
@@ -1772,7 +1774,11 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
 
             foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
             {
-                File.Copy(file, Path.Combine(destination, Path.GetRelativePath(source, file)));
+                var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+                File.Copy(file, target);
+                // Match the cached setup index on Windows, just as the cohort copies do.
+                if (OperatingSystem.IsWindows()) File.SetCreationTimeUtc(target, File.GetCreationTimeUtc(file));
+                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(file));
             }
         }
     }

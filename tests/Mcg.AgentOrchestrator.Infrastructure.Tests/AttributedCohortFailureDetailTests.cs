@@ -79,7 +79,11 @@ public sealed class AttributedCohortFailureDetailTests
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 1);
-        driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive);
+        // This test pins feedback content; hold timing is covered by AttributedFailureRoutingHoldTests.
+        driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive with
+        {
+            AutomaticRetryOperatorRoutingHoldSeconds = 0
+        });
 
         var feedback = Assert.Single(MarkerRetries(second)).Message;
         Assert.Equal(second.Tasks.Single().Id, Assert.Single(harness.Dispatches));
