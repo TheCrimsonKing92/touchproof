@@ -122,7 +122,7 @@ public sealed class RemovalReferenceCensusIntakeTests : CliCommandTestBase
         Assert.Equal(new[] { peer.Id, removal.Id },
             GoalSchedulingOrder.ForAcceptance(kernel.Goals).Select(goal => goal.Id));
 
-        var repository = new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db"));
+        var repository = CreateMigratedStateRepository(Path.Combine(root, "state.db"));
         await repository.SaveAsync(kernel);
         var facts = await repository.ListAcceptanceQueueFactsAsync();
         Assert.Equal(peerVerifiedAt, Assert.Single(facts.Where(fact => fact.GoalId == peer.Id.Value)).VerifiedAt);
