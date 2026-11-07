@@ -121,7 +121,7 @@ internal sealed class ConductorHandoffSchemaUpgrade(
         }
     }
 
-    private static string DrainFailure(string path)
+    internal static string DrainFailure(string path)
     {
         var lines = File.ReadAllLines(path);
         if (lines.Any(l => l.StartsWith("LOOP_RELAUNCH_DETACH ", StringComparison.Ordinal)))

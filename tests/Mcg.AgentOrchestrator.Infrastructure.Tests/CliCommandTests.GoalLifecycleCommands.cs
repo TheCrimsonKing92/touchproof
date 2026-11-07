@@ -205,6 +205,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommand
 
 public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "Cli_goal_role_flags_assign_named_agents_at_creation")]
     public void CliGoalRoleFlagsAssignNamedAgentsAtCreation()
     {
@@ -1904,6 +1906,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
 
 public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]
     public void CliStatusPrintsCleanupBackoffForSnapshotVisibility()
     {

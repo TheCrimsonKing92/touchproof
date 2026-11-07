@@ -9,6 +9,8 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerGoalScopedWrite : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public async Task Revise_UnrelatedGoalAndRequest_PreservesStoredBytes()
     {

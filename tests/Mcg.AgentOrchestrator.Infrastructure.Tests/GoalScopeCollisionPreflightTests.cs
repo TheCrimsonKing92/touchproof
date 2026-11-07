@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalScopeCollisionPreflightTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "Goal_scope_collision_advisory_keeps_goal_creation_nonblocking_without_dispatch")]
     public async Task GoalCreationRemainsNonblockingWithoutDispatch()
     {

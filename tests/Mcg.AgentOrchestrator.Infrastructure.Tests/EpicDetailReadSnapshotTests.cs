@@ -10,6 +10,8 @@ using System.Text.Json;
 // Parallel-safe: each test owns its database files and request-local trace callbacks.
 public sealed class EpicDetailReadSnapshotTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Theory]
     [InlineData(1)]
     [InlineData(7)]

@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsStatus : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_status_loads_terminal_goal_on_demand")]
     public void PersistentRunnerStatusLoadsTerminalGoalOnDemand()
     {

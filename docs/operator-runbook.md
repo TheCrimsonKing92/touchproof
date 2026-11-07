@@ -303,6 +303,26 @@ The scheduled task runs `scripts\Resume-OrchestratorLoop.ps1`. The resume script
 
 ---
 
+### Project fleet rolling restart after home adoption
+
+An adopted home build queues one background rolling restart per commit for the home supervisor's lifetime.
+Different commits run in order. Enabled, running, non-home projects drain and restart one at a time;
+failures leave the project's old build in the result and do not skip later projects.
+The home orchestrator directory's `fleet-restart-status.txt` is the current fleet status table, replaced
+after each completed pass. `FLEET_ROLLING_RESTART_PROJECT` outcomes and the `FLEET_ROLLING_RESTART`
+summary in the home conduct event stream retain history; `FLEET_ROLLING_RESTART_FAILED` names pass errors.
+
+Each project's `fleet-restart-drain.json` holds new acceptance admission while its live gate drains.
+The conductor acknowledges the hold with its active-attempt count in `fleet-restart-drain.ack.json`;
+only an acknowledged zero count and no live heartbeat permit a stop. After five minutes without drain,
+`failed-drain-timeout` leaves the old conductor running without writing a stop request. The pass removes
+its own hold on every outcome. If its owner process exits or the drain-plus-restart deadline expires,
+the project conductor removes the abandoned hold and emits `FLEET_RESTART_HOLD_ABANDONED` before resuming
+admission. Invalid hold or heartbeat artifacts hold admission/drain closed and report diagnostics.
+Run the updated conductor runtime before relying on this admission handshake: older conductors cannot
+acknowledge it and safely time out. Same-commit failures are not automatically retried; restarting the
+home supervisor resets the in-memory deduplication history.
+
 ## 2. Policies (the gate you choose)
 
 | Policy | Workers | Behavior |

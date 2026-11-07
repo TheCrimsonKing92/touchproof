@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OperatorChannelTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     // ---- OperatorChannelCatalog / Store ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelCatalog_default_is_null_channel")]

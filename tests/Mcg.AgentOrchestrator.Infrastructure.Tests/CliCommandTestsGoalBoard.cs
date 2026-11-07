@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly ITestOutputHelper _output;
 
     public CliCommandTestsGoalBoard(ITestOutputHelper output)

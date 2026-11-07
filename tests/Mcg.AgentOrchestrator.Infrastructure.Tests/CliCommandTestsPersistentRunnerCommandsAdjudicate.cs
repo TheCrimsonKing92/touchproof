@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsAdjudicate : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public async Task Adjudicate_cli_queues_typed_versioned_agent_intent_without_mutating_goal()
     {

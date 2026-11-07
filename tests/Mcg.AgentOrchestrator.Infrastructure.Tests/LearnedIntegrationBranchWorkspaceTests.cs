@@ -9,6 +9,8 @@ using static InfrastructureTestSupport;
 // Parallel-safe: unique project/data/registry roots and AsyncLocal console capture.
 public sealed class LearnedIntegrationBranchWorkspaceTests : HostCapacityBoundTestBase
 {
+    private protected override bool UsesGit => false;
+
     private readonly string directory = CreateTempDirectory();
     private string ProjectRoot => Path.Combine(directory, "repository");
     private OrchestratorProjectRegistry Registry => new(Path.Combine(directory, "registry"), Path.Combine(directory, "data"));

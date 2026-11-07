@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalBoardProcessSnapshotTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public void GoalBoardCommandCapturesProcessSnapshotOnceForMultipleGoals()
     {
