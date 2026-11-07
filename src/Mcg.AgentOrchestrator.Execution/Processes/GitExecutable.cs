@@ -6,15 +6,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Owns the immutable installation identity, never a snapshot of the caller's environment.
 internal static class GitExecutable
 {
-    internal const string LegacyLaunchVariable = "MCG_GIT_LEGACY_LAUNCH";
     private static readonly Lazy<GitInstallation?> Installation = new(
         () => Recognize(HandleListProcessLauncher.ResolveApplication("git")),
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     internal static bool Prepare(ProcessStartInfo info)
     {
-        if (!OperatingSystem.IsWindows() || info.FileName != "git" ||
-            Environment.GetEnvironmentVariable(LegacyLaunchVariable) is not null)
+        if (!OperatingSystem.IsWindows() || info.FileName != "git")
             return false;
 
         if (Installation.Value is { } installation)
