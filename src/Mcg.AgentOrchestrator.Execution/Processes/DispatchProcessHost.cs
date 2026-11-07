@@ -314,7 +314,9 @@ public static class DispatchProcessHost
         IWorkerIntegrityLabeler? gitMetadataLabeler = null,
         IWorkerSandboxFileSystem? sandboxFileSystem = null,
         WorkerSandboxPreparer.CodexScratchScope? codexScratch = null,
-        Action<string>? seedCodexAuth = null)
+        Action<string>? seedCodexAuth = null,
+        Func<string, IReadOnlyDictionary<string, string>?, (string? Output, string? FallbackReason)>? commonDirectoryQuery = null,
+        Action<string>? reportGitMetadataFallback = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -384,7 +386,9 @@ public static class DispatchProcessHost
         }
 
         protectWorkspaceBoundary ??= ProtectWorkspaceBoundary;
-        protectGitMetadata ??= ProtectGitMetadata;
+        protectGitMetadata ??= worktree => ProtectGitMetadata(worktree,
+            gitMetadataLabeler ?? ResolveIntegrityLabeler(), commonDirectoryQuery: commonDirectoryQuery,
+            reportFallback: reportGitMetadataFallback);
 
         var shouldProtectWorkspaceBoundary = parameters.SandboxWorktreeWritable &&
             !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase);
@@ -1222,7 +1226,9 @@ public static void DropToLow() {
         string worktree,
         IWorkerIntegrityLabeler integrityLabeler,
         Func<string, IReadOnlyDictionary<string, string>?, string?>? commonDirectoryResolver = null,
-        IReadOnlyDictionary<string, string>? gitEnvironment = null)
+        IReadOnlyDictionary<string, string>? gitEnvironment = null,
+        Func<string, IReadOnlyDictionary<string, string>?, (string? Output, string? FallbackReason)>? commonDirectoryQuery = null,
+        Action<string>? reportFallback = null)
     {
         var checkoutGitFile = Path.Combine(worktree, ".git");
         if (!File.Exists(checkoutGitFile) && !Directory.Exists(checkoutGitFile))
@@ -1244,9 +1250,30 @@ public static void DropToLow() {
             commonDir = commonDirectoryResolver?.Invoke(worktree, gitEnvironment);
             if (commonDir is null)
             {
-                var commonDirResult = gitEnvironment is null
-                    ? GitCli.Run(worktree, "rev-parse", "--git-common-dir")
-                    : GitCli.RunWithEnvironment(worktree, gitEnvironment, "rev-parse", "--git-common-dir");
+                string? output = null;
+                string? fallbackReason = "in-process-query-unavailable";
+                try
+                {
+                    if (commonDirectoryQuery is not null)
+                        (output, fallbackReason) = commonDirectoryQuery(worktree, gitEnvironment);
+                }
+                catch (Exception ex)
+                {
+                    fallbackReason = "in-process-query-exception:" + ex.GetType().Name;
+                }
+
+                var proven = !string.IsNullOrWhiteSpace(output) && fallbackReason is null;
+                if (!proven)
+                {
+                    // Exactly one lookup per protection phase; diagnostics must not prevent fallback.
+                    try { reportFallback?.Invoke(fallbackReason ?? "unproven-git-layout"); }
+                    catch { }
+                }
+                var commonDirResult = proven
+                    ? new GitCli.GitResult(0, output!, "", ProcessStarted: false)
+                    : gitEnvironment is null
+                        ? GitCli.Run(worktree, "rev-parse", "--git-common-dir")
+                        : GitCli.RunWithEnvironment(worktree, gitEnvironment, "rev-parse", "--git-common-dir");
                 if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
                 {
                     return;
@@ -1396,7 +1423,8 @@ public static void DropToLow() {
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
     public static int Run(string parametersPath,
         Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null,
-        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null)
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null,
+        Func<string, IReadOnlyDictionary<string, string>?, (string? Output, string? FallbackReason)>? commonDirectoryQuery = null)
     {
         DispatchRunParameters parameters;
         try
@@ -1408,7 +1436,7 @@ public static void DropToLow() {
             return 1;
         }
 
-        return RunCore(parameters, null, buildService, startJobQos);
+        return RunCore(parameters, null, buildService, startJobQos, commonDirectoryQuery);
     }
 
     internal sealed class HeartbeatTestHooks
@@ -1452,7 +1480,8 @@ public static void DropToLow() {
 
     private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks,
         Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null,
-        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null)
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null,
+        Func<string, IReadOnlyDictionary<string, string>?, (string? Output, string? FallbackReason)>? commonDirectoryQuery = null)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var lastProgressAt = startedAt;
@@ -1909,7 +1938,10 @@ public static void DropToLow() {
                 parameters,
                 sandboxPreparer,
                 (phase, stepStartedAt, elapsed) => WriteSandboxPrepEvent(parameters, phase, stepStartedAt, elapsed),
-                codexScratch: codexScratch);
+                codexScratch: codexScratch,
+                commonDirectoryQuery: commonDirectoryQuery,
+                reportGitMetadataFallback: reason => WriteSandboxPrepEvent(parameters,
+                    "protect-git-metadata-fallback", DateTimeOffset.UtcNow, null, reason));
             WriteSandboxPrepEvent(
                 parameters,
                 sandboxPreparation.PrepReceiptHit ? "receipt-hit" : "complete",
@@ -2599,7 +2631,8 @@ public static void DropToLow() {
         DispatchRunParameters parameters,
         string phase,
         DateTimeOffset startedAt,
-        TimeSpan? elapsed)
+        TimeSpan? elapsed,
+        string? reason = null)
     {
         if (!parameters.SandboxLowIntegrity)
         {
@@ -2618,6 +2651,7 @@ public static void DropToLow() {
         {
             payload["elapsedMs"] = (long)value.TotalMilliseconds;
         }
+        if (reason is not null) payload["reason"] = reason;
 
         try
         {
