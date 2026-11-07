@@ -2564,7 +2564,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await RunLaneTestHostWithShardPermitAsync(
             arguments,
             worktreePath,
-            EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+            AcceptanceLaneCheckTimeout.Resolve(check, EngineSettings),
             CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
             cancellationToken, isMtpLane: true).ConfigureAwait(false);
 
@@ -2757,7 +2757,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan? commandTimeout = null)
     {
         var elapsed = Stopwatch.StartNew();
-        var timeout = commandTimeout ?? EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes);
+        var timeout = commandTimeout ?? AcceptanceLaneCheckTimeout.Resolve(check, EngineSettings);
         var environment = executionEnvironment ?? ResolveExecutionEnvironment(
             goalId,
             attemptName,

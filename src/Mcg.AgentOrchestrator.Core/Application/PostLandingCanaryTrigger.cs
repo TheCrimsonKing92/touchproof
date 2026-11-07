@@ -49,6 +49,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             // Stall policy is reached through the command summary and stall monitor.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",
+            // Budget arithmetic is reached indirectly through the lane check timeout resolver.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneTimeoutBudget",
             "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",
@@ -109,6 +111,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInfrastructureLaneResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceInvocationEvidenceProvenance",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneCheckTimeout",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunAttribution",
