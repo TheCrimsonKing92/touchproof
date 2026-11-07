@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -15,7 +16,7 @@ internal static class CliPushAdoptedCommand
     }
 
     internal static int Run(IReadOnlyList<string> args, AdoptedBuildPushService service,
-        TextWriter output, TextWriter error, string defaultBranch = "main")
+        TextWriter output, TextWriter error, string defaultBranch = TrunkBranchName.Default)
     {
         try
         {

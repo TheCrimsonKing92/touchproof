@@ -12,7 +12,7 @@ internal sealed class AdoptedBuildPushService(
 {
     private readonly object _gate = new();
 
-    internal bool Push(string commit, string remote = "origin", string branch = "main")
+    internal bool Push(string commit, string remote = "origin", string branch = TrunkBranchName.Default)
     {
         lock (_gate) return PushCore(commit, remote, branch);
     }

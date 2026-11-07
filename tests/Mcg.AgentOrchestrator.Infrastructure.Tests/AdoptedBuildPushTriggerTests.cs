@@ -35,7 +35,7 @@ public sealed class AdoptedBuildPushTriggerTests
             var pushed = new List<string>();
             var events = new List<string>();
             var trigger = new AdoptedBuildPushTrigger(
-                () => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(root), pushed.Add, events.Add,
+                () => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(root)), pushed.Add, events.Add,
                 _ => Assert.Fail("No attention expected for a valid policy."));
             void Write(bool enabled) => File.WriteAllText(Path.Combine(root, "conductor-policy.json"),
                 (ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = enabled }).ToJson());

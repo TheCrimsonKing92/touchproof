@@ -83,5 +83,5 @@ internal sealed class AdoptedBuildPushFixture : IDisposable
     }
 
     internal string RemoteTip => Git("--git-dir=" + Remote, "rev-parse", "refs/heads/main");
-    public void Dispose() => Directory.Delete(_root, true);
+    public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
 }

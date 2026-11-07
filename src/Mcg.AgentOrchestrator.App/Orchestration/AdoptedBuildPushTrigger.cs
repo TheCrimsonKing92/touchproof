@@ -39,7 +39,7 @@ internal sealed class AdoptedBuildPushTrigger(
         var workspace = project?.ResolveWorkspace() ?? OrchestratorWorkspace.ForDirectory(
             root, root, OrchestratorWorkspace.DefaultTenantName, registry);
         var service = AdoptedBuildPushService.CreateDefault(root, append);
-        return new(() => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(workspace.OrchestratorDirectory),
+        return new(() => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)),
             commit => service.Push(commit, branch: workspace.IntegrationBranch), append,
             body => Mcg.AgentOrchestrator.Infrastructure.CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
                 .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
