@@ -14,7 +14,6 @@ internal static class CliNextGoalQueryRoute
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -33,7 +32,7 @@ internal static class CliNextGoalQueryRoute
             var matches = ids.Length == 0
                 ? new AgentOrchestratorKernel()
                 : stateQueries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
-            CliReadOnlyQueryExecutor.Execute(args, matches, workspace, providers, channel,
+            CliReadOnlyQueryExecutor.Execute(args, matches, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
             return true;
         }
@@ -54,7 +53,7 @@ internal static class CliNextGoalQueryRoute
         if (items.Any(item => item.CorrelationKey?.StartsWith(SweepBlockerPrefix, StringComparison.Ordinal) == true))
             return false;
 
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
         return true;
     }

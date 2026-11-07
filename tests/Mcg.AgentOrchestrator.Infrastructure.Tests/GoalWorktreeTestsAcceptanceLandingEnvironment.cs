@@ -36,16 +36,13 @@ public sealed class GoalWorktreeTestsAcceptanceLandingEnvironment : GoalWorktree
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             File.WriteAllText(
-                workspace.OperatorChannelPath,
+                Path.Combine(workspace.OrchestratorDirectory, "operator-channel.json"),
                 """{ "channelType": "discord", "forumChannelId": "42" }""");
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var channel = OperatorChannelComposition.Create(
-                OperatorChannelStore.Load(workspace.OperatorChannelPath),
-                workspace.OrchestratorDirectory);
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
-            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal, channel)
+            var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
                 CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier

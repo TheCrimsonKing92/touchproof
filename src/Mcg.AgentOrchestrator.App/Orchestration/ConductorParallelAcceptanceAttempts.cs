@@ -1371,7 +1371,6 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     DotnetBuildEnvironmentManager.CaptureStorageRoot(), workspace.OrchestratorDirectory),
                 agents,
                 profiles,
-                NullOperatorChannel.Instance,
                 providers,
                 cleanupHooks: WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);

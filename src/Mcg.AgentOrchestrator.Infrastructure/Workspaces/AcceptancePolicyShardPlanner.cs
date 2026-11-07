@@ -7,7 +7,6 @@ internal static partial class AcceptancePolicyShardPlanner
 {
     internal const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
     internal const string ProvidersProject = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
-    internal const string OperatorCommsProject = "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj";
     internal const string ExecutionProject = "src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj";
     internal const string InfrastructureProject = "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
     internal const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
@@ -29,9 +28,8 @@ internal static partial class AcceptancePolicyShardPlanner
     // This graph owns impact propagation and cache eligibility. Edges point to consumers.
     internal static readonly IReadOnlyDictionary<string, ProjectTopologyEntry> ProjectTopology = new Dictionary<string, ProjectTopologyEntry>(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = new(BaseCacheEligibility.Always, [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject, OwnerConsoleTestsProject, StorageRetentionTestsProject]),
+        [CoreProject] = new(BaseCacheEligibility.Always, [ExecutionProject, ProvidersProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject, OwnerConsoleTestsProject, StorageRetentionTestsProject]),
         [ProvidersProject] = new(BaseCacheEligibility.Always, [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject]),
-        [OperatorCommsProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
         [ExecutionProject] = new(BaseCacheEligibility.Always, [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
         [InfrastructureProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, OwnerConsoleTestsProject, StorageRetentionTestsProject]),
         [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, OwnerConsoleTestsProject, StorageRetentionTestsProject]),
@@ -311,8 +309,6 @@ internal static partial class AcceptancePolicyShardPlanner
             return CoreProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase))
             return ProvidersProject;
-        if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase))
-            return OperatorCommsProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Execution/", StringComparison.OrdinalIgnoreCase))
             return ExecutionProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase))
@@ -339,7 +335,6 @@ internal static partial class AcceptancePolicyShardPlanner
     internal static string ProjectLabel(string project) =>
         project.Equals(CoreProject, StringComparison.OrdinalIgnoreCase) ? "Core" :
         project.Equals(ProvidersProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Providers" :
-        project.Equals(OperatorCommsProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.OperatorComms" :
         project.Equals(ExecutionProject, StringComparison.OrdinalIgnoreCase) ? "Execution" :
         project.Equals(InfrastructureProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure" :
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :

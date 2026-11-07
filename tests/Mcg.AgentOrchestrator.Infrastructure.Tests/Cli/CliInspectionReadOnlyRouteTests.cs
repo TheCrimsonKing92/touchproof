@@ -44,7 +44,7 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
                     args, repository, OrchestratorWorkspace.ForDirectory(root),
-                    new InMemoryModelProviderRegistry([]), null,
+                    new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -100,7 +100,7 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
             var queryOutput = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                    args, repository, workspace, providers, null,
+                    args, repository, workspace, providers,
                     ref agents, ref profiles, ref currentGoal, out var changed));
                 Xunit.Assert.False(changed);
             });
@@ -125,7 +125,7 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
         Goal? currentGoal = null;
         Xunit.Assert.False(CliReadOnlyCommandRunner.TryExecute(
             args, repository, OrchestratorWorkspace.ForDirectory(Path.GetTempPath()),
-            new InMemoryModelProviderRegistry([]), null,
+            new InMemoryModelProviderRegistry([]),
             ref agents, ref profiles, ref currentGoal, out var changed));
         Xunit.Assert.False(changed);
         Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);

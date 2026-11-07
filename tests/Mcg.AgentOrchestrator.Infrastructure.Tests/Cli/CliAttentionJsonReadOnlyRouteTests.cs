@@ -146,7 +146,7 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             Goal? currentGoal = null;
             var providers = new InMemoryModelProviderRegistry([]);
             Assert.False(CliAttentionQueryCommand.TryExecute(["attention"], repository, workspace,
-                providers, null, ref agents, ref profiles, ref currentGoal));
+                providers, ref agents, ref profiles, ref currentGoal));
             // Only this existing store is read; an absent store gets no sidecar exemption.
             string[] allowedReadSidecars = File.Exists(database) ? [database + "-wal", database + "-shm"] : [];
             var before = Snapshot(root, allowedReadSidecars);
@@ -233,7 +233,7 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             var jsonOutput = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(["attention", "--json"], repository, workspace,
-                    providers, null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    providers, ref agents, ref profiles, ref currentGoal, out var changed));
                 Assert.False(changed);
             });
             using var json = JsonDocument.Parse(jsonOutput);
@@ -243,7 +243,7 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             var read = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(["attention"], repository, workspace,
-                    providers, null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    providers, ref agents, ref profiles, ref currentGoal, out var changed));
                 Assert.False(changed);
             });
             var legacy = CaptureConsole(() => Assert.False(CliCommandDispatcher.ExecuteCommand(

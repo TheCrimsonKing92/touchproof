@@ -152,7 +152,7 @@ public sealed class CliRemoteExecutorsShadowAgreementTests : CliTaskQueryTestSup
         var output = CaptureConsole(() =>
         {
             Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, OrchestratorWorkspace.ForDirectory(root),
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
             Assert.False(changed);
         });
         Assert.Null(goal);

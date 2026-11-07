@@ -7,103 +7,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
 {
     private protected override bool UsesGit => false;
 
-    // ---- OperatorChannelCatalog / Store ----
-
-    [Xunit.Fact(DisplayName = "OperatorChannelCatalog_default_is_null_channel")]
-    public void OperatorChannelCatalogDefaultIsNullChannel()
-    {
-        var catalog = OperatorChannelCatalog.Default();
-        Assert.True(catalog.IsNull);
-        Assert.Equal("null", catalog.ChannelType);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_discord_catalog")]
-    public void OperatorChannelStoreRoundtripsDiscordCatalog()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, "operator-channel.json");
-        var catalog = new OperatorChannelCatalog("discord");
-
-        OperatorChannelStore.Save(path, catalog);
-        var restored = OperatorChannelStore.Load(path);
-
-        Assert.Equal("discord", restored.ChannelType);
-        Assert.False(restored.IsNull);
-    }
-
-    [Xunit.Fact]
-    public void OperatorChannelStoreLoadsLegacyDashboardUrlAndDropsItWhenSaved()
-    {
-        var path = Path.Combine(CreateTempDirectory(), "operator-channel.json");
-        File.WriteAllText(path, """
-            { "channelType": "discord", "dashboardBaseUrl": "https://localhost:5001",
-              "forumChannelId": "42", "operatorUserIds": ["user1"] }
-            """);
-
-        var catalog = OperatorChannelStore.Load(path);
-
-        Assert.Equal("discord", catalog.ChannelType);
-        OperatorChannelStore.Save(path, catalog);
-        Assert.DoesNotContain("dashboardBaseUrl", File.ReadAllText(path), StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public void OperatorChannelStoreLoadsLegacyMuteKeyAndKeepsSupportedFields()
-    {
-        var path = Path.Combine(CreateTempDirectory(), "operator-channel.json");
-        File.WriteAllText(path, """
-            { "channelType": "discord", "forumChannelId": "41",
-              "progressThreadId": "progress-thread", "deadManHeartbeatEnabled": true,
-              "controlPlaneMutedUntil": "2026-07-26T05:00:00+00:00" }
-            """);
-
-        var catalog = OperatorChannelStore.Load(path);
-
-        Assert.Equal("discord", catalog.ChannelType);
-        Assert.True(catalog.DeadManHeartbeatEnabled);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelStore_load_missing_file_returns_null_default")]
-    public void OperatorChannelStoreLoadMissingFileReturnsNullDefault()
-    {
-        var path = Path.Combine(CreateTempDirectory(), "nonexistent.json");
-        var catalog = OperatorChannelStore.Load(path);
-        Assert.True(catalog.IsNull);
-    }
-
-    // ---- NullOperatorChannel ----
-
-    // Parallel-safe: the catalog and composition use a private temporary directory.
-    [Xunit.Fact]
-    public void Composition_LegacyDiscordCatalog_ReturnsNullChannel()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, "operator-channel.json");
-        File.WriteAllText(path, """
-            { "channelType": "discord", "forumChannelId": "42",
-              "operatorUserIds": ["user1", "user2"], "isNull": false }
-            """);
-
-        var catalog = OperatorChannelStore.Load(path);
-
-        // Prove the legacy record loaded instead of falling back after a read failure.
-        Assert.Equal("discord", catalog.ChannelType);
-        Assert.False(catalog.IsNull);
-        var channel = OperatorChannelComposition.Create(catalog, root);
-        Assert.Same(NullOperatorChannel.Instance, channel);
-    }
-
-    [Xunit.Fact(DisplayName = "NullOperatorChannel_send_is_noop")]
-    public async Task NullOperatorChannelSendIsNoop()
-    {
-        var channel = NullOperatorChannel.Instance;
-        var escalation = BuildEscalation("inbox-001");
-
-        await channel.SendEscalationAsync(escalation);
-
-        Assert.Equal("null", channel.ChannelType);
-    }
-
     // ---- OperatorEscalationProjection ----
 
     [Xunit.Fact(DisplayName = "Projection_blocker_item_maps_to_escalation")]
@@ -274,44 +177,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.True(actions.Count <= 3);
     }
 
-    // ---- OperatorChannelFactory ----
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]
-    public void OperatorChannelFactoryReturnsNullChannelWhenCatalogIsNullType()
-    {
-        var catalog = OperatorChannelCatalog.Default();
-        var channel = OperatorChannelComposition.Create(catalog, CreateTempDirectory());
-        Assert.Equal("null", channel.ChannelType);
-        Assert.True(channel is NullOperatorChannel);
-    }
-
-    [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
-    public async Task DeadManHeartbeatClientDefaultOptionsDoNotSend()
-    {
-        var client = new DeadManHeartbeatClient(new HttpClient(new ThrowingHandler()));
-
-        var sent = await client.SendAsync();
-
-        Assert.False(sent);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_wires_dead_man_heartbeat_only_when_catalog_enables_valid_url")]
-    public void OperatorChannelFactoryWiresDeadManHeartbeatOnlyWhenCatalogEnablesValidUrl()
-    {
-        var disabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(OperatorChannelCatalog.Default());
-        var enabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(
-            new OperatorChannelCatalog(
-                "discord",
-                DeadManHeartbeatEnabled: true,
-                DeadManHeartbeatUrl: "https://example.test/deadman"));
-
-        Assert.False(disabled.Enabled);
-        Assert.True(enabled.Enabled);
-        Assert.Equal(new Uri("https://example.test/deadman"), enabled.Endpoint);
-    }
-
-    // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
-
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
     public void RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
     {
@@ -320,14 +185,12 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var goal = kernel.CreateGoal("Test objective", [
             new TaskSpec(TaskId.New(), "Test task", AgentRole.Developer)
         ]);
-        var channel = NullOperatorChannel.Instance;
 
         Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
             workspace,
             goal,
             "Acceptance output tail: Unit test failed",
-            "conductor:Verified",
-            channel);
+            "conductor:Verified");
 
         var report = Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.Build(
             kernel,
@@ -363,20 +226,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             .Single(candidate => candidate.Kind == OperatorInboxKind.HumanInput);
 
         Assert.Contains("Occurrences: 2", item.Message, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact(DisplayName = "RecordLandingEscalation_inbox_still_recorded_when_channel_throws")]
-    public void RecordLandingEscalationInboxStillRecordedWhenChannelThrows()
-    {
-        var workspace = BuildTestWorkspace();
-        var goal = BuildTestGoal();
-        var throwingChannel = new ThrowingFakeChannel();
-
-        Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
-            workspace, goal, "conflict reason", "integration", throwingChannel);
-
-        var escapedPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
-        Assert.True(File.Exists(escapedPath));
     }
 
     [Xunit.Fact(DisplayName = "RecordOwnershipHolds_dedupes_open_hold_refreshes_then_allows_new_after_clear")]
@@ -526,24 +375,12 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.Contains("HOLD_CLEARANCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
     }
 
-    // ---- Deep link rendered in message content ----
-
     // ---- helpers ----
 
     private static Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace BuildTestWorkspace()
     {
         var dir = CreateTempDirectory();
         return Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace.ForDirectory(dir);
-    }
-
-    private static Mcg.AgentOrchestrator.Core.Goal BuildTestGoal()
-    {
-        var id = Mcg.AgentOrchestrator.Core.GoalId.New();
-        var task = new Mcg.AgentOrchestrator.Core.TaskSpec(
-            Mcg.AgentOrchestrator.Core.TaskId.New(),
-            "Test task",
-            Mcg.AgentOrchestrator.Core.AgentRole.Developer);
-        return new Mcg.AgentOrchestrator.Core.Goal(id, "Test objective", [task]);
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) BuildKernelWithSingleTaskGoal()
@@ -584,34 +421,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             OperatorInboxKind.HoldClearanceFailure => "recover abc123def <note>",
             _ => "next abc123def"
         };
-
-    private sealed class ThrowingHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("Heartbeat should be disabled by default.");
-    }
-
-    private sealed class ThrowingFakeChannel : IOperatorChannel
-    {
-        public string ChannelType => "throwing-fake";
-        public Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Simulated channel failure.");
-    }
-
-    private static OperatorEscalation BuildEscalation(
-        string inboxItemId,
-        string goalId = "goal-test-123",
-        string goalPrefix = "testgoal",
-        string kind = "FailedTask",
-        string title = "Test escalation",
-        string summary = "Something went wrong.",
-        string keyEvidence = "task failed after 3 retries",
-        IReadOnlyList<OperatorEscalationAction>? actions = null)
-    {
-        return new OperatorEscalation(
-            inboxItemId, goalId, goalPrefix, kind, title, summary, keyEvidence,
-            actions ?? [new OperatorEscalationAction("Retry", "next testgoal", RequiresConfirm: false)]);
-    }
 
     private static OperatorInboxItem BuildInboxItem(
         OperatorInboxKind kind,

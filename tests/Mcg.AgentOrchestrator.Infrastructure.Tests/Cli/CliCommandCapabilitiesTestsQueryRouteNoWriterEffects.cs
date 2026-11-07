@@ -116,7 +116,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                    args, repository, workspace, new InMemoryModelProviderRegistry([]), null,
+                    args, repository, workspace, new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out var changed),
                     $"{verb}: read-only execution declined '{string.Join(" ", args)}'.");
                 Assert.False(changed);
@@ -191,7 +191,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
                 var profiles = WorkerProfileCatalog.Default();
                 Goal? currentGoal = null;
                 CaptureConsole(() => Assert.False(CliReadOnlyCommandRunner.TryExecute(
-                    args, repository, workspace, new InMemoryModelProviderRegistry([]), null,
+                    args, repository, workspace, new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out _)));
             }
             finally

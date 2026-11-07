@@ -43,7 +43,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli,
         WorktreeCleanupContext? acceptanceCleanupContext = null,
@@ -54,8 +53,8 @@ internal static partial class CliPersistentStateRunner
     {
         CliCommandHelp.ValidateGoalCreationOptions(args);
         if (CliArgumentParser.IsAskGoal(args))
-            return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
-        if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
+            return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+        if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
         if (CliEpicOutcomeCommands.IsMutation(args))
             return CliEpicOutcomeCommands.Submit(args, workspace, operatorIntentSubmissionSource);
@@ -103,8 +102,7 @@ internal static partial class CliPersistentStateRunner
                 ref agents,
                 providers,
                 ref workerProfiles,
-                ref commandCurrentGoal,
-                channel);
+                ref commandCurrentGoal);
         }
 
         // Dependency-aware backlog commands read goal identities and landing state but mutate only
@@ -119,8 +117,7 @@ internal static partial class CliPersistentStateRunner
                 ref agents,
                 providers,
                 ref workerProfiles,
-                ref currentGoal,
-                channel);
+                ref currentGoal);
         }
 
         if (IsMetadataOnlyListing(args))
@@ -141,7 +138,7 @@ internal static partial class CliPersistentStateRunner
         // dispatch it started — the goal then re-dispatches the same stage forever and can't advance.
         if (IsConductLoop(args))
         {
-            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceCleanupContext, startupLoopLease);
+            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceCleanupContext, startupLoopLease);
         }
 
         if (IsSingleGoalConductCommand(args))
@@ -154,7 +151,6 @@ internal static partial class CliPersistentStateRunner
                 providers,
                 ref workerProfiles,
                 ref currentGoal,
-                channel,
                 acceptanceVerifier,
                 persistOnlyCurrentGoal: true,
                 cleanupContext: acceptanceCleanupContext,
@@ -171,7 +167,6 @@ internal static partial class CliPersistentStateRunner
                 providers,
                 ref workerProfiles,
                 ref currentGoal,
-                channel,
                 acceptanceVerifier,
                 cleanupContext: acceptanceCleanupContext,
                 stableSlotSelector: stableSlotSelector);
@@ -184,12 +179,12 @@ internal static partial class CliPersistentStateRunner
 
         if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
         {
-            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsBacklogIntakeCommand(args))
         {
-            return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalCreateDeliveryRetryCommand(args))
@@ -199,46 +194,46 @@ internal static partial class CliPersistentStateRunner
 
         if (IsGoalReplacementCommand(args))
         {
-            return CliGoalReplacementExecution.ExecuteGoalReplacementOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return CliGoalReplacementExecution.ExecuteGoalReplacementOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (CliLifecycleGoalExecution.IsCommand(args))
         {
             return CliLifecycleGoalExecution.Execute(args, stateRepository, workspace, ref agents, providers,
-                ref workerProfiles, ref currentGoal, channel, createLifecycleContext);
+                ref workerProfiles, ref currentGoal, createLifecycleContext);
         }
 
         if (args.Count > 0 && args[0].Equals("run-goal", StringComparison.OrdinalIgnoreCase))
         {
             return CliRunGoalExecution.Execute(args, stateRepository, workspace, ref agents, providers,
-                ref workerProfiles, ref currentGoal, channel);
+                ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalCreateCommand(args))
         {
-            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalMarkLandedCommand(args))
         {
-            return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsSingleGoalSnapshotCommand(args))
         {
-            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsSingleGoalReportCommand(args))
         {
-            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
         if (IsCancelDispatchCommand(args))
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         if (CliGoalPriorityCommand.IsCommand(args) || CliGoalIsolationCommand.IsCommand(args) || CliProviderResetCommand.IsCommand(args))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
         if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
         {
@@ -256,12 +251,11 @@ internal static partial class CliPersistentStateRunner
                     providers,
                     workerProfiles,
                     ref currentGoal,
-                    channel,
                     operatorIntentSubmissionSource,
                     emitAgentReadEnvelope);
             }
 
-            return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsCriterionEvidenceMutationCommand(args))
@@ -276,20 +270,20 @@ internal static partial class CliPersistentStateRunner
 
         if (IsGoalLifecycleDispositionCommand(args))
         {
-            return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalScopedWriteCommand(args) && stateRepository is IOrchestratorStateOutboxRepository scopedRepository &&
-            TryExecuteGoalScopedWrite(args, scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, out var scopedChanged))
+            TryExecuteGoalScopedWrite(args, scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, out var scopedChanged))
             return scopedChanged;
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsIntentOnlyAttentionCommand(args))
-            return ExecuteIntentOnlyAttentionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteIntentOnlyAttentionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
 
         var nextAgents = agents;
         var nextWorkerProfiles = workerProfiles;
@@ -321,7 +315,6 @@ internal static partial class CliPersistentStateRunner
                             providers,
                             ref commandProfiles,
                             ref commandGoal,
-                            channel,
                             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
                             registerStateOutboxMessage: outboxMessages.Add,
                             registerPostCommitFailure: failure => postCommitFailure ??= failure,
@@ -374,7 +367,6 @@ internal static partial class CliPersistentStateRunner
                             providers,
                             ref commandProfiles,
                             ref commandGoal,
-                            channel,
                             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
                             registerPostCommitFailure: failure => postCommitFailure ??= failure,
                             registerPostCommitAction: postCommitActions.Register);
@@ -738,8 +730,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         var currentGoalId = currentGoal?.Id.Value;
         GoalId? goalMarkLandedGoalId = currentGoal?.Id;
@@ -773,7 +764,6 @@ internal static partial class CliPersistentStateRunner
                     providers,
                     ref workerProfiles,
                     ref currentGoal,
-                    channel,
                     () => LoadSingleGoalKernel(stateRepository, goalId, cancellation.Token),
                     Persist,
                     goalMarkLandedElapsedMilliseconds: () => elapsed.ElapsedMilliseconds);
@@ -877,7 +867,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         WorktreeCleanupContext? cleanupContext = null,
         ConductorLoopLeaseController? startupLoopLease = null)
     {
@@ -1081,7 +1070,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref loopCurrentGoal,
-            channel,
             LoadLoopKernel,
             Persist,
             persistGoalKernel: PersistGoals,
@@ -1667,8 +1655,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -1680,7 +1667,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult());
 
         if (shouldSave)
@@ -1698,8 +1684,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         var goalId = ResolveSingleGoalCommandGoalId(
             stateRepository,
@@ -1719,7 +1704,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             () => LoadSingleGoalKernel(stateRepository, goalId),
             Persist,
             reloadKernelForGoals: ids => LoadConductLoopKernel(stateRepository, ids, workspace.ExecutionDirectory));
@@ -1740,7 +1724,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel,
         OperatorIntentSubmissionSource submissionSource,
         bool emitAgentReadEnvelope)
     {
@@ -1758,8 +1741,7 @@ internal static partial class CliPersistentStateRunner
             providers,
             agents,
             workerProfiles,
-            goal,
-            channel);
+            goal);
         var task = CliCommandHandlers.ResolveGoalScopedTaskMutationTarget(preparedCommand, context);
         EnsureGoalScopedTaskMutationTargetMatchesSelector(preparedCommand, goal, task);
 
@@ -1859,8 +1841,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         var target = CliArgumentParser.ParseGoalScopedTaskTargetArgs(args);
         var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, target.Parts);
@@ -1889,8 +1870,7 @@ internal static partial class CliPersistentStateRunner
                         providers,
                         transactionAgents,
                         transactionProfiles,
-                        transactionCurrentGoal,
-                        channel);
+                        transactionCurrentGoal);
                     var outcome = CliCommandHandlers.ExecuteGoalScopedTaskMutationWithoutRendering(preparedCommand, context);
 
                     transactionAgents = context.Agents;
@@ -1939,8 +1919,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
@@ -1957,7 +1936,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
             Persist);
 
@@ -1977,8 +1955,7 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        ref Goal? currentGoal)
     {
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
         {
@@ -2073,7 +2050,6 @@ internal static partial class CliPersistentStateRunner
                 providers,
                 ref workerProfiles,
                 ref currentGoal,
-                channel,
                 () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
                 finalizeGoalCreation: FinalizeGoalCreation,
                 eventWriter: deferredEventWriter,
@@ -2419,7 +2395,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         bool persistOnlyCurrentGoal = false,
         WorktreeCleanupContext? cleanupContext = null,
@@ -2427,7 +2402,7 @@ internal static partial class CliPersistentStateRunner
     {
         if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier, cleanupContext, stableSlotSelector);
+            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceVerifier, cleanupContext, stableSlotSelector);
         }
 
         var phaseTimings = new CliPhaseTimingRecorder("acceptance");
@@ -2585,7 +2560,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             checkpoints.Reload,
             Persist,
             finalizeAcceptanceMerge: Finalize,
@@ -2720,7 +2694,6 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         WorktreeCleanupContext? cleanupContext = null,
         Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
@@ -2740,7 +2713,6 @@ internal static partial class CliPersistentStateRunner
             providers,
             ref workerProfiles,
             ref currentGoal,
-            channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
             Persist,
             acceptanceVerifier: acceptanceVerifier,

@@ -15,8 +15,7 @@ internal static class CliRunGoalExecution
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog profiles,
-        ref Goal? currentGoal,
-        IOperatorChannel? channel)
+        ref Goal? currentGoal)
     {
         // Keep the full read scope for provider holds and cross-goal readiness checks;
         // persistence still owns only the selected goal.
@@ -29,7 +28,7 @@ internal static class CliRunGoalExecution
         var checkpoint = new CliOwnedGoalCheckpoint(repository, kernel, currentGoal.Id);
         string? failure = null;
         var changed = CliCommandDispatcher.ExecuteCommand(
-            args, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal, channel,
+            args, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal,
             reloadKernel: () => repository.LoadAsync().GetAwaiter().GetResult(),
             persistKernel: loaded => checkpoint.Persist(loaded),
             registerPostCommitFailure: reason => failure = reason);

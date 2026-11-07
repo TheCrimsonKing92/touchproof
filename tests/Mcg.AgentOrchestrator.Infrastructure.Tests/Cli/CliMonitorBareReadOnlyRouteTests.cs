@@ -92,7 +92,7 @@ public sealed class CliMonitorBareReadOnlyRouteTests : CliTaskQueryTestSupport
                 var queryOutput = CaptureConsole(() =>
                 {
                     Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                        command, queryRepository, workspace, new InMemoryModelProviderRegistry([]), null,
+                        command, queryRepository, workspace, new InMemoryModelProviderRegistry([]),
                         ref agents, ref profiles, ref selectedGoal, out var changed, clock));
                     Xunit.Assert.False(changed);
                 });

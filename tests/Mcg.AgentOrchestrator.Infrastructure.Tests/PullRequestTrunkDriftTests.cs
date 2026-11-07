@@ -264,7 +264,7 @@ public sealed class PullRequestTrunkDriftTests : GoalWorktreeTestBase, Xunit.ICl
         }
         // Previously queued publication must recheck the terminal observation.
         var result = PullRequestLandingDelivery.Deliver(fixture.Kernel, fixture.Goal, fixture.Workspace,
-            candidate, fixture.Publisher, null, null, null, new SystemClock());
+            candidate, fixture.Publisher, null, null, new SystemClock());
         Assert.Contains("refresh stopped", result.Message);
         Assert.Single(fixture.Publisher.Requests);
         Assert.Equal(fixture.Pushed, fixture.RemoteGoal());

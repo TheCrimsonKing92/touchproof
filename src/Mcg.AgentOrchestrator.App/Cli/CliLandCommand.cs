@@ -26,7 +26,6 @@ internal static class CliLandCommand
             context.Kernel,
             context.CurrentGoal,
             context.Workspace,
-            context.Channel,
             eventWriter: context.EventWriter,
             mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace),
             pullRequestPublisher: context.PullRequestPublisher);

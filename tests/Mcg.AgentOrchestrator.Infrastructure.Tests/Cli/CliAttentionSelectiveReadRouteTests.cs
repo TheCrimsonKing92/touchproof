@@ -199,9 +199,9 @@ public sealed class CliAttentionSelectiveReadRouteTests : CliTaskQueryTestSuppor
         var output = CaptureConsole(() =>
         {
             served = direct
-                ? CliAttentionQueryCommand.TryExecute(args, repository, workspace, providers, null,
+                ? CliAttentionQueryCommand.TryExecute(args, repository, workspace, providers,
                     ref agents, ref profiles, ref currentGoal)
-                : CliReadOnlyCommandRunner.TryExecute(args, repository, workspace, providers, null,
+                : CliReadOnlyCommandRunner.TryExecute(args, repository, workspace, providers,
                     ref agents, ref profiles, ref currentGoal, out changed);
         });
         return (served, changed, output);

@@ -33,14 +33,13 @@ internal static class CliTaskQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
         if (CliProcessLogsQueryCommand.IsCommand(args))
         {
-            CliProcessLogsQueryCommand.Execute(args, stateQueries, workspace, providers, channel,
+            CliProcessLogsQueryCommand.Execute(args, stateQueries, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
             return;
         }
@@ -52,7 +51,6 @@ internal static class CliTaskQueryCommand
                 new AgentOrchestratorKernel(),
                 workspace,
                 providers,
-                channel,
                 ref agents,
                 ref workerProfiles,
                 ref currentGoal,
@@ -70,7 +68,6 @@ internal static class CliTaskQueryCommand
             target.Kernel,
             workspace,
             providers,
-            channel,
             ref agents,
             ref workerProfiles,
             ref currentGoal,
@@ -193,7 +190,6 @@ internal static class CliTaskQueryCommand
         AgentOrchestratorKernel commandKernel,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -205,8 +201,7 @@ internal static class CliTaskQueryCommand
             ref agents,
             providers,
             ref workerProfiles,
-            ref currentGoal,
-            channel);
+            ref currentGoal);
         if (changed)
         {
             throw new InvalidOperationException(
@@ -219,7 +214,6 @@ internal static class CliTaskQueryCommand
         AgentOrchestratorKernel commandKernel,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -231,7 +225,6 @@ internal static class CliTaskQueryCommand
             commandKernel,
             workspace,
             providers,
-            channel,
             ref agents,
             ref workerProfiles,
             ref commandCurrentGoal);

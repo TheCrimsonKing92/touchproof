@@ -17,7 +17,6 @@ internal static class CliAttentionQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -27,10 +26,10 @@ internal static class CliAttentionQueryCommand
             return false;
 
         if (args.Count == 1 || args[1].Equals("list", StringComparison.OrdinalIgnoreCase))
-            return TryExecuteSelective(args, stateQueries, workspace, providers, channel,
+            return TryExecuteSelective(args, stateQueries, workspace, providers,
                 ref agents, ref workerProfiles, ref currentGoal);
 
-        var routed = AttentionShowReadRoute.TryExecute(args, stateQueries, workspace, providers, channel,
+        var routed = AttentionShowReadRoute.TryExecute(args, stateQueries, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
         if (routed is not null)
             return routed.Value;
@@ -47,7 +46,7 @@ internal static class CliAttentionQueryCommand
         if (kernel.Goals.Count != metadata.Count || kernel.Goals.Any(goal => goal.Status == GoalStatus.Parked))
             return false;
 
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
         return true;
     }
@@ -57,7 +56,6 @@ internal static class CliAttentionQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -90,7 +88,7 @@ internal static class CliAttentionQueryCommand
         if (kernel.Goals.Count != selection.GoalIds.Count || kernel.Goals.Any(goal => goal.Status == GoalStatus.Parked))
             return false;
 
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
         return true;
     }

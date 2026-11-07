@@ -38,7 +38,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
             string Run(string[] command) => CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(command, repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             });
 
@@ -138,7 +138,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(["round-value", .. flags], repository,
                     OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
-                    null, ref agents, ref profiles, ref goal, out var changed));
+                    ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             }));
             Assert.Equal("", stdout);
@@ -169,7 +169,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(WindowArgs, repository,
                     OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
-                    null, ref agents, ref profiles, ref goal, out var changed));
+                    ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             });
             Assert.Contains("Window | 0 | 0 | 0 | 0 | 0 | 0 | n/a | 0 | 0 | 0 | 0 | 0", output);
@@ -201,7 +201,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
             string Run(string[] command) => CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(command, repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
                 Assert.False(changed);
             });
             string[] current = ["round-value", "--since", "2026-09-25T00:00:00Z", "--until", "2026-09-26T00:00:00Z"];

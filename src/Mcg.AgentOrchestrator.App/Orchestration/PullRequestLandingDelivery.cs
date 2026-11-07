@@ -27,7 +27,7 @@ internal static class PullRequestLandingDelivery
     public static bool IsDeliveredForReview(string reason) => DeliveredForReviewHold.IsDeliveredForReviewText(reason);
 
     public static LandingResult Deliver(AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace,
-        string candidate, IPullRequestPublisher publisher, IOperatorChannel? channel,
+        string candidate, IPullRequestPublisher publisher,
         IGoalLifecycleEventWriter? eventWriter, Func<string?>? mutationBlocker, IClock clock)
     {
         LandingResult Result(string reason, bool stateChanged = false) => new(goal.Id.Value, goal.Id.Value[..8],
@@ -35,7 +35,7 @@ internal static class PullRequestLandingDelivery
             StateChanged: stateChanged);
         LandingResult Fail(string reason)
         {
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, LandingExecutor.IntegrationBranchName, channel);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, LandingExecutor.IntegrationBranchName);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, LandingExecutor.IntegrationBranchName);
             return Result(reason, stateChanged: true);
         }

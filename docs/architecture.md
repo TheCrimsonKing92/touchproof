@@ -8,18 +8,16 @@ that already exist.
 ## Current project topology
 
 The `Direct production references` column records direct `ProjectReference` edges, not transitive
-dependencies. `App` therefore lists Providers directly as well as through Infrastructure, while
-Infrastructure has no reference to OperatorComms.
+dependencies. `App` therefore lists Providers directly as well as through Infrastructure.
 
 <!-- current-project-inventory:begin -->
 | Project | Direct production references | Responsibility | Explicit non-responsibility |
 | --- | --- | --- | --- |
 | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | none | Domain model, application contracts, deterministic workflow policy, conductor policy types, and current filesystem access through helpers such as `SharedJsonlFile` and policy/document readers. | No database access, child-process execution, network access, provider adapters, CLI, or host composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Concrete model-provider adapters, provider defaults, smoke behavior, and agent-catalog persistence. | No executable composition, conductor lifecycle, or CLI. |
-| `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Operator-channel implementations, including transport and message behavior behind Core contracts. | No goal-state persistence, conductor policy, or host-level channel composition. |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj`<br>`src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj` | Worktrees, build/test integration, and acceptance verification. | No CLI, executable host, or OperatorComms implementation. |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj`<br>`src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj` | Worktrees, build/test integration, and acceptance verification. | No CLI, executable host, or transport implementation. |
 | `src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | SQLite persistence, process execution, worker dispatch and artifacts, and verification records. | No worktree, build-environment or acceptance-gate code and no reference to Infrastructure or App. |
-| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Headless executable composition root; it contains conductor coordination, CLI, maintenance, provider wiring, operator-channel composition, and the application contracts. | No ASP.NET hosting or HTTP endpoints, and no reusable domain contracts, provider adapter implementations, OperatorComms implementations, or general persistence implementation. |
+| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | Headless executable composition root; it contains conductor coordination, CLI, maintenance, provider wiring, and the application contracts. | No ASP.NET hosting or HTTP endpoints, and no reusable domain contracts, provider adapter implementations, or general persistence implementation. |
 | `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | n/a | Core policy tests and hermetic repository-documentation contracts. | No infrastructure integration coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | n/a | Broad infrastructure and App orchestration coverage, including persistence, workers, worktrees, conductor behavior, and acceptance. | No ownership of the separately scoped CLI or provider-environment suites. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj`<br>`src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | Focused acceptance execution-owner and invocation-pipeline coverage; references App to exercise native job custody through the production host. | No ownership of broad infrastructure, CLI, or provider-environment coverage. |
@@ -41,12 +39,10 @@ The resulting production graph is:
 ```text
 Core                          -> none
 Infrastructure.Providers      -> Core
-Infrastructure.OperatorComms  -> Core
 Execution                     -> Core, Infrastructure.Providers
 Infrastructure                -> Core, Infrastructure.Providers, Execution
 App                           -> Core, Infrastructure,
-                                 Infrastructure.Providers,
-                                 Infrastructure.OperatorComms
+                                 Infrastructure.Providers
 ```
 
 The two other checked-in projects are deliberately outside this census:
@@ -84,9 +80,8 @@ Where the code has no single owner, this table records the gap instead of invent
   CLI production project.
 - **Providers:** concrete adapters live in `Infrastructure.Providers`; App still owns registry,
   client, defaults, smoke-runner, and scripted-provider composition.
-- **Operator communications:** transport implementations live in `Infrastructure.OperatorComms`,
-  while `App/Orchestration/OperatorChannelComposition` selects and hosts them. Typed operator
-  intents are a separate persistence/control seam, not a communications transport.
+- **Operator inbox:** App records escalations locally and projects them into the attention queue.
+  Typed operator intents remain a separate persistence/control seam.
 
 ## Placement rules
 

@@ -90,7 +90,6 @@ and the separately labelled modular-monolith target.
 | --- | --- | --- |
 | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Domain model, workflow contracts, and deterministic policy types. | Database persistence, external adapters, or hosting. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | Concrete model-provider adapters, provider defaults, smoke checks, and agent-catalog persistence. | Host composition or orchestration lifecycle. |
-| `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Operator-channel implementations and message transport behavior. | Goal state, conductor policy, or host composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | SQLite stores, process and worker execution, worktrees, and acceptance verification. | CLI or executable composition. |
 | `src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj` | SQLite persistence, process execution, worker dispatch and artifacts, and verification records. | Worktrees, build environments, acceptance gates, or Infrastructure and App references. |
 | `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Headless executable composition root containing the conductor, CLI, maintenance, and application contracts. | ASP.NET hosting or HTTP endpoints. |

@@ -35,7 +35,7 @@ public sealed class CliAttentionNextReadOnlyRouteTests : CliTaskQueryTestSupport
             Goal? currentGoal = null;
             var providers = new InMemoryModelProviderRegistry([]);
             var output = CaptureConsole(() => Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                ["attention"], repository, workspace, providers, null,
+                ["attention"], repository, workspace, providers,
                 ref agents, ref profiles, ref currentGoal, out var changed) && !changed));
             Xunit.Assert.Equal(CliAttentionNextGoldenFixtures.EmptyAttention, output);
             if (supportsAttentionProjection)

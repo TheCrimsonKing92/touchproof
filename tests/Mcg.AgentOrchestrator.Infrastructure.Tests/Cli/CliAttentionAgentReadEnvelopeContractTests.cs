@@ -142,7 +142,7 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref goal, out var changed));
             Assert.False(changed);
             Assert.Null(goal);
         });
