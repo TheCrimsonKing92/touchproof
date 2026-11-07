@@ -1,8 +1,75 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: all repositories and child-process environments are fixture-owned.
+// Parallel-safe: fixture-owned repositories/environments and test-identity-scoped census windows.
 public sealed class GitRefFileResolverParityTests
 {
+    [Theory]
+    [InlineData("loose")]
+    [InlineData("packed")]
+    [InlineData("symbolic")]
+    [InlineData("symbolic-packed")]
+    [InlineData("ambiguous")]
+    [InlineData("ambiguous-packed")]
+    [InlineData("annotated-tag")]
+    [InlineData("annotated-tag-packed")]
+    [InlineData("missing")]
+    public void BranchAndCommitForms_MatchGitOrInvokeFallback(string shape)
+    {
+        using var fixture = new Fixture(commit: shape != "missing");
+        var metadata = Path.Combine(fixture.Repo, ".git");
+        if (shape.StartsWith("symbolic", StringComparison.Ordinal))
+        {
+            fixture.Git("branch", "target");
+            fixture.Git("symbolic-ref", "refs/heads/fixture-main", "refs/heads/target");
+            Assert.Equal("ref: refs/heads/target", File.ReadAllText(
+                Path.Combine(metadata, "refs", "heads", "fixture-main")).Trim());
+        }
+        else if (shape.StartsWith("ambiguous", StringComparison.Ordinal) ||
+                 shape.StartsWith("annotated-tag", StringComparison.Ordinal))
+        {
+            if (shape.StartsWith("annotated-tag", StringComparison.Ordinal))
+                fixture.Git("branch", "-m", "real-main");
+            fixture.Git("tag", "-a", "fixture-main", "-m", "tag before branch advances");
+            fixture.Git("commit", "--allow-empty", "-m", "branch advances");
+            Assert.NotEqual(fixture.Oracle("HEAD^{commit}"), fixture.Oracle("fixture-main^{commit}"));
+            Assert.NotEqual(fixture.Oracle("fixture-main"), fixture.Oracle("fixture-main^{commit}"));
+        }
+        if (shape.EndsWith("packed", StringComparison.Ordinal))
+        {
+            fixture.Git("pack-refs", "--all");
+            Assert.True(File.Exists(Path.Combine(metadata, "packed-refs")));
+            // A symbolic branch remains loose; its target is packed instead.
+            var packedBranch = shape == "symbolic-packed" ? "target" :
+                shape == "annotated-tag-packed" ? "real-main" : "fixture-main";
+            Assert.False(File.Exists(Path.Combine(metadata, "refs", "heads", packedBranch)));
+        }
+
+        var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+        Assert.NotEqual("<unknown>", identity);
+        HostCapacitySlotGitCensus.EnsureInstalled(nameof(GitRefFileResolverParityTests));
+        foreach (var revision in new[] { "fixture-main", "HEAD^{commit}", "fixture-main^{commit}" })
+        {
+            var expected = GitCli.Run(fixture.Repo, "rev-parse", "--verify", revision);
+            Assert.Equal(shape != "missing", expected.Succeeded);
+            var shouldResolve = shape is "loose" or "packed" ||
+                revision == "HEAD^{commit}" && (shape.StartsWith("ambiguous", StringComparison.Ordinal) ||
+                                               shape.StartsWith("annotated-tag", StringComparison.Ordinal));
+            Assert.Equal(shouldResolve, GitRefFileResolver.TryResolve(fixture.Repo, revision, out var fileValue));
+            Assert.Equal(shouldResolve ? expected.Output.Trim() : string.Empty, fileValue);
+
+            // Isolate each read so fallback must use one-shot Git, including failed lookups.
+            using var reader = new GitRevisionReader();
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            var resolved = reader.TryResolve(fixture.Repo, revision, out var actual);
+            var delta = Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close());
+            Assert.Equal(expected.Succeeded, resolved);
+            Assert.Equal(expected.Succeeded ? expected.Output.Trim() : string.Empty, actual);
+            Assert.Equal(shouldResolve ? 0 : 1, delta.Launches);
+            if (!shouldResolve) Assert.Equal(1, delta.Subcommands["rev-parse"]);
+            Assert.Null(reader.GetReader(fixture.Repo));
+        }
+    }
+
     [Theory]
     [InlineData(false, "uppercase")]
     [InlineData(false, "wrong-length")]
