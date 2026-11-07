@@ -171,6 +171,10 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         File.WriteAllText(path, contents);
         RunGit(worktree, "add", relativePath);
         RunGit(worktree, "commit", "-m", $"Candidate {goalId.Value[..8]}");
+        // Setup needs the just-created commit ID. Reuse the hermetic file lookup from the
+        // commit postcondition; unsupported metadata still goes through the Git probe.
+        if (InfrastructureTestSupport.TryReadGitHeadInProcess(worktree, out var head) && head is not null)
+            return head;
         return RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
     }
 

@@ -89,9 +89,23 @@ public sealed class CohortCandidateTemplate : IDisposable
                 try
                 {
                     File.Copy(index, temporary);
+                    // RunGitProbe deliberately strips repository selectors from commandEnvironment.
+                    // Supply the complete allowlisted environment so this index, rather than the
+                    // immutable recipe's real index, receives the refresh.
+                    var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var name in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP" })
+                        if (Environment.GetEnvironmentVariable(name) is { } value) environment[name] = value;
+                    environment["GIT_INDEX_FILE"] = temporary;
+                    environment["GIT_CONFIG_NOSYSTEM"] = "1";
+                    environment["GIT_CONFIG_GLOBAL"] = "NUL";
+                    environment["GIT_TERMINAL_PROMPT"] = "0";
+                    environment["GCM_INTERACTIVE"] = "Never";
+                    environment["GIT_OPTIONAL_LOCKS"] = "0";
+                    environment["LC_ALL"] = "C";
+                    environment["LANG"] = "C";
                     var result = InfrastructureTestSupport.RunGitProbe(worktree,
                         ["update-index", "--refresh"],
-                        new Dictionary<string, string> { ["GIT_INDEX_FILE"] = temporary });
+                        verificationEnvironment: environment);
                     InfrastructureTestSupport.RequireCompleteGitOutput(result);
                     if (!result.Succeeded)
                         throw new InvalidOperationException($"Candidate index preparation failed: {result.StandardError}");
