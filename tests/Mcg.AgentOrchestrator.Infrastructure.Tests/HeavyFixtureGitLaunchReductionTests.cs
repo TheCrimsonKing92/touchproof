@@ -9,16 +9,17 @@ public sealed class HeavyFixtureGitLaunchReductionTests(ITestOutputHelper output
 {
     private const int ScenarioCompletionHangFailsafeMilliseconds = 1_800_000;
 
-    [Fact(Timeout = ScenarioCompletionHangFailsafeMilliseconds)] // Hang detector: all 168 scenario rows must complete.
+    [Fact(Timeout = ScenarioCompletionHangFailsafeMilliseconds)] // Hang detector: all 169 scenario rows must complete.
     public async Task FiveClasses_ReduceHistoricalAggregateLaunchesByTwentyFivePercent()
     {
         // gate 208e909d-0-20261106160206117, main 0798b6829, first-run slot-timing rows.
         // Includes all setup and reader-start LaunchObserver events; retries excluded.
         // Bound operator answer f9e25b4c9cf64f44a92318e95bcfd93d.
+        // Launches stay historical; Rows pins current coverage, including cases added since the baseline.
         var baseline = new (Type Class, int Launches, int Rows)[]
         {
             (typeof(AcceptanceCohortWorkflowTestsTrainRedAttribution), 1530, 43),
-            (typeof(MergeTrainFocusedRecheckReceiptAcceptanceTests), 1349, 30),
+            (typeof(MergeTrainFocusedRecheckReceiptAcceptanceTests), 1349, 31),
             (typeof(AcceptanceCohortWorkflowTestsMergeTrain), 1042, 20),
             (typeof(PullRequestTrunkDriftTests), 959, 20),
             (typeof(CliCommandTestsTerminalSweepCommands), 930, 55)
