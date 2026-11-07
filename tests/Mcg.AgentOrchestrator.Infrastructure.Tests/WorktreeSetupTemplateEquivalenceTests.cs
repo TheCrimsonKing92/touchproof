@@ -4,8 +4,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: instance recipes and independently owned repositories/stores.
 public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
 {
-    [Fact]
-    public void ManifestCopies_MatchHandBuiltStateAndRemainIndependent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ManifestCopies_MatchHandBuiltStateAndRemainIndependent(bool changeTimestamp)
     {
         using var template = new WorktreeSetupTemplate();
         var reference = CreateReducedAcceptanceCohortRepository();
@@ -20,7 +22,23 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
                 File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.ReadOnly);
             Builder.Manifest(reference);
             Builder.Manifest(first, template);
-            Builder.Manifest(second, template);
+            if (changeTimestamp)
+            {
+                var seed = Path.Combine(second, "seed.txt");
+                File.SetLastWriteTimeUtc(seed, File.GetLastWriteTimeUtc(seed).AddMinutes(-1));
+            }
+            var identity = HostCapacitySlotTimingWriter.CurrentTestName();
+            Assert.NotEqual("<unknown>", identity);
+            HostCapacitySlotGitCensus.EnsureInstalled(nameof(WorktreeSetupTemplateEquivalenceTests));
+            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            HostCapacitySlotGitCensus.GitLaunchDelta? delta;
+            try { Builder.Manifest(second, template); }
+            finally { delta = window.Close(); }
+            Assert.NotNull(delta);
+            // An always-miss recipe would rerun add/commit. A redundant Windows refresh
+            // also fails this assertion, even though both paths produce equivalent trees.
+            Assert.Equal(OperatingSystem.IsWindows() && !changeTimestamp ? 0 : 1, delta.Launches);
+            Assert.Equal(delta.Launches, delta.Subcommands.GetValueOrDefault("update-index"));
             foreach (var file in objects)
             {
                 Assert.True(File.GetAttributes(file).HasFlag(FileAttributes.ReadOnly));
@@ -80,8 +98,10 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
         finally { DeleteDirectory(reference); DeleteDirectory(first); DeleteDirectory(second); }
     }
 
-    [Fact]
-    public void LandingCandidateCopies_MatchHandBuiltBranchAndCreateRealWorktrees()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LandingCandidateCopies_MatchHandBuiltBranchAndCreateRealWorktrees(bool changeTimestamp)
     {
         using var template = new WorktreeSetupTemplate();
         var reference = LandingExecutorTests.CreateGitRepository();
@@ -93,6 +113,11 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
             var branch = GoalWorktrees.BranchName(goal);
             LandingExecutorTests.AddGoalBranchCommit(reference, branch, "src/delivery.txt", "goal work");
             template.AddLandingCandidate(first, goal);
+            if (changeTimestamp)
+            {
+                var seed = Path.Combine(second, "README.md");
+                File.SetLastWriteTimeUtc(seed, File.GetLastWriteTimeUtc(seed).AddMinutes(-1));
+            }
             var identity = HostCapacitySlotTimingWriter.CurrentTestName();
             Assert.NotEqual("<unknown>", identity);
             HostCapacitySlotGitCensus.EnsureInstalled(nameof(WorktreeSetupTemplateEquivalenceTests));
@@ -101,8 +126,8 @@ public sealed class WorktreeSetupTemplateEquivalenceTests : GoalWorktreeTestBase
             try { template.AddLandingCandidate(second, goal); }
             finally { delta = window.Close(); }
             Assert.NotNull(delta);
-            Assert.Equal(1, delta.Launches);
-            Assert.Equal(1, delta.Subcommands.GetValueOrDefault("update-index"));
+            Assert.Equal(OperatingSystem.IsWindows() && !changeTimestamp ? 0 : 1, delta.Launches);
+            Assert.Equal(delta.Launches, delta.Subcommands.GetValueOrDefault("update-index"));
             AssertEquivalent(reference, first);
             AssertEquivalent(reference, second);
             Assert.False(Directory.Exists(Path.Combine(first, GoalWorktrees.DirectoryName)));

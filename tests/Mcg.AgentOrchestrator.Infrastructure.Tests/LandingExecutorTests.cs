@@ -1774,7 +1774,11 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
 
             foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
             {
-                File.Copy(file, Path.Combine(destination, Path.GetRelativePath(source, file)));
+                var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+                File.Copy(file, target);
+                // Match the cached setup index on Windows, just as the cohort copies do.
+                if (OperatingSystem.IsWindows()) File.SetCreationTimeUtc(target, File.GetCreationTimeUtc(file));
+                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(file));
             }
         }
     }

@@ -19,6 +19,7 @@ public sealed class WorktreeSetupTemplate : IDisposable
         // a different recipe, so a mutated repository can never receive a stale setup overlay.
         var key = Fingerprint(git) + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(contents)));
         string source;
+        bool refreshIndex;
         lock (sync)
         {
             if (!recipes.TryGetValue(key, out source!))
@@ -31,9 +32,15 @@ public sealed class WorktreeSetupTemplate : IDisposable
             CopyFiles(Path.Combine(source, ".git"), git);
             var manifest = Path.Combine(repository, "config", "acceptance-manifest.json");
             Directory.CreateDirectory(Path.GetDirectoryName(manifest)!);
-            File.Copy(Path.Combine(source, "config", "acceptance-manifest.json"), manifest);
+            var sourceManifest = Path.Combine(source, "config", "acceptance-manifest.json");
+            File.Copy(sourceManifest, manifest);
+            if (OperatingSystem.IsWindows()) File.SetCreationTimeUtc(manifest, File.GetCreationTimeUtc(sourceManifest));
+            File.SetLastWriteTimeUtc(manifest, File.GetLastWriteTimeUtc(sourceManifest));
+            refreshIndex = !OperatingSystem.IsWindows() || !WorktreeTimestampsMatch(source, repository);
         }
-        MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
+        // Only matching Windows copies can reuse the recipe's index stat data.
+        // Unix ctime cannot be copied; other inputs also retain the Git refresh.
+        if (refreshIndex) MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
         return true;
     }
 
@@ -73,6 +80,7 @@ public sealed class WorktreeSetupTemplate : IDisposable
     {
         var git = Path.Combine(repository, ".git");
         var key = "landing-candidate:" + Fingerprint(git);
+        bool refreshIndex;
         lock (sync)
         {
             if (!recipes.TryGetValue(key, out var source))
@@ -96,10 +104,10 @@ public sealed class WorktreeSetupTemplate : IDisposable
                     StringComparison.Ordinal) || Path.GetFileName(file) == "index") File.Copy(file, target, overwrite: true);
                 else File.WriteAllText(target, File.ReadAllText(file).Replace(oldBranch, newBranch, StringComparison.Ordinal));
             }
+            refreshIndex = !OperatingSystem.IsWindows() || !WorktreeTimestampsMatch(source, repository);
         }
-        // The caller's seed files have their own filesystem identity. Refresh that index;
-        // GoalWorktrees.Ensure below the fixture boundary still creates the real worktree.
-        MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
+        // GoalWorktrees.Ensure below this boundary still creates the real worktree.
+        if (refreshIndex) MergeTrainRecheckFixtureTemplate.RefreshIndex(repository);
     }
 
     internal static void HandBuildTerminalSeed(string repository)
@@ -121,6 +129,29 @@ public sealed class WorktreeSetupTemplate : IDisposable
             }, args);
             Assert.True(result.Succeeded, result.Error);
         }
+    }
+
+    private static bool WorktreeTimestampsMatch(string source, string target)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
+        {
+            var name = Path.GetFileName(entry);
+            if (name is ".git" or ".orchestrator" or ".orchestrator-worktrees") continue;
+            var destination = Path.Combine(target, name);
+            if (Directory.Exists(entry))
+            {
+                if (!WorktreeTimestampsMatch(entry, destination)) return false;
+            }
+            else
+            {
+                var expected = new FileInfo(entry);
+                var actual = new FileInfo(destination);
+                if (!actual.Exists || actual.Length != expected.Length ||
+                    actual.CreationTimeUtc != expected.CreationTimeUtc ||
+                    actual.LastWriteTimeUtc != expected.LastWriteTimeUtc) return false;
+            }
+        }
+        return true;
     }
 
     private static string Fingerprint(string git)
