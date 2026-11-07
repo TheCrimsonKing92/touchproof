@@ -24,6 +24,81 @@ public sealed class MultiRepositoryGateHoldTests
     }
 
     [Fact]
+    public void Execute_AcceptAlias_HoldsBeforeGateMergeOrCleanup()
+    {
+        using var fixture = new GoalRepositoriesTestFixture();
+        var goal = fixture.CreateGoal();
+        ConductorDriverTests.PassVerification(fixture.Kernel, goal, goal.Tasks.Single());
+        var worktree = fixture.CreateHomeWorktree(goal);
+        var candidate = GoalRepositoryWorktreeProvisionerFixture.CommitChange(worktree);
+        var main = fixture.Home.Git("rev-parse", "HEAD");
+
+        Assert.False(CliCommandHandlers.Execute(["accept", goal.Id.Value, "--skip-verify",
+            "--no-record", "--autonomy", AutonomyPolicy.SupervisedAuto.Name], fixture.Context()));
+
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Contains(MultiRepositoryGateHold.Kind, goal.LandingBlocker!.Kind);
+        Assert.Equal("operator", goal.LandingBlocker.NextActor);
+        Assert.Equal("wait-for-multi-repository-gate-slice", goal.LandingBlocker.NextVerb);
+        Assert.Equal(main, fixture.Home.Git("rev-parse", "HEAD"));
+        Assert.Equal(candidate, GoalRepositoryWorktreeProvisionerFixture.Run(worktree, "rev-parse", "HEAD"));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Workspace.OrchestratorDirectory, "acceptance-gate-attempts")));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BuildQueue_FastForwardableGoal_HoldsOnlyDeclaredRepositories(bool declared)
+    {
+        using var fixture = new GoalRepositoriesTestFixture();
+        var goal = fixture.CreateGoal(declared: declared);
+        ConductorDriverTests.PassVerification(fixture.Kernel, goal, goal.Tasks.Single());
+        var worktree = fixture.CreateHomeWorktree(goal);
+        var candidate = GoalRepositoryWorktreeProvisionerFixture.CommitChange(worktree);
+        var main = fixture.Home.Git("rev-parse", "HEAD");
+        Assert.NotEqual(main, candidate);
+        fixture.Home.Git("merge-base", "--is-ancestor", "HEAD", GoalWorktrees.BranchName(goal.Id));
+
+        var item = Assert.Single(AcceptanceQueuePlanner.Build(fixture.Kernel,
+            fixture.Home.CheckoutPath, AutonomyPolicy.SupervisedAuto, "main").Items);
+        Assert.True(item.HasBranchDiff);
+        Assert.Equal(false, item.WorktreeDirty);
+        Assert.Equal(declared ? AcceptanceQueueDisposition.Held : AcceptanceQueueDisposition.Ready,
+            item.Disposition);
+        if (!declared) return;
+
+        Assert.Equal(MultiRepositoryGateHold.Kind, item.Reason);
+        Assert.Equal(MultiRepositoryGateHold.NextAction, item.SuggestedCommand);
+        CliCommandHandlers.Execute(["acceptance-queue", "--apply", "--confirm-acceptance-queue",
+            "--autonomy", AutonomyPolicy.SupervisedAuto.Name], fixture.Context());
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Equal(main, fixture.Home.Git("rev-parse", "HEAD"));
+        Assert.Equal(candidate, GoalRepositoryWorktreeProvisionerFixture.Run(worktree, "rev-parse", "HEAD"));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Workspace.OrchestratorDirectory, "acceptance-gate-attempts")));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Reconcile_UndeclaredGoal_NeverWritesAttention(bool verified, bool completed)
+    {
+        using var fixture = new GoalRepositoriesTestFixture();
+        var goal = fixture.CreateGoal(declared: false);
+        if (verified) ConductorDriverTests.PassVerification(fixture.Kernel, goal, goal.Tasks.Single());
+        if (completed) fixture.Kernel.CompleteGoal(goal.Id, "Fixture completed.");
+        CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory);
+        // The previous TryResolveAsync path attempts BEGIN IMMEDIATE on this read-only store.
+        var store = CollaborationItemStore.OpenExisting(fixture.Workspace.OrchestratorDirectory);
+        var attention = new MultiRepositoryGateHoldAttention(store);
+
+        attention.Reconcile(goal);
+        attention.ReconcileAll(fixture.Kernel.Goals);
+
+        Assert.Empty(store.GetAttentionQueueAsync().GetAwaiter().GetResult());
+    }
+
+    [Fact]
     public async Task AdvanceOnce_MultipleRepositories_HoldsAcrossReloadWithoutGateOrLanding()
     {
         using var fixture = new GoalRepositoriesTestFixture();

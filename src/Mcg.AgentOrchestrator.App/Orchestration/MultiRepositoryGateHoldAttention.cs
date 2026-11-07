@@ -13,9 +13,9 @@ internal sealed class MultiRepositoryGateHoldAttention(ICollaborationItemStore s
 
     internal void Reconcile(Goal goal)
     {
+        if (!MultiRepositoryGateHold.Applies(goal)) return;
         var key = Prefix + goal.Id.Value;
-        if (MultiRepositoryGateHold.Applies(goal) &&
-            GoalLifecycle.ResolveState(goal) is GoalLifecycleState.Verified or GoalLifecycleState.Verifying)
+        if (GoalLifecycle.ResolveState(goal) is GoalLifecycleState.Verified or GoalLifecycleState.Verifying)
             store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, MultiRepositoryGateHold.Kind,
                 "Owner: operator. " + MultiRepositoryGateHold.NextAction + ".", key).GetAwaiter().GetResult();
         else
