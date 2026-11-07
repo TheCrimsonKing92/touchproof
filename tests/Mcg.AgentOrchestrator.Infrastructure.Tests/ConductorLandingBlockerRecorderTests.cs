@@ -89,7 +89,7 @@ public sealed class ConductorLandingBlockerRecorderTests
     }
 
     [Fact]
-    public void Observe_UntypedQueueHold_RecordsUnmappedNextAction()
+    public void Observe_UntypedQueueHold_RecordsConductorNextTick()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("queue blocker");
@@ -99,7 +99,7 @@ public sealed class ConductorLandingBlockerRecorderTests
                 { Owner = ConductorHoldOwner.AcceptanceQueue }, Start, changed);
 
         Assert.Equal(new GoalLandingBlocker("untyped/AcceptanceQueue", "queue",
-            "untyped/AcceptanceQueue:", Start, "unmapped", "unmapped"), goal.LandingBlocker);
+            "untyped/AcceptanceQueue:", Start, "conductor", "next-tick"), goal.LandingBlocker);
         Assert.Equal(goal.Id, Assert.Single(changed));
     }
 

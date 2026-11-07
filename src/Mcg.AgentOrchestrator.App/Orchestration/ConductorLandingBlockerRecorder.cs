@@ -36,9 +36,11 @@ internal static class ConductorLandingBlockerRecorder
                 var kind = held.Decision is { } decision
                     ? decision.Stage + "/" + decision.DiscriminatingEvidence
                     : "untyped/" + held.Owner;
+                var ownerNext = ConductorHoldOwnerNextAction.For(held.Owner);
                 var next = held.Decision is { } typed
-                    && NextActions.TryGetValue(typed.DiscriminatingEvidence, out var action)
-                    ? action : (Actor: "unmapped", Verb: "unmapped");
+                    ? NextActions.TryGetValue(typed.DiscriminatingEvidence, out var action)
+                        ? action : (Actor: "unmapped", Verb: "unmapped")
+                    : (Actor: ownerNext.Actor, Verb: ownerNext.Verb);
                 changed = current.ObserveLandingBlocker(new GoalLandingBlocker(
                     kind, held.Reason.Replace('\r', ' ').Replace('\n', ' '),
                     kind + ":" + (held.StableIdentity ?? ""), observedAt, next.Actor, next.Verb));
