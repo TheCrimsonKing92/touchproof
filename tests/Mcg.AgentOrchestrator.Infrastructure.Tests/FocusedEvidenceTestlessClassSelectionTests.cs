@@ -98,6 +98,15 @@ public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocu
     }
 
     [Fact]
+    public void SubstringOnlyTestlessDeclaration_RetainsOriginalSelector()
+    {
+        using var fixture = new Fixture();
+        fixture.Write("public static class SupportHelperHarness {}");
+
+        AssertRetained(fixture, "SupportHelper");
+    }
+
+    [Fact]
     public void QualifiedPartialClass_DropsOnlyWhenEveryPartIsTestless()
     {
         using var fixture = new Fixture();

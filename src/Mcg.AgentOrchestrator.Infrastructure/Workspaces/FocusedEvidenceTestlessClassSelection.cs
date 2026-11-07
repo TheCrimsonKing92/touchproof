@@ -71,6 +71,9 @@ internal static class FocusedEvidenceTestlessClassSelection
     {
         internal bool ProvesTestless(string selector)
         {
+            // A substring-only match does not prove the named class is testless. Keep the
+            // original selector so downstream guards can still inspect its merge-base identity.
+            if (!Declarations.Any(type => FocusedEvidenceRequestResolver.FocusedEvidenceTypeMatches(type, selector))) return false;
             if (TestNames.Any(name => name.Contains(selector, StringComparison.OrdinalIgnoreCase))) return false;
             // Disabled conditional text may hide another partial part or a substring match.
             var segments = selector.Split('.');
