@@ -19,15 +19,15 @@ public sealed class GoalWorktreeIsolatedDotnetTestsAcceptanceDiffSpec
 
         var files = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(repo.Root, "main");
 
-        // A cold qualifying revision uses one shot; the next read admits its reader.
-        Assert.Equal(new[] { "rev-parse", "diff" }, launches.Commands);
+        // File-resolved branches need neither a one-shot probe nor a persistent reader.
+        Assert.Equal(new[] { "diff" }, launches.Commands);
         Assert.Equal("main...HEAD", Assert.Single(launches.Diffs)[^1]);
         Assert.Equal(new[] { "change.txt" }, files);
         launches.Clear();
 
         files = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(repo.Root, "main");
 
-        Assert.Equal(new[] { "cat-file", "diff" }, launches.Commands);
+        Assert.Equal(new[] { "diff" }, launches.Commands);
         Assert.Equal("main...HEAD", Assert.Single(launches.Diffs)[^1]);
         Assert.Equal(new[] { "change.txt" }, files);
     }
@@ -44,7 +44,7 @@ public sealed class GoalWorktreeIsolatedDotnetTestsAcceptanceDiffSpec
 
         var files = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(repo.Root, "main");
 
-        Assert.Equal(new[] { "rev-parse", "diff" }, launches.Commands);
+        Assert.Equal(new[] { "diff" }, launches.Commands);
         Assert.Equal("master...HEAD", Assert.Single(launches.Diffs)[^1]);
         Assert.Equal(new[] { "change.txt" }, files);
     }
@@ -80,8 +80,8 @@ public sealed class GoalWorktreeIsolatedDotnetTestsAcceptanceDiffSpec
 
         var files = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(repo.Root, "main");
 
-        Assert.Equal(new[] { "rev-parse", "diff" }, launches.Commands);
-        Assert.Equal(new[] { "rev-parse", "--verify", "main" }, Assert.Single(launches.Probes));
+        Assert.Equal(new[] { "diff" }, launches.Commands);
+        Assert.Empty(launches.Probes);
         Assert.Equal("main...HEAD", Assert.Single(launches.Diffs)[^1]);
         Assert.Equal(new[] { "change.txt" }, files);
     }
