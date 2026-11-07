@@ -8,10 +8,11 @@ internal static class MergeTrainReachAttribution
 {
     internal static MergeTrainMemberBinding? TryAttribute(
         IReadOnlyList<string> resultPaths, string workspacePath,
-        IReadOnlyList<MergeTrainMemberBinding> members, out IReadOnlyList<string> failingClasses)
+        IReadOnlyList<MergeTrainMemberBinding> members, out IReadOnlyList<string> failingClasses,
+        IReadOnlySet<string>? confirmedIdentities = null)
     {
         failingClasses = [];
-        var classes = ReadFailingClasses(resultPaths);
+        var classes = ReadFailingClasses(resultPaths, confirmedIdentities);
         if (classes is null) return null;
         try
         {
@@ -22,9 +23,15 @@ internal static class MergeTrainReachAttribution
                     .Where(path => path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) &&
                         path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                var reach = sources.Length == 0 ? new HashSet<string>(StringComparer.Ordinal)
-                    : RepositoryTestReach.TryReadReachableTestClasses(workspacePath, sources);
-                if (reach is null) return null;
+                var reach = new HashSet<string>(StringComparer.Ordinal);
+                // The focused command's source-count limit is not an attribution limit.
+                // Preserve every member's complete reach: any unresolved batch declines.
+                foreach (var batch in sources.Chunk(ReverseDependencyTestImpactReader.MaximumChangedSourceFiles))
+                {
+                    var selected = RepositoryTestReach.TryReadReachableTestClasses(workspacePath, batch);
+                    if (selected is null) return null;
+                    reach.UnionWith(selected);
+                }
                 reaches.Add(reach);
             }
 
@@ -46,17 +53,37 @@ internal static class MergeTrainReachAttribution
     }
 
     // Keep parity with the impact path: never authorize from partial or guarded evidence.
-    internal static IReadOnlyList<string>? ReadFailingClasses(IReadOnlyList<string> resultPaths)
+    internal static IReadOnlyList<string>? ReadFailingClasses(IReadOnlyList<string> resultPaths,
+        IReadOnlySet<string>? confirmedIdentities = null)
+    {
+        var failures = ReadFailures(resultPaths, confirmedIdentities);
+        if (failures is null) return null;
+        var classes = failures.Select(failure => AcceptanceTestSourceResolver.ExtractClassName(failure.TestName ?? string.Empty))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        return classes.Any(string.IsNullOrWhiteSpace) ? null : classes.Select(name => name!).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    internal static IReadOnlyList<AcceptanceTrxFailure>? ReadFailures(IReadOnlyList<string> resultPaths,
+        IReadOnlySet<string>? confirmedIdentities = null)
     {
         var results = resultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
         if (results.Any(result => result.Status != AcceptanceTrxReadStatus.Readable)) return null;
         var failures = results.SelectMany(result => result.Failures)
-            .Where(failure => AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome) &&
-                ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace) is null).ToArray();
-        if (failures.Length == 0 || failures.Any(MergeTrainRedAttribution.IsMessageSubjectGuard)) return null;
-        var classes = failures.Select(failure => AcceptanceTestSourceResolver.ExtractClassName(failure.TestName ?? string.Empty))
-            .Distinct(StringComparer.Ordinal).ToArray();
-        return classes.Any(string.IsNullOrWhiteSpace) ? null : classes.Select(name => name!).Order(StringComparer.Ordinal).ToArray();
+            .Where(failure => AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome)).ToArray();
+        if (confirmedIdentities is not null)
+        {
+            // Gate confirmation includes apparatus rows. Check coverage before
+            // excluding those rows from attribution, as the ownership stage does.
+            var observed = failures.Where(failure => !string.IsNullOrWhiteSpace(failure.TestName))
+                .Select(failure => AcceptanceTrxTestIdentityResolver.NormalizeSelector(failure.TestName!))
+                .ToHashSet(StringComparer.Ordinal);
+            if (!confirmedIdentities.All(observed.Contains)) return null;
+            failures = failures.Where(failure => failure.TestName is not null &&
+                confirmedIdentities.Contains(AcceptanceTrxTestIdentityResolver.NormalizeSelector(failure.TestName))).ToArray();
+        }
+        failures = failures.Where(failure =>
+            ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace) is null).ToArray();
+        return failures.Length == 0 || failures.Any(MergeTrainRedAttribution.IsMessageSubjectGuard) ? null : failures;
     }
 
     private static string NormalizePath(string workspacePath, string path)
