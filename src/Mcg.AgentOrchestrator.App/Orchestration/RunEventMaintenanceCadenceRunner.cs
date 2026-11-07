@@ -13,10 +13,12 @@ internal sealed class RunEventMaintenanceCadenceRunner(
     private readonly Func<DateTimeOffset> _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     private Task? _currentRun;
 
-    internal static RunEventMaintenanceCadenceRunner ForWorkspace(OrchestratorWorkspace workspace) =>
+    internal static RunEventMaintenanceCadenceRunner ForWorkspace(OrchestratorWorkspace workspace,
+        bool archivedSnapshotCompressionEnabled) =>
         new(workspace.ConductEventsLogPath,
             () => RunEventMaintenanceCadence.TryRunIfDue(
-                workspace.RunEventStorePath, workspace.ConductEventsLogPath, workspace: workspace),
+                workspace.RunEventStorePath, workspace.ConductEventsLogPath, workspace: workspace,
+                archivedSnapshotCompressionEnabled: archivedSnapshotCompressionEnabled),
             () => !RunEventMaintenanceCadence.IsKnownFresh(workspace.RunEventStorePath, DateTimeOffset.UtcNow));
 
     internal Task? CurrentRun

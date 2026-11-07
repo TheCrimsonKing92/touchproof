@@ -6,7 +6,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorAuthorHost
 {
-    internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_AUTHOR_ENABLED";
     internal const int MaxAttempts = 2;
     private readonly ConductorAuthorClaimStore _claims;
     private readonly ICollaborationItemStore _collaboration;
@@ -46,10 +45,7 @@ internal sealed partial class ConductorAuthorHost
     internal bool Enabled { get; set; }
     internal IReadOnlyCollection<Task<string>> CurrentRounds => _rounds.Values.Select(value => value.Round).ToArray();
 
-    internal static bool ResolveEnabled(string? value) =>
-        !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) && value != "0";
-
-    internal static ConductorAuthorHost CreateDefault(OrchestratorWorkspace workspace) => new(
+    internal static ConductorAuthorHost CreateDefault(OrchestratorWorkspace workspace, bool enabled) => new(
         new ConductorAuthorClaimStore(Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")),
         CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
         new ClaudeConductorAuthorModelRound(Path.Combine(workspace.OrchestratorDirectory, "author-rounds"),
@@ -59,7 +55,7 @@ internal sealed partial class ConductorAuthorHost
         goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
         new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch),
         new ConductEventLogWriter(workspace.ConductEventsLogPath),
-        enabled: ResolveEnabled(Environment.GetEnvironmentVariable(EnabledEnvironmentVariable)),
+        enabled: enabled,
         lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
             message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
                 .Append("author-lessons", null, message)));

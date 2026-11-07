@@ -234,14 +234,12 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
         internal readonly List<string> Lines = [];
         internal readonly SqliteOperatorIntentStore Store;
         private readonly string _root = CreateTempDirectory("isolation-grouping");
-        private readonly string? _trainDisabled = Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED");
         private readonly OrchestratorWorkspace _workspace;
         private readonly SqliteOrchestratorStateRepository _repository;
         private readonly ConductorDriver _driver;
         private readonly ConductorBatchLoop _loop;
         internal GroupingFixture(int count, bool trains)
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", trains ? "0" : "1");
             Goals = Enumerable.Range(0, count).Select(index => VerifiedAt(Kernel, ((char)('A' + index)).ToString(), index)).ToArray();
             foreach (var goal in Goals)
             {
@@ -254,7 +252,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
                 .ToDictionary(item => item.Id, item => (IReadOnlyList<string>)new[] { item.Path });
             const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             string Branch(GoalId id) => id.Value.PadRight(40, 'b');
-            _driver = MakeDriver(getFacts: _ => new(WorkspaceExists: true), classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            _driver = MakeDriver(mergeTrainsEnabled: trains, getFacts: _ => new(WorkspaceExists: true), classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 isVerificationGateSatisfied: _ => true, getLandingFileScopes: goal => paths[goal.Id],
                 resolveAcceptanceHeads: goal => (Branch(goal.Id), main),
                 gateReadyCandidateProjector: new(id => new(Branch(id), main), id => new(true, paths[id]), (_, _, _) => new(true)),
@@ -305,7 +303,6 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
                 new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "admitted by group")));
         public void Dispose()
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", _trainDisabled);
             TryDeleteDirectory(_root);
         }
     }

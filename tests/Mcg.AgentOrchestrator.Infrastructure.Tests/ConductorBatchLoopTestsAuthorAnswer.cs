@@ -374,12 +374,16 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
 
     [Xunit.Theory]
     [Xunit.InlineData("false", false)]
-    [Xunit.InlineData("FALSE", false)]
-    [Xunit.InlineData("0", false)]
+    [Xunit.InlineData("true", true)]
     [Xunit.InlineData(null, true)]
     public async Task Enablement_defaults_on_and_can_be_disabled(string? value, bool expected)
     {
-        using var harness = new AuthorHarness(Answer, enabled: ConductorAuthorHost.ResolveEnabled(value));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(
+            Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy.Default.ToJson())!.AsObject();
+        Xunit.Assert.True(json.Remove("features"));
+        if (value is not null) json["features"] = System.Text.Json.Nodes.JsonNode.Parse($"{{\"author\":{value}}}");
+        var policy = Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy.ParseJson(json.ToJsonString());
+        using var harness = new AuthorHarness(Answer, enabled: policy.Features.Author);
         var goal = harness.Kernel.CreateGoal("Choose runtime");
         await harness.Raise(goal, "Which runtime?");
         if (expected) await harness.RoundTrip(goal);

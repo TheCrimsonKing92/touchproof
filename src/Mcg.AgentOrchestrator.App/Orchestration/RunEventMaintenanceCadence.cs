@@ -31,7 +31,7 @@ internal static class RunEventMaintenanceCadence
         Func<DateTimeOffset, int>? goalSnapshotArchiveOperation = null,
         GoalSnapshotArchiveDrain? goalSnapshotArchiveDrain = null,
         Func<long, GoalSnapshotArchiveRecompressionResult>? archivedSnapshotCompressionOperation = null,
-        bool? archivedSnapshotCompressionEnabled = null)
+        bool archivedSnapshotCompressionEnabled = false)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -146,7 +146,7 @@ internal static class RunEventMaintenanceCadence
                     throw;
                 }
 
-                var compressionEnabled = archivedSnapshotCompressionEnabled ?? ArchivedSnapshotCompressionCadence.IsEnabledFromEnvironment();
+                var compressionEnabled = archivedSnapshotCompressionEnabled;
                 var archiveResult = GoalSnapshotArchiveCadence.Run(
                     goalSnapshotArchiveOperation ?? (cutoff =>
                         (goalSnapshotArchiveDrain ?? GoalSnapshotArchiveDrain.Default).Run(bytes =>
