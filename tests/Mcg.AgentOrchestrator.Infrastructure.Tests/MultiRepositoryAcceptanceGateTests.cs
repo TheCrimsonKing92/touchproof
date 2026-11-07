@@ -217,7 +217,7 @@ public sealed class MultiRepositoryAcceptanceGateTests
         Assert.Equal(2, fixture.Calls.Count);
         Assert.Equal(before, fixture.Repositories.Home.Git("rev-parse", "HEAD"));
         Assert.True(Directory.Exists(fixture.HomeWorktree));
-        Assert.Equal(MultiRepositoryLandingHold.Kind, fixture.Goal.LandingBlocker!.Kind);
+        Assert.Equal("multi-repository-landing/" + MultiRepositoryLandingHold.Kind, fixture.Goal.LandingBlocker!.Kind);
     }
 
     private static void AssertLandingHold(ConductorAdvanceResult result) =>

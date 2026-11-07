@@ -10,12 +10,14 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "AcceptanceCriterionEvidence.RefusedCarry.cs : DescribeRefusedCarryHold : Refused carry hold is returned without a policy decision.",
         "AcceptanceCriterionEvidence.cs : RecordAndCreateHold : Criterion evidence diagnostic becomes an undecided hold.",
         "ConductorAcceptanceCohorts.cs : CohortGateFaulted : Cohort fault creates held member results without decisions.",
+        "ConductorBatchLoop.ActivationAdmissionProbe.cs : RecordActivationAdmissionWaitingForProbe : Name-only helper scanning treats the unrelated probe Waiting callback as an outcome helper.",
         "ConductorBatchLoop.ParallelAcceptanceCompletion.cs : CompleteParallelAcceptanceRun : Completion recovery holds lack typed attribution.",
         "ConductorBatchLoop.ParallelAcceptanceCompletion.cs : ParallelAcceptanceHeld : Parallel acceptance hold factory sets only ownership.",
         "ConductorBatchLoop.cs : EscalateParallelAcceptanceSafely : Exception fallback escalation has no policy decision.",
         "ConductorDriver.AcceptanceCarryForward.cs : CompleteLandingAfterRacingLandingCarryForward : Racing landing carry-forward hold lacks a decision.",
         "ConductorDriver.AcceptanceCohortExecution.cs : CohortHeld : Cohort hold member results have no decisions.",
         "ConductorDriver.AcceptanceCohortExecution.cs : CohortInFlight : In-flight cohort hold has no decision.",
+        "ConductorDriver.AcceptanceLanding.cs : ExecuteRepositoryAcceptance : Repository acceptance precondition holds lack typed decisions.",
         "ConductorDriver.DeferredNoChangeEvidence.cs : TryRunDeferredNoChangeEvidence : Deferred evidence escalation and pending hold lack attribution.",
         "ConductorDriver.DeveloperCompletionStructuralPreflight.cs : TryRunDeveloperCompletionStructuralPreflight : Conflict integration validation failure escalates without a typed decision.",
         "ConductorDriver.FindingEvidenceDeveloperHandoff.cs : TryRouteDeliveredFindingEvidenceToDeveloper : Developer evidence handoff hold has no decision.",
@@ -35,7 +37,8 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.cs : AdvanceOnce : Awaiting verification and unknown lifecycle outcomes lack decisions.",
         "ConductorDriver.cs : ExecuteDispatchAndStart : Failed dispatch recovery escalates without a decision.",
         "ConductorParallelAcceptanceAttempts.RefusedCarryRelaunch.cs : TryHoldRefusedCarryRelaunch : Refused carry helper result is held without a decision.",
-        "ConductorParallelAcceptanceAttempts.cs : FromArtifact : Rehydrated held and escalated outcomes do not restore decisions."
+        "ConductorParallelAcceptanceAttempts.cs : FromArtifact : Rehydrated held and escalated outcomes do not restore decisions.",
+        "MultiRepositoryAcceptanceGate.cs : MultiRepositoryAcceptanceGate : Primary-constructor attribution covers repository receipt waiting holds without decisions."
     ];
 
     private static readonly Regex MemberDeclaration = new(
