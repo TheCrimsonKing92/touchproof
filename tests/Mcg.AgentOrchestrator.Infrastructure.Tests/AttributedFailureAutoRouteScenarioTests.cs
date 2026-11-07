@@ -21,7 +21,7 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
         for (var tick = 1; tick <= 3; tick++)
         {
             driver.BeginTick(kernel, tick);
-            driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive);
+            driver.AdvanceOnce(second, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         }
         AssertRoute(second, second.Tasks.Single(), harness, "partition-1", Candidate, CohortTests);
         Assert.Empty(MarkerRetries(first));
@@ -92,7 +92,7 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
             for (var tick = 1; tick <= 2; tick++)
             {
                 driver.BeginTick(kernel, tick);
-                driver.AdvanceOnce(culprit, ConductorAutonomyPolicy.Permissive);
+                driver.AdvanceOnce(culprit, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
             }
             AssertRoute(culprit, culprit.Tasks.Single(), harness, receipt.ReceiptId, candidate, names);
             Assert.Contains("source=train-" + (ownership ? "ownership" : "reach"), MarkerRetries(culprit).Single().Message);
@@ -121,7 +121,7 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 2);
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         AssertRoute(goal, developer, harness, receipt.ReceiptId, Candidate, [TesterIdentity]);
         Assert.False(result.WasEscalated);
     }

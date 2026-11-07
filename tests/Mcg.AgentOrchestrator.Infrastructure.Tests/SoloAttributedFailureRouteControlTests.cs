@@ -225,7 +225,7 @@ public sealed class SoloAttributedFailureRouteControlTests
         fixture.Kernel.RecordTaskProcessRefreshed(fixture.Goal.Id, task.Id, process with
             { CompletedAt = DateTimeOffset.UtcNow, ExitCode = 0 }, null);
         driver.BeginTick(fixture.Kernel, 3);
-        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
         Assert.Single(fixture.Starts);
         Assert.Single(MarkerRetries(fixture.Goal));
     }

@@ -1374,8 +1374,15 @@ internal sealed partial class ConductorDriver
     }
     private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
     {
+        var failureRecordedAt = _utcNow();
         _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
-        return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+        var retryGoal = GetCurrentGoal(goal);
+        var retryTask = retryGoal.FindTask(route.DeveloperTaskId!);
+        OperatorRoutingNoteLedger.OpenHold(retryTask, failureRecordedAt,
+            policy.AutomaticRetryOperatorRoutingHoldSeconds, null, [route.Feedback!]);
+        if (policy.AutomaticRetryOperatorRoutingHoldSeconds > 0)
+            _recordTaskNote(goal.Id, retryTask.Id, AcceptanceRetryRoutingHoldGate.Describe(retryTask, _utcNow()));
+        return ExecuteDispatchAndStart(retryGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
