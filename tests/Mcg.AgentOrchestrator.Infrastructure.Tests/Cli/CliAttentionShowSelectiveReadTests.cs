@@ -154,7 +154,7 @@ public sealed class CliAttentionShowSelectiveReadTests : CliTaskQueryTestSupport
         Goal? currentGoal = null;
         var served = false;
         var output = CaptureConsole(() => served = CliAttentionQueryCommand.TryExecute(args, repository,
-            workspace, new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal));
+            workspace, new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal));
         return (served, output);
     }
 

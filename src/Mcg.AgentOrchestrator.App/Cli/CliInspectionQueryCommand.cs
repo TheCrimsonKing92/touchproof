@@ -27,7 +27,6 @@ internal static class CliInspectionQueryCommand
         IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles)
     {
@@ -52,7 +51,7 @@ internal static class CliInspectionQueryCommand
             default:
                 Goal? commandGoal = null;
                 CliReadOnlyQueryExecutor.Execute(args, new AgentOrchestratorKernel(), workspace,
-                    providers, channel, ref agents, ref workerProfiles, ref commandGoal);
+                    providers, ref agents, ref workerProfiles, ref commandGoal);
                 break;
         }
     }

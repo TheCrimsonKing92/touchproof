@@ -12,7 +12,6 @@ internal sealed class CliExecutionContext(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog workerProfiles,
     Goal? currentGoal,
-    IOperatorChannel? channel = null,
     Func<AgentOrchestratorKernel>? reloadKernel = null,
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
@@ -243,8 +242,6 @@ public void FinalizeGoalReplacement(Goal goal, GoalReplacementCommand command) =
 
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
-
-public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }
 
 internal sealed record GoalReplacementCommand(

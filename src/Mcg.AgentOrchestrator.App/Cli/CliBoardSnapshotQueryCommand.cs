@@ -41,7 +41,6 @@ internal static class CliBoardSnapshotQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -51,7 +50,7 @@ internal static class CliBoardSnapshotQueryCommand
         var localGoal = string.IsNullOrWhiteSpace(currentGoalId) ? null : kernel.Goals.FirstOrDefault(
             goal => goal.Id.Value.Equals(currentGoalId, StringComparison.OrdinalIgnoreCase));
         localGoal ??= OrchestratorEntityResolver.GetLatestGoal(kernel);
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref localGoal);
     }
 }

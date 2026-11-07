@@ -74,9 +74,16 @@ internal sealed partial class OperatorIntentCoordinator
             passedGateHold, requestPassedGateRegate);
     }
 
+    private static Func<string, CancellationToken, Task<long?>> BuildGoalStateVersionReader(string stateDirectory)
+    {
+        var stateDbPath = Path.Combine(stateDirectory, "state.db");
+        return (goalId, cancellationToken) =>
+            SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(stateDbPath, goalId, cancellationToken);
+    }
+
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
     {
-        var versionReader = OperatorChannelComposition.BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
+        var versionReader = BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
         var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var solo = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory);

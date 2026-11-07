@@ -221,7 +221,6 @@ internal sealed partial class ConductorDriver
         IGoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        IOperatorChannel? channel = null,
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
@@ -818,7 +817,6 @@ internal sealed partial class ConductorDriver
                 kernel,
                 goal,
                 workspace,
-                channel,
                 policy,
                 eventWriter,
                 LandingMutationBlocker);
@@ -895,7 +893,7 @@ internal sealed partial class ConductorDriver
         _writeEscalation = (goal, state, reason) =>
         {
             var source = $"conductor:{state}";
-            var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source, channel);
+            var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source);
             eventWriter.AppendGoalEscalated(goal.Id, state, goal.Status, reason, source);
             return result;
         };
@@ -935,7 +933,7 @@ internal sealed partial class ConductorDriver
         if (PullRequestLandingDelivery.Applies(workspace))
             PullRequestDeliveryTracker = new(kernel, workspace, new GitHubPullRequestStatusReader(new ForgeProcessRunner()),
                 new ForgeProcessRunner(), CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-                eventWriter, channel, refreshJournal: RefreshJournal, mutationBlocker: () => LandingMutationBlocker?.Invoke(),
+                eventWriter, refreshJournal: RefreshJournal, mutationBlocker: () => LandingMutationBlocker?.Invoke(),
                 landingSink: receipt => SuccessfulLandingSink?.Invoke(receipt), acceptanceAttempts: _parallelAcceptanceAttemptCoordinator, conflictCheck: PullRequestReviewConflictCheck.CreateDefault(workspace));
         ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
             goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));

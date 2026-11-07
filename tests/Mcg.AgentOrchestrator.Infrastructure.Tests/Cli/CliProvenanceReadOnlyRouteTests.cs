@@ -41,7 +41,7 @@ public sealed class CliProvenanceReadOnlyRouteTests : CliTaskQueryTestSupport
             Goal? currentGoal = null;
             Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(["provenance", argument]));
             Assert.False(CliReadOnlyCommandRunner.TryExecute(["provenance", argument], repository, workspace,
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal, out var changed));
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal, out var changed));
             Assert.False(changed);
             Assert.Equal(0, repository.ListGoalMetadataCount);
             Assert.Equal(0, repository.LoadGoalsCount);
@@ -89,7 +89,7 @@ public sealed class CliProvenanceReadOnlyRouteTests : CliTaskQueryTestSupport
             {
                 var error = Assert.Throws<InvalidOperationException>(() =>
                     CliReadOnlyCommandRunner.TryExecute(["provenance"], new QueryOnlyStateRepository(kernel), workspace,
-                        new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal, out _));
+                        new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal, out _));
                 Assert.Equal("Provenance check failed: 1 completed goal(s) are unbacked (missing verification receipts).",
                     error.Message);
             });
@@ -133,7 +133,7 @@ public sealed class CliProvenanceReadOnlyRouteTests : CliTaskQueryTestSupport
             var output = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(["provenance"], repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal, out var changed));
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal, out var changed));
                 Assert.False(changed);
             });
 
@@ -276,7 +276,7 @@ public sealed class CliProvenanceReadOnlyRouteTests : CliTaskQueryTestSupport
         return CaptureConsole(() =>
         {
             Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal, out var changed));
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal, out var changed));
             Assert.False(changed);
         });
     }

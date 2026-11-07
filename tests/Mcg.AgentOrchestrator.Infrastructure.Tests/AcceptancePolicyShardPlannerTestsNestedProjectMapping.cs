@@ -13,7 +13,6 @@ public sealed class AcceptancePolicyShardPlannerTestsNestedProjectMapping
     [
         [AcceptancePolicyShardPlanner.CoreProject, "Core"],
         [AcceptancePolicyShardPlanner.ProvidersProject, "Infrastructure.Providers"],
-        [AcceptancePolicyShardPlanner.OperatorCommsProject, "Infrastructure.OperatorComms"],
         [AcceptancePolicyShardPlanner.ExecutionProject, "Execution"],
         [AcceptancePolicyShardPlanner.InfrastructureProject, "Infrastructure"],
         [AcceptancePolicyShardPlanner.AppProject, "App"],

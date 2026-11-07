@@ -254,7 +254,7 @@ public sealed class BacklogItemSummaryTests : IDisposable
         Goal? current = null;
         Assert.True(CliReadOnlyCommandRunner.TryExecute(args,
             new SqliteOrchestratorStateRepository(seed.Workspace.SqliteStatePath), seed.Workspace,
-            new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref current, out var changed));
+            new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref current, out var changed));
         Assert.False(changed);
     });
 

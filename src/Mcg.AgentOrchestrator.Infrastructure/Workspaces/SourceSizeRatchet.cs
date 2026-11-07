@@ -143,14 +143,14 @@ internal static class SourceSizeRatchet
             // Goal 387027bb adds three integration lines for the separately owned acceptance retry hold gate.
             // Goal 5ca3f5c0: six property/construction lines wire the separately owned PR tracker and landing receipt.
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1681),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1679),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
             // Goal 387027bb snapshots the routing deadline and emits its initial waiting event (+7 integration lines).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 604),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 603),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
@@ -376,7 +376,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 3262),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 3234),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -419,7 +419,7 @@ internal static class SourceSizeRatchet
             // lifecycle transitions, including canonical identities produced from a TRX receipt.
             // Goal fc109f3f keeps both apparatus classifications in the five-role lifecycle decision table
             // that proves unchanged candidates preserve all completed worker evidence during re-gating.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1942),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1941),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 777),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
@@ -447,7 +447,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 114),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 59),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 192),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1357),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1355),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 676),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 649),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs", 417),
@@ -562,7 +562,7 @@ internal static class SourceSizeRatchet
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
             // Goal 0d141bc6 adds the immutable merge-train feature option at its existing admission consumer;
             // extracting only that option would separate it from the dependency checks it gates (+2 lines).
-            new SourceClassCeiling("ConductorDriver", 14246, 70),
+            new SourceClassCeiling("ConductorDriver", 14243, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -603,7 +603,7 @@ internal static class SourceSizeRatchet
             // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
             // Goal 0d141bc6 passes resolved policy features at the existing loop/watch construction seams;
             // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
-            new SourceClassCeiling("CliCommandHandlers", 11023, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11021, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -713,7 +713,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 4403, 17),
+            new SourceClassCeiling("CliPersistentStateRunner", 4369, 17),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

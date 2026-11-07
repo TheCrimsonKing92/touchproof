@@ -23,7 +23,6 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
                 queries,
                 OrchestratorWorkspace.ForDirectory(root),
                 new InMemoryModelProviderRegistry([]),
-                channel: null,
                 ref agents,
                 ref profiles,
                 ref currentGoal));

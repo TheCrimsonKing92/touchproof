@@ -41,7 +41,7 @@ public sealed class CliReadRouteQueryCapabilityTests : CliTaskQueryTestSupport
                 return CaptureConsole(() =>
                 {
                     Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                        args, queries, workspace, new InMemoryModelProviderRegistry([]), null,
+                        args, queries, workspace, new InMemoryModelProviderRegistry([]),
                         ref agents, ref profiles, ref currentGoal, out var changed));
                     Xunit.Assert.False(changed);
                 });

@@ -1404,7 +1404,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.AcceptanceVerifier,
                     context.Agents,
                     context.WorkerProfiles,
-                    context.Channel,
                     context.Providers,
                     persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
                     readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
@@ -1775,7 +1774,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.AcceptanceVerifier,
                 context.Agents,
                 context.WorkerProfiles,
-                context.Channel,
                 context.Providers,
                 persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
                     readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(

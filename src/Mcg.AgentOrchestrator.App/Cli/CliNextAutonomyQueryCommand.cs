@@ -18,7 +18,6 @@ internal static class CliNextAutonomyQueryCommand
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
@@ -30,7 +29,7 @@ internal static class CliNextAutonomyQueryCommand
             args = [args[0], CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id).Value, args[1], args[2]];
         }
 
-        return CliNextGoalQueryRoute.TryExecute(args, args[1], stateQueries, workspace, providers, channel,
+        return CliNextGoalQueryRoute.TryExecute(args, args[1], stateQueries, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
     }
 }

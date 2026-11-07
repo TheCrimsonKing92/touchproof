@@ -270,7 +270,7 @@ public sealed class PullRequestReviewRoundTests : Xunit.IClassFixture<IsolatedDo
         WriteReceipt(fixture, candidate);
         var result = deliveredAt is { } at
             ? PullRequestLandingDelivery.Deliver(fixture.Kernel, fixture.Goal, fixture.Workspace,
-                candidate, publisher, null, null, null, new FixedClock(at))
+                candidate, publisher, null, null, new FixedClock(at))
             : LandingExecutor.Execute(fixture.Kernel, fixture.Goal, fixture.Workspace, pullRequestPublisher: publisher);
         Assert.Contains("delivered for review:", result.Message);
         Assert.Equal(candidate, fixture.Goal.DeliveredForReview!.PushedCommit);

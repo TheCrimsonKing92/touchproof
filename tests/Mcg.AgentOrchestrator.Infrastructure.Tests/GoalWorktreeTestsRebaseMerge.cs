@@ -1290,7 +1290,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Goal? currentGoal = goal;
 
             var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
+            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
             {
                 CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
@@ -1338,7 +1338,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var profiles = WorkerProfileCatalog.Default();
 
             var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
+            var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
             {
                 CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier

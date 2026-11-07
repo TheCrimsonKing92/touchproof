@@ -85,7 +85,7 @@ public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
             Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             Assert.False(CliReadOnlyCommandRunner.TryExecute(
                 args, repository, OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
-                null, ref agents, ref profiles, ref currentGoal, out var changed));
+                ref agents, ref profiles, ref currentGoal, out var changed));
             Assert.False(changed);
             Assert.Equal(0, repository.ListGoalMetadataCount);
             Assert.Equal(0, repository.LoadGoalsCount);

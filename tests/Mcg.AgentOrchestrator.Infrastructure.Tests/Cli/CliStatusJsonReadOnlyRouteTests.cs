@@ -68,7 +68,7 @@ public sealed class CliStatusJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             var human = Record.Exception(() =>
             {
                 CliStatusQueryCommand.Execute(["status", prefix], repository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal);
+                    new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal);
             });
             var json = Record.Exception(() =>
             {
@@ -100,7 +100,7 @@ public sealed class CliStatusJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             var output = CaptureConsole(() =>
             {
                 Assert.True(CliReadOnlyCommandRunner.TryExecute(["status", "abc12345", "--json"], repository,
-                    OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]), null,
+                    OrchestratorWorkspace.ForDirectory(root), new InMemoryModelProviderRegistry([]),
                     ref agents, ref profiles, ref currentGoal, out var changed));
                 Assert.False(changed);
             });

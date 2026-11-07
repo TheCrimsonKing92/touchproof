@@ -10,7 +10,6 @@ internal static class AttentionShowReadRoute
         IOrchestratorStateQueries stateQueries,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -82,7 +81,7 @@ internal static class AttentionShowReadRoute
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
             orderedIds.Select(loaded.ExportGoalSnapshot).ToArray(),
             loaded.ExportSnapshot().HumanInputRequests));
-        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers,
             ref agents, ref workerProfiles, ref currentGoal);
         return true;
     }

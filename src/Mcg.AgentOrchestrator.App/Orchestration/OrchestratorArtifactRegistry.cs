@@ -33,7 +33,7 @@ internal static class OrchestratorArtifactRegistry
         Source("semantic-acceptance.jsonl", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("agents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("model-functions.json", "App/Orchestration/OrchestratorWorkspace.cs"),
-        Source("operator-channel.json", "App/Orchestration/OrchestratorWorkspace.cs"),
+        Retired("operator-channel.json", "Channel reader and writer removed; leftover files are inert."),
         Source("workers.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("spec-refiner-precedents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"),

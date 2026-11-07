@@ -121,7 +121,7 @@ public sealed class CliAttentionShowJsonReadOnlyRouteTests : CliTaskQueryTestSup
             var providers = new InMemoryModelProviderRegistry([]);
             // Establish that these seeds exercise the human route's decline cases.
             Assert.False(CliAttentionQueryCommand.TryExecute(["attention", "show"], repository, workspace,
-                providers, null, ref agents, ref profiles, ref currentGoal));
+                providers, ref agents, ref profiles, ref currentGoal));
             string[] allowedReadSidecars = File.Exists(database) ? [database + "-wal", database + "-shm"] : [];
             var before = Snapshot(root, allowedReadSidecars);
             var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);

@@ -231,7 +231,7 @@ public sealed class CliServedFormsSqliteStoreEffectsTests : CliTaskQueryTestSupp
         return CaptureConsole(() =>
         {
             Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
-                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                new InMemoryModelProviderRegistry([]), ref agents, ref profiles, ref currentGoal,
                 out var changed), $"{string.Join(" ", args)}: read-only runner declined the form.");
             Assert.False(changed);
         });

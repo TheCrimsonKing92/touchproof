@@ -40,7 +40,7 @@ public sealed class CliMonitorGoalQueryRouteOwnershipTests : CliTaskQueryTestSup
             Goal? currentGoal = null;
             var actual = Record.Exception(() => CliReadOnlyCommandRunner.TryExecute(
                 args, repository, workspace, new InMemoryModelProviderRegistry([]),
-                null, ref agents, ref profiles, ref currentGoal, out _));
+                ref agents, ref profiles, ref currentGoal, out _));
             Assert.NotNull(actual);
             Assert.Equal(baseline.GetType(), actual.GetType());
             Assert.Equal(baseline.Message, actual.Message);
@@ -79,7 +79,7 @@ public sealed class CliMonitorGoalQueryRouteOwnershipTests : CliTaskQueryTestSup
             {
                 var error = Assert.Throws<ArgumentException>(() => CliReadOnlyCommandRunner.TryExecute(
                     args, repository, workspace, new InMemoryModelProviderRegistry([]),
-                    null, ref agents, ref profiles, ref currentGoal, out _));
+                    ref agents, ref profiles, ref currentGoal, out _));
                 Assert.Equal(baseline.Message, error.Message);
             });
             Assert.Empty(output);

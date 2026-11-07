@@ -52,7 +52,6 @@ internal static class CliReadinessQueryCommand
         IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
@@ -83,7 +82,7 @@ internal static class CliReadinessQueryCommand
         var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles,
-            goal, channel, reloadKernelForGoals: ids => CliPersistentStateRunner.LoadConductLoopKernel(
+            goal, reloadKernelForGoals: ids => CliPersistentStateRunner.LoadConductLoopKernel(
                 stateRepository, ids, workspace.ExecutionDirectory)) { IsReadOnlyQuery = true };
         try
         {

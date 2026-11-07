@@ -13,7 +13,6 @@ set "APP_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.App\obj\project.assets.json"
 set "CORE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Core\obj\project.assets.json"
 set "INFRASTRUCTURE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure\obj\project.assets.json"
 set "PROVIDERS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.Providers\obj\project.assets.json"
-set "OPERATOR_COMMS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\obj\project.assets.json"
 set "DOTNET_HOST=dotnet"
 if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNET_PATH%"
 
@@ -133,7 +132,6 @@ if not exist "%APP_ASSETS%" goto missing_build_assets
 if not exist "%CORE_ASSETS%" goto missing_build_assets
 if not exist "%INFRASTRUCTURE_ASSETS%" goto missing_build_assets
 if not exist "%PROVIDERS_ASSETS%" goto missing_build_assets
-if not exist "%OPERATOR_COMMS_ASSETS%" goto missing_build_assets
 
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
 call "%DOTNET_HOST%" build "%APP_PROJECT%" --no-restore --nologo -v quiet -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= >"%BUILD_LOG%" 2>&1

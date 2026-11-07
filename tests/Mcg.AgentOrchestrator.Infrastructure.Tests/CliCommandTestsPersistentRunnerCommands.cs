@@ -505,7 +505,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
-        var configuredChannel = NullOperatorChannel.Instance;
         using var conductorLease = conductorActive
             ? ConductorLoopLease.Acquire(workspace.OrchestratorDirectory)
             : null;
@@ -518,8 +517,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal,
-                configuredChannel);
+                ref currentGoal);
             Xunit.Assert.False(changed);
         });
 

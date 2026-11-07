@@ -73,7 +73,7 @@ internal sealed class CliAttentionShowDecisionsFixture : CliTaskQueryTestSupport
             if (readOnly)
             {
                 var state = SqliteOrchestratorStateRepository.OpenReadOnly(Workspace.SqliteStatePath);
-                Assert.True(CliReadOnlyCommandRunner.TryExecute(args, state, Workspace, providers, null,
+                Assert.True(CliReadOnlyCommandRunner.TryExecute(args, state, Workspace, providers,
                     ref agents, ref profiles, ref selected, out var changed));
                 Assert.False(changed);
             }
