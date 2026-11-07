@@ -17,7 +17,7 @@
 > This also disposes of the "nested projects" lead below. Those three arms are not failing because
 > they are nested; they are failing because their project paths are the longest, and combined with
 > the lease's artifacts root the copy destinations exceed `MAX_PATH`. The operator's standalone
-> reproduction passed because its isolated root was `C:/Users/miles/isoarm` — far shorter than the
+> reproduction passed because its isolated root was `C:/example/repo/isoarm` — far shorter than the
 > in-gate lease path. That is a difference in the *root length*, not in the gate.
 >
 > Keep the standalone receipts below; they are still valid evidence that the arms and arguments are

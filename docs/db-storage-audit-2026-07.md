@@ -98,7 +98,7 @@ Event-driven wake may increase tick frequency. At 5,000 ticks/day, the old avera
 
 Pre-maintenance size measured on this machine:
 
-- `C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator\run-events.db` = 1,833,816,064 bytes at first survey during this task.
+- `C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator\run-events.db` = 1,833,816,064 bytes at first survey during this task.
 - The live file grew to 1,837,817,856 bytes by command execution, confirming old tick payload growth was still active.
 
 Maintenance receipts:
@@ -116,6 +116,6 @@ Maintenance receipts:
 
 Post-maintenance direct file check:
 
-- `C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator\run-events.db` = 454,877,184 bytes.
+- `C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator\run-events.db` = 454,877,184 bytes.
 - No `run-events.db-wal` or `run-events.db-shm` file was present in the post-run direct check.
 - A final check later in the same worker turn measured 455,512,064 bytes, showing the pre-fix live writer was still adding tick payloads while this branch had not yet landed.

@@ -2,7 +2,7 @@
 
 The retained cohort verdict at `.orchestrator/cohort-acceptance.db.artifacts/cohort-v2-c138e08f1166c7b973d281c70a933742572b957c173cafb868a7f6ab6b6f7905/de75647cd2bf354c6fc02ce2416adfa6573d7b9f7ba17981ff095db5ae1559e5/gate-verdict.json` records `Outcome: InfrastructureFailure`, `GateExitCode: 2`, and the five failed checks reported for all eight cohort attempts. Its SHA-referenced `trx-011.trx` contains this failure from `GoalWorktrees_git_metadata_access_marks_low_integrity_worker_non_committing`:
 
-> System.UnauthorizedAccessException : Access to the path 'C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\c-230dea6c45fb\.scratch\mcg-wt\b9559b96ddb7463fafe2bf75031d7210' is denied.
+> System.UnauthorizedAccessException : Access to the path 'C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\c-230dea6c45fb\.scratch\mcg-wt\b9559b96ddb7463fafe2bf75031d7210' is denied.
 
 The mechanism is Windows mandatory-integrity control, not cohort selection or the verifier's null goal id:
 

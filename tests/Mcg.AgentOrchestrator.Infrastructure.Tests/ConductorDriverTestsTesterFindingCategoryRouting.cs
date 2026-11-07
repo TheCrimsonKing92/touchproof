@@ -149,7 +149,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         const string goalId = "45469eead6f54022b9a2f9f3e32d695a";
         const string developerId = "2d0c7585098040d6aa868bd8568a49bb";
         const string testerId = "f944bdc5c3104af09173b1bd55576fa8";
-        const string directory = @"C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\45469eea";
+        const string directory = @"C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\45469eea";
         const string command = "codex exec --json --skip-git-repo-check --model 'gpt-6.1-sol' -c model_reasoning_effort='high' -c project_doc_max_bytes=65536 --sandbox 'danger-full-access' --cd '" + directory + "'";
         var firstDispatch = new TaskDispatchSnapshot("codex-cli", command, directory,
             DateTimeOffset.Parse("2026-10-27T22:00:24.4560594Z"),

@@ -20,7 +20,7 @@ Command: `.\scripts\Invoke-TestSummary.ps1 -Target tests\Mcg.AgentOrchestrator.I
 
 Result: valid RED, 49 executed, 48 passed, 1 failed. `GoalReplace_CompetingReplacementTimeout_IsRetryableWithoutAudit_ThenConflictsAfterWinnerCommits` failed after 19.391 seconds at its injected-wait assertion with `Assert.Equal() Failure: Values differ`, `Expected: 1`, `Actual: 0`. The real 15-second deadline produced the retryable exception without invoking the scoped clock or wait delegate. Thus the test-controlled first branch assertion is unreachable under the mutation, while `ConcurrentGoalReplacementsCommitExactlyOneSuccessor` again lets host speed decide whether its loser observes the committed owner before timing out.
 
-Retained RED receipt: `C:\Users\miles\AppData\Local\Temp\Low\mcg-tests\summary-20260918T083455708-b7cfed8f\summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.trx`.
+Retained RED receipt: `C:\example\repo\AppData\Local\Temp\Low\mcg-tests\summary-20260918T083455708-b7cfed8f\summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.trx`.
 
 ## GREEN: scoped clock and wait delegate restored
 
