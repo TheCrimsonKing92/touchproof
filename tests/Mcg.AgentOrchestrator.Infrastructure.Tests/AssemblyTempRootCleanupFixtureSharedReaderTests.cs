@@ -31,7 +31,13 @@ public sealed class AssemblyTempRootCleanupFixtureSharedReaderTests
                 Assert.True(result.Succeeded, result.Error);
             }
 
-            Assert.True(readers.TryResolve(repo, "HEAD^{commit}", out _));
+            // This expression bypasses in-process ref resolution. Keep reading until
+            // admission creates a persistent reader, with a bound that fails loudly.
+            const int maximumAdmissionReads = 32;
+            for (var attempt = 0; attempt < maximumAdmissionReads && readers.GetReader(repo) is null; attempt++)
+            {
+                Assert.True(readers.TryResolve(repo, "HEAD^{commit}", out _));
+            }
             var process = Assert.IsType<GitRevisionReader.ReaderProcess>(readers.GetReader(repo));
             Assert.False(process.HasExited);
             Assert.Equal(1, readers.RetainedCount);
