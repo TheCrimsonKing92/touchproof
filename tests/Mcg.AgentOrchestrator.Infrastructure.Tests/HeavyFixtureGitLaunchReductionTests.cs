@@ -8,6 +8,16 @@ public sealed class HeavyFixtureGitLaunchReductionTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "heavy-fixture-bound-" + Guid.NewGuid().ToString("N"));
 
+    private static readonly (string ClassName, int Rows)[] ReplacementClasses =
+    [
+        (nameof(MergeTrainFocusedRecheckReceiptContractTests), 4),
+        (nameof(MergeTrainFocusedRecheckRedReceiptRefusalTests), 5),
+        (nameof(MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests), 5),
+        (nameof(MergeTrainFocusedRecheckAttemptRefusalTests), 5),
+        (nameof(MergeTrainFocusedRecheckSelectionRefusalTests), 5),
+        (nameof(MergeTrainFocusedRecheckCompositionRefusalTests), 7)
+    ];
+
     [Fact]
     public void Baselines_CurrentDiscovery_PinsSelectionWithoutExecutingBodies()
     {
@@ -64,6 +74,39 @@ public sealed class HeavyFixtureGitLaunchReductionTests : IDisposable
         Assert.Contains($"launches={launches}; historical=5810; maximum=4357; rows=169", result.ResultSummary);
         foreach (var baseline in HeavyFixtureGitLaunchBoundCheck.Baselines)
             Assert.Contains(baseline.ClassName, result.OutputTail);
+    }
+
+    [Fact]
+    public void Evaluate_SplitGroup_RequiresEveryReplacementClass()
+    {
+        const string group = "MergeTrainFocusedRecheckReceiptAcceptanceTests";
+        // Put a replacement row first so the measured launches belong to the split group.
+        var rows = Rows().OrderBy(row => row.StartsWith("MergeTrainFocusedRecheck", StringComparison.Ordinal) ? 0 : 1).ToArray();
+        var result = Evaluate(Write("split-complete", rows, 4357));
+        Assert.True(result.Passed);
+        Assert.False(result.Advisory);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("launches=4357; historical=5810; maximum=4357; rows=169", result.ResultSummary);
+        Assert.Contains($"{group}: rows=31/31, launches=4357", result.OutputTail);
+        var baseline = Assert.Single(HeavyFixtureGitLaunchBoundCheck.Baselines, entry => entry.ClassName == group);
+        Assert.Equal(1349, baseline.Launches);
+        Assert.Equal(31, baseline.Rows);
+
+        foreach (var member in ReplacementClasses)
+        {
+            var remaining = rows.Where(row => !row.StartsWith(member.ClassName + ".", StringComparison.Ordinal));
+            var missing = Evaluate(Write("split-missing-" + member.ClassName, remaining, 0));
+            AssertSkipped(missing, $"missing rows: {member.ClassName} (0/{member.Rows})");
+        }
+
+        // The same aggregate of 31 rows cannot hide an absent destination class.
+        var absent = ReplacementClasses[0];
+        var substitute = ReplacementClasses[1];
+        var wrongSelection = rows.Where(row => !row.StartsWith(absent.ClassName + ".", StringComparison.Ordinal))
+            .Concat(Enumerable.Range(100, absent.Rows).Select(index => $"{substitute.ClassName}.Scenario(row: {index})"));
+        var drift = Evaluate(Write("split-wrong-selection", wrongSelection, 0));
+        AssertMalformed(drift, $"excess distinct rows: {substitute.ClassName}");
+        Assert.Contains($"{group}: rows=31/31", drift.OutputTail);
     }
 
     [Fact]
@@ -243,7 +286,10 @@ public sealed class HeavyFixtureGitLaunchReductionTests : IDisposable
     }
 
     private static IEnumerable<string> Rows() => HeavyFixtureGitLaunchBoundCheck.Baselines.SelectMany(entry =>
-        Enumerable.Range(0, entry.Rows).Select(index => $"{entry.ClassName}.Scenario(row: {index})"));
+        entry.ClassName == "MergeTrainFocusedRecheckReceiptAcceptanceTests"
+            ? ReplacementClasses.SelectMany(member =>
+                Enumerable.Range(0, member.Rows).Select(index => $"{member.ClassName}.Scenario(row: {index})"))
+            : Enumerable.Range(0, entry.Rows).Select(index => $"{entry.ClassName}.Scenario(row: {index})"));
 
     private string Write(string name, IEnumerable<string> rows, long launches)
     {
