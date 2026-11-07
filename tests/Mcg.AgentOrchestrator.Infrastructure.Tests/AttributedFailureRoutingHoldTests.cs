@@ -133,6 +133,8 @@ public sealed class AttributedFailureRoutingHoldTests
             _kernel = kernel;
             Goal = second;
             Assert.True(ApplyCohort(kernel, first, second).ShouldRecord);
+            Assert.True(kernel.RouteRecordedAcceptanceFailure(Goal.Id, "Attributed cohort failure recorded."));
+            Assert.Equal(GoalStatus.AcceptanceFailed, Goal.Status);
             Now = DateTimeOffset.UtcNow;
             Policy = holdSeconds is { } seconds
                 ? ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = seconds }
