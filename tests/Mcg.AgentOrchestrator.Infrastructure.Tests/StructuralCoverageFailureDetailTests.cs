@@ -5,6 +5,7 @@ public sealed class StructuralCoverageFailureDetailTests
 {
     private const string Meaning = "meaning: each listed test exists and was discovered but no shard executed it; adding new tests cannot clear this";
     private const string ReceiptMeaning = "meaning: the candidate's discovered test count or main baseline generation does not reconcile; the receipts below give the counts";
+    internal const string ZeroRemovalMeaning = "meaning: no declared test removals were found for the main baseline, so the shortfall is a real count gap";
     private const string CountReceipt = "cross-generation-count:candidate=10,minimum=12,main=12,deleted=0";
 
     [Xunit.Fact]
@@ -17,7 +18,7 @@ public sealed class StructuralCoverageFailureDetailTests
         Assert.Equal(new[]
         {
             "classification: structural-coverage-failed", coverage.Summary,
-            ReceiptMeaning, $"receipt: {CountReceipt}"
+            ReceiptMeaning, ZeroRemovalMeaning, $"receipt: {CountReceipt}"
         }, lines);
         Assert.DoesNotContain(Meaning, lines);
         Assert.DoesNotContain(lines, line => line.StartsWith("missing test: ", StringComparison.Ordinal));
@@ -76,7 +77,7 @@ public sealed class StructuralCoverageFailureDetailTests
         Assert.Equal(new[]
         {
             "classification: structural-coverage-failed", coverage.Summary,
-            ReceiptMeaning, $"receipt: {CountReceipt}"
+            ReceiptMeaning, ZeroRemovalMeaning, $"receipt: {CountReceipt}"
         }, lines);
         Assert.DoesNotContain(Meaning, lines);
         Assert.DoesNotContain(lines, line => line.StartsWith("missing test: ", StringComparison.Ordinal));
@@ -97,6 +98,7 @@ public sealed class StructuralCoverageFailureDetailTests
         Assert.Equal(new[]
         {
             "classification: structural-coverage-failed", coverage.Summary, Meaning, ReceiptMeaning,
+            ZeroRemovalMeaning,
             "empty partition: partition-one", "omitted: 1 more empty partitions not listed",
             "missing test: discovered=\"Fixture.Cases.Mismatch\"; executed=null",
             "omitted: 1 more identity mismatches not listed",
