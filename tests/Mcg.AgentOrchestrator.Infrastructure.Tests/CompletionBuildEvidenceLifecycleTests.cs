@@ -176,7 +176,7 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         Assert.False(fixture.Task.LastProcess!.WasCancelled);
         Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
         Assert.Equal(fixture.Task.CompletionBuildEvidence.LeaseOwner,
-            new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         Assert.Equal(0, fixture.Stops);
     }
 
@@ -212,7 +212,7 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.TimedOut, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.Equal(1, fixture.Stops);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         Assert.NotEqual(WorkTaskStatus.Completed, fixture.Task.Status);
         Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
     }
@@ -246,7 +246,7 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
         Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
         Assert.True(fixture.Task.LastProcess!.WasCancelled);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         // The caller persists worker cancellation; the coordinator persists only its operation.
         new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
         fixture.Reload();
@@ -290,7 +290,7 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         fixture.Runner().RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.ApparatusFailure, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.Equal(1, fixture.Launches);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
     }
 
     [Fact]

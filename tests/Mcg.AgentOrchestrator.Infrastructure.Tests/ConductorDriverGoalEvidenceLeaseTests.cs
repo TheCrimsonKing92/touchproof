@@ -15,7 +15,7 @@ public sealed class ConductorDriverGoalEvidenceLeaseTests
     {
         var root = ConductorDriverTests.CreateTempDirectory();
         var dbPath = Path.Combine(root, "state.db");
-        var store = new ReconcileSweepRemediationStore(dbPath);
+        var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
         var (kernel, goal) = SimpleGoal("Recover same-process integration lease");
         var instances = new Queue<string>(["faulted-instance", "overlap-instance", "reclaimed-instance"]);
         var coordinator = new GoalEvidenceOperationCoordinator(
@@ -145,7 +145,7 @@ public sealed class ConductorDriverGoalEvidenceLeaseTests
         string expectedStatus)
     {
         var root = ConductorDriverTests.CreateTempDirectory();
-        var innerStore = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+        var innerStore = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
         var (kernel, goal) = SimpleGoal($"Terminal ordering {scenario}");
         GoalOperationStatus? statusObservedAtRelease = null;
         var store = new ReleaseObservingRemediationStore(innerStore, (_, owner) =>

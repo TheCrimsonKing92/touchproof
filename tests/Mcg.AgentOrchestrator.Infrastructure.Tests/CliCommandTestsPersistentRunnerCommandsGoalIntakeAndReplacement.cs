@@ -1516,7 +1516,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                 new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
                 ref competingProfiles,
                 ref competingGoal));
-            evidenceLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            evidenceLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
                 .TryAcquireAcceptanceLease(
                     predecessor.Id.Value,
                     $"goal-evidence:test:{Guid.NewGuid():N}",
@@ -1568,7 +1568,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
         const string predecessorGoalId = "timeout-predecessor";
-        using var competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        using var competingLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 predecessorGoalId,
                 $"goal-replace:test:{Guid.NewGuid():N}",
@@ -1833,7 +1833,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                 ref localGoal));
         }
 
-        IDisposable? competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        IDisposable? competingLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 predecessor.Id.Value,
                 $"goal-replace:test:{Guid.NewGuid():N}",
@@ -1904,7 +1904,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
-        IDisposable? competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        IDisposable? competingLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 predecessor.Id.Value,
                 $"goal-replace:{Environment.ProcessId}:competing",

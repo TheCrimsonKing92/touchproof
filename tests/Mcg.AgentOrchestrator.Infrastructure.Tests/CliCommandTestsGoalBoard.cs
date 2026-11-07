@@ -263,7 +263,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 Path.Combine(root, $"{deadGoal.Tasks.Single().Id.Value}-exit.txt"),
                 DispatchExitArtifacts.Native(0, "worker exited", DateTimeOffset.UtcNow));
             WriteAcceptanceAttempt(workspace, gateGoal.Id.Value, live: true);
-            var leaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            var leaseStore = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath));
             Xunit.Assert.True(leaseStore.TryClaimAcceptanceLease(
                 gateGoal.Id.Value,
                 "goal-replace:test:active",
@@ -617,7 +617,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 kernel,
                 AgentCatalog.Default().Agents,
                 "Persisted goal-evidence lease");
-            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath));
             const string operation = "conductor:developer-branch-integration";
             const string instance = "board-instance";
             using var currentProcess = Process.GetCurrentProcess();
@@ -685,7 +685,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 kernel,
                 AgentCatalog.Default().Agents,
                 "Pre-upgrade goal-evidence lease");
-            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath));
             const string owner =
                 "goal-evidence:conductor:developer-branch-integration:no-pid:a3b675d01a2349aaa8aee97aff86f334";
             Xunit.Assert.True(store.TryClaimAcceptanceLease(
@@ -724,7 +724,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 kernel,
                 AgentCatalog.Default().Agents,
                 "Malformed lease timestamp");
-            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath));
             const string owner = "goal-evidence:v1:conductor:developer-branch-integration:42:malformed-time";
             Xunit.Assert.True(store.TryClaimAcceptanceLease(
                 goal.Id.Value,

@@ -595,7 +595,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts(CohortCandid
             var replacementProtectedGoal = new[] { firstGoal, secondGoal }
                 .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
                 .Last();
-            using (var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            using (var replacementLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
                        .TryAcquireAcceptanceLease(
                            replacementProtectedGoal.Id.Value,
                            $"goal-replace:test:{Guid.NewGuid():N}",

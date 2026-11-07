@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class GoalWorktreeTests
+public sealed class GoalWorktreeFastTests
 {
     private static AgentDefinition EchoDeveloper() => new(
         new AgentId("echo-developer"),
@@ -183,7 +183,7 @@ public sealed class GoalWorktreeTests
         FakeAcceptanceVerifier verifier,
         bool fiveRole = false)
     {
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var agents = fiveRole ? EchoAgents() : [EchoDeveloper()];
         return new CliExecutionContext(kernel, workspace, SeedSpecRefiner(workspace), agents, EchoProfiles(), null)

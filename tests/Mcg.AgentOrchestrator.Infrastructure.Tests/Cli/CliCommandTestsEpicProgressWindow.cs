@@ -165,7 +165,7 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number = 14";
+            command.CommandText = "DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number >= 14";
             command.ExecuteNonQuery();
         }
         var before = SnapshotStores(workspace);

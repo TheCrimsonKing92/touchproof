@@ -212,6 +212,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             Paths = paths;
             MainSha = mainSha;
             Workspace = OrchestratorWorkspace.ForDirectory(repo);
+            InfrastructureTestSupport.SetUpStateDatabase(Workspace.SqliteStatePath);
             StorePath = Path.Combine(Workspace.OrchestratorDirectory, "cohort-acceptance.db");
             Events = new(new SqliteRunEventStore(Workspace.RunEventStorePath), Workspace.RunEventStorePath);
             Circuit = new(Events);

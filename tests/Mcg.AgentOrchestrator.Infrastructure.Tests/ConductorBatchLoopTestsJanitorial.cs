@@ -26,7 +26,7 @@ public sealed class ConductorBatchLoopTestsJanitorial : ConductorBatchLoopTests
         using var lockReleased = new ManualResetEventSlim();
         var retryDelays = 0;
         var store = new ReconcileSweepRemediationStore(
-            dbPath,
+            SetUpStateDatabase(dbPath),
             busyTimeoutSeconds: 1,
             busyRetryDelay: (_, _, _) =>
             {

@@ -36,7 +36,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         coordinator.Cancel(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
 
         using var metadata = ReadOnlyMetadata(operation);
         Assert.True(metadata.RootElement.GetProperty("Authorized").GetBoolean());
@@ -87,7 +87,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         if (attempts == 0) Assert.Equal(JsonValueKind.Null, registration.ValueKind);
         else Assert.Equal(attempts, registration.GetProperty("Attempts").GetInt32());
         Assert.False(File.Exists(operation.ResultPath));
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         using var metadata = ReadOnlyMetadata(operation);
         Assert.True(metadata.RootElement.GetProperty("Authorized").GetBoolean());
         Assert.Contains("status=read-failed", metadata.RootElement.GetProperty("StandardError").GetString());
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
     }
 
     [Theory]
@@ -203,7 +203,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         Assert.Null(operation.BuildExitCode);
         Assert.NotEqual(WorkTaskStatus.Completed, fixture.Task.Status);
         Assert.False(fixture.Task.LastVerification!.Succeeded);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         fixture.Reload();
         Assert.Equal(CompletionBuildEvidencePhase.TimedOut, fixture.Task.CompletionBuildEvidence!.Phase);
     }
@@ -239,7 +239,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
             runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
             var admitted = fixture.Task.CompletionBuildEvidence!;
             Assert.Equal(CompletionBuildEvidencePhase.Pending, admitted.Phase);
-            Assert.NotNull(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+            Assert.NotNull(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
             runner.CancelLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
             var operation = fixture.Task.CompletionBuildEvidence!;
             Assert.True(child.Observer!.HasExited);
@@ -251,7 +251,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
             Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
             Assert.True(fixture.Task.LastProcess!.WasCancelled);
             Assert.Null(fixture.Task.LastVerification);
-            Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+            Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
             if (fault == "drain")
             {
                 Assert.True(blocked.Entered);
@@ -395,7 +395,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         coordinator.Cancel(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
-        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(fixture.StatePath)).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         Assert.Equal(2, starts);
         Assert.Equal(original, File.ReadAllText(firstOutput));
         var files = MetadataFiles(operation);

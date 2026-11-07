@@ -11,7 +11,7 @@ public sealed class FundamentalAliasTests
     public void CliNextPrintsRunCommandAsCopyPasteableLine()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Expose Run command", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -44,7 +44,7 @@ public sealed class FundamentalAliasTests
     public void CliNextRunCommandIsHealthSuggestedCommand()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Health suggested command", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -81,7 +81,7 @@ public sealed class FundamentalAliasTests
     public void CliNextFullPrintsBoundedDiagnosticsNotDeepSections()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Expose detail via next full", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -130,7 +130,7 @@ public sealed class FundamentalAliasTests
     public void CliNextFullPointsToDeeperDiagnosticCommands()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Expose model and subscription detail", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -166,7 +166,7 @@ public sealed class FundamentalAliasTests
     public void CliNextFullAcceptsGoalPrefixBeforeFullFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Goal prefix test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents =
@@ -198,7 +198,7 @@ public sealed class FundamentalAliasTests
     public void CliAcceptAliasPrintsAcceptanceSummary()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Accept alias test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -224,7 +224,7 @@ public sealed class FundamentalAliasTests
     public void CliAcceptAliasResolvesNamedGoalByPrefix()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Named accept test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -248,7 +248,7 @@ public sealed class FundamentalAliasTests
     public void CliStopCancelDelegatesToCancelGoal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Stop cancel test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -279,7 +279,7 @@ public sealed class FundamentalAliasTests
     public void CliStopParkDryRunShowsPlanWithoutConfirming()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Stop park test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -304,7 +304,7 @@ public sealed class FundamentalAliasTests
     public void CliStopAbandonDelegatesToAbandonGoal()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Stop abandon test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -331,7 +331,7 @@ public sealed class FundamentalAliasTests
     public void CliStopRequiresAsFlag()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Stop no-mode test", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -355,7 +355,7 @@ public sealed class FundamentalAliasTests
     public void CliConfigAgentsListsAgentCatalog()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -374,7 +374,7 @@ public sealed class FundamentalAliasTests
     public void CliConfigDoctorRunsHealthCheck()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -393,7 +393,7 @@ public sealed class FundamentalAliasTests
     public void CliConfigPolicyListsAutonomyPolicies()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -412,7 +412,7 @@ public sealed class FundamentalAliasTests
     public void CliConfigProfilesListsWorkerProfiles()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -464,7 +464,7 @@ public sealed class FundamentalAliasTests
 
         Add smoke tests for the CLI commands. Done when focused tests pass.
         """);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var workspace = CreateSetUpWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);

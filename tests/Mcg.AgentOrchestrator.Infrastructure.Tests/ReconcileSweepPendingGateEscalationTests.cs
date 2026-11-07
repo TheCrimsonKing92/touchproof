@@ -119,7 +119,7 @@ public sealed class ReconcileSweepPendingGateEscalationTests : IDisposable
     {
         Directory.CreateDirectory(_databaseRoot);
         return new ReconcileSweepRemediationCoordinator(
-            new ReconcileSweepRemediationStore(Path.Combine(_databaseRoot, "state.db")),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(_databaseRoot, "state.db"))),
             ReconcileSweepOptions.Default,
             _ =>
             {

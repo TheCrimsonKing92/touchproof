@@ -108,7 +108,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
             Live = false;
         },
         begin: (goal, child, id) => BusyLease ? new(null, null) :
-            new GoalEvidenceOperationCoordinator(new ReconcileSweepRemediationStore(StatePath), Root,
+            new GoalEvidenceOperationCoordinator(new ReconcileSweepRemediationStore(SetUpStateDatabase(StatePath)), Root,
                 TimeSpan.FromMinutes(10), () => Clock.UtcNow, () => child.Pid, () => id, () => child.StartedAt,
                 new FakePidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName),
         startProcess: startProcess, readIdentity: readIdentity, hostReaders: hostReaders, storageRoot: Storage);

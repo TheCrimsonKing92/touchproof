@@ -60,14 +60,22 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         _busyRetryDelay = busyRetryDelay;
         _writeTelemetry = new SqliteWriteTelemetry(_dbPath, writeTelemetryOptions);
         _timeProvider = timeProvider ?? TimeProvider.System;
-        Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
-        if (StateDbWriteSession.TryExecute(_dbPath, EnsureSchema))
-        {
-            return;
-        }
+        RequireSetUp(_dbPath);
+    }
 
-        using var connection = Open();
-        EnsureSchema(connection);
+    private static void RequireSetUp(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw new InvalidOperationException($"ReconcileSweepRemediationStore store '{dbPath}' is missing; run setup.");
+
+        using var connection = StateDbConnectionFactory.Open(dbPath, StateDbConnectionProfile.MigrationProbeRead);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'table' AND name IN ('reconcile_sweep_remediation', 'reconcile_acceptance_leases')
+            """;
+        if (Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 2)
+            throw new InvalidOperationException($"ReconcileSweepRemediationStore store '{dbPath}' schema is missing required tables; run setup.");
     }
 
     public ReconcileSweepRemediationState Observe(
@@ -625,7 +633,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         return connection;
     }
 
-    private static void EnsureSchema(SqliteConnection connection)
+    internal static void ApplyStateSchemaStep(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
