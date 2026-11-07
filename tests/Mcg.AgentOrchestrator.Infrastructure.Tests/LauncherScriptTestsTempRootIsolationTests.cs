@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 [Xunit.Collection("ProcessSpawning")]
-public sealed class LauncherScriptTestsTempRootIsolationGuardTests
+public sealed class LauncherScriptTestsTempRootIsolationTests
 {
     private static readonly string[] ScenarioNames =
     [
