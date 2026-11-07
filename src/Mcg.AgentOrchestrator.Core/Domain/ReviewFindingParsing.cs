@@ -19,8 +19,10 @@ public sealed record ReviewFindingParseResult(
 public static partial class ReviewFindingConvergence
 {
     public const string FindingFormatViolationCode = "ERR_REVIEW_FINDING_FORMAT";
+    public const string NoFileAnchor = "(no file anchor)";
 
-    public static ReviewFindingParseResult ParseJson(string findingsJson, string touchedAnchorsJson)
+    public static ReviewFindingParseResult ParseJson(
+        string findingsJson, string touchedAnchorsJson, string? workingDirectory = null)
     {
         var accepted = new List<ReviewFinding>();
         var warnings = new List<ReviewFindingParseDiagnostic>();
@@ -68,7 +70,7 @@ public static partial class ReviewFindingConvergence
                             throw new ArgumentException("Every review finding requires one unambiguous stable_id.");
                         var finding = item.Element.Deserialize<ReviewFinding>(options);
                         ValidateFindings([finding!]);
-                        accepted.Add(finding! with { Severity = item.Severity });
+                        accepted.Add(NormalizeFindingLocation(finding! with { Severity = item.Severity }, workingDirectory));
                     }
                     catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
                     {
@@ -91,6 +93,64 @@ public static partial class ReviewFindingConvergence
         {
             return new(empty, warnings, new(null, null, null, ex.Message));
         }
+    }
+
+    private static ReviewFinding NormalizeFindingLocation(ReviewFinding finding, string? workingDirectory)
+    {
+        var file = finding.Location.File;
+        if (file == NoFileAnchor)
+            return finding;
+
+        try
+        {
+            var path = file.Replace('\\', Path.DirectorySeparatorChar);
+            var rooted = Path.IsPathRooted(path);
+            if (!string.IsNullOrWhiteSpace(workingDirectory) && Path.IsPathFullyQualified(workingDirectory) &&
+                (!rooted || Path.IsPathFullyQualified(path)))
+            {
+                var root = Path.GetFullPath(workingDirectory);
+                var fullPath = Path.GetFullPath(path, root);
+                var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                var boundary = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+                if (fullPath.Length > root.Length && fullPath.StartsWith(boundary, comparison))
+                    return rooted
+                        ? finding with { Location = finding.Location with { File = Path.GetRelativePath(root, fullPath).Replace('\\', '/') } }
+                        : finding;
+            }
+            else if (!rooted)
+            {
+                // API results may have no working directory. Ordinary relative anchors retain their identity.
+                var depth = 0;
+                var contained = true;
+                foreach (var segment in file.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (segment == "..")
+                    {
+                        if (--depth < 0)
+                        {
+                            contained = false;
+                            break;
+                        }
+                    }
+                    else if (segment != ".")
+                        depth++;
+                }
+                if (contained && depth > 0 && !file.Contains('\0'))
+                    return finding;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            // An unusable location must not reject an otherwise valid finding.
+        }
+
+        return finding with
+        {
+            Location = finding.Location with { File = NoFileAnchor },
+            Description = finding.Description.Contains(file, StringComparison.Ordinal)
+                ? finding.Description
+                : $"{finding.Description} (location outside repository: {file})"
+        };
     }
 
     private static string? ReadStableId(JsonElement element)
