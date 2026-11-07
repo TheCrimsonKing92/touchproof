@@ -19,7 +19,7 @@ public sealed class OwnerActivityDiagnosticParserTests
         Assert.Equal("Deferred", Value("tests_status"));
         Assert.Equal("cf4b9c145ade6ce2ab70a43ddb46e5bc710d6f19", Value("baseline_head"));
         Assert.Equal("2026-11-04T08:35:01.1819368+00:00", Value("dispatched_at"));
-        Assert.Equal("\"C:\\\\Users\\\\miles\\\\vcs\\\\mcg-agent-orchestrator\\\\.orchestrator-worktrees\\\\fd7ee5fb\"", Value("worktree"));
+        Assert.Equal("\"C:\\\\example\\\\repo\\\\vcs\\\\mcg-agent-orchestrator\\\\.orchestrator-worktrees\\\\fd7ee5fb\"", Value("worktree"));
         Assert.Equal("\"deferred — `GoalWorktreeRecoveryRefusalTests`, `ConductorMissingWorktreeRecoveryTests` (Acceptance-owned execution). matched no accepted verification pattern\"", Value("detail"));
         Assert.All(parsed.Fields, field => Assert.Contains(field.Label + "=" + field.Value, source));
         string? Value(string label) => Assert.Single(parsed.Fields, field => field.Label == label).Value;

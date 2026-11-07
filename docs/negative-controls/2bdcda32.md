@@ -46,7 +46,7 @@ only the start-time ordering check:
 ```
 
 Invocation after `Invoke-WorkerBuildCheck.ps1` rebuilt the infrastructure tests (2026-09-16T11:16Z):
-`dotnet C:\Users\miles\AppData\LocalLow\mcg-dotnet-isolated\goals\2bdcda32\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure.Tests\debug\Mcg.AgentOrchestrator.Infrastructure.Tests.dll --filter-method '*WorkerProcessJobsAncestryWalk*' --minimum-expected-tests 5 --progress off --no-ansi`.
+`dotnet C:\example\repo\AppData\LocalLow\mcg-dotnet-isolated\goals\2bdcda32\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure.Tests\debug\Mcg.AgentOrchestrator.Infrastructure.Tests.dll --filter-method '*WorkerProcessJobsAncestryWalk*' --minimum-expected-tests 5 --progress off --no-ansi`.
 Result: total=5 passed=3 failed=2, exit code 1.
 
 ```

@@ -16,7 +16,7 @@ non-parallel collection definition and reflection fact intact:
 ```
 
 The mutated run retained its red TRX under
-`C:\Users\miles\AppData\Local\Temp\Low\mcg-tests\summary-20260919T061635144-a66d8014`.
+`C:\example\repo\AppData\Local\Temp\Low\mcg-tests\summary-20260919T061635144-a66d8014`.
 Result: `total=1 passed=0 failed=1 skipped=0`.
 
 ```text
@@ -31,4 +31,4 @@ proving that removing the class membership attribute turns the reflection guard 
 After restoring the attribute, the identical command completed with exit code 0:
 `total=1 passed=1 failed=0 skipped=0`. The managed runner retained the named green
 evidence receipt under
-`C:\Users\miles\AppData\Local\Temp\Low\mcg-tests\summary-20260919T061852887-e438ee11`.
+`C:\example\repo\AppData\Local\Temp\Low\mcg-tests\summary-20260919T061852887-e438ee11`.

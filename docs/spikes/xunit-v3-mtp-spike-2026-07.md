@@ -14,7 +14,7 @@ Recommended next step: build a small Core-only gate adapter that invokes the pro
 
 ## Environment
 
-- OS: Windows, local worktree `C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\2c0971f7`
+- OS: Windows, local worktree `C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\2c0971f7`
 - SDK: `dotnet --version` -> `10.0.103`
 - Baseline project: xUnit v2, `Microsoft.NET.Test.Sdk` 17.11.1, `xunit` 2.9.2, `xunit.runner.visualstudio` 2.8.2
 - Temporary MTP project: `xunit.v3.mtp-v2` 3.2.2, `Microsoft.Testing.Extensions.TrxReport` 2.3.2

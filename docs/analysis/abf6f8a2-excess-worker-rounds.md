@@ -57,7 +57,7 @@ Run from the repository root. The retained snapshot is a verification handoff an
 
 ```powershell
 $cutoff = [datetimeoffset]'2026-08-07T22:43:03.4206169Z'
-$analysisRoot = 'C:\Users\miles\AppData\Local\Temp\Low\mcg-abf6f8a2-final-7c632471'
+$analysisRoot = 'C:\example\repo\AppData\Local\Temp\Low\mcg-abf6f8a2-final-7c632471'
 $receipt = Get-Content -Raw (Join-Path $analysisRoot 'receipt.json') | ConvertFrom-Json
 $manifest = Join-Path $analysisRoot 'operator-manifest.csv'
 $journalManifest = Join-Path $analysisRoot 'journal-manifest.csv'
@@ -92,7 +92,7 @@ The original pre-fix verified output digests were:
 
 ### Final frozen verification rerun
 
-The corrected analyzer was rerun twice at `2026-08-11T18:53:02.0422205+00:00` with helper revision `7c63247139604c87cf79238951a41ac3fd370811`. One frozen snapshot contains only the 1,791 declared pre-cutoff logs, 318 matching journals, a transactionally backed-up dogfood database, manifests, and both generated outputs. Manifest entries use stable relative paths. The exact snapshot is retained for the independent Tester at `C:\Users\miles\AppData\Local\Temp\Low\mcg-abf6f8a2-final-7c632471`; `receipt.json` records the hashes and the 13 classified goal ids. It is a verification handoff, not checked-in source or a replacement durable store.
+The corrected analyzer was rerun twice at `2026-08-11T18:53:02.0422205+00:00` with helper revision `7c63247139604c87cf79238951a41ac3fd370811`. One frozen snapshot contains only the 1,791 declared pre-cutoff logs, 318 matching journals, a transactionally backed-up dogfood database, manifests, and both generated outputs. Manifest entries use stable relative paths. The exact snapshot is retained for the independent Tester at `C:\example\repo\AppData\Local\Temp\Low\mcg-abf6f8a2-final-7c632471`; `receipt.json` records the hashes and the 13 classified goal ids. It is a verification handoff, not checked-in source or a replacement durable store.
 
 | Post-fix input/output | Receipt |
 |---|---|

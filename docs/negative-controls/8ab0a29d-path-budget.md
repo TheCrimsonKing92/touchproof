@@ -18,7 +18,7 @@ the binding case, not the native copies.
 
 ## Worst case under the new scheme
 
-    root       C:\Users\miles\AppData\LocalLow\mdi-<16 hex>        52
+    root       C:\example\repo\AppData\LocalLow\mdi-<16 hex>        52
     separator  \bin\                                                5
     project    Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests   62
     artifact   deepest relative                                    72
