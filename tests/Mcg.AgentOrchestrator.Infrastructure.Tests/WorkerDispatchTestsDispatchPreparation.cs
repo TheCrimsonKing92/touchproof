@@ -506,6 +506,74 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
     }
 
+    [Xunit.Fact]
+    public void ReviewerRoundOutsideAnchorsDegradeWhileChangedAnchorIsTouched()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var sourcePath = Path.Combine(root, "src", "Example.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            const string source = "public sealed class Example\n{\n    public void Run()\n    {\n        var guard = false;\n    }\n}\n";
+            File.WriteAllText(sourcePath, source);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            File.WriteAllText(sourcePath, source.Replace("false", "true", StringComparison.Ordinal));
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix guard"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var changed = new ReviewFindingLocation("src/Example.cs", "Example.Run", "guard");
+            var skipped = new[]
+            {
+                new ReviewFindingLocation(Path.Combine(root + "-evidence", "round.result.json").Replace('\\', '/'), "receipt"),
+                new ReviewFindingLocation(sourcePath, "Example.Run", "guard"),
+                new ReviewFindingLocation("src/../../outside.json", "receipt"),
+                new ReviewFindingLocation("src\\..\\..\\outside.json", "receipt"),
+                new ReviewFindingLocation(ReviewFindingConvergence.NoFileAnchor, "receipt")
+            };
+
+            var scope = new WorkerGitContext().ReadReviewerRoundTouchScope(
+                root, previous, current, [.. skipped, changed]);
+
+            Assert.Equal(changed, Assert.Single(scope.TouchedAnchors));
+            Assert.All(skipped, anchor => Assert.Contains(anchor.File, scope.Diagnostic, StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReviewerRoundSkippedAnchorsRetainOtherUnavailableProofReasons()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var outside = new ReviewFindingLocation(Path.Combine(root + "-evidence", "round.json"), "receipt");
+            var context = new WorkerGitContext();
+            var missingBaseline = context.ReadReviewerRoundTouchScope(root, null, current, [outside]);
+            var missingCurrent = context.ReadReviewerRoundTouchScope(root, current, null, [outside]);
+            var identical = context.ReadReviewerRoundTouchScope(root, current, current, [outside]);
+            // With no eligible anchors even an unusable diff range must never reach git diff.
+            var skippedOnly = context.ReadReviewerRoundTouchScope(root, "not-a-commit", current, [outside]);
+
+            Assert.Contains("no reviewed-commit baseline", missingBaseline.Diagnostic, StringComparison.Ordinal);
+            Assert.Contains("current target commit is missing", missingCurrent.Diagnostic, StringComparison.Ordinal);
+            Assert.All(new[] { missingBaseline, missingCurrent, identical, skippedOnly }, scope =>
+            {
+                Assert.Empty(scope.TouchedAnchors);
+                Assert.Contains(outside.File, scope.Diagnostic, StringComparison.Ordinal);
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_round_diff_failure_is_loud")]
     public void ReviewerRoundDiffFailureIsLoud()
     {

@@ -219,7 +219,7 @@ public static partial class WorkerResultBlockers
             return false;
         }
 
-        var parsed = ReviewFindingConvergence.ParseJson(findingsJson, touchedAnchorsJson);
+        var parsed = ReviewFindingConvergence.ParseJson(findingsJson, touchedAnchorsJson, verification.WorkingDirectory);
         advisoryRejections = parsed.AdvisoryRejections;
         if (parsed.FatalDiagnostic is { } fatal)
         {

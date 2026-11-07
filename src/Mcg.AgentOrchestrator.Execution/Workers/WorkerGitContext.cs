@@ -152,6 +152,15 @@ internal sealed class WorkerGitContext
                 "Reviewer round touched-anchor scope unavailable because the working directory is not a git workspace.");
         }
 
+        var classified = anchors.ToLookup(anchor => IsRepositoryRelativeAnchor(workingDirectory, anchor.File));
+        var skippedFiles = classified[false].Select(anchor => anchor.File).Distinct(StringComparer.Ordinal).ToArray();
+        var skippedDiagnostic = skippedFiles.Length == 0 ? null
+            : "Round-diff touch proof unavailable for carried anchors that are rooted, outside the working directory, or have no file anchor: " +
+              string.Join(", ", skippedFiles.Select(file => $"'{file}'")) + ".";
+        string? WithSkippedAnchors(string? diagnostic = null) =>
+            diagnostic is null ? skippedDiagnostic
+                : skippedDiagnostic is null ? diagnostic : $"{diagnostic} {skippedDiagnostic}";
+
         // No usable baseline: DEGRADE, do not throw. Record why proof is unavailable so an empty list is not
         // misclassified as positive evidence that every carried anchor was untouched. Throwing instead aborted the Reviewer
         // DISPATCH BEFORE IT STARTED, and because a task's first round records no reviewed commit the goal
@@ -163,23 +172,23 @@ internal sealed class WorkerGitContext
         {
             return new ReviewerRoundTouchScope(
                 [],
-                "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.");
+                WithSkippedAnchors("Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline."));
         }
 
         if (string.IsNullOrWhiteSpace(currentCommit))
         {
             return new ReviewerRoundTouchScope(
                 [],
-                "Round-diff touch proof unavailable because the current target commit is missing.");
+                WithSkippedAnchors("Round-diff touch proof unavailable because the current target commit is missing."));
         }
 
         if (string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
         {
-            return new ReviewerRoundTouchScope([]);
+            return new ReviewerRoundTouchScope([], WithSkippedAnchors());
         }
 
         var touched = new List<ReviewFindingLocation>();
-        foreach (var fileGroup in anchors.GroupBy(anchor => anchor.File, StringComparer.OrdinalIgnoreCase))
+        foreach (var fileGroup in classified[true].GroupBy(anchor => anchor.File, StringComparer.OrdinalIgnoreCase))
         {
             var path = fileGroup.Key.Replace('\\', '/');
             var diff = GitCli.Run(
@@ -223,7 +232,27 @@ internal sealed class WorkerGitContext
             }
         }
 
-        return new ReviewerRoundTouchScope(touched);
+        return new ReviewerRoundTouchScope(touched, WithSkippedAnchors());
+    }
+
+    private static bool IsRepositoryRelativeAnchor(string workingDirectory, string file)
+    {
+        if (file == ReviewFindingConvergence.NoFileAnchor || Path.IsPathRooted(file))
+            return false;
+
+        try
+        {
+            var root = Path.GetFullPath(workingDirectory);
+            var path = Path.GetFullPath(file.Replace('\\', Path.DirectorySeparatorChar), root);
+            var boundary = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+            return path.Length > root.Length && path.StartsWith(
+                boundary,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            return false;
+        }
     }
 
     internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(
