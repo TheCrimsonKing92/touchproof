@@ -43,6 +43,7 @@ internal sealed class CliExecutionContext(
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
 public bool IsReadOnlyQuery { get; init; }
+public OrchestratorProjectRegistry? ProjectRegistry { get; init; }
 
 public IClock? DiagnosticsClock { get; init; }
 

@@ -134,6 +134,7 @@ internal sealed partial class GoalDispatchOperations
             dispatch.Task.InterruptedDispatchRecoveryId is not null);
 
         var admittedTaskIds = new HashSet<TaskId>();
+        var provisioningFailures = new List<DispatchProcessStartFailure>();
         foreach (var prepared in batch.Dispatches)
         {
             var currentTask = kernel.GetTask(goal.Id, prepared.Task.Id);
@@ -142,6 +143,11 @@ internal sealed partial class GoalDispatchOperations
                 continue;
             }
 
+            if (!GoalRepositoryDispatchProvisioning.TryProvision(kernel.GetGoal(goal.Id), currentTask, out var provisioningFailure))
+            {
+                provisioningFailures.Add(new(currentTask.Id, provisioningFailure));
+                continue;
+            }
             // Each paid reservation hydrates a whole goal. Preserve earlier admissions as well
             // as the mutations already accumulated before this batch.
             if (RequiresDurableAdmissionSnapshotReplacement(currentTask))
@@ -181,7 +187,8 @@ internal sealed partial class GoalDispatchOperations
             kernel,
             workspace,
             goal,
-            batch.Dispatches.Select(dispatch => dispatch.Task.Id).ToHashSet(),
+            batch.Dispatches.Select(dispatch => dispatch.Task.Id)
+                .Except(provisioningFailures.Select(failure => failure.TaskId)).ToHashSet(),
             refreshBeforeStart: false,
             agents,
             profiles,
@@ -194,7 +201,8 @@ internal sealed partial class GoalDispatchOperations
             recordDurableGoalBaseline: recordDurableGoalBaseline);
         return new SubscriptionStartResult(
             batch.Dispatches,
-            processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count },
+            processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count,
+                StartFailures = (processes.StartFailures ?? []).Concat(provisioningFailures).ToArray() },
             safeBatch.Plan,
             OrderReadyBlockedDiagnostics(batch.Blocked.Concat(offlineAssignments.Blocked).ToArray(), safeBatch.Blocked));
     }
@@ -343,6 +351,11 @@ internal sealed partial class GoalDispatchOperations
                 }
             }
 
+            if (!GoalRepositoryDispatchProvisioning.TryProvision(goal, task, out var provisioningFailure))
+            {
+                startFailures.Add(new DispatchProcessStartFailure(task.Id, provisioningFailure));
+                continue;
+            }
             RetryAdmissionResult? admission = null;
             if (admittedTaskIds is null || !admittedTaskIds.Contains(task.Id))
             {

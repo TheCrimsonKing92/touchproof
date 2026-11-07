@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly Action<string, string> _acceptanceEventSink;
+    internal MultiRepositoryGateHoldAttention? MultiRepositoryGateHoldAttention { get; set; }
     private readonly Func<AcceptanceEngineHealthSnapshot?> _readAcceptanceEngineHealth;
     private readonly Action<TimeSpan> _noTickAcceptancePollDelay;
     private readonly TimeSpan _noTickAcceptancePollTimeout;
@@ -113,6 +114,7 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (MultiRepositoryGateHold.Applies(goal)) return MakeResult(goal.Id.Value, goalPrefix, policy, MultiRepositoryGateHold.Create(goal, GoalLifecycleState.Verified));
         var facts = new VerifiedAdmissionFacts(goal.Status);
         if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
             return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!,
@@ -214,6 +216,7 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy)
     {
+        if (MultiRepositoryGateHold.Applies(goal)) return MakeResult(goal.Id.Value, goalPrefix, policy, MultiRepositoryGateHold.Create(goal, GoalLifecycleState.Verifying));
         if (!_isConductorTick)
         {
             var decision = VerifyingStagePolicy.Evaluate(new(

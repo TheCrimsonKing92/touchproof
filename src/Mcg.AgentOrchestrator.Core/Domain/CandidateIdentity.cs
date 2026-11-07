@@ -13,7 +13,14 @@ public sealed record CandidateIdentity
     public string PatchId { get; }
     public string BaseClosureHash { get; }
     public string ManifestIdentity { get; }
+    // Receipt metadata; equality remains the three canonical identity components.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepositoryTupleCanonical { get; init; }
     public string Canonical => $"candidate:v1:{PatchId}:{BaseClosureHash}:{ManifestIdentity}";
+
+    public bool Equals(CandidateIdentity? other) => other is not null &&
+        PatchId == other.PatchId && BaseClosureHash == other.BaseClosureHash && ManifestIdentity == other.ManifestIdentity;
+    public override int GetHashCode() => HashCode.Combine(PatchId, BaseClosureHash, ManifestIdentity);
 
     public static bool AreSameCandidate(CandidateIdentity? left, CandidateIdentity? right) =>
         left is not null && right is not null && left == right;

@@ -2441,6 +2441,9 @@ public sealed partial class AgentOrchestratorKernel
     public void RecordGoalDeliveredForReview(GoalId goalId, GoalDeliveredForReview delivery) =>
         GetGoal(goalId).RecordDeliveredForReview(delivery, _eventWriter.AppendTimelineEvent);
 
+    public void DeclareGoalRepositories(GoalId goalId, GoalRepositoryDeclaration declaration) =>
+        GetGoal(goalId).DeclareRepositories(declaration);
+
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);
 

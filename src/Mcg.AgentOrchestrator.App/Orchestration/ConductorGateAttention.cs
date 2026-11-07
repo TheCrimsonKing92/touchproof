@@ -13,6 +13,7 @@ internal static class ConductorGateAttention
         var store = CollaborationItemStore.ForDirectory(orchestratorDirectory);
         driver.PassedGateHoldAttention = new(store, resolvePassedGateHold);
         driver.AwaitingVerificationGateAttention = new(store);
+        driver.MultiRepositoryGateHoldAttention = new(store);
         driver.StalledEvidenceWaitAttention = new(store,
             goal => (driver._cohortKernel ?? driver._conductorTickKernel)?.GetPendingHumanInput(goal.Id));
     }
@@ -35,6 +36,11 @@ internal static class ConductorGateAttention
             driver.StalledEvidenceWaitAttention?.ReconcileAll(goals);
             return true;
         });
+        runPhase("reconcile-multi-repository-gate-waits", () =>
+        {
+            driver.MultiRepositoryGateHoldAttention?.ReconcileAll(goals);
+            return true;
+        });
     }
 
     internal static void ReconcileOutcome(
@@ -45,6 +51,8 @@ internal static class ConductorGateAttention
                 () => OperatorInbox.ResolveAnsweredBuildReportEscalations(workspace, kernel.GetGoal(goal.Id), kernel.HumanInputRequests.ToArray()));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-outcome",
             () => driver.PassedGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
+        PassedGateHoldFaultIsolation.Run(goal, "reconcile-multi-repository-gate-outcome",
+            () => driver.MultiRepositoryGateHoldAttention?.Reconcile(kernel.GetGoal(goal.Id)));
         PassedGateHoldFaultIsolation.Run(goal, "reconcile-awaiting-verification-outcome",
             () => driver.AwaitingVerificationGateAttention?.Reconcile(kernel.GetGoal(goal.Id),
                 outcome is ConductorAdvanceOutcome.Held { State: GoalLifecycleState.AwaitingVerification }));
