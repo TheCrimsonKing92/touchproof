@@ -2,15 +2,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
-    private static bool IsHelpRequested(IReadOnlyList<string> parts) =>
-        parts.Any(part =>
-            part.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
-            part.Equals("-h", StringComparison.OrdinalIgnoreCase));
-
     internal static bool TryPrintStartupHelp(IReadOnlyList<string> parts)
     {
         if (parts.Count == 0 ||
-            (!IsHelpRequested(parts) && !parts[0].Equals("help", StringComparison.OrdinalIgnoreCase)))
+            (!parts.Any(CliCommandHelp.IsHelpFlag) && !parts[0].Equals("help", StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }

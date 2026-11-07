@@ -32,6 +32,7 @@
       "paths": [
         "src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor*.cs",
         "src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/AdoptedBuildPushService.cs",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs"
       ]
     },
@@ -56,6 +57,7 @@
         "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentPolicyApproval.cs",
         "config/landing-denylist.json",
         "config/acceptance-manifest.json",
+        "config/adopted-build-leak-patterns.json",
         "**/conductor-policy.json",
         "src/Mcg.AgentOrchestrator.App/Orchestration/LandingDenylistOwnerGate.cs"
       ]

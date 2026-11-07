@@ -5,14 +5,29 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Measures executions owned by this gate; never executes test bodies or reuses an earlier gate's census.
 internal static class HeavyFixtureGitLaunchBoundCheck
 {
-    internal sealed record Baseline(string ClassName, int Launches, int Rows);
+    // A baseline is a historical measurement group; its current classes must each retain their rows.
+    internal sealed record Baseline(string ClassName, int Launches, int Rows)
+    {
+        internal IReadOnlyList<(string ClassName, int Rows)> Classes { get; init; } = [(ClassName, Rows)];
+    }
 
     // Gate 208e909d-0-20261106160206117, main 0798b6829, first-run slot-timing rows.
     // Bound operator answer f9e25b4c9cf64f44a92318e95bcfd93d. Launches remain historical.
     internal static IReadOnlyList<Baseline> Baselines { get; } = Array.AsReadOnly(new Baseline[]
     {
         new("AcceptanceCohortWorkflowTestsTrainRedAttribution", 1530, 43),
-        new("MergeTrainFocusedRecheckReceiptAcceptanceTests", 1349, 31),
+        new("MergeTrainFocusedRecheckReceiptAcceptanceTests", 1349, 31)
+        {
+            Classes = Array.AsReadOnly(new (string ClassName, int Rows)[]
+            {
+                ("MergeTrainFocusedRecheckReceiptContractTests", 4),
+                ("MergeTrainFocusedRecheckRedReceiptRefusalTests", 5),
+                ("MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests", 5),
+                ("MergeTrainFocusedRecheckAttemptRefusalTests", 5),
+                ("MergeTrainFocusedRecheckSelectionRefusalTests", 5),
+                ("MergeTrainFocusedRecheckCompositionRefusalTests", 7)
+            })
+        },
         new("AcceptanceCohortWorkflowTestsMergeTrain", 1042, 20),
         new("PullRequestTrunkDriftTests", 959, 20),
         new("CliCommandTestsTerminalSweepCommands", 930, 55)
@@ -101,10 +116,14 @@ internal static class HeavyFixtureGitLaunchBoundCheck
             $"{entry.ClassName}: rows={coverage[entry.ClassName].Count}/{entry.Rows}, launches={launches[entry.ClassName]}"));
         foreach (var entry in Baselines)
         {
-            if (coverage[entry.ClassName].Count > entry.Rows)
-                malformed.Add($"excess distinct rows: {entry.ClassName}");
-            else if (coverage[entry.ClassName].Count < entry.Rows)
-                incomplete.Add($"missing rows: {entry.ClassName} ({coverage[entry.ClassName].Count}/{entry.Rows})");
+            foreach (var member in entry.Classes)
+            {
+                var rows = coverage[entry.ClassName].Count(identity => SelectionClassFor(identity) == member.ClassName);
+                if (rows > member.Rows)
+                    malformed.Add($"excess distinct rows: {member.ClassName}");
+                else if (rows < member.Rows)
+                    incomplete.Add($"missing rows: {member.ClassName} ({rows}/{member.Rows})");
+            }
         }
         var historical = Baselines.Sum(entry => entry.Launches);
         var maximum = historical * 3L / 4;
@@ -120,11 +139,16 @@ internal static class HeavyFixtureGitLaunchBoundCheck
 
     private static string? ClassFor(string identity)
     {
+        var className = SelectionClassFor(identity);
+        return Baselines.FirstOrDefault(entry => entry.Classes.Any(member =>
+            member.ClassName.Equals(className, StringComparison.Ordinal)))?.ClassName;
+    }
+
+    private static string? SelectionClassFor(string identity)
+    {
         var selector = AcceptanceTrxTestIdentityResolver.NormalizeSelector(identity);
         var separator = selector.LastIndexOf('.');
-        if (separator < 0) return null;
-        var className = selector[..separator];
-        return Baselines.Any(entry => entry.ClassName.Equals(className, StringComparison.Ordinal)) ? className : null;
+        return separator < 0 ? null : selector[..separator];
     }
 
     private static IEnumerable<string> ReceiptPaths(IEnumerable<AcceptanceCheckResult> checks) => checks

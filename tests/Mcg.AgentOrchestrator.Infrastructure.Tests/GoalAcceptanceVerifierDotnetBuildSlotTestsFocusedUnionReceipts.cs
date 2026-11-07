@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using static FocusedEvidenceUnionPlanningTests;
+using static FocusedEvidenceUnionPlanningSupport;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 [Xunit.Collection(TestCollections.JobAccounting)]

@@ -56,7 +56,8 @@ public sealed record ConductorAutonomyPolicy(
     int BuildGcConserveMemoryLevel = 5,
     int BuildGcHeapCount = 0,
     int BuildRootRetentionDays = 0,
-    int AutomaticRetryOperatorRoutingHoldSeconds = 180)
+    int AutomaticRetryOperatorRoutingHoldSeconds = 180,
+    bool AdoptedBuildPushEnabled = false)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -257,6 +258,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeMechanicalReworkCheap\": {CascadeMechanicalReworkCheap.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"followerGatesEnabled\": {FollowerGatesEnabled.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"adoptedBuildPushEnabled\": {AdoptedBuildPushEnabled.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
@@ -411,6 +413,14 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException($"conductor-policy.json{src}: cascadeTesterCheapFirst must be a boolean.");
                 cascadeTesterCheapFirst = cascadeSwitch.GetBoolean();
             }
+            var adoptedBuildPushEnabled = false;
+            if (root.TryGetProperty("adoptedBuildPushEnabled", out var pushSwitch) &&
+                pushSwitch.ValueKind != JsonValueKind.Null)
+            {
+                if (pushSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException($"conductor-policy.json{src}: adoptedBuildPushEnabled must be a boolean.");
+                adoptedBuildPushEnabled = pushSwitch.GetBoolean();
+            }
             var followerGatesEnabled = false;
             if (root.TryGetProperty("followerGatesEnabled", out var followerSwitch) &&
                 followerSwitch.ValueKind != JsonValueKind.Null)
@@ -514,7 +524,8 @@ public sealed record ConductorAutonomyPolicy(
                 buildGcConserveMemoryLevel,
                 buildGcHeapCount,
                 buildRootRetentionDays,
-                routingHoldSeconds)
+                routingHoldSeconds,
+                adoptedBuildPushEnabled)
             {
                 Features = ParseFeatures(root, src)
             };

@@ -618,7 +618,7 @@ bounce does not reset it, backlog `8c11fd0d`). Expect the executor at ~04:22Z; i
 annotate 8c11fd0d with the goal-events messages and hand-drive the refinement.
 
 **ddf216bc criterion 4 receipts** are at `.orchestrator/operator-evidence/ddf216bc-criterion4/receipts.md`. Disposable
-workspace `C:\Users\miles\mcg-pub\ws-ddf` driven only through public verbs with the candidate dll built from
+workspace `C:\example\repo\mcg-pub\ws-ddf` driven only through public verbs with the candidate dll built from
 `5bf7e8631` (scratchpad `Run-Ddf-Cli.ps1` sets `MCG_ORCHESTRATOR_REPOSITORY_ROOT`): goal `4b70f41d` (operator-notes
 doc) answered poll-interval-unit A "seconds" (answer `090ddbf9`) 03:01:38Z, `supersede` to B "minutes" (`9406b4ae`)
 03:02:21Z; the precedent store entry was replaced to reference answer B; the item's answer_history keeps A retracted

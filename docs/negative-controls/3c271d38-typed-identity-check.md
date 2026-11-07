@@ -29,7 +29,7 @@ Command:
 ```
 
 Managed-runner result: 10 total, 9 passed, 1 failed; exit code 2. Retained evidence directory:
-`C:\Users\miles\AppData\Local\Temp\Low\mcg-tests\summary-20260918T055707524-9b38dd74`.
+`C:\example\repo\AppData\Local\Temp\Low\mcg-tests\summary-20260918T055707524-9b38dd74`.
 
 Failing assertion:
 
@@ -44,7 +44,7 @@ Expected: typeof(Mcg.AgentOrchestrator.Core.WorkerContextPreparationException)
 The mutation was reverted by restoring the loop exactly as shown above. The same managed-runner
 command passed 10/10 tests with managed-runner exit code 0. The named TRX/run-identity evidence is
 retained at
-`C:\Users\miles\AppData\Local\Temp\Low\mcg-tests\summary-20260918T060421620-62f392c8`.
+`C:\example\repo\AppData\Local\Temp\Low\mcg-tests\summary-20260918T060421620-62f392c8`.
 
 ## Stored-format stop-condition check
 

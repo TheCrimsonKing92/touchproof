@@ -357,8 +357,9 @@ internal sealed partial class ConductorContinuitySupervisor
             try
             {
                 (_fleetBuildAdoptionSummary ??= FleetAdoptionSummaryFactory?.Invoke() ?? new FleetBuildAdoptionSummary(
-                    OrchestratorProjectRegistry.CreateDefault(), TryAppendConductEvent, _timeProvider,
-                    homeRoot: OrchestratorHome.ResolveForProcess().SourceRootDirectory))
+                    OrchestratorProjectRegistry.CreateDefault(), AppendAdoptedBuildEvent, _timeProvider,
+                    homeRoot: OrchestratorHome.ResolveForProcess().SourceRootDirectory,
+                    onFinalized: AdoptedBuildPushTrigger.CreateDefault(AppendAdoptedBuildEvent).OnFinalized))
                     .OnHomeAdopted(primaryBuild.CommitSha, now);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
@@ -377,6 +378,13 @@ internal sealed partial class ConductorContinuitySupervisor
                 TryAppendConductEvent($"FLEET_ROLLING_RESTART_FAILED commit={primaryBuild.CommitSha} reason={Sanitize(ex.Message)}");
             }
         }
+    }
+
+    private void AppendAdoptedBuildEvent(string detail)
+    {
+        if (appendConductEvent is null)
+            throw new InvalidOperationException("Adopted build publication requires a conduct event sink.");
+        appendConductEvent("loop-handoff", null, detail);
     }
 
     private void RaiseFailedBothAttention(
