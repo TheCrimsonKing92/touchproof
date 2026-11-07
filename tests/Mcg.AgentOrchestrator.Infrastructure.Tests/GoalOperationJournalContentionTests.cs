@@ -46,7 +46,7 @@ public sealed class GoalOperationJournalContentionTests
         try
         {
             var dbPath = Path.Combine(root, "state.db");
-            var store = new ReconcileSweepRemediationStore(dbPath);
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
             var goal = new AgentOrchestratorKernel().CreateGoal("Reclaim terminal same-process lease");
             var instances = new Queue<string>(["first-instance", "second-instance"]);
             var coordinator = new GoalEvidenceOperationCoordinator(
@@ -105,7 +105,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Roll back failed Begin append");
             var blockedExecutionDirectory = Path.Combine(root, "not-a-directory");
             File.WriteAllText(blockedExecutionDirectory, "file blocks journal directory creation");
@@ -134,7 +134,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var innerStore = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var innerStore = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Recover failed Begin compensation");
             var journalPath = GoalOperationJournal.PathFor(root, goal.Id);
             Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
@@ -180,7 +180,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var innerStore = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var innerStore = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var store = new FailingReleaseStore(
                 innerStore,
                 () => throw new IOException("injected terminal release failure"));
@@ -235,7 +235,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Do not reclaim from corrupt evidence");
             const string operation = "conductor:developer-branch-integration";
             const string instance = "corrupt-instance";
@@ -272,7 +272,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Hold unsafe lease evidence");
             var instances = new Queue<string>(["live-instance", "blocked-instance"]);
             var ownerProcessStartedAt = new DateTimeOffset(2026, 8, 27, 12, 0, 0, TimeSpan.Zero);
@@ -301,7 +301,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(missingRoot);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(missingRoot, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(missingRoot, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Missing exact journal evidence");
             Xunit.Assert.True(store.TryClaimAcceptanceLease(
                 goal.Id.Value,
@@ -347,7 +347,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Reclaim abandoned Begin-only evidence lease");
             var instances = new Queue<string>(["abandoned-instance", "successor-instance"]);
             var ownerProcessStartedAt = new DateTimeOffset(2026, 8, 27, 12, 0, 0, TimeSpan.Zero);
@@ -391,7 +391,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Hold Begin-only lease when owner liveness is unavailable");
             var instances = new Queue<string>(["live-instance", "blocked-instance"]);
             var pidProbe = new StubConductLockPidProbe(isRunning: true, isSameProcess: true);
@@ -430,7 +430,7 @@ public sealed class GoalOperationJournalContentionTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new ReconcileSweepRemediationStore(Path.Combine(root, "state.db"));
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(root, "state.db")));
             var goal = new AgentOrchestratorKernel().CreateGoal("Unreadable exact journal evidence");
             const string owner = "goal-evidence:v1:conductor:developer-branch-integration:42:locked-instance";
             Xunit.Assert.True(store.TryClaimAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30)));
@@ -471,7 +471,7 @@ public sealed class GoalOperationJournalContentionTests
         try
         {
             var dbPath = Path.Combine(root, "state.db");
-            var store = new ReconcileSweepRemediationStore(dbPath);
+            var store = new ReconcileSweepRemediationStore(SetUpStateDatabase(dbPath));
             var goal = new AgentOrchestratorKernel().CreateGoal("Release terminal integration orphan");
             var coordinator = new GoalEvidenceOperationCoordinator(
                 store,

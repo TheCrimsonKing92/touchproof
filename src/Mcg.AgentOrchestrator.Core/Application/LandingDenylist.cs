@@ -12,6 +12,7 @@ public sealed class LandingDenylist
         new("git-mutation", "Moves main, the integration branch or the remote mirror.", ["src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor*.cs", "src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs"]),
         new("worker-sandbox", "Sets worker sandbox policy and integrity levels.", ["src/**/*WorkerSandbox*.cs"]),
         new("landing-policy", "Decides what lands, who may approve it, and this denylist itself.", ["src/Mcg.AgentOrchestrator.Core/Application/LandingPolicy.cs", "src/Mcg.AgentOrchestrator.Core/Application/LandingDecision.cs", "src/Mcg.AgentOrchestrator.Core/Application/LandingDenylist*.cs", "src/Mcg.AgentOrchestrator.Core/Application/RepositoryOwnershipMap.cs", "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier.OwnerProtectedConfiguration.cs", "src/Mcg.AgentOrchestrator.Core/Conductor/ConductorAutonomyPolicy.cs", "src/Mcg.AgentOrchestrator.Core/Collaboration/AcceptancePolicyChangeDecision.cs", "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentPolicyApproval.cs", "config/landing-denylist.json", "config/acceptance-manifest.json", "**/conductor-policy.json", "src/Mcg.AgentOrchestrator.App/Orchestration/LandingDenylistOwnerGate.cs"]),
+        new("environment-variables", "Admits a new environment variable setting or identity.", ["config/environment-variable-allowlist.json"]),
     ]);
 
     public sealed record Rule(string Id, string Reason, IReadOnlyList<string> Paths);

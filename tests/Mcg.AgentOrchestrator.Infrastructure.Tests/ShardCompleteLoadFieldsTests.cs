@@ -83,6 +83,7 @@ public sealed class ShardCompleteLoadFieldsTests
             var kernel = new AgentOrchestratorKernel();
             var goals = Enumerable.Range(0, 3).Select(index => kernel.CreateGoal("Member " + index)).ToArray();
             var workspace = OrchestratorWorkspace.ForDirectory(directory);
+            SetUpStateDatabase(workspace.SqliteStatePath);
             var verifier = new GoalAcceptanceVerifier((string[] _, string _, TimeSpan _, CancellationToken _) =>
                 throw new InvalidOperationException("The progress fixture must not launch commands"));
             var driver = new ConductorDriver(kernel, workspace, verifier,

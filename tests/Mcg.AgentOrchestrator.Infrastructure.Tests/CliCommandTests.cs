@@ -25,8 +25,7 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
     private protected OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
         SeedLocalSkillCatalog(root);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var workspace = CreateSetUpWorkspace(root);
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
             new ModelFunctionBinding(
                 ModelFunctionPurposes.SpecRefiner,

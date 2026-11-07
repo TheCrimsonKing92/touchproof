@@ -219,12 +219,12 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var merged = kernel.CreateGoal("Merged goal");
         var cleaned = kernel.CreateGoal("Cleaned goal");
         var missing = kernel.CreateGoal("Missing journal goal");
         var clarified = kernel.CreateGoal("Clarified goal");
-
         var worktreePath = GoalWorktrees.WorktreePath(root, merged.Id);
         Directory.CreateDirectory(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
@@ -259,11 +259,11 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var queried = kernel.CreateGoal("Queried journal goal");
         var unqueried = kernel.CreateGoal("Unqueried locked journal goal");
         GoalOperationJournal.Completed(root, unqueried, "conductor:land", "landed");
-
         var unqueriedJournalPath = GoalOperationJournal.PathFor(root, unqueried.Id);
         using var exclusiveJournalLock = new FileStream(
             unqueriedJournalPath,
@@ -453,7 +453,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var (kernel, goal) = SimpleGoal("Lease-protected workspace creation");
-        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        using var replacementLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 goal.Id.Value,
                 $"goal-replace:test:{Guid.NewGuid():N}",
@@ -484,7 +484,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
-        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        using var replacementLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 goal.Id.Value,
                 $"goal-replace:test:{Guid.NewGuid():N}",
@@ -531,7 +531,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         RunGit(worktree, "add", "feature.txt");
         RunGit(worktree, "commit", "-m", "goal work");
         var leaseOwner = $"goal-replace:test:{Guid.NewGuid():N}";
-        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+        using var replacementLease = new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath))
             .TryAcquireAcceptanceLease(
                 goal.Id.Value,
                 leaseOwner,
@@ -564,6 +564,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Record refresh goal");
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -571,7 +572,6 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Directory.CreateDirectory(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
         GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
-
         var driver = new ConductorDriver(
             kernel,
             workspace,
@@ -597,6 +597,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var (kernel, goal) = SimpleGoal("Conductor stale clarification goal.");
         var key = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version";
@@ -619,7 +620,6 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             new FakeAcceptanceVerifier(),
             DefaultAgents(),
             WorkerProfileCatalog.Default());
-
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
@@ -638,8 +638,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
-
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Slots busy conductor goal");
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -1038,8 +1038,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     {
         var root = CreateTempDirectory();
         MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
-
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Already merged gate skip");
         PassVerification(kernel, goal, goal.Tasks.Single());

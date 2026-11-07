@@ -22,17 +22,17 @@ public sealed class ProcessTreeGuiSuppressionTestsGitDirectLaunchProcessTreeTest
         Assert.StartsWith("git version", report.GetProperty("Output").GetString()!);
 
         // Same job-accounting apparatus must detect the shim plus its extra console host.
-        using var control = await GitDirectLaunchTestHarness.Run("version", "1");
-        var legacy = control.RootElement;
-        GitDirectLaunchTestHarness.AssertWindowless(legacy);
-        Assert.Equal(3u, legacy.GetProperty("after").GetUInt32() - legacy.GetProperty("before").GetUInt32());
-        Assert.Equal(legacy.GetProperty("shim").GetString(), legacy.GetProperty("image").GetString(), ignoreCase: true);
+        using var control = await GitDirectLaunchTestHarness.Run("shim-version");
+        var shim = control.RootElement;
+        GitDirectLaunchTestHarness.AssertWindowless(shim);
+        Assert.Equal(3u, shim.GetProperty("after").GetUInt32() - shim.GetProperty("before").GetUInt32());
+        Assert.Equal(shim.GetProperty("shim").GetString(), shim.GetProperty("image").GetString(), ignoreCase: true);
     }
 }
 
 internal static class GitDirectLaunchTestHarness
 {
-    internal static async Task<JsonDocument> Run(string operation, string? legacyValue = null)
+    internal static async Task<JsonDocument> Run(string operation)
     {
         var directory = InfrastructureTestSupport.CreateTempDirectory();
         try
@@ -51,10 +51,9 @@ internal static class GitDirectLaunchTestHarness
                          "--git-direct-launch", reportPath, operation })
                 info.ArgumentList.Add(argument);
             foreach (var name in new[] { "DOTNET_STARTUP_HOOKS", ChildConsoleLaunchPolicy.OffSwitchVariable,
-                         GitExecutable.LegacyLaunchVariable, "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                         "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                          "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT" })
                 info.Environment.Remove(name);
-            if (legacyValue is not null) info.Environment[GitExecutable.LegacyLaunchVariable] = legacyValue;
             var shim = HandleListProcessLauncher.ResolveApplication("git");
             info.Environment["PATH"] = string.Join(';', Path.GetDirectoryName(shim), Path.GetDirectoryName(dotnet), Environment.SystemDirectory);
             info.Environment["MSYSTEM"] = "inherited-invalid-system";

@@ -16,6 +16,7 @@ public sealed class ConductorDriverTestsSourceSizePreflight
         MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
             kernel,

@@ -59,6 +59,13 @@
         "**/conductor-policy.json",
         "src/Mcg.AgentOrchestrator.App/Orchestration/LandingDenylistOwnerGate.cs"
       ]
+    },
+    {
+      "id": "environment-variables",
+      "reason": "Admits a new environment variable setting or identity.",
+      "paths": [
+        "config/environment-variable-allowlist.json"
+      ]
     }
   ]
 }

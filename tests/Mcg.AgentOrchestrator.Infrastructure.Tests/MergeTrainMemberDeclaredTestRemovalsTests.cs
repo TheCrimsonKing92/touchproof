@@ -149,7 +149,9 @@ public sealed class MergeTrainMemberDeclaredTestRemovalsTests : IDisposable
         var verifier = new GoalAcceptanceVerifier(
             (string[] _, string _, TimeSpan _, CancellationToken _) =>
                 throw new InvalidOperationException("The options fixture must not launch a command"));
-        var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(_root), verifier,
+        var workspace = OrchestratorWorkspace.ForDirectory(_root);
+        SetUpStateDatabase(workspace.SqliteStatePath);
+        var driver = new ConductorDriver(kernel, workspace, verifier,
             AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
             cleanupHooks: new GoalWorktreeCleanupHooks { BuildStorageRoot = new(Path.Combine(_root, "build-storage")) });
         var members = goals.Select((goal, index) => new MergeTrainMemberBinding(

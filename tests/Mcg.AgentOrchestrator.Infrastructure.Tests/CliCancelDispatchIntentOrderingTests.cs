@@ -79,7 +79,7 @@ public sealed class CliCancelDispatchIntentOrderingTests
         Assert.True(f.Task.CompletionBuildEvidence.CustodyReleased);
         Assert.Equal(alreadyCompleted ? 0 : 1, f.Stops);
         Assert.Equal(1, f.Launches);
-        Assert.Null(new ReconcileSweepRemediationStore(f.StatePath).TryGetAcceptanceLeaseOwner(f.GoalId.Value));
+        Assert.Null(new ReconcileSweepRemediationStore(SetUpStateDatabase(f.StatePath)).TryGetAcceptanceLeaseOwner(f.GoalId.Value));
         new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
         f.Reload();
         Assert.True(ExitedDispatchReconciliationExecutor.ReconcileTask(f.Kernel, f.GoalId, f.TaskId, f.Runner()));

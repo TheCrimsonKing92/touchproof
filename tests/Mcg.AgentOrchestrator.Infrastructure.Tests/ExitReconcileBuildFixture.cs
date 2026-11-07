@@ -225,7 +225,7 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
             probe: _ => _completionLive ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
             stop: _ => _completionLive = false,
             begin: (goal, child, id) => new GoalEvidenceOperationCoordinator(
-                new ReconcileSweepRemediationStore(Build.StatePath), Workspace.ExecutionDirectory,
+                new ReconcileSweepRemediationStore(SetUpStateDatabase(Build.StatePath)), Workspace.ExecutionDirectory,
                 TimeSpan.FromMinutes(10), () => DateTimeOffset.UtcNow, () => child.Pid, () => id,
                 () => child.StartedAt, new ControlledPidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName),
             storageRoot: Build.Storage),

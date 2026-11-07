@@ -75,4 +75,18 @@ public sealed class LandingDenylistTests
         Assert.NotEmpty(LandingDenylist.BuiltInDefault.Match(["config/landing-denylist.json"]));
         Assert.Equal(JsonSerializer.Serialize(parsed.Rules), JsonSerializer.Serialize(LandingDenylist.BuiltInDefault.Rules));
     }
+
+    [Fact]
+    public void EnvironmentVariableAllowlist_Change_ClassifiedUnderEnvironmentVariablesRule()
+    {
+        var json = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), "config", "landing-denylist.json"));
+        var parsed = LandingDenylist.Parse(json, "candidate checkout");
+        foreach (var denylist in new[] { parsed, LandingDenylist.BuiltInDefault })
+        {
+            var match = Assert.Single(denylist.Match(["config/environment-variable-allowlist.json"]));
+            Assert.Equal("environment-variables", match.RuleId);
+            Assert.Equal("Admits a new environment variable setting or identity.",
+                Assert.Single(denylist.Rules, rule => rule.Id == match.RuleId).Reason);
+        }
+    }
 }

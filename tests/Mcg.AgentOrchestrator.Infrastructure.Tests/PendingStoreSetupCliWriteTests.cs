@@ -151,8 +151,8 @@ public sealed class PendingStoreSetupCliWriteTests : CliCommandTestBase
 
     private static StoreSetupPlanEntry RollBackState(OrchestratorWorkspace workspace)
     {
-        // Migration 14 introduces promotion facts; simulate the previous landed runtime.
-        Execute(workspace.SqliteStatePath, "DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number = 14;");
+        // Migration 15 introduces reconcile sweep remediation; simulate the previous landed runtime.
+        Execute(workspace.SqliteStatePath, "DELETE FROM schema_migrations WHERE migration_number = 15;");
         return Pending(workspace, "state-migrations");
     }
 

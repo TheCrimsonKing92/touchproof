@@ -23,7 +23,7 @@ public sealed class GoalReplaceProtectedReasonTests : CliCommandTestBase
     {
         var (workspace, predecessor, command, requestId) = await PrepareReplacement(scenario);
         var evidenceLease = scenario == "unavailable"
-            ? new ReconcileSweepRemediationStore(workspace.SqliteStatePath).TryAcquireAcceptanceLease(
+            ? new ReconcileSweepRemediationStore(SetUpStateDatabase(workspace.SqliteStatePath)).TryAcquireAcceptanceLease(
                 predecessor.Id.Value, $"goal-evidence:test:{Guid.NewGuid():N}", TimeSpan.FromMinutes(30))
             : null;
         if (scenario == "unavailable")

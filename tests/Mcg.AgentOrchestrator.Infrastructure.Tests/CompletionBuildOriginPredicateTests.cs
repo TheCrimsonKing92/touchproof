@@ -241,5 +241,5 @@ public sealed class CompletionBuildOriginPredicateTests
     }
 
     private static string? Lease(CompletionBuildEvidenceFixture f) =>
-        new ReconcileSweepRemediationStore(f.StatePath).TryGetAcceptanceLeaseOwner(f.GoalId.Value);
+        new ReconcileSweepRemediationStore(SetUpStateDatabase(f.StatePath)).TryGetAcceptanceLeaseOwner(f.GoalId.Value);
 }
