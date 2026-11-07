@@ -18,10 +18,8 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
     private static void AssertTrainOccupiesWidth(int goalCount)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
-        var previousTrainDisabled = Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", "0");
             ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
             AddAcceptanceManifest(repo);
             var kernel = new AgentOrchestratorKernel();
@@ -34,7 +32,10 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
             var cleanup = CreateIsolatedCleanupContext(repo);
             var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
-                runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
+                runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks)
+            {
+                MergeTrainsFeatureEnabled = true
+            };
             Assert.True(driver.MergeTrainsEnabled);
             Assert.True(driver.AcceptanceCohortsEnabled);
             Assert.All(goals, goal => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
@@ -95,7 +96,6 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", previousTrainDisabled);
             ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
             DeleteDirectory(repo);
         }

@@ -214,7 +214,7 @@ internal static class SourceSizeRatchet
             // Goal f608f29b guards progressive-review paid restarts through EnvironmentContractGate before steering.
             // Goal 5ca3f5c0: five PR-tracking phase lines alongside shared gate-attention reconciliation.
             // Goal bc361051: retain typed progress facts in tick-local state and forward them at emission.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2533),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2532),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -560,7 +560,9 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
-            new SourceClassCeiling("ConductorDriver", 14244, 70),
+            // Goal 0d141bc6 adds the immutable merge-train feature option at its existing admission consumer;
+            // extracting only that option would separate it from the dependency checks it gates (+2 lines).
+            new SourceClassCeiling("ConductorDriver", 14246, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -599,7 +601,9 @@ internal static class SourceSizeRatchet
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
             // Goal 509d0c91 adds route-only ruling-file validation and captures its text in the existing
             // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
-            new SourceClassCeiling("CliCommandHandlers", 11017, 30),
+            // Goal 0d141bc6 passes resolved policy features at the existing loop/watch construction seams;
+            // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
+            new SourceClassCeiling("CliCommandHandlers", 11023, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -696,7 +700,7 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 exempts the review owner at the existing hold-tracking call;
             // the added comment explains why the tracker still needs the hold record.
             // Goal bc361051: seven wiring lines preserve typed progress facts; no new partial or headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 8968, 55),
+            new SourceClassCeiling("ConductorBatchLoop", 8941, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

@@ -70,7 +70,8 @@ internal static class WorkerBuildEvidenceRequirement
                     WorkerBuildProjectScope.ValidatePath(worktreeRoot, project, mustExist: true);
                     projects.Add(Path.GetRelativePath(worktreeRoot, project).Replace('\\', '/'));
                 }
-                else if (!OwningProjectResolver.IsExplicitlyExcluded(worktreeRoot, absolute))
+                // An absent source with no surviving owner is a removal that needs no build.
+                else if (!OwningProjectResolver.IsExplicitlyExcluded(worktreeRoot, absolute) && Path.Exists(absolute))
                     errors.Add($"unresolved compiled source: {path}");
             }
             catch (Exception exception) when (exception is IOException or ArgumentException or UnauthorizedAccessException or System.Xml.XmlException)

@@ -137,10 +137,8 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
     {
         using var isolation = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
         var root = CreateTempDirectory("priority-dependent-group");
-        var previousTrainDisabled = Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", "0");
             var kernel = new AgentOrchestratorKernel();
             var s = VerifiedAt(kernel, "S", 0);
             var t = VerifiedAt(kernel, "T", 1);
@@ -224,7 +222,6 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", previousTrainDisabled);
             TryDeleteDirectory(root);
         }
     }
@@ -346,7 +343,7 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
     {
         const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         string Branch(GoalId id) => id.Value.PadRight(40, 'b');
-        return MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+        return MakeDriver(mergeTrainsEnabled: true, getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             classifyRisk: _ => ChangeRiskTier.DocsOnly, isVerificationGateSatisfied: _ => true,
             getLandingFileScopes: goal => paths[goal.Id], resolveAcceptanceHeads: goal => (Branch(goal.Id), main),
             gateReadyCandidateProjector: new GateReadyCandidateProjector(id => new(Branch(id), main),

@@ -92,7 +92,7 @@ public sealed class ConductorBatchLoopTestsStewardRoute : ConductorBatchLoopTest
 internal sealed class StewardHarness : IDisposable
 {
     internal const string Sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    internal StewardHarness(string caseLetter)
+    internal StewardHarness(string caseLetter, bool enabled = true)
     {
         Root = Path.Combine(Path.GetTempPath(), $"mcg-steward-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Root);
@@ -116,7 +116,7 @@ internal sealed class StewardHarness : IDisposable
                 _ => File.Exists(TrxPath) ? [TrxPath] : []), Model, Intents,
             new AdjudicationEvidenceResolver(Root), _ => 7, _ => Root,
             new GoalLifecycleEventWriter(Path.Combine(Root, "lifecycle")),
-            new ConductEventLogWriter(ConductPath));
+            new ConductEventLogWriter(ConductPath), enabled: enabled);
     }
 
     internal string Root { get; }
