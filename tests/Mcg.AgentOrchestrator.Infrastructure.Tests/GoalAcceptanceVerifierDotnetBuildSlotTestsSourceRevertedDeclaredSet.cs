@@ -93,7 +93,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedDecl
     {
         using var fixture = new Probe();
         fixture.Write(Probe.Legacy, "public sealed class RenamedProbeTests { }");
-        fixture.Write("tests/Mcg.AgentOrchestrator.Core.Tests/LegacyProbeTestsHarness.cs", "public static class LegacyProbeTestsHarness { }");
+        fixture.Write("tests/Mcg.AgentOrchestrator.Core.Tests/LegacyProbeTestsHarness.cs", "public static class LegacyProbeTestsHarness { [Xunit.Fact] public static void Legacy() { } }");
         fixture.Git("add", ".");
         fixture.Git("commit", "-m", "rename legacy declaration");
         var calls = 0;
