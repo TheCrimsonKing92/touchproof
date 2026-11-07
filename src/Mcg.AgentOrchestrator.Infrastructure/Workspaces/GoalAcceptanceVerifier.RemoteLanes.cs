@@ -145,10 +145,23 @@ public sealed partial class GoalAcceptanceVerifier
         remote.Occupancy ??= new(goal?.Value, slot, _storageRoot, GateHeartbeatRunClass.Classify(_executionContext), GateHeartbeatRunClass.ResolveRunId(_executionContext));
         var plan = _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."));
         return new(lane => plan.Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1,
-                EngineSettings.ResolveCheckTimeout(shards.FirstOrDefault(check => check.Name == lane)?.TimeoutMinutes), ReportRemoteLanePolicy).Offer,
+                ResolveLaneCheckTimeout(shards.FirstOrDefault(check => check.Name == lane)), ReportRemoteLanePolicy).Offer,
             (check, entry) => AcceptanceGateLaneProgress.RemoteStarted(goal, check.Name, entry.Id, slot, _storageRoot, EmitGateProgress),
-            check => EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
-            check => plan.Deadline(check.Name, EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes)), cache, _timeProvider);
+            ResolveLaneCheckTimeout,
+            check => plan.Deadline(check.Name, ResolveLaneCheckTimeout(check)), cache, _timeProvider);
+    }
+
+    private TimeSpan ResolveLaneCheckTimeout(AcceptanceManifestCheck? check)
+    {
+        if (check?.TimeoutMinutes is > 0)
+            return EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes);
+
+        var configuredTimeout = EngineSettings.ResolveCheckTimeout(null);
+        if (check is null) return configuredTimeout;
+        var local = AcceptanceLaneDurationStore.ResolveLocalEstimate(check);
+        var estimateSeconds = RemoteLaneOfferPolicy.ResolveLocalSeconds(
+            local.MedianSeconds, local.Samples, check.EstimatedSerialSeconds);
+        return AcceptanceLaneTimeoutBudget.Resolve(configuredTimeout, estimateSeconds);
     }
     private RemoteLaneEarlyOffer? StartRemoteLaneEarlyOffer(IReadOnlyList<AcceptanceManifestCheck> checks,
         AcceptancePartitionVerdictCache? cache, GoalId? goal, int? slot, DotnetBuildEnvironmentLease? lease,
