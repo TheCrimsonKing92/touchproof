@@ -7,9 +7,10 @@ using Timeout = System.Threading.Timeout;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class OwnerConsoleFullScreenView : IDisposable
+internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKeySurface
 {
     private readonly OwnerConsoleScreenController _controller;
+    private readonly OwnerConsoleKeyRouter _router;
     private readonly IApplication _app;
     private readonly IKeyboard? _keyboard;
     private readonly OwnerConsoleInputDiagnostics? _diagnostics;
@@ -43,8 +44,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
     private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
-    internal OwnerConsoleEpicDialog EpicView { get; }
-    internal OwnerConsoleGateDialog GateView { get; } = new();
+    public OwnerConsoleEpicDialog EpicView { get; }
+    public OwnerConsoleGateDialog GateView { get; } = new();
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
@@ -64,19 +65,19 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     internal bool ActivityFollowing => _activityPane.Following;
     internal string? ActivityFilter => _activityPane.Filter;
     private View? _commandReturnFocus;
-    private bool ActionRunning => _acting || _operation.IsRunning;
+    public bool ActionRunning => _acting || _operation.IsRunning;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
-    internal DataTable BoardTable { get; } = CreateBoardTable();
+    public DataTable BoardTable { get; } = CreateBoardTable();
     internal string StatusText => _status.Text;
     internal OwnerConsoleNoticeStrip NoticeStrip { get; }
     internal string NoticeText => _notice.Text;
-    internal TextField CommandLine => _command;
-    internal TableView BoardPane => _board;
+    public TextField CommandLine => _command;
+    public TableView BoardPane => _board;
     private readonly OwnerConsoleClipboard _clipboard;
     private string? _selectedFieldKey = "goal";
     private bool _copySelectionValid = true;
-    internal OwnerConsoleFieldSnapshot? SelectedBoardFields
+    public OwnerConsoleFieldSnapshot? SelectedBoardFields
     {
         get
         {
@@ -89,17 +90,29 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 : snapshot;
         }
     }
-    internal ListView DecisionsPane => _decisions;
-    internal ListView ActivityPane => _activity;
+    public ListView DecisionsPane => _decisions;
+    public ListView ActivityPane => _activity;
     internal string HintText => _hints.Text;
     internal IReadOnlyList<string> DecisionLines => _decisionsPane.Lines;
-    internal IReadOnlyList<string> ActivityLines => _activityPane.Lines;
-    internal string? SelectedGoalId { get; private set; }
-    internal string? SelectedProject { get; private set; }
+    public IReadOnlyList<string> ActivityLines => _activityPane.Lines;
+    public string? SelectedGoalId { get; private set; }
+    public string? SelectedProject { get; private set; }
     private OwnerConsoleBoardRow? SelectedBoardRow => _controller.Model is { } model &&
         _selectedBoardIndex >= 0 && _selectedBoardIndex < model.Board.Length ? model.Board[_selectedBoardIndex] : null;
-    internal OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
+    public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
+
+    bool IOwnerConsoleKeySurface.EditingCommand { get => _editingCommand; set => _editingCommand = value; }
+    string? IOwnerConsoleKeySurface.CompletionHint { set => _completionHint = value; }
+    View? IOwnerConsoleKeySurface.CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
+    int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
+    int IOwnerConsoleKeySurface.SelectedBoardIndex => _selectedBoardIndex;
+    string? IOwnerConsoleKeySurface.SelectedFieldKey { get => _selectedFieldKey; set => _selectedFieldKey = value; }
+    bool IOwnerConsoleKeySurface.CopySelectionValid { set => _copySelectionValid = value; }
+    OwnerConsoleViewModel? IOwnerConsoleKeySurface.ArrangedBoard => _arrangedBoard;
+    bool IOwnerConsoleKeySurface.Rendering { set => _rendering = value; }
+    OwnerConsoleActivityPane IOwnerConsoleKeySurface.ActivityModel => _activityPane;
+    OwnerConsoleFieldSnapshot? IOwnerConsoleKeySurface.DecisionFields => _decisionsPane.SelectedFields;
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
@@ -237,6 +250,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             RenderOverflow();
         };
         RenderHints();
+        _router = new(this, _controller, _operation, _clipboard, _collapse, _token);
         _keyboard = app.Initialized ? app.Keyboard : null;
         if (_keyboard is not null) _keyboard.KeyDown += OnKeyDown;
         if (_diagnostics is not null) _app.LayoutAndDrawComplete += OnLayoutAndDrawComplete;
@@ -292,7 +306,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderOverflow();
     }
 
-    private void RenderBoard()
+    public void RenderBoard()
     {
         using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
@@ -321,11 +335,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderOverflow();
     }
 
-    private int BoardBodyRows() => _board.Viewport.Height - 1 -
+    public int BoardBodyRows() => _board.Viewport.Height - 1 -
         (_board.Style.ShowHorizontalHeaderOverline ? 1 : 0) -
         (_board.Style.ShowHorizontalHeaderUnderline ? 1 : 0);
 
-    private void RenderOverflow()
+    public void RenderOverflow()
     {
         var model = _controller.Model;
         SetTitle(_decisionsFrame, "DECISIONS" + (_decisionsPane.TitleStatus is { } status ? $" ({status})" : ""), OwnerConsoleOverflow.Of(
@@ -360,7 +374,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderStatus();
     }
 
-    internal void ShowNotice(string message, OwnerConsoleNoticeSeverity severity, OwnerConsoleNoticeSource source)
+    public void ShowNotice(string message, OwnerConsoleNoticeSeverity severity, OwnerConsoleNoticeSource source)
     {
         NoticeStrip.Raise(message, severity, source);
         RenderNotices();
@@ -406,7 +420,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _activityPane.Render(_controller.Model, _activityWidth);
     }
     private int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
-    private void FollowLatest()
+    public void FollowLatest()
     {
         _rendering = true;
         try
@@ -458,234 +472,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         }
     }
 
-    private async Task HandleKeyCoreAsync(Key key)
-    {
-        if (GateView.IsOpen)
-        {
-            if (key == OwnerConsoleBindings.OpenFields)
-            {
-                key.Handled = true;
-                if (GateView.SelectedFields is { } fields) await _controller.ShowFieldsAsync(fields);
-                else GateView.FieldsUnavailable();
-                GateView.BodyPane.SetFocus(); return;
-            }
-            if (GateView.HandleKey(key)) FocusPane(GateView.ReturnPane);
-            return;
-        }
-        if (EpicView.IsOpen)
-        {
-            if (key == OwnerConsoleBindings.OpenFields)
-            {
-                key.Handled = true;
-                if (EpicView.SelectedFields is { } fields) await _controller.ShowFieldsAsync(fields);
-                else EpicView.FieldsUnavailable();
-                EpicView.BodyPane.SetFocus(); return;
-            }
-            if (await EpicView.HandleKeyAsync(key)) FocusPane(EpicView.ReturnPane);
-            return;
-        }
-        if (_editingCommand || _command.HasFocus)
-        {
-            if (key == Key.Esc) { key.Handled = true; FinishCommand(); return; }
-            if (key == Key.Tab)
-            {
-                key.Handled = true;
-                var completion = OwnerConsoleCommandCompletion.Complete(_command.Text, OwnerConsoleBindings.Commands,
-                    _hints.Viewport.Width > 0 ? _hints.Viewport.Width : 80);
-                _command.Text = completion.Text;
-                _command.InsertionPoint = _command.Text.Length;
-                _completionHint = completion.Hint;
-                RenderHints();
-                return;
-            }
-            if (key != Key.Enter || ActionRunning) return;
-            key.Handled = true;
-            var line = _command.Text;
-            FinishCommand();
-            if (OwnerConsoleBindings.ForLine(line) is { Owner: OwnerConsoleCommandOwner.View } binding)
-                await RunBindingAsync(binding, line.Trim().TrimStart(':').TrimStart()
-                    .Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(1));
-            else if (!(OwnerConsoleBindings.ForLine(line)?.Command == "goal" && RefuseSelectedBoardRow()))
-                await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
-            return;
-        }
-        if (key == OwnerConsoleBindings.OpenFields)
-        {
-            key.Handled = true;
-            if (ActionRunning) return;
-            var fields = _board.HasFocus ? SelectedBoardFields : _decisions.HasFocus ? _decisionsPane.SelectedFields :
-                _activity.HasFocus ? _activityPane.SelectedFields : null;
-            var owner = PaneView(FocusedPane);
-            if (fields is not null) await _controller.ShowFieldsAsync(fields, _board.HasFocus ? _selectedFieldKey : null);
-            else ShowNotice("No selected structured item.", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-            owner.SetFocus();
-            return;
-        }
-        if (key == OwnerConsoleBindings.CopyField && _board.HasFocus)
-        {
-            key.Handled = true;
-            var field = SelectedBoardFields?.Fields.FirstOrDefault(item => item.Key == _selectedFieldKey);
-            var result = _clipboard.Copy(field);
-            ShowNotice(result.Message, result.Copied ? OwnerConsoleNoticeSeverity.Success : OwnerConsoleNoticeSeverity.Failure,
-                OwnerConsoleNoticeSource.Action);
-            return;
-        }
-        if (_board.HasFocus && (key == Key.CursorLeft || key == Key.CursorRight))
-        {
-            key.Handled = true;
-            var currentColumn = OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "");
-            var direction = key == Key.CursorLeft ? -1 : 1;
-            var next = currentColumn + direction;
-            while (next >= 0 && next < BoardTable.Columns.Count && !_board.Style.GetOrCreateColumnStyle(next).Visible) next += direction;
-            if (next >= 0 && next < BoardTable.Columns.Count && _selectedBoardIndex >= 0)
-            {
-                _selectedFieldKey = OwnerConsoleBoardRenderer.FieldKeys[next]; _copySelectionValid = true;
-                _board.SetSelection(next, _selectedBoardIndex, false);
-            }
-            return;
-        }
-        if (key.AsRune.Value == ':' && !ActionRunning)
-        {
-            key.Handled = true;
-            _commandReturnFocus = PaneView(FocusedPane);
-            _editingCommand = true;
-            _command.SetFocus();
-            RenderHints();
-            return;
-        }
-        var character = (char)key.AsRune.Value;
-        if (!key.IsCtrl && !key.IsAlt && char.ToLowerInvariant(character) == 'c' &&
-            FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_arrangedBoard))
-        {
-            key.Handled = true;
-            if (ActionRunning || SelectedProject is not { } project || _arrangedBoard is null ||
-                !_arrangedBoard.Board.Any(row => row.IsDiagnostic &&
-                    string.Equals(row.Project, project, StringComparison.OrdinalIgnoreCase))) return;
-            _collapse.Toggle(project);
-            _rendering = true;
-            try
-            {
-                var collapsed = _collapse.Apply(_arrangedBoard);
-                _controller.Apply(collapsed);
-                RenderBoard();
-                var header = Array.FindIndex(collapsed.Board.ToArray(), row => row.IsDiagnostic &&
-                    string.Equals(row.Project, project, StringComparison.OrdinalIgnoreCase));
-                SelectBoard(header, allowHeader: true);
-            }
-            finally { _rendering = false; }
-            RenderHints();
-            RenderOverflow();
-            return;
-        }
-        if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.ForKey(character, FocusedPane) is { } keyBinding)
-        {
-            key.Handled = true;
-            await RunBindingAsync(keyBinding, fromKey: true);
-            return;
-        }
-        if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.IsTopLevelKey(character))
-        {
-            key.Handled = true;
-            if (!ActionRunning)
-            {
-                StartAction();
-                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(character, FocusedPane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-            }
-            return;
-        }
-        if (key == Key.Tab.WithShift)
-        {
-            key.Handled = true;
-            if (!ActionRunning) FocusPane(OwnerConsoleKeyHints.Previous(FocusedPane));
-            return;
-        }
-        if (key == Key.Tab)
-        {
-            key.Handled = true;
-            if (!ActionRunning) FocusPane(OwnerConsoleKeyHints.Next(FocusedPane));
-            return;
-        }
-        if (key == Key.Home && FocusedPane == OwnerConsolePane.Activity)
-        { key.Handled = true; if (!ActionRunning) FollowLatest(); return; }
-        var pane = FocusedPane;
-        var count = pane == OwnerConsolePane.Activity ? ActivityLines.Count : pane == OwnerConsolePane.Board ?
-            BoardTable.Rows.Count : _controller.Model?.Decisions.Length ?? 0;
-        var current = pane == OwnerConsolePane.Activity ? _activity.SelectedItem ?? 0 : pane == OwnerConsolePane.Board ?
-            _selectedBoardIndex : _controller.SelectedIndex;
-        var pageHeight = pane == OwnerConsolePane.Board ? BoardBodyRows() : PaneView(pane).Viewport.Height;
-        if (OwnerConsolePaneNavigator.Target(key, current, count, pageHeight) is { } target)
-        {
-            key.Handled = true;
-            if (ActionRunning || target < 0) return;
-            if (pane == OwnerConsolePane.Board) SelectBoard(target, direction:
-                key == Key.Home ? 1 : key == Key.End ? -1 : Math.Sign(target - current));
-            else if (pane == OwnerConsolePane.Activity) { _activity.SelectedItem = target; _activity.EnsureSelectedItemVisible(); }
-            else { _controller.SelectIndex(target); _decisions.SelectedItem = target; _decisions.EnsureSelectedItemVisible(); }
-            RenderHints();
-            RenderOverflow();
-            return;
-        }
-        if (key == Key.CursorUp || key == Key.CursorDown)
-        {
-            key.Handled = true;
-            // Production modal keys are excluded by OnKeyDown's top-window guard. Keep the
-            // existing headless decision-navigation contract while a fake dialog is pending.
-            if (ActionRunning && pane != OwnerConsolePane.Decisions) return;
-            var delta = key == Key.CursorUp ? -1 : 1;
-            if (pane == OwnerConsolePane.Board) SelectBoard(_selectedBoardIndex + delta, direction: delta);
-            else if (pane == OwnerConsolePane.Activity)
-            {
-                if (ActivityLines.Count > 0)
-                {
-                    _activity.SelectedItem = Math.Clamp((_activity.SelectedItem ?? 0) + delta, 0, ActivityLines.Count - 1);
-                    _activity.EnsureSelectedItemVisible();
-                }
-            }
-            else
-            {
-                await _controller.HandleKeyAsync(delta < 0 ? ConsoleKey.UpArrow : ConsoleKey.DownArrow, cancellationToken: _token);
-                _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
-                RenderHints();
-            }
-            RenderOverflow();
-            return;
-        }
-        if (key == Key.Enter)
-        {
-            key.Handled = true;
-            if (ActionRunning) return;
-            if (pane == OwnerConsolePane.Board && RefuseSelectedBoardRow()) return;
-            if (pane == OwnerConsolePane.Board && SelectedGoalId is { } goalId)
-                await ActAsync(ct => _controller.ShowGoalDetailAsync(goalId, _operation, ct));
-            else if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
-                await ActAsync(ct => _controller.HandleKeyAsync(ConsoleKey.Enter, operation: _operation, cancellationToken: ct));
-            else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
-                _activity.SelectedItem is { } selected && selected >= 0 &&
-                selected < _activityPane.Rows.Count)
-            {
-                if (_activityPane.Rows[selected].ItemIndex is { } itemIndex)
-                    await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model!.Activity[itemIndex], _operation, ct));
-                else if (_activityPane.Rows[selected].Key.Kind == OwnerConsoleActivityFilter.EmptyKind)
-                {
-                    StartAction();
-                    ShowNotice(OwnerConsoleActivityFilter.EmptyEnterNotice(_activityPane.Filter!), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-                }
-                else
-                {
-                    StartAction();
-                    ShowNotice("Enter: a day separator has no detail; select an event row", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-                }
-            }
-            return;
-        }
-        if (!ActionRunning && !key.IsCtrl && !key.IsAlt && !char.IsControl(character) && !char.IsWhiteSpace(character))
-        {
-            StartAction();
-            ShowNotice($"{character}: not bound; press : for commands or ? for help", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-        }
-    }
+    private Task HandleKeyCoreAsync(Key key) => _router.RouteAsync(key);
 
-    private async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false)
+    public async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false)
     {
         if (binding == OwnerConsoleBindings.Quit)
         {
@@ -763,16 +552,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         else GateView.Open(FocusedPane, gate, goalId);
     }
 
-    private void FinishCommand()
-    {
-        _editingCommand = false;
-        _completionHint = null;
-        _command.Text = string.Empty;
-        (_commandReturnFocus ?? _decisions).SetFocus();
-        RenderHints();
-    }
-
-    private async Task ActAsync(Func<CancellationToken, Task> action)
+    public async Task ActAsync(Func<CancellationToken, Task> action)
     {
         // Modal waits belong to the owner; only the controller's dependency work is bounded.
         StartAction();
@@ -789,11 +569,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             OpenGate(gateGoalId);
     }
 
-    private void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
+    public void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
 
     internal void FocusDecisions() => FocusPane(OwnerConsolePane.Decisions);
 
-    private View PaneView(OwnerConsolePane pane) => pane switch
+    public View PaneView(OwnerConsolePane pane) => pane switch
     {
         OwnerConsolePane.Decisions => _decisions,
         OwnerConsolePane.Board => _board,
@@ -801,7 +581,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
     };
 
-    private void FocusPane(OwnerConsolePane pane)
+    public void FocusPane(OwnerConsolePane pane)
     {
         _focusedPane = pane;
         PaneView(pane).SetFocus();
@@ -814,13 +594,13 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderHints();
     }
 
-    private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
+    public void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
             ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
 
-    private void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false)
+    public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false)
     {
         if (!refresh) _copySelectionValid = true;
         using var trace = _diagnostics?.Begin("select-board", TraceState);
@@ -860,7 +640,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_preview.Text != text) _preview.Text = text;
     }
 
-    private bool RefuseSelectedBoardRow()
+    public bool RefuseSelectedBoardRow()
     {
         if (FocusedPane != OwnerConsolePane.Board || SelectedBoardRow is not { } row ||
             !row.IsForeign && !row.IsDiagnostic) return false;
