@@ -76,7 +76,7 @@ internal static class SourceSizeRatchet
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
             // Goal b5bb7a54 adds the .NET receipt normalization hook after TRX copying; the step stays in NormalizedGateResultStep.
             // Goal 4e5aab2e: preserve the slot timing sidecar beside each durable TRX receipt (+1 line).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 249),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 203),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.BuildArtifactLock.cs", 334),
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
