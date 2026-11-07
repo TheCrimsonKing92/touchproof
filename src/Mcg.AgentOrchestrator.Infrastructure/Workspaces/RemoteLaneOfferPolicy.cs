@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record RemoteLaneOfferInputs(string LaneName, double? LocalMedianSeconds,
     int LocalSamples, double ManifestEstimateSeconds, double? RemoteMedianSeconds,
     int RemoteSamples, double ExpectedLocalFinishSeconds, int ConsecutiveRemoteFailures = 0,
-    DateTimeOffset? NewestRemoteFailureAt = null, DateTimeOffset DecisionTime = default);
+    DateTimeOffset? NewestRemoteFailureAt = null, DateTimeOffset DecisionTime = default,
+    double? SoloMedianSeconds = null, double? ConcurrentMedianSeconds = null);
 
 internal sealed record RemoteLaneOfferDecision(bool Offer, string Reason, double LocalSeconds,
     double RemoteSeconds, RemoteLaneOfferInputs Inputs);
@@ -35,12 +36,13 @@ internal static class RemoteLaneOfferPolicy
         return Math.Max(estimates.DefaultIfEmpty(0).Max(), estimates.Sum() / Math.Max(1, concurrency));
     }
 
-    internal static RemoteLaneOfferDecision Decide(RemoteLaneOfferInputs inputs)
+    internal static RemoteLaneOfferDecision Decide(RemoteLaneOfferInputs inputs, bool sharedExecutor = false)
     {
         var local = ResolveLocalSeconds(inputs.LocalMedianSeconds, inputs.LocalSamples, inputs.ManifestEstimateSeconds);
-        var measured = inputs.RemoteSamples >= MinimumSamples && inputs.RemoteMedianSeconds is { } observed &&
+        var median = (sharedExecutor ? inputs.ConcurrentMedianSeconds : inputs.SoloMedianSeconds) ?? inputs.RemoteMedianSeconds;
+        var measured = inputs.RemoteSamples >= MinimumSamples && median is { } observed &&
             double.IsFinite(observed) && observed > 0;
-        var remote = measured ? inputs.RemoteMedianSeconds!.Value : PriorRemoteMultiplier * local + PriorRemoteOverheadSeconds;
+        var remote = measured ? median!.Value : PriorRemoteMultiplier * local + PriorRemoteOverheadSeconds;
         var reason = local < ShortLaneSeconds ? "short" :
             inputs.ConsecutiveRemoteFailures >= FailingThreshold && inputs.NewestRemoteFailureAt is { } newest &&
             inputs.DecisionTime - newest < FailingHold ? "remote-failing" :

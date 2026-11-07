@@ -121,7 +121,8 @@ public enum ProgressKind
     FindingEvidenceSuppressed = 39,
     TaskRetryFeedbackUpdated = 40,
     ProviderHoldSubstituted = 41,
-    ProviderCapabilitySubstituted = 42
+    ProviderCapabilitySubstituted = 42,
+    RemovalReferenceCensusRecorded = 43
 }
 
 public enum HumanInputAnswerOrigin
