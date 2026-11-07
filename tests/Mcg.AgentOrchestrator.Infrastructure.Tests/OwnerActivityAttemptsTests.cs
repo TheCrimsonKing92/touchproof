@@ -48,7 +48,7 @@ public sealed class OwnerActivityAttemptsTests
 
         Assert.Equal(events.Length, items.Length);
         for (var index = 0; index < events.Length; index++)
-            Assert.Equal(OwnerActivityNarrator.DetailPhrase(events[index], "Search"), items[index].Phrase);
+            Assert.Equal(OwnerLifecycleStageNarration.DetailPhrase(events[index], "Search"), items[index].Phrase);
     }
 
     [Fact]

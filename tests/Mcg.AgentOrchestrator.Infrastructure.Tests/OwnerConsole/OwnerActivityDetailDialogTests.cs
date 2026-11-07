@@ -13,7 +13,7 @@ public sealed class OwnerActivityDetailDialogTests
     [InlineData(160)]
     public void LayoutResizeScrollAndF2PreserveFieldIdentityAndFullValues(int columns)
     {
-        var detail = OwnerActivityNarrator.ExplainWithFields(OwnerActivityDetailFixture.Failure());
+        var detail = OwnerActivityExplanation.ExplainWithFields(OwnerActivityDetailFixture.Failure());
         using var dialog = new OwnerConsoleTextDialog("What this means", detail.Text) { Structured = detail.Structured };
         dialog.ShadowStyle = ShadowStyles.Transparent;
         dialog.Layout(new Size(columns, 24));
@@ -85,7 +85,7 @@ public sealed class OwnerActivityDetailDialogTests
         var evidence = OwnerActivityDetailEvidence.From(raw, new("value", "Opaque value", value), new("empty", "Empty", ""));
         var source = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "unknown", "full-goal", "", evidence);
         var item = new OwnerConsoleActivityItem(source.Timestamp, "unknown", "tag", "full-goa", "", Evidence: [source]);
-        var detail = OwnerActivityNarrator.ExplainWithFields(item);
+        var detail = OwnerActivityExplanation.ExplainWithFields(item);
         using var dialog = new OwnerConsoleTextDialog("What this means", detail.Text) { Structured = detail.Structured };
         dialog.Layout(new Size(columns, 24));
         AssertLayout(dialog, detail.Text, dialog.Body.Viewport.Width);

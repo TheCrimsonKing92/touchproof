@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Microsoft.Win32.SafeHandles;
 
 internal static class ConductorStartCallerProbe
 {
@@ -52,14 +53,7 @@ internal static class ConductorStartCallerProbe
             File.WriteAllText(Path.Combine(root, "launch-receipt.json"), result.StandardOutput ?? "{}");
             if (result.ExitCode == 0)
             {
-                using var receipt = JsonDocument.Parse(result.StandardOutput!);
-                using var process = Process.GetProcessById(receipt.RootElement.GetProperty("pid").GetInt32());
-                File.WriteAllText(Path.Combine(root, "launch-identity.json"), JsonSerializer.Serialize(new
-                {
-                    pid = process.Id,
-                    startedAt = process.StartTime.ToUniversalTime(),
-                    imagePath = process.MainModule!.FileName
-                }));
+                CaptureIdentity(root, result.StandardOutput);
                 // Keep the actual launching process and its console alive while the
                 // fake captures membership; caller exit must not hide inheritance.
                 using var ready = EventWaitHandle.OpenExisting(token);
@@ -68,6 +62,71 @@ internal static class ConductorStartCallerProbe
             }
             return result;
         }
+    }
+
+    internal static void CaptureIdentity(string root, string? receiptText)
+    {
+        int? pid = null;
+        int? openWin32Error = null;
+        SafeProcessHandle? handle = null;
+        ProcessImagePathResolver.Result? image = null;
+        var stage = "parse-receipt";
+        try
+        {
+            using var receipt = JsonDocument.Parse(receiptText!);
+            pid = receipt.RootElement.GetProperty("pid").GetInt32();
+            stage = "open-process";
+            handle = ProcessImagePathResolver.Open(pid.Value, out var openError);
+            openWin32Error = openError;
+            if (handle.IsInvalid) throw new Win32Exception(openError);
+            stage = "resolve-image";
+            image = ProcessImagePathResolver.Resolve(handle);
+            if (image.Status != ProcessImagePathResolver.Status.Resolved)
+                throw new InvalidOperationException($"Process image query: {image.Status}; exit code: {image.ExitCode}; Win32 error: {image.Win32Error}.");
+            stage = "read-start-time";
+            using var process = Process.GetProcessById(pid.Value);
+            var startedAt = process.StartTime.ToUniversalTime();
+            stage = "write-identity";
+            File.WriteAllText(Path.Combine(root, "launch-identity.json"), JsonSerializer.Serialize(new
+            {
+                pid = pid.Value,
+                startedAt,
+                imagePath = image.Path
+            }));
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                var state = handle is { IsInvalid: false, IsClosed: false }
+                    ? ProcessImagePathResolver.ReadState(handle) : null;
+                File.WriteAllText(Path.Combine(root, "launch-identity-error.json"), JsonSerializer.Serialize(new
+                {
+                    exceptionType = failure.GetType().FullName,
+                    message = failure.Message,
+                    stage,
+                    pid,
+                    pidUnavailable = pid is null ? "unavailable: receipt pid not parsed" : null,
+                    exited = state?.Exited,
+                    exitCode = state?.ExitCode,
+                    stateUnavailable = state?.Exited is null ? "unavailable: process handle could not be inspected" : null,
+                    exitCodeUnavailable = state?.Exited == false ? "unavailable: process still running" :
+                        state?.ExitCode is null ? "unavailable: process state unknown" : null,
+                    openWin32Error,
+                    openUnavailable = openWin32Error is null ? "unavailable: opening not attempted" : null,
+                    queryWin32Error = image?.Win32Error,
+                    stateWin32Error = state?.Win32Error
+                }));
+            }
+            catch (Exception diagnosticFailure)
+            {
+                // A diagnostic-write failure must not replace the original cause.
+                try { Console.Error.WriteLine("Identity diagnostic could not be written: " + diagnosticFailure); }
+                catch (Exception) { /* Preserve the capture failure even if the caller pipe is broken. */ }
+            }
+            throw;
+        }
+        finally { handle?.Dispose(); }
     }
 
     [DllImport("kernel32.dll")]

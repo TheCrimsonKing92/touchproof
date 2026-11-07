@@ -8,7 +8,7 @@ public sealed class OwnerNarratorRuleBoundaryTests
     {
         var path = SourcePath("OwnerActivityNarrator");
 
-        Assert.InRange(File.ReadLines(path).Count(), 1, 260);
+        Assert.InRange(File.ReadLines(path).Count(), 1, 175);
         Assert.DoesNotContain("SameQuestion", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
@@ -16,6 +16,10 @@ public sealed class OwnerNarratorRuleBoundaryTests
     [InlineData("OwnerQuestionRoutes")]
     [InlineData("OwnerEscalationNarration")]
     [InlineData("OwnerAttentionNarration")]
+    [InlineData("OwnerLandingNarration")]
+    [InlineData("OwnerLifecycleStageNarration")]
+    [InlineData("OwnerStallNarration")]
+    [InlineData("OwnerActivityExplanation")]
     public void RuleFile_PresentationOnly_DeclaresOneSmallSealedType(string name)
     {
         var path = SourcePath(name);

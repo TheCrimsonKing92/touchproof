@@ -35,7 +35,7 @@ internal sealed class OwnerEscalationNarration(IReadOnlyList<OwnerConductEvent> 
             return new(lead + text, text, "The conductor or operator will handle the next step.",
                 Spans: question is null ? SingleTitle(name, lead.Length + "about ".Length) : null);
         }
-        var subject = FailureReason(item) is { } plan ? "plan rejected: " + plan :
+        var subject = OwnerLifecycleStageNarration.FailureReason(item) is { } plan ? "plan rejected: " + plan :
             question is not null ? Words(question, "") : head == "owner-review-hold" ? "approval of the completed work" :
             OwnerEscalationReasonText.Plain(rawReason, "the conductor reported a hold on " + name, Words,
                 task => ordered.Take(index).LastOrDefault(value => value.EventKind == "goal-lifecycle" &&

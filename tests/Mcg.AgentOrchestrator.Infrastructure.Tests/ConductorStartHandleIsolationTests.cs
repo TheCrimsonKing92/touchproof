@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.Infrastructure.Tests;
 
 // Parallel-safe: unique roots, named events, child environments and process identities.
@@ -80,6 +81,122 @@ public sealed class ConductorStartHandleIsolationTests
         Assert.Equal($"fake-conductor-stdout pid={conductor.Id}" + Environment.NewLine, ReadLiveLog(stdoutPath));
         Assert.Equal($"fake-conductor-stderr pid={conductor.Id}" + Environment.NewLine, ReadLiveLog(stderrPath));
         Assert.Equal("60", value.GetProperty("args")[3].GetString());
+    }
+
+    [Fact(Skip = "Requires Windows process handles.", SkipUnless = nameof(IsWindows))]
+    public async Task Resolve_LiveThenExitedChild_ReturnsImageThenExitCode()
+    {
+        var expectedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        var start = new ProcessStartInfo(expectedPath)
+        {
+            Arguments = "/d /q /c exit 23",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        start.Environment.Clear();
+        foreach (var key in new[] { "SystemRoot", "WINDIR", "TEMP", "TMP" })
+            if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
+        // The initial thread is the lifecycle gate: the child cannot exit or
+        // initialize its loader until Resume. This forces the old missing-module
+        // condition without a race, inherited output handles or pacing delays.
+        using var child = OwnedProcessGroup.StartSuspended(start);
+        using var handle = ProcessImagePathResolver.Open(child.Process.Id, out var openError);
+        Assert.Equal(0, openError);
+        Assert.False(handle.IsInvalid);
+        for (var index = 0; index < 50; index++)
+        {
+            var live = ProcessImagePathResolver.Resolve(handle);
+            Assert.Equal(ProcessImagePathResolver.Status.Resolved, live.Status);
+            Assert.Equal(expectedPath, live.Path, ignoreCase: true);
+            Assert.Null(live.ExitCode);
+            Assert.Equal(0, live.Win32Error);
+        }
+
+        child.Resume();
+        await child.WaitForOwnedExitAsync(TestContext.Current.CancellationToken);
+        ProcessImagePathResolver.Result? exited = null;
+        var failure = Record.Exception(() => exited = ProcessImagePathResolver.Resolve(handle));
+        Assert.Null(failure);
+        Assert.NotNull(exited);
+        Assert.Equal(ProcessImagePathResolver.Status.Exited, exited.Status);
+        Assert.Equal(23, exited.ExitCode);
+        Assert.Null(exited.Path);
+        Assert.Equal(0, exited.Win32Error);
+    }
+
+    [Theory(Skip = "Requires Windows process diagnostics.", SkipUnless = nameof(IsWindows))]
+    [InlineData("parse-receipt")]
+    [InlineData("open-process")]
+    [InlineData("write-identity")]
+    public async Task IdentityCapture_Failure_PublishesAndSurfacesDiagnostic(string stage)
+    {
+        // This caller creates no descendants. Its exit orders the fixture's pipe
+        // drains; the actual capture method below supplies the failure artifact.
+        using var fixture = new LaunchFixture(configureCallerStart: start => start.Arguments = "/d /q /c exit 23");
+        try
+        {
+            await fixture.Caller.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(23, fixture.Caller.ExitCode);
+            var pid = stage == "open-process" ? 0 : Environment.ProcessId;
+            var receipt = stage == "parse-receipt" ? "{}" : JsonSerializer.Serialize(new { pid });
+            var identityPath = Path.Combine(fixture.Root, "launch-identity.json");
+            if (stage == "write-identity") Directory.CreateDirectory(identityPath);
+            var captureFailure = Record.Exception(() => ConductorStartCallerProbe.CaptureIdentity(fixture.Root, receipt));
+            Assert.NotNull(captureFailure);
+            if (stage == "parse-receipt") Assert.IsType<KeyNotFoundException>(captureFailure);
+            else if (stage == "open-process") Assert.IsType<System.ComponentModel.Win32Exception>(captureFailure);
+            else Assert.IsType<UnauthorizedAccessException>(captureFailure);
+            if (stage == "write-identity") Directory.Delete(identityPath);
+            Assert.False(File.Exists(identityPath));
+
+            var diagnosticPath = Path.Combine(fixture.Root, "launch-identity-error.json");
+            var diagnosticText = File.ReadAllText(diagnosticPath);
+            using var diagnostic = JsonDocument.Parse(diagnosticText);
+            var value = diagnostic.RootElement;
+            Assert.Equal(captureFailure.GetType().FullName, value.GetProperty("exceptionType").GetString());
+            Assert.Equal(captureFailure.Message, value.GetProperty("message").GetString());
+            Assert.Equal(stage, value.GetProperty("stage").GetString());
+            Assert.Equal(JsonValueKind.Null, value.GetProperty("exitCode").ValueKind);
+            Assert.StartsWith("unavailable:", value.GetProperty("exitCodeUnavailable").GetString());
+            if (stage == "parse-receipt")
+            {
+                Assert.Equal(JsonValueKind.Null, value.GetProperty("pid").ValueKind);
+                Assert.StartsWith("unavailable:", value.GetProperty("pidUnavailable").GetString());
+                Assert.Equal(JsonValueKind.Null, value.GetProperty("openWin32Error").ValueKind);
+                Assert.Equal("unavailable: opening not attempted", value.GetProperty("openUnavailable").GetString());
+            }
+            else
+            {
+                Assert.Equal(pid, value.GetProperty("pid").GetInt32());
+                Assert.Equal(stage == "open-process" ? 87 : 0, value.GetProperty("openWin32Error").GetInt32());
+            }
+            if (stage == "write-identity")
+            {
+                Assert.False(value.GetProperty("exited").GetBoolean());
+                Assert.Equal(0, value.GetProperty("queryWin32Error").GetInt32());
+                Assert.Equal(0, value.GetProperty("stateWin32Error").GetInt32());
+            }
+            else
+            {
+                Assert.Equal(JsonValueKind.Null, value.GetProperty("exited").ValueKind);
+                Assert.StartsWith("unavailable:", value.GetProperty("stateUnavailable").GetString());
+            }
+
+            var cleanup = Assert.Throws<AggregateException>(fixture.Dispose);
+            var surfaced = Assert.IsType<InvalidOperationException>(Assert.Single(cleanup.InnerExceptions));
+            Assert.Contains(diagnosticPath, surfaced.Message);
+            Assert.Contains(diagnosticText, surfaced.Message);
+            Assert.Contains("Caller exit code: 23", surfaced.Message);
+            Assert.Contains("Launch receipt (", surfaced.Message);
+        }
+        finally
+        {
+            // A missing identity intentionally retains the root. The controlled
+            // caller has no children, so the test can remove its diagnostic files.
+            _ = Record.Exception(fixture.Dispose);
+            if (Directory.Exists(fixture.Root)) Directory.Delete(fixture.Root, recursive: true);
+        }
     }
 
     private static string ReadLiveLog(string path)
@@ -182,12 +299,20 @@ public sealed class ConductorStartHandleIsolationTests
                 {
                     receipt = "unavailable: " + receiptFailure.Message;
                 }
+                var diagnosticPath = Path.Combine(Root, "launch-identity-error.json");
+                string diagnostic;
+                try { diagnostic = File.ReadAllText(diagnosticPath); }
+                catch (Exception diagnosticFailure) when (diagnosticFailure is IOException or UnauthorizedAccessException)
+                {
+                    diagnostic = "unavailable: " + diagnosticFailure.Message;
+                }
                 throw new InvalidOperationException(
                     $"Caller did not publish launch-identity.json; expected path: {identityPath}." + Environment.NewLine +
                     $"Caller exit code: {exitCode}" + Environment.NewLine +
                     $"Caller stdout: {stdout}" + Environment.NewLine +
                     $"Caller stderr: {stderr}" + Environment.NewLine +
-                    $"Launch receipt ({receiptPath}): {receipt}", failure);
+                    $"Launch receipt ({receiptPath}): {receipt}" + Environment.NewLine +
+                    $"Identity diagnostic ({diagnosticPath}): {diagnostic}", failure);
             }
             using var identity = JsonDocument.Parse(identityText);
             var process = Process.GetProcessById(identity.RootElement.GetProperty("pid").GetInt32());
@@ -196,7 +321,9 @@ public sealed class ConductorStartHandleIsolationTests
                 // Retain the handle and validate start time/image before using the pid.
                 _ = process.SafeHandle;
                 Assert.Equal(identity.RootElement.GetProperty("startedAt").GetDateTime(), process.StartTime.ToUniversalTime());
-                Assert.Equal(identity.RootElement.GetProperty("imagePath").GetString(), process.MainModule!.FileName);
+                var image = ProcessImagePathResolver.Resolve(process.SafeHandle);
+                Assert.Equal(ProcessImagePathResolver.Status.Resolved, image.Status);
+                Assert.Equal(identity.RootElement.GetProperty("imagePath").GetString(), image.Path, ignoreCase: true);
                 return process;
             }
             catch { process.Dispose(); throw; }

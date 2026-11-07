@@ -1,114 +1,293 @@
 using System.Reflection;
-using System.Runtime.ExceptionServices;
-using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: nested scenarios retain their private roots and fixture owners. One outer
-// capacity lease covers the run; nested InitializeAsync must never acquire a second lease.
-public sealed class HeavyFixtureGitLaunchReductionTests(ITestOutputHelper output) : HostCapacityBoundTestBase
+// Parallel-safe: private receipt files, no git, test-body invocation or process-wide state changes.
+public sealed class HeavyFixtureGitLaunchReductionTests : IDisposable
 {
-    private const int ScenarioCompletionHangFailsafeMilliseconds = 1_800_000;
+    private readonly string root = Path.Combine(Path.GetTempPath(), "heavy-fixture-bound-" + Guid.NewGuid().ToString("N"));
 
-    [Fact(Timeout = ScenarioCompletionHangFailsafeMilliseconds)] // Hang detector: all 169 scenario rows must complete.
-    public async Task FiveClasses_ReduceHistoricalAggregateLaunchesByTwentyFivePercent()
+    [Fact]
+    public void Baselines_CurrentDiscovery_PinsSelectionWithoutExecutingBodies()
     {
-        // gate 208e909d-0-20261106160206117, main 0798b6829, first-run slot-timing rows.
-        // Includes all setup and reader-start LaunchObserver events; retries excluded.
-        // Bound operator answer f9e25b4c9cf64f44a92318e95bcfd93d.
-        // Launches stay historical; Rows pins current coverage, including cases added since the baseline.
-        var baseline = new (Type Class, int Launches, int Rows)[]
+        // Historical launch totals belong to the original groups; the split classes retain their rows.
+        var groups = new (string ClassName, Type[] Classes)[]
         {
-            (typeof(AcceptanceCohortWorkflowTestsTrainRedAttribution), 1530, 43),
-            (typeof(MergeTrainFocusedRecheckReceiptContractTests), 174, 4),
-            (typeof(MergeTrainFocusedRecheckRedReceiptRefusalTests), 218, 5),
-            (typeof(MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests), 218, 5),
-            (typeof(MergeTrainFocusedRecheckAttemptRefusalTests), 217, 5),
-            (typeof(MergeTrainFocusedRecheckSelectionRefusalTests), 217, 5),
-            (typeof(MergeTrainFocusedRecheckCompositionRefusalTests), 305, 7),
-            (typeof(AcceptanceCohortWorkflowTestsMergeTrain), 1042, 20),
-            (typeof(PullRequestTrunkDriftTests), 959, 20),
-            (typeof(CliCommandTestsTerminalSweepCommands), 930, 55)
+            (nameof(AcceptanceCohortWorkflowTestsTrainRedAttribution), [typeof(AcceptanceCohortWorkflowTestsTrainRedAttribution)]),
+            ("MergeTrainFocusedRecheckReceiptAcceptanceTests",
+                [typeof(MergeTrainFocusedRecheckReceiptContractTests),
+                 typeof(MergeTrainFocusedRecheckRedReceiptRefusalTests),
+                 typeof(MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests),
+                 typeof(MergeTrainFocusedRecheckAttemptRefusalTests),
+                 typeof(MergeTrainFocusedRecheckSelectionRefusalTests),
+                 typeof(MergeTrainFocusedRecheckCompositionRefusalTests)]),
+            (nameof(AcceptanceCohortWorkflowTestsMergeTrain), [typeof(AcceptanceCohortWorkflowTestsMergeTrain)]),
+            (nameof(PullRequestTrunkDriftTests), [typeof(PullRequestTrunkDriftTests)]),
+            (nameof(CliCommandTestsTerminalSweepCommands), [typeof(CliCommandTestsTerminalSweepCommands)])
         };
-        var identity = HostCapacitySlotTimingWriter.CurrentTestName();
-        Assert.NotEqual("<unknown>", identity);
-        HostCapacitySlotGitCensus.EnsureInstalled(nameof(HeavyFixtureGitLaunchReductionTests));
-        var total = 0;
-        foreach (var entry in baseline)
+        Assert.Equal(groups.Select(group => group.ClassName), HeavyFixtureGitLaunchBoundCheck.Baselines.Select(entry => entry.ClassName));
+        foreach (var entry in HeavyFixtureGitLaunchBoundCheck.Baselines)
         {
-            using var candidates = new CohortCandidateTemplate();
-            using var setup = new WorktreeSetupTemplate();
-            var reads = new ConcurrentDictionary<string, int>(OperatingSystem.IsWindows()
-                ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-            void ObserveRead(string directory)
-            {
-                if (HostCapacitySlotTimingWriter.CurrentTestName() == identity)
-                    reads.AddOrUpdate(directory, 1, (_, count) => count + 1);
-            }
-            GitRevisionReader.Shared.SuccessfulGitRead += ObserveRead;
-            var window = Assert.IsType<HostCapacitySlotGitCensus.Window>(HostCapacitySlotGitCensus.Shared.Open(identity));
+            var group = Assert.Single(groups, candidate => candidate.ClassName == entry.ClassName);
             var rows = 0;
-            try
+            foreach (var type in group.Classes)
             {
-                foreach (var method in entry.Class.GetMethods(BindingFlags.Public | BindingFlags.Instance).OrderBy(m => m.Name))
+                foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
                 {
                     var fact = method.GetCustomAttribute<FactAttribute>(inherit: true);
                     if (fact is null) continue;
                     Assert.Null(fact.Skip);
-                    var inline = method.GetCustomAttributesData().Where(a => a.AttributeType == typeof(InlineDataAttribute)).ToArray();
-                    Assert.False(fact is TheoryAttribute && inline.Length == 0,
-                        $"The launch census must explicitly support data discovery for {entry.Class.Name}.{method.Name}.");
-                    IEnumerable<object?[]> data = inline.Length == 0 ? [Array.Empty<object?>()] : inline.Select(attribute =>
-                        ((IEnumerable<CustomAttributeTypedArgument>)attribute.ConstructorArguments[0].Value!).Select(argument =>
-                            argument.ArgumentType.IsEnum ? Enum.ToObject(argument.ArgumentType, argument.Value!) : argument.Value).ToArray());
-                    foreach (var arguments in data)
-                    {
-                        var constructor = Assert.Single(entry.Class.GetConstructors());
-                        var parameters = constructor.GetParameters().Select(parameter => parameter.ParameterType == typeof(CohortCandidateTemplate)
-                            ? (object)candidates : parameter.ParameterType == typeof(WorktreeSetupTemplate) ? setup :
-                            parameter.ParameterType == typeof(ITestOutputHelper) ? output :
-                            throw new InvalidOperationException($"Unowned fixture parameter {parameter.ParameterType}.")).ToArray();
-                        var instance = constructor.Invoke(parameters);
-                        try
-                        {
-                            object? result;
-                            try { result = method.Invoke(instance, arguments); }
-                            catch (TargetInvocationException ex) when (ex.InnerException is not null)
-                            {
-                                ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-                                throw;
-                            }
-                            if (result is Task task) await task;
-                            else if (result is ValueTask valueTask) await valueTask;
-                            else Assert.Null(result);
-                            rows++;
-                        }
-                        finally
-                        {
-                            if (instance is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync();
-                            else if (instance is IDisposable disposable) disposable.Dispose();
-                        }
-                    }
+                    var inline = method.GetCustomAttributesData().Count(attribute => attribute.AttributeType == typeof(InlineDataAttribute));
+                    Assert.False(fact is TheoryAttribute && inline == 0,
+                        $"The launch census must explicitly support data discovery for {type.Name}.{method.Name}.");
+                    rows += Math.Max(1, inline);
                 }
             }
-            finally
-            {
-                GitRevisionReader.Shared.SuccessfulGitRead -= ObserveRead;
-                var delta = Assert.IsType<HostCapacitySlotGitCensus.GitLaunchDelta>(window.Close());
-                output.WriteLine($"{entry.Class.Name}: rows={rows}; launches={delta.Launches}; historical={entry.Launches}");
-                output.WriteLine("subcommands: " + string.Join(", ", delta.Subcommands.OrderByDescending(pair => pair.Value)
-                    .Select(pair => $"{pair.Key}={pair.Value}")));
-                output.WriteLine("top callers: " + string.Join(", ", (delta.Callers ?? new Dictionary<string, int>())
-                    .OrderByDescending(pair => pair.Value).Take(5).Select(pair => $"{pair.Key}={pair.Value}")));
-                output.WriteLine($"successful file-miss reads by repository: once={reads.Count(pair => pair.Value == 1)}; " +
-                    $"repeated={reads.Count(pair => pair.Value > 1)}; reads={reads.Values.Sum()}");
-                total += delta.Launches;
-            }
-            Assert.Equal(entry.Rows, rows); // A smaller selected set must never masquerade as savings.
+            Assert.Equal(entry.Rows, rows); // A smaller selection must never masquerade as savings.
         }
-        var historicalTotal = baseline.Sum(entry => entry.Launches);
-        Assert.Equal(5810, historicalTotal);
-        output.WriteLine($"aggregate={total}; historical={historicalTotal}; maximum={historicalTotal * 0.75}");
-        Assert.True(total * 4L <= historicalTotal * 3L,
-            $"Five-class git launches {total} exceed 75% of the committed 0798b6829 baseline {historicalTotal}.");
+        Assert.Equal(169, HeavyFixtureGitLaunchBoundCheck.Baselines.Sum(entry => entry.Rows));
+        Assert.Equal(5810, HeavyFixtureGitLaunchBoundCheck.Baselines.Sum(entry => entry.Launches));
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(4357, true)]
+    [InlineData(4358, false)]
+    public void Evaluate_CompleteCoverage_EnforcesHistoricalBound(int launches, bool passed)
+    {
+        var result = Evaluate(Write("complete", Rows(), launches));
+        Assert.Equal(passed, result.Passed);
+        Assert.False(result.Advisory);
+        Assert.Equal(passed ? 0 : 1, result.ExitCode);
+        Assert.StartsWith(passed ? "status=passed" : "status=failed", result.ResultSummary);
+        Assert.Contains($"launches={launches}; historical=5810; maximum=4357; rows=169", result.ResultSummary);
+        foreach (var baseline in HeavyFixtureGitLaunchBoundCheck.Baselines)
+            Assert.Contains(baseline.ClassName, result.OutputTail);
+    }
+
+    [Fact]
+    public void Evaluate_MissingClass_SkipsEvenAboveBound()
+    {
+        var missing = HeavyFixtureGitLaunchBoundCheck.Baselines[^1];
+        var result = Evaluate(Write("four-classes", Rows().Where(row => !row.StartsWith(missing.ClassName + ".", StringComparison.Ordinal)), 9000));
+        AssertSkipped(result, missing.ClassName);
+        Assert.Contains($"{missing.ClassName} (0/{missing.Rows})", result.ResultSummary);
+    }
+
+    [Fact]
+    public void Evaluate_DuplicateRows_CannotReplaceMissingCoverage()
+    {
+        var rows = Rows().ToArray();
+        var result = Evaluate(Write("duplicate", rows.Skip(1).Append(rows[1]), 0));
+        AssertSkipped(result, "missing rows");
+        Assert.Contains("rows=168", result.ResultSummary);
+    }
+
+    [Fact]
+    public void Evaluate_ExtraDistinctRow_FailsSelectionDrift()
+    {
+        var result = Evaluate(Write("excess", Rows().Append(Rows().First().Replace("row: 0", "row: 999")), 0));
+        AssertMalformed(result, "excess distinct rows");
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("empty")]
+    [InlineData("missing-field")]
+    [InlineData("missing-row")]
+    [InlineData("wrong-method")]
+    public void Evaluate_IncompleteCensus_NeverPasses(string defect)
+    {
+        var path = Write("incomplete", Rows(), 0);
+        var sidecar = LaneSlotTimingReader.PathFor(path);
+        var lines = File.ReadAllLines(sidecar);
+        switch (defect)
+        {
+            case "absent": File.Delete(sidecar); break;
+            case "empty": File.WriteAllText(sidecar, ""); break;
+            case "missing-field": lines[0] = lines[0].Replace(",\"git_launches\":0", ""); break;
+            case "missing-row": lines = lines.Skip(1).ToArray(); break;
+            case "wrong-method": lines[0] = lines[0].Replace(".Scenario", ".Other"); break;
+        }
+        if (defect is not "absent" and not "empty") File.WriteAllLines(sidecar, lines);
+        AssertSkipped(Evaluate(path), defect == "absent" ? "unreadable slot timing" : "missing");
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1.5")]
+    [InlineData("\"bad\"")]
+    [InlineData("null")]
+    [InlineData("9223372036854775808")]
+    public void Evaluate_InvalidLaunchCount_FailsMeasurement(string value)
+    {
+        var path = Write("invalid-count", Rows(), 0);
+        var sidecar = LaneSlotTimingReader.PathFor(path);
+        var lines = File.ReadAllLines(sidecar);
+        lines[0] = lines[0].Replace("\"git_launches\":0", "\"git_launches\":" + value);
+        File.WriteAllLines(sidecar, lines);
+        AssertMalformed(Evaluate(path), "invalid git_launches");
+    }
+
+    [Theory]
+    [InlineData("{")]
+    [InlineData("{}")]
+    [InlineData("null")]
+    public void Evaluate_MalformedRelevantSidecar_FailsMeasurement(string invalid)
+    {
+        var path = Write("malformed", Rows(), 0);
+        File.AppendAllText(LaneSlotTimingReader.PathFor(path), invalid + Environment.NewLine);
+        AssertMalformed(Evaluate(path), "malformed");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Evaluate_Overflow_FailsMeasurement(bool acrossClasses)
+    {
+        var path = Write("overflow", Rows(), long.MaxValue);
+        File.AppendAllText(LaneSlotTimingReader.PathFor(path), TimingRow(acrossClasses ? Rows().Last() : Rows().First(), 1)
+            + Environment.NewLine);
+        AssertMalformed(Evaluate(path), acrossClasses ? "aggregate launch count overflow" : "OverflowException");
+    }
+
+    [Fact]
+    public void Evaluate_Reruns_CountsEveryAttemptAndDeduplicatesReceiptPaths()
+    {
+        var first = Write("first", Rows(), 4000);
+        var rerun = Write("rerun", Rows().Take(1), 200);
+        var within = Write("within", Rows().Take(1), 158);
+        var check = Check(first) with
+        {
+            LaneRerun = new("first", [first], [], "failing-trx", "rerun", [rerun], [], null, "flake"),
+            WithinAttemptRerun = new("partition", "failing-trx", "first", "within", 1, [within])
+        };
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([check, Check(rerun)]));
+        Assert.False(result.Passed);
+        Assert.False(result.Advisory);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("launches=4358", result.ResultSummary);
+        Assert.Contains("rows=169", result.ResultSummary);
+    }
+
+    [Fact]
+    public void Evaluate_RetryOfIncompleteSelection_CannotFillCoverageGap()
+    {
+        var first = Write("partial", Rows().Skip(1), 0);
+        var retry = Write("partial-retry", Rows().Skip(1), 0);
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([Check(first), Check(retry)]));
+        AssertSkipped(result, "missing rows");
+        Assert.Contains("rows=168", result.ResultSummary);
+    }
+
+    [Fact]
+    public void Evaluate_ReusedPriorGate_CannotSupplyCoverageOrLaunches()
+    {
+        var current = Write("current", Rows().Skip(1), 0);
+        var prior = Write("prior", Rows(), 9000);
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate(
+            [Check(current), Check(prior) with { TestResultIsExplicitCrossAttemptReuse = true }]));
+        AssertSkipped(result, "missing rows");
+        Assert.Contains("launches=0", result.ResultSummary);
+    }
+
+    [Fact]
+    public void Evaluate_Crosswalk_UsesNormalizedTrx()
+    {
+        var path = Write("normalized", Rows(), 4357);
+        var check = Check(Path.Combine(root, "native.json")) with
+        {
+            CrosswalkDiagnostics = [], NormalizedTestResultPaths = [path]
+        };
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([check]));
+        Assert.True(result.Passed);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    public void Evaluate_UnreadableTrx_SkipsCompleteOtherEvidence(string defect)
+    {
+        var good = Write("good", Rows(), 0);
+        var broken = Path.Combine(root, "broken.trx");
+        if (defect == "unreadable") File.WriteAllText(broken, "<broken");
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([Check(good), Check(broken)]));
+        AssertSkipped(result, "unreadable TRX");
+    }
+
+    [Theory]
+    [InlineData("Skipped")]
+    [InlineData("NotExecuted")]
+    public void Evaluate_UnexecutedRows_DoNotCountAsCoverage(string outcome)
+    {
+        var path = Write("unexecuted", Rows(), 0);
+        var trx = XDocument.Load(path);
+        trx.Descendants("UnitTestResult").First().SetAttributeValue("outcome", outcome);
+        trx.Save(path);
+        AssertSkipped(Evaluate(path), "missing rows");
+    }
+
+    [Fact]
+    public void Evaluate_SimilarClassAndUnrelatedInvalidCounts_AreIgnored()
+    {
+        var unrelated = Rows().First().Replace("TestsTrainRedAttribution", "TestsTrainRedAttributionExtra");
+        var other = Write("other", [unrelated], long.MaxValue);
+        File.AppendAllText(LaneSlotTimingReader.PathFor(other), "{bad json" + Environment.NewLine);
+        Assert.Null(HeavyFixtureGitLaunchBoundCheck.Evaluate([Check(other)]));
+        var good = Write("selected", Rows(), 4357);
+        var result = Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([Check(good), Check(other)]));
+        Assert.True(result.Passed);
+        Assert.Contains("launches=4357", result.ResultSummary);
+        Assert.Null(HeavyFixtureGitLaunchBoundCheck.Evaluate([]));
+    }
+
+    private static IEnumerable<string> Rows() => HeavyFixtureGitLaunchBoundCheck.Baselines.SelectMany(entry =>
+        Enumerable.Range(0, entry.Rows).Select(index => $"{entry.ClassName}.Scenario(row: {index})"));
+
+    private string Write(string name, IEnumerable<string> rows, long launches)
+    {
+        Directory.CreateDirectory(root);
+        var identities = rows.ToArray();
+        Assert.NotEmpty(identities);
+        var path = Path.Combine(root, name + ".trx");
+        new XDocument(new XElement("TestRun", new XElement("Results", identities.Select((identity, index) =>
+            new XElement("UnitTestResult", new XAttribute("testId", index), new XAttribute("testName", identity),
+                new XAttribute("outcome", "Passed")))))).Save(path);
+        File.WriteAllLines(LaneSlotTimingReader.PathFor(path), identities.Select((identity, index) =>
+            TimingRow(identity, index == 0 ? launches : 0)));
+        return path;
+    }
+
+    private static string TimingRow(string identity, long launches) => JsonSerializer.Serialize(new
+    {
+        test_name = identity[..identity.IndexOf('(')], git_launches = launches, slot_count = 0
+    });
+
+    private static AcceptanceCheckResult Check(string path) => new("lane", true, 0, null, TestResultPaths: [path]);
+    private static AcceptanceCheckResult Evaluate(string path) =>
+        Assert.IsType<AcceptanceCheckResult>(HeavyFixtureGitLaunchBoundCheck.Evaluate([Check(path)]));
+
+    private static void AssertSkipped(AcceptanceCheckResult result, string reason)
+    {
+        Assert.False(result.Passed);
+        Assert.True(result.Advisory);
+        Assert.Null(result.ExitCode);
+        Assert.StartsWith("status=skipped;", result.ResultSummary);
+        Assert.Contains(reason, result.ResultSummary);
+    }
+
+    private static void AssertMalformed(AcceptanceCheckResult result, string reason)
+    {
+        Assert.False(result.Passed);
+        Assert.False(result.Advisory);
+        Assert.Equal(1, result.ExitCode);
+        Assert.StartsWith("status=failed; reason=malformed:", result.ResultSummary);
+        Assert.Contains(reason, result.OutputTail);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 }
