@@ -576,6 +576,8 @@ public sealed class GoalAdvancementOperations
 
         var admission = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .GetPreparedAdmission(goal.Id.Value, taskId.Value, kernel.GetTask(goal.Id, taskId).LastDispatch!.DispatchedAt);
+        if (!GoalRepositoryDispatchProvisioning.TryProvision(goal, kernel.GetTask(goal.Id, taskId), out var provisioningFailure))
+            throw new DurableDispatchStartFailureException(new DispatchProcessStartFailure(taskId, provisioningFailure));
         var startResult = new BackgroundDispatchRunner
         {
             RetryCorrectionConditionOracle = SourceSizeRatchetObligationOracle.Evaluate,

@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -283,7 +283,7 @@ public sealed partial class AgentOrchestratorKernel
                 headerLines.Add($"- HEAD commit: {targetHeadCommit.Trim()}");
             }
         }
-
+        headerLines.AddRange(GoalRepositoryBriefSection.Render(repositoryWorktrees));
         if (task.RequiredRole == AgentRole.Reviewer && reviewRetryCap is not null)
         {
             headerLines.Add($"Review retry budget: round {reviewRetryCap.Round}/{reviewRetryCap.StopRound}.");

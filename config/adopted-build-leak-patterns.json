@@ -1,0 +1,7 @@
+{
+  "github-token": "(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pa[t]_[A-Za-z0-9_]{20,})",
+  "secret-key": "(?<![A-Za-z0-9])s[k]-[A-Za-z0-9_-]{20,}",
+  "aws-access-key-id": "(?<![A-Za-z0-9])(?:AKI[A]|ASI[A])[A-Z0-9]{16}(?![A-Za-z0-9])",
+  "pem-private-key": "-----BEGIN [A-Z ]*PRIVATE KE[Y]-----",
+  "slack-token": "(?<![A-Za-z0-9])xox[bp]-[A-Za-z0-9-]{10,}"
+}

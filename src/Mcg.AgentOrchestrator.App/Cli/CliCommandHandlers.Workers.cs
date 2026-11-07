@@ -497,6 +497,11 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, goal, task),
         HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
+    if (!GoalRepositoryDispatchProvisioning.TryProvision(goal, task, out var provisioningFailure))
+    {
+        context.FailAfterCommit(provisioningFailure);
+        return;
+    }
     var startResult = CliWorkerDispatchRunnerFactory.Create(context.Workspace).TryStartLatestDispatch(
         context.Kernel,
         goal.Id,

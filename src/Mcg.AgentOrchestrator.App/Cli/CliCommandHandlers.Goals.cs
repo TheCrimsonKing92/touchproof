@@ -293,6 +293,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var goalPipelineRequest = ResolveGoalIntakePipelineRequest(parts);
             var goalDependsOn = CliGoalDependencyCommands.ResolveAtCreation(context, parts);
+            var goalRepositories = GoalRepositoriesArgument.Resolve(parts, context.Workspace, context.ProjectRegistry);
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
@@ -377,6 +378,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             var preparedSourceBacklogDependencies = CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
+            if (goalRepositories is not null) context.Kernel.DeclareGoalRepositories(context.CurrentGoal.Id, goalRepositories);
             context.FinalizeGoalCreation(context.CurrentGoal, preparedSourceBacklogDependencies);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
             if (summary)
@@ -1096,6 +1098,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var noRecord = HasCliConfirmation(parts, "--no-record");
             var acceptanceGoalPart = GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, acceptanceGoalPart);
+            if (CliMultiRepositoryGateHold.Apply(context, context.CurrentGoal)) return true;
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
             AutoVerifyFromGitEvidence(context, context.CurrentGoal);
             if (RunAcceptanceWorkspaceMerge(context, skipVerify))
@@ -1338,7 +1341,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return HandleGoalsPrune(context, parts);
 
         case "conduct":
-            if (IsHelpRequested(parts))
+            if (parts.Any(CliCommandHelp.IsHelpFlag))
             {
                 CliCommandHelp.TryPrintStartupHelp(parts);
                 return false;

@@ -2445,6 +2445,9 @@ public sealed partial class AgentOrchestratorKernel
         Append(GetGoal(goalId), null, ProgressKind.RemovalReferenceCensusRecorded,
             RemovalReferenceCensusBriefSection.StoredPrefix + "\n" + renderedCensus);
 
+    public void DeclareGoalRepositories(GoalId goalId, GoalRepositoryDeclaration declaration) =>
+        GetGoal(goalId).DeclareRepositories(declaration);
+
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);
 

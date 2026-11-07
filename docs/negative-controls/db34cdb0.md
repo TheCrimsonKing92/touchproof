@@ -37,7 +37,7 @@ place (unused under the mutation), every retained condition (`total > 0`, `execu
 ## Invocation
 
 Both arms ran the same managed-runner command from the goal worktree
-`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0`:
+`C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0`:
 
 ```powershell
 .\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter "FullyQualifiedName~ConductorAcceptanceCohortTests"
@@ -55,7 +55,7 @@ failed ConductorAcceptanceCohortTests.SkippedRowWithMatchingCounters_IsPassed (2
   Assert.Equal() Failure: Values differ
   Expected: Passed
   Actual:   InfrastructureFailure
-    at ConductorAcceptanceCohortTests.SkippedRowWithMatchingCounters_IsPassed() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\ConductorAcceptanceCohortTests.cs:285
+    at ConductorAcceptanceCohortTests.SkippedRowWithMatchingCounters_IsPassed() in C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\ConductorAcceptanceCohortTests.cs:285
 ```
 
 ```
@@ -137,7 +137,7 @@ every other condition was untouched, and no test file was edited between arms.
 ## Invocation
 
 Both arms ran the same managed-runner command from the goal worktree
-`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0`:
+`C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0`:
 
 ```powershell
 .\scripts\Invoke-TestSummary.ps1 -Target tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter "FullyQualifiedName~ConductorAcceptanceCohortTests"
@@ -150,7 +150,7 @@ failed ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsI
   Assert.Equal() Failure: Values differ
   Expected: InfrastructureFailure
   Actual:   Passed
-    at ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\ConductorAcceptanceCohortTests.cs:331
+    at ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure() in C:\example\repo\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\ConductorAcceptanceCohortTests.cs:331
 ```
 
 ```

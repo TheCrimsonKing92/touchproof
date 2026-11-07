@@ -215,6 +215,14 @@ public sealed class Goal
 
     public GoalHoldState? CurrentHold { get; private set; }
     public GoalDeliveredForReview? DeliveredForReview { get; private set; }
+    public GoalRepositoryDeclaration? Repositories { get; private set; }
+
+    internal void DeclareRepositories(GoalRepositoryDeclaration declaration)
+    {
+        if (Repositories is not null || _tasks.Any(task => task.LastDispatch is not null))
+            throw new InvalidOperationException("Repositories can only be declared once before dispatch.");
+        Repositories = declaration;
+    }
 
     internal void RecordDeliveredForReview(GoalDeliveredForReview delivery, Action<ProgressEvent> writeEvent)
     {
@@ -1515,7 +1523,7 @@ public sealed class Goal
             ExplicitDisposition: ExplicitDisposition,
             ParkedLifecycleStatus: ParkedLifecycleStatus,
             LandingBlocker: LandingBlocker,
-            DeliveredForReview: DeliveredForReview);
+            DeliveredForReview: DeliveredForReview, Repositories: Repositories);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1642,6 +1650,7 @@ public sealed class Goal
         goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
         goal.DeliveredForReview = snapshot.DeliveredForReview;
+        goal.Repositories = snapshot.Repositories;
         goal.LandingBlocker = IsTerminalMetadataStatus(snapshot.Status) ? null : snapshot.LandingBlocker;
 
         return goal;

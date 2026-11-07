@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] | goal --text-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] | goal --brief-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --text-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] | goal --brief-file <path> [--pipeline <auto|scout|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] [--depends-on <goal-prefix>] [--repositories default,<key>[,<key>...]] (--depends-on is repeatable, combines with --backlog-item and cannot be combined with --simple, --run or --from-backlog)";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
@@ -156,7 +156,7 @@ internal static class CliCommandHelp
     private static readonly string[] GoalOwnFlags =
     [
         "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--summary",
-        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic", "--depends-on",
+        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic", "--depends-on", "--repositories",
         ..GoalRoleOverrideFlags,
         ..HelpFlags
     ];
@@ -795,6 +795,11 @@ internal static class CliCommandHelp
         "Report required Windows Defender exclusions; add missing roots only with --apply while elevated.",
         ["--apply", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry PushAdopted = new(
+        CliPushAdoptedCommand.Usage,
+        "Publish one adopted commit after a leak scan, fast-forward only; holds raise operator attention.",
+        ["--remote", "--branch", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
         "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
@@ -804,6 +809,7 @@ internal static class CliCommandHelp
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["project"] = Flags("--root"),
+            ["push-adopted"] = Flags("--remote", "--branch"),
             ["status"] = Flags("--tasks-only"),
             ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
             ["hermes-acp-trial"] = Flags(
@@ -975,6 +981,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
         Console.WriteLine("  conductor         Start, report or stop the conductor.");
         Console.WriteLine("  host-exclusions   Report or explicitly apply host scan exclusions.");
+        Console.WriteLine("  push-adopted      Scan and publish an exact adopted commit, fast-forward only.");
         Console.WriteLine("  help <command>    Show command-specific help.");
     }
 
@@ -1434,6 +1441,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("host-exclusions", StringComparison.OrdinalIgnoreCase))
         {
             entry = HostExclusions;
+            return true;
+        }
+
+        if (args[0].Equals("push-adopted", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = PushAdopted;
             return true;
         }
 
@@ -1914,7 +1927,7 @@ internal static class CliCommandHelp
             ? CliArgumentParser.SplitCommand(value)
             : [value];
 
-    private static bool IsHelpFlag(string arg) =>
+    internal static bool IsHelpFlag(string arg) =>
         arg.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
         arg.Equals("-h", StringComparison.OrdinalIgnoreCase);
 

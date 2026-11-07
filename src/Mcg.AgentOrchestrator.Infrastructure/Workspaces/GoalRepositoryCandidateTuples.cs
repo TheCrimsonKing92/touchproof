@@ -11,11 +11,16 @@ public static class GoalRepositoryCandidateTuples
         out RepositoryCandidateTuple? tuple,
         out string failureReason,
         Func<string, IReadOnlyList<string>, string>? manifestIdentity = null,
-        string? projectHomeDirectory = null) =>
+        string? projectHomeDirectory = null,
+        Func<string, string?>? projectHomeDirectoryForWorktree = null,
+        bool allowUnchangedRepositories = false) =>
         TryCompute(repositories, bindings, (path, branch) =>
         {
+            var projectHome = projectHomeDirectoryForWorktree is null ? projectHomeDirectory : projectHomeDirectoryForWorktree(path);
             var ok = GoalWorktrees.TryComputeCandidateIdentity(path, branch, out var identity,
-                out var reason, manifestIdentity, projectHomeDirectory);
+                out var reason, manifestIdentity, projectHome);
+            if (!ok && allowUnchangedRepositories && reason == "empty-change")
+                return GoalRepositoryUnchangedCandidate.Compute(path, manifestIdentity, projectHome);
             return (ok, identity, reason);
         }, out tuple, out failureReason);
 

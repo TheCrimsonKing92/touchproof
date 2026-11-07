@@ -12,7 +12,7 @@
   "paidProcessStartedCount": 6,
   "scorecardEligible": false,
   "workerShell": {
-    "executable": "C:\\Users\\miles\\AppData\\Local\\Programs\\PowerShell\\7\\pwsh.exe",
+    "executable": "C:\\example\\repo\\AppData\\Local\\Programs\\PowerShell\\7\\pwsh.exe",
     "arguments": [
       "-NoProfile",
       "-NonInteractive",
@@ -24,7 +24,7 @@
     ],
     "contractSha256": "8f1f2d136fc992c8b770f1a1f38ab7d558e559106441a1b4734cd0cf81193b4b"
   },
-  "resolvedCommand": "codex exec --json --skip-git-repo-check --model 'gpt-5.6-sol' -c model_reasoning_effort='low' -c project_doc_max_bytes=65536 --sandbox 'read-only' --cd 'C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.orchestrator-worktrees\\de762740'",
+  "resolvedCommand": "codex exec --json --skip-git-repo-check --model 'gpt-5.6-sol' -c model_reasoning_effort='low' -c project_doc_max_bytes=65536 --sandbox 'read-only' --cd 'C:\\example\\repo\\vcs\\mcg-agent-orchestrator\\.orchestrator-worktrees\\de762740'",
   "requiredContextInventory": [
     {
       "logicalIdentity": "AGENTS.md",
