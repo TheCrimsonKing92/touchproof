@@ -133,9 +133,9 @@ public sealed class FocusedEvidenceUnionPlanningTests
             var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "MtpTestRunnerScriptTests.cs"), """
-                public class AcceptanceLaneStallPolicyTests { }
-                public class AcceptancePartitionVerdictCacheWithinAttemptRerunTests { }
-                public class MtpTestRunnerScriptTestsSilenceGuard { }
+                public class AcceptanceLaneStallPolicyTests { [Xunit.Fact] public void Runs() { } }
+                public class AcceptancePartitionVerdictCacheWithinAttemptRerunTests { [Xunit.Fact] public void Runs() { } }
+                public class MtpTestRunnerScriptTestsSilenceGuard { [Xunit.Fact] public void Runs() { } }
                 public class MtpTestRunnerScriptTests
                 {
                     [Xunit.Fact] public void ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild() { }
