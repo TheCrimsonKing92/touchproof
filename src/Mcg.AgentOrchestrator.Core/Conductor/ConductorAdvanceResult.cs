@@ -17,7 +17,8 @@ public enum ConductorHoldOwner
     DurableOutbox,
     WorkerCapacity,
     Environment,
-    PullRequestReview
+    PullRequestReview,
+    Operator
 }
 
 public abstract record ConductorAdvanceOutcome

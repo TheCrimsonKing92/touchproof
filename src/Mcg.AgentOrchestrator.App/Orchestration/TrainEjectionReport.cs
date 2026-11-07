@@ -67,7 +67,7 @@ internal static class TrainEjectionReport
     {
         if (result.Outcome is not ConductorAdvanceOutcome.Held held) return result;
         var originalReason = OriginalHoldReason(held);
-        var reason = DescribeWaitingHold(driver, goalId, originalReason);
+        var reason = DescribeWaitingHold(driver, goalId, held, originalReason);
         if (reason == held.Reason) return result;
         var described = held with { Reason = reason };
         OriginalHoldReasons.Add(described, originalReason);
@@ -77,8 +77,10 @@ internal static class TrainEjectionReport
     internal static string OriginalHoldReason(ConductorAdvanceOutcome.Held held) =>
         OriginalHoldReasons.TryGetValue(held, out var reason) ? reason : held.Reason;
 
-    internal static string DescribeWaitingHold(ConductorDriver driver, GoalId goalId, string reason)
+    internal static string DescribeWaitingHold(
+        ConductorDriver driver, GoalId goalId, ConductorAdvanceOutcome.Held held, string reason)
     {
+        if (!IsTrainWaitHold(held)) return reason;
         if (driver.ExecutionDirectory is not { } executionDirectory) return reason;
         try
         {
@@ -101,6 +103,11 @@ internal static class TrainEjectionReport
             return reason;
         }
     }
+
+    // Landing waits are Verified; recovery can also resolve to Verified without being a train wait.
+    private static bool IsTrainWaitHold(ConductorAdvanceOutcome.Held held) =>
+        held.State == GoalLifecycleState.Verified &&
+        held.Decision?.Stage != FailedGoalRecoveryDecisionRecords.StageName;
 
     internal static string DescribeHold(string? stateDirectory, GoalId goalId, string detail)
     {
