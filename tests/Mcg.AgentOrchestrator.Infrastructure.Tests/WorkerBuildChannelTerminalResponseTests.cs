@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: fixture-owned repository, pipe, capture files and native child job.
-public sealed class WorkerBuildRequestChannelTerminalResponseTests
+public sealed class WorkerBuildChannelTerminalResponseTests
 {
     [Theory]
     [InlineData(false)]
