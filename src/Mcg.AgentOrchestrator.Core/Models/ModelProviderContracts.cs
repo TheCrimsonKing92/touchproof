@@ -113,6 +113,8 @@ public sealed record TaskVerificationRecord(
 
     public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
 
+    public WorkerWriteIntegrityObservation? WriteIntegrityObservation { get; init; }
+
     public bool Succeeded => ExitCode == 0 && string.IsNullOrWhiteSpace(OrchestratorFailureReason);
 
     public bool HasSameRoundIdentity(TaskVerificationRecord other)
@@ -152,6 +154,7 @@ public sealed record TaskVerificationRecord(
         return this with
         {
             ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
+            WriteIntegrityObservation = preferred.WriteIntegrityObservation ?? WriteIntegrityObservation,
             CandidateIdentity = preferred.CandidateIdentity ?? CandidateIdentity,
             AcceptanceCriteriaVersionHash = preferred.AcceptanceCriteriaVersionHash ?? AcceptanceCriteriaVersionHash,
             InconclusiveRoundInputs = InconclusiveRoundInputs ?? preferred.InconclusiveRoundInputs,

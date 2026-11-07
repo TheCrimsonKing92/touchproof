@@ -24,7 +24,9 @@ internal static class AutomaticWorkerRetryCause
             return null;
         }
 
-        if (outcome.OutcomeClass == TaskOutcomeClass.Finding)
+        if (outcome.OutcomeClass == TaskOutcomeClass.Finding ||
+            string.Equals(TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt),
+                TaskOutcomeRules.WorkerWriteIntegrityBlocked.Token, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
