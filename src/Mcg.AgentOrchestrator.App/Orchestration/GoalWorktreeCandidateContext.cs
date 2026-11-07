@@ -12,6 +12,7 @@ internal static class GoalWorktreeCandidateContext
             workspace.ExecutionDirectory, workspace.IntegrationBranch));
         return goal =>
         {
+            if (goal.Repositories is not null) return GoalRepositoryCandidateIdentity.Compute(goal, workspace);
             var path = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
             if (path is null) return (null, "missing-worktree");
             GoalWorktrees.TryComputeCandidateIdentity(path, workspace.IntegrationBranch, out var identity, out var failure,

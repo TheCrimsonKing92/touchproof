@@ -84,6 +84,12 @@ internal static class GoalIntakeRequestMapper
             dependencyPayload["dependsOn"] = JsonSerializer.SerializeToNode(dependsOn);
             canonical = dependencyPayload.ToJsonString();
         }
+        if (GoalRepositoriesArgument.Resolve(args, workspace) is { } repositories)
+        {
+            var repositoryPayload = JsonNode.Parse(canonical)!.AsObject();
+            repositoryPayload["repositories"] = JsonSerializer.SerializeToNode(repositories);
+            canonical = repositoryPayload.ToJsonString();
+        }
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
         return new GoalIntakeRequestDescriptor(requestKey, fingerprint, mode, objective);
     }
@@ -176,7 +182,7 @@ internal static class GoalIntakeRequestMapper
         "--ideation" or "--researcher" or "--planner" or "--developer" or "--tester" or "--reviewer";
 
     private static bool IsValueFlag(string value) => value.ToLowerInvariant() is
-        "--request-key" or "--brief-file" or "--text-file" or "--pipeline" or "--depends-on" or
+        "--request-key" or "--brief-file" or "--text-file" or "--pipeline" or "--depends-on" or "--repositories" or
         "--backlog-item" or "--backlog-coverage" or "--ideation" or "--researcher" or
         "--planner" or "--developer" or "--tester" or "--reviewer";
 }

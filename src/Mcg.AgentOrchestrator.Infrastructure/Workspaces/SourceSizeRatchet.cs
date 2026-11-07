@@ -165,7 +165,8 @@ internal static class SourceSizeRatchet
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 574), // def5cd48: planner conflict probe and existing-policy escalation.
+            // Goal 350ad330: exclude multi-repository goals from gate-ready projection before I/O.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 575), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 345),
@@ -566,7 +567,8 @@ internal static class SourceSizeRatchet
             // extracting only that option would separate it from the dependency checks it gates (+2 lines).
             // Goal 871a6f45 keeps retry, hold opening and dispatch ordered in the shared attributed-failure
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
-            new SourceClassCeiling("ConductorDriver", 14250, 70),
+            // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
+            new SourceClassCeiling("ConductorDriver", 14256, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -607,7 +609,8 @@ internal static class SourceSizeRatchet
             // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
             // Goal 0d141bc6 passes resolved policy features at the existing loop/watch construction seams;
             // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
-            new SourceClassCeiling("CliCommandHandlers", 11021, 30),
+            // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
+            new SourceClassCeiling("CliCommandHandlers", 11030, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -667,7 +670,8 @@ internal static class SourceSizeRatchet
             // Goal 509d0c91 adds the optional request kind at the existing locked recorder entry point;
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9103, 28),
+            // Goal 350ad330: declaration mutation and brief-section call; rendering remains in its own type.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9106, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

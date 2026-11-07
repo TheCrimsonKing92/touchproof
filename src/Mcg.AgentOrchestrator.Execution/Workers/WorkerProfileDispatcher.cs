@@ -242,7 +242,7 @@ public static partial class WorkerProfileDispatcher
             changedExistingTests: changedExistingTests.Entries,
             changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
             acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
-            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome));
+            integrationBranchPromptName: integrationBranch, roleRequirementStack: ProjectStackResolver.GuidanceStackFor(workingDirectory, targetHome), repositoryWorktrees: GoalRepositoryBriefEntries.For(goal, workingDirectory));
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
