@@ -1804,6 +1804,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 RunId: attempt.AttemptId,
                 ResultsPrefix: prefix,
                 LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id],
+                MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers([(candidate.Goal.Id, candidate.Goal.Objective)]),
                 LaneWaitSink: observations => PersistLaneWaits(attempt, observations)));
     }
 

@@ -72,6 +72,41 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     }
 
     [Xunit.Fact]
+    public void InlineLanding_SoloGateOptionsCarryObjectiveDeclaredRemovals()
+    {
+        var executionDirectory = CreateTempDirectory();
+        try
+        {
+            const string first = "Example.Tests.RemovedTests.First";
+            const string second = "Example.Tests.RemovedTests.Second";
+            var (kernel, goal) = SimpleGoal($"## Acceptance criteria\n- test-removal: `{first}`\n- test-removal: `{second}`");
+            PassVerification(kernel, goal, goal.Tasks.Single());
+            var worktreePath = GoalWorktrees.WorktreePath(executionDirectory, goal.Id);
+            Directory.CreateDirectory(worktreePath);
+            WriteSourceSizeAuthority(worktreePath, maximumLineCount: 3, actualLineCount: 3);
+            AcceptanceRunExecutionOptions? captured = null;
+            var driver = MakeAcceptanceDriver(
+                runAcceptanceVerificationWithOptions: (_, _, _, _, options) =>
+                {
+                    captured = options;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                executionDirectory: executionDirectory);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.NotNull(captured);
+            Assert.Equal([goal.Id], captured.AttemptMemberGoalIds);
+            Assert.Equal([new MemberDeclaredTestRemoval(goal.Id, first), new(goal.Id, second)], captured.MemberTestRemovals);
+        }
+        finally
+        {
+            Directory.Delete(executionDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void ConductorDriverNoTickLandingUsesLeasedSharedAttempt()
     {
         var attemptRoot = CreateTempDirectory();
@@ -431,7 +466,9 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Func<DateTimeOffset>? utcNow = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceVerification = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
-        string? executionDirectory = null) =>
+        string? executionDirectory = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>?
+            runAcceptanceVerificationWithOptions = null) =>
         new(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             () => 0,
@@ -469,7 +506,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             noTickAcceptancePollDelay: noTickAcceptancePollDelay,
             noTickAcceptancePollTimeout: noTickAcceptancePollTimeout,
             utcNow: utcNow,
-            executionDirectory: executionDirectory);
+            executionDirectory: executionDirectory,
+            runAcceptanceVerificationWithOptions: runAcceptanceVerificationWithOptions);
 
     private static void WriteSourceSizeAuthority(
         string root,

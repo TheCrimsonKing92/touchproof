@@ -7,10 +7,11 @@ using Timeout = System.Threading.Timeout;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKeySurface
+internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKeySurface, IOwnerConsoleBindingSurface
 {
     private readonly OwnerConsoleScreenController _controller;
     private readonly OwnerConsoleKeyRouter _router;
+    private readonly OwnerConsoleBindingRunner _bindingRunner;
     private readonly IApplication _app;
     private readonly IKeyboard? _keyboard;
     private readonly OwnerConsoleInputDiagnostics? _diagnostics;
@@ -102,17 +103,20 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
-    bool IOwnerConsoleKeySurface.EditingCommand { get => _editingCommand; set => _editingCommand = value; }
+    public bool EditingCommand { get => _editingCommand; set => _editingCommand = value; }
     string? IOwnerConsoleKeySurface.CompletionHint { set => _completionHint = value; }
-    View? IOwnerConsoleKeySurface.CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
+    public View? CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
     int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
     int IOwnerConsoleKeySurface.SelectedBoardIndex => _selectedBoardIndex;
     string? IOwnerConsoleKeySurface.SelectedFieldKey { get => _selectedFieldKey; set => _selectedFieldKey = value; }
     bool IOwnerConsoleKeySurface.CopySelectionValid { set => _copySelectionValid = value; }
     OwnerConsoleViewModel? IOwnerConsoleKeySurface.ArrangedBoard => _arrangedBoard;
-    bool IOwnerConsoleKeySurface.Rendering { set => _rendering = value; }
-    OwnerConsoleActivityPane IOwnerConsoleKeySurface.ActivityModel => _activityPane;
+    public bool Rendering { set => _rendering = value; }
+    public OwnerConsoleActivityPane ActivityModel => _activityPane;
     OwnerConsoleFieldSnapshot? IOwnerConsoleKeySurface.DecisionFields => _decisionsPane.SelectedFields;
+    int IOwnerConsoleBindingSurface.ActivityWidth => _activityWidth;
+    IDisposable? IOwnerConsoleBindingSurface.BeginActivitySourceReplacement() => _diagnostics?.Begin("activity-source-replacement", TraceState);
+    void IOwnerConsoleBindingSurface.RequestStop() => _app.RequestStop(Window);
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
@@ -251,6 +255,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         };
         RenderHints();
         _router = new(this, _controller, _operation, _clipboard, _collapse, _token);
+        _bindingRunner = new(this, _controller, _operation, _boardSource is null ? null : _boardSource.HandleScope, _refresh, _token);
         _keyboard = app.Initialized ? app.Keyboard : null;
         if (_keyboard is not null) _keyboard.KeyDown += OnKeyDown;
         if (_diagnostics is not null) _app.LayoutAndDrawComplete += OnLayoutAndDrawComplete;
@@ -474,77 +479,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     private Task HandleKeyCoreAsync(Key key) => _router.RouteAsync(key);
 
-    public async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false)
-    {
-        if (binding == OwnerConsoleBindings.Quit)
-        {
-            await _controller.HandleKeyAsync(0, binding.Key!.Value, cancellationToken: _token);
-            _app.RequestStop(Window);
-            return;
-        }
-        if (ActionRunning) return;
-        if ((binding.Command is "goal" or "gate" or "accept" or "answer") && RefuseSelectedBoardRow()) return;
-        if (binding == OwnerConsoleBindings.ProjectScope)
-        {
-            StartAction();
-            var result = _boardSource?.HandleScope(argument) ?? new OwnerConsoleScopeCommandResult(
-                "scope: project registry unavailable in this session", false, false);
-            ShowNotice(result.Message, result.Success ? OwnerConsoleNoticeSeverity.Success : OwnerConsoleNoticeSeverity.Failure,
-                OwnerConsoleNoticeSource.Action);
-            if (result.Changed) await _refresh();
-        }
-        else if (binding.Owner == OwnerConsoleCommandOwner.Controller)
-            await ActAsync(ct => _controller.RunCommandAsync(binding.Command, _operation, ct));
-        else if (binding == OwnerConsoleBindings.Gate)
-        { StartAction(); OpenGate(argument); }
-        else if (binding == OwnerConsoleBindings.Epics)
-        { StartAction(); await EpicView.OpenAsync(FocusedPane); }
-        else if (binding == OwnerConsoleBindings.Help)
-            await ActAsync(_ => _controller.ShowHelpAsync());
-        else if (binding.Scope == OwnerConsoleScope.Decisions)
-        {
-            if (FocusedPane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
-                await ActAsync(ct => _controller.HandleKeyAsync(0, binding.Key!.Value, _operation, ct));
-            else if (FocusedPane != OwnerConsolePane.Decisions)
-            {
-                StartAction();
-                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(binding.Key!.Value, FocusedPane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-            }
-        }
-        else if (binding == OwnerConsoleBindings.Follow)
-        { StartAction(); FocusPane(OwnerConsolePane.Activity); FollowLatest(); }
-        else if (binding == OwnerConsoleBindings.Filter)
-        {
-            if (fromKey)
-            {
-                _commandReturnFocus = _activity;
-                _editingCommand = true;
-                _command.Text = OwnerConsoleActivityFilter.CommandText(_activityPane.Filter);
-                _command.InsertionPoint = _command.Text.Length;
-                _command.SetFocus();
-                RenderHints();
-                return;
-            }
-            StartAction();
-            FocusPane(OwnerConsolePane.Activity);
-            _rendering = true;
-            try
-            {
-                using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
-                _activityPane.Refilter(_controller.Model, argument, _activityWidth);
-            }
-            finally { _rendering = false; }
-            RenderHints();
-            RenderOverflow();
-            ShowNotice(_activityPane.Filter is { } filter ? OwnerConsoleActivityFilter.AppliedNotice(filter,
-                _activityPane.Rows.Count(row => row.ItemIndex is not null),
-                Math.Min(_controller.Model?.Activity.Length ?? 0, OwnerConsoleViewModelBuilder.MaxActivityItems))
-                : OwnerConsoleActivityFilter.ClearedNotice, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
-        }
-        else throw new InvalidOperationException($"No view action for binding {binding.Command}.");
-    }
+    public Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false) => _bindingRunner.RunAsync(binding, argument, fromKey);
 
-    private void OpenGate(string? goalId = null)
+    public void OpenGate(string? goalId = null)
     {
         var gate = _controller.Model?.Gate;
         if (goalId is not null && gate?.ForMember(goalId) is null)
