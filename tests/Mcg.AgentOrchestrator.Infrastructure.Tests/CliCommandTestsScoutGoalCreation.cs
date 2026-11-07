@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsScoutGoalCreation : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Theory]
     [Xunit.InlineData("scout")]
     public async Task GoalCreateForcedPipelinePersistsExactTaskOrder(string pipeline)

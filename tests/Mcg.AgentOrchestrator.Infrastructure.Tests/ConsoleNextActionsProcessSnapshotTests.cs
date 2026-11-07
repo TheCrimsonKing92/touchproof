@@ -4,6 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ConsoleNextActionsProcessSnapshotTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public void PrintNextActions_MultipleTasksAndItems_ReusesProcessSnapshot()
     {

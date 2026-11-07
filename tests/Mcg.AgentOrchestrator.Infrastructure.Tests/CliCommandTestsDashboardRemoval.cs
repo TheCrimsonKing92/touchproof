@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsDashboardRemoval : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Theory]
     [InlineData("http://localhost:5087")]
     [InlineData("https://localhost:5087")]

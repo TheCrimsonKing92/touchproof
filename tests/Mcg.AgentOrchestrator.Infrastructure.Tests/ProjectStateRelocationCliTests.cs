@@ -7,6 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each fact owns all directories, SQLite stores and console capture.
 public sealed class ProjectStateRelocationCliTests : HostCapacityBoundTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public void FreshCreateAndShowPrintDataPathsWithoutWritingIntoTarget()
     {

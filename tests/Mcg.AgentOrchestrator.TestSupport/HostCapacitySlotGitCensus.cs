@@ -14,6 +14,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
     private readonly Dictionary<string, Dictionary<string, int>> counts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, int>> callers = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<Window>> openWindows = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<UnslottedWatch>> unslottedWatches = new(StringComparer.Ordinal);
     [ThreadStatic] private static long stackWalks;
     private static readonly ConcurrentDictionary<MethodBase, CallerFrame> callerFrames = new();
 
@@ -142,6 +143,7 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
         try
         {
             var name = currentTestName();
+            string[] destinations;
             lock (sync)
             {
                 if (!counts.TryGetValue(name, out var commands))
@@ -153,9 +155,66 @@ public sealed class HostCapacitySlotGitCensus(Func<string> currentTestName)
                 var callerCount = checked(sources.GetValueOrDefault(key) + 1);
                 commands[subcommand] = commandCount;
                 sources[key] = callerCount;
+                // Nested fixtures can share a test identity and destination. Each launch
+                // still produces only one row there, while each fixture owns its lifetime.
+                destinations = unslottedWatches.TryGetValue(name, out var watches)
+                    ? watches.Select(watch => watch.Destination).Distinct(StringComparer.Ordinal).ToArray() : [];
             }
+            foreach (var destination in destinations)
+                HostCapacitySlotTimingWriter.TryAppend(destination, name, 0, 0, 0,
+                    new GitLaunchDelta(1, new Dictionary<string, int> { [subcommand] = 1 },
+                        new Dictionary<string, int> { [caller + "|" + subcommand] = 1 }), unslotted: true);
         }
         catch (Exception error) { Diagnose(error); }
+    }
+
+    public UnslottedWatch? OpenUnslotted(string testName, string destination)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(testName) || testName == "<unknown>" || string.IsNullOrEmpty(destination))
+                return null;
+            lock (sync)
+            {
+                var watch = new UnslottedWatch(this, testName, destination);
+                if (!unslottedWatches.TryGetValue(testName, out var watches))
+                    unslottedWatches[testName] = watches = new();
+                watches.Add(watch);
+                return watch;
+            }
+        }
+        catch (Exception error) { Diagnose(error); return null; }
+    }
+
+    public sealed class UnslottedWatch
+    {
+        private readonly HostCapacitySlotGitCensus census;
+        private readonly string testName;
+        private bool closed;
+        internal string Destination { get; }
+
+        internal UnslottedWatch(HostCapacitySlotGitCensus census, string testName, string destination)
+        {
+            this.census = census;
+            this.testName = testName;
+            Destination = destination;
+        }
+
+        public void Close()
+        {
+            try
+            {
+                lock (census.sync)
+                {
+                    if (closed) return;
+                    closed = true;
+                    var watches = census.unslottedWatches[testName];
+                    watches.Remove(this);
+                    if (watches.Count == 0) census.unslottedWatches.Remove(testName);
+                }
+            }
+            catch (Exception error) { Diagnose(error); }
+        }
     }
 
     public Window? Open(string testName)

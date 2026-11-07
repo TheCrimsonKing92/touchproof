@@ -6,6 +6,8 @@ using Microsoft.Data.Sqlite;
 // Parallel-safe: each workspace and its unpooled SQLite connections belong to this test.
 public sealed class CliBacklogUpdateWorkspaceTemplateTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Xunit.Fact]
     public async Task CopyTo_RefinedWorkspaceBaseline_MatchesStoreAndHandlerOutcome()
     {

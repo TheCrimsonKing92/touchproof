@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Collection(TestCollections.CliProcessEnvironment)]
 public sealed class BoardFillCliGoalIntakeTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Fact]
     public async Task Real_adapter_replays_one_goal_with_full_backlog_link_and_applies_dependency()
     {

@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: every case owns its SQLite stores, journal, evidence and fake runner.
 public sealed class FinalizedLandingBranchRetirementTests : CliCommandTestBase
 {
+    private protected override bool UsesGit => false;
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
