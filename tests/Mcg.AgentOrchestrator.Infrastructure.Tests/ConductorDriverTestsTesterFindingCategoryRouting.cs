@@ -19,7 +19,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         var developer = goal.Tasks.Single(task => task.Id.Value == "2d0c7585098040d6aa868bd8568a49bb");
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var checkpointDispatch = developer.DispatchHistory[0];
-        Xunit.Assert.Equal("a104a98deeed4719", DispatchIdentity.BuildId(goal.Id, developer.Id, checkpointDispatch));
+        Xunit.Assert.Equal("16e557fcd274fa62", DispatchIdentity.BuildId(goal.Id, developer.Id, checkpointDispatch));
         Xunit.Assert.Equal(checkpointDispatch.FailedRoundCheckpointDecision!.DispatchId,
             DispatchIdentity.BuildId(goal.Id, developer.Id, checkpointDispatch));
         Xunit.Assert.Null(checkpointDispatch.ResultCommit);
@@ -143,8 +143,9 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
     {
         // Retained task-history.json and incident-timeline.json under operator-evidence/
         // tester-routing-20261028, cutoff 00:40Z before the manual Developer retry.
-        // Remap only Git object IDs into an isolated graph: retained ff8df75a is an integration
-        // merge whose first parent is checkpoint d1a712d9. Goal/task/dispatch identities, times,
+        // Remap Git object IDs into an isolated graph: retained ff8df75a is an integration
+        // merge whose first parent is checkpoint d1a712d9. Rebind the dispatch ID to the
+        // anonymized command/directory; goal/task identities, times,
         // no-change round and mixed findings retain the incident's structured evidence.
         const string goalId = "45469eead6f54022b9a2f9f3e32d695a";
         const string developerId = "2d0c7585098040d6aa868bd8568a49bb";
@@ -155,7 +156,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
             DateTimeOffset.Parse("2026-10-27T22:00:24.4560594Z"),
             BaseCommit: "7b393558262c05c2e3f8d0cbdcbda6e2c7387659",
             FailedRoundCheckpointDecision: control == "missing" ? null : new FailedRoundCheckpointDecision(
-                control == "wrong-dispatch" ? "another-dispatch" : "a104a98deeed4719",
+                control == "wrong-dispatch" ? "another-dispatch" : "16e557fcd274fa62",
                 control == "failed" ? FailedRoundCheckpointOutcome.CommitFailed : FailedRoundCheckpointOutcome.Committed,
                 control == "empty-commit" ? "" : control == "unchanged-commit"
                     ? "7b393558262c05c2e3f8d0cbdcbda6e2c7387659"
