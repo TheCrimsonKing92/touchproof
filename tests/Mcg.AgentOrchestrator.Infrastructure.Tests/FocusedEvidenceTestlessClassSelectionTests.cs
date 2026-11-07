@@ -154,6 +154,42 @@ public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocu
         Assert.Single(fixture.Calls.Where(args => args.Contains("--filter-class")));
     }
 
+    [Theory]
+    [InlineData("NotExecuted")]
+    [InlineData("Skipped")]
+    public void MixedReceipt_SkippedFactCannotSupplyExecutionCoverage(string skippedOutcome)
+    {
+        using var fixture = new Fixture();
+        fixture.Write("""
+            public class SkippedTests { [Xunit.Fact(Skip = "deliberate zero execution")] public void DoesNotRun() {} }
+            public class FailedTests { [Xunit.Fact] public void Fails() {} }
+            """);
+        var check = Assert.Single(fixture.Plan("AlphaTests;SkippedTests;FailedTests", out var planCoverage));
+        Assert.Null(planCoverage.DroppedSelections);
+        Assert.Equal(3, check.FocusedEvidenceTokens.Count);
+        var receipt = Path.Combine(fixture.Root, "mixed.trx");
+        File.WriteAllText(receipt, $$"""
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="passed" testName="AlphaTests.Runs" outcome="Passed" />
+                <UnitTestResult testId="failed" testName="FailedTests.Fails" outcome="Failed" />
+                <UnitTestResult testId="skipped" testName="SkippedTests.DoesNotRun" outcome="{{skippedOutcome}}" />
+              </Results>
+              <ResultSummary outcome="Failed">
+                <Counters total="3" executed="2" passed="1" failed="1" notExecuted="1" />
+              </ResultSummary>
+            </TestRun>
+            """);
+
+        var execution = GoalAcceptanceVerifierTestTelemetry.ExtractTrxExecutedTestIdentities([receipt]);
+        Assert.Empty(execution.UnreadableReceiptPaths);
+        Assert.Equal(new[] { "AlphaTests.Runs", "FailedTests.Fails" }, execution.Identities);
+        var coverage = GoalAcceptanceVerifierTestTelemetry.InspectFocusedEvidenceSelectionCoverage(
+            check.FocusedEvidenceSelections, [receipt]);
+        Assert.Empty(coverage.UnreadableReceiptPaths);
+        Assert.Equal("FullyQualifiedName~SkippedTests", Assert.Single(coverage.UncoveredSelections));
+    }
+
     [Fact]
     public void TraitAndTestlessDrops_PreserveBothReasonsInOrder()
     {

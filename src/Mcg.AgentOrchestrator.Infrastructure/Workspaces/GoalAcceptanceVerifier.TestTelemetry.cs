@@ -219,7 +219,9 @@ internal static class GoalAcceptanceVerifierTestTelemetry
                     .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
                 identities.AddRange(document
                     .Descendants()
-                    .Where(element => element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal))
+                    .Where(element => element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                        !string.Equals(element.Attribute("outcome")?.Value?.Trim(), "NotExecuted", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(element.Attribute("outcome")?.Value?.Trim(), "Skipped", StringComparison.OrdinalIgnoreCase))
                     .Select(result =>
                     {
                         definitionsByTestId.TryGetValue(
