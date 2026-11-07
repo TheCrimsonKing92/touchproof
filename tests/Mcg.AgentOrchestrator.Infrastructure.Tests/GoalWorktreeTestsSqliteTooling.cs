@@ -561,80 +561,91 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
 
     [Xunit.Fact(DisplayName = "InvokeRepoScript_StartOrchestratorCommand_emits_parseable_launch_json")]
     public void InvokeRepoScriptStartOrchestratorCommandEmitsParseableLaunchJson()
+        => AssertStartOrchestratorCommandLaunchJson();
+
+    internal static void AssertStartOrchestratorCommandLaunchJson(
+        Action<LauncherScriptTests.LauncherScenarioArtifacts>? observeArtifacts = null)
     {
-        var repoRoot = FindCurrentSourceRoot();
-        var sandboxPath = Path.Combine(Path.GetTempPath(), $"start-orchestrator-command-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(sandboxPath);
+        using var sandbox = LauncherScriptTests.CreateLauncherRepositorySandbox(FindCurrentSourceRoot());
+        var repoRoot = sandbox.RepositoryRoot;
+        var sandboxPath = repoRoot;
+        var hostPath = Path.Combine(sandboxPath, "fake-dotnet.cmd");
+        File.WriteAllText(hostPath, """
+            @echo off
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
+            """);
+
+        var appScriptPath = Path.Combine(sandboxPath, "fake-app.ps1");
+        File.WriteAllText(appScriptPath, """
+            param(
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [string[]]$Arguments
+            )
+
+            Start-Sleep -Milliseconds 250
+            $Arguments | ConvertTo-Json -Compress
+            """);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        LauncherScriptTests.ConfigureLauncherScenarioEnvironment(startInfo, repoRoot);
+        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = hostPath;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
+        startInfo.ArgumentList.Add("-Name");
+        startInfo.ArgumentList.Add("goal-worktree-launch-json-test");
+        startInfo.ArgumentList.Add("-AppDll");
+        startInfo.ArgumentList.Add(appScriptPath);
+        startInfo.ArgumentList.Add("conduct");
+        startInfo.ArgumentList.Add("--loop");
+
+        var result = RunRedirectedProcess(startInfo, "Start-OrchestratorCommand.ps1");
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+
+        var outputLines = stdout.Split(
+            ["\r\n", "\n"],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(outputLines);
+
+        using var document = JsonDocument.Parse(outputLines[0]);
+        var root = document.RootElement;
+        var pid = root.GetProperty("pid").GetInt32();
+        var stdoutPath = root.GetProperty("stdoutPath").GetString();
+        var stderrPath = root.GetProperty("stderrPath").GetString();
+        var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+
+        Assert.True(pid > 0);
+        Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
+        Assert.False(string.IsNullOrWhiteSpace(stderrPath));
+        Assert.Equal(new[] { appScriptPath, "conduct", "--loop" }, args);
+        Assert.True(DateTimeOffset.TryParse(root.GetProperty("startedAt").GetString(), out _));
+
         try
         {
-            var hostPath = Path.Combine(sandboxPath, "fake-dotnet.cmd");
-            File.WriteAllText(hostPath, """
-                @echo off
-                powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
-                """);
-
-            var appScriptPath = Path.Combine(sandboxPath, "fake-app.ps1");
-            File.WriteAllText(appScriptPath, """
-                param(
-                    [Parameter(ValueFromRemainingArguments = $true)]
-                    [string[]]$Arguments
-                )
-
-                Start-Sleep -Milliseconds 250
-                $Arguments | ConvertTo-Json -Compress
-                """);
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                WorkingDirectory = repoRoot,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = hostPath;
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-ExecutionPolicy");
-            startInfo.ArgumentList.Add("Bypass");
-            startInfo.ArgumentList.Add("-File");
-            startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
-            startInfo.ArgumentList.Add("scripts\\Start-OrchestratorCommand.ps1");
-            startInfo.ArgumentList.Add("-Name");
-            startInfo.ArgumentList.Add("goal-worktree-launch-json-test");
-            startInfo.ArgumentList.Add("-AppDll");
-            startInfo.ArgumentList.Add(appScriptPath);
-            startInfo.ArgumentList.Add("conduct");
-            startInfo.ArgumentList.Add("--loop");
-
-            var result = RunRedirectedProcess(startInfo, "Start-OrchestratorCommand.ps1");
-            var stdout = result.Stdout;
-            var stderr = result.Stderr;
-            Assert.Equal(0, result.ExitCode);
-            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
-
-            var outputLines = stdout.Split(
-                ["\r\n", "\n"],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            Assert.Single(outputLines);
-
-            using var document = JsonDocument.Parse(outputLines[0]);
-            var root = document.RootElement;
-            var pid = root.GetProperty("pid").GetInt32();
-            var stdoutPath = root.GetProperty("stdoutPath").GetString();
-            var stderrPath = root.GetProperty("stderrPath").GetString();
-            var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
-
-            Assert.True(pid > 0);
-            Assert.False(string.IsNullOrWhiteSpace(stdoutPath));
-            Assert.False(string.IsNullOrWhiteSpace(stderrPath));
-            Assert.Equal(new[] { appScriptPath, "conduct", "--loop" }, args);
-            Assert.True(DateTimeOffset.TryParse(root.GetProperty("startedAt").GetString(), out _));
+            using var child = Process.GetProcessById(pid);
+            Assert.True(child.WaitForExit(20000), $"Launched command pid {pid} did not exit within 20 seconds.");
         }
-        finally
+        catch (ArgumentException)
         {
-            DeleteDirectory(sandboxPath);
+            // Short commands can exit before the test reopens the emitted PID.
         }
+
+        LauncherScriptTests.AssertLauncherScenarioArtifacts(repoRoot, "goal-worktree-launch-json-test",
+            stdoutPath!, stderrPath!, observeArtifacts, journalRequired: true);
     }
 
     [Xunit.Fact(DisplayName = "GoalHealthEvaluator_prioritizes_dirty_worktree_before_next_action")]
