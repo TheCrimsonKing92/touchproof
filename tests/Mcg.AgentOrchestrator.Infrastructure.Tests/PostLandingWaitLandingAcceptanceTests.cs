@@ -2,9 +2,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Private git fixtures; the collection owns the landing runner's shared hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PostLandingWaitLandingAcceptanceTests
+// Parallel safe: git fixtures are private; landing runner hooks are flow-local.
+public sealed class PostLandingWaitLandingAcceptanceTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(PostLandingOperatorCheck.Availability, true)]

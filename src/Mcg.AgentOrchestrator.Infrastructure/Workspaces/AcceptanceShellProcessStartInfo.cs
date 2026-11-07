@@ -76,6 +76,16 @@ internal static class AcceptanceShellProcessStartInfo
         configureEnvironment?.Invoke(startInfo.Environment);
         resolvedCommandPath = null;
 
+        if (arguments.Length > 0 && arguments[0] == "git")
+        {
+            startInfo.FileName = arguments[0];
+            if (GitExecutable.Prepare(startInfo) && startInfo.FileName != arguments[0])
+            {
+                arguments = (string[])arguments.Clone();
+                arguments[0] = startInfo.FileName;
+            }
+        }
+
         if (OperatingSystem.IsWindows())
         {
             if (string.IsNullOrWhiteSpace(stdoutRedirectTarget) != string.IsNullOrWhiteSpace(stderrRedirectTarget))

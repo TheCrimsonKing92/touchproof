@@ -54,7 +54,7 @@ internal sealed class AcceptanceBalancedLanePlanWriter
             (result.TestResultAttemptId is { } attemptId && attemptId != _plan.AttemptId)) return;
         var laneName = _plan.Scheduled.FirstOrDefault(name => check.Name.EndsWith(": " + name, StringComparison.Ordinal)) ?? check.Name;
         var names = laneName == layout.ResidualLaneName ? AcceptanceClassDurationResultReader.ReadNames(result.TestResultPaths) : null;
-        var durations = result.Passed ? AcceptanceClassDurationResultReader.Read(result.TestResultPaths) : null;
+        var durations = result.Passed ? AcceptanceClassDurationResultReader.ReadModelInputs(result.TestResultPaths) : null;
         lock (_sync)
         {
             if (names is not null)
@@ -62,7 +62,7 @@ internal sealed class AcceptanceBalancedLanePlanWriter
                     { ResidualClasses = names, ResidualObserved = true } };
             if (durations is not null)
                 _samples.AddRange(durations.Select(pair => new AcceptanceClassDurationHistoryStore.Sample(
-                    _plan.AttemptId, laneName, pair.Key, pair.Value)));
+                    _plan.AttemptId, laneName, pair.Key, pair.Value.Seconds, pair.Value.SlotHeldSeconds, pair.Value.SlotCount)));
         }
     }
 

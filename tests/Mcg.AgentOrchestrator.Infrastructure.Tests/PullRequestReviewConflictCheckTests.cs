@@ -5,9 +5,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-// Each test owns its repository and stores; LandingExecutor's GitRunner seam is shared.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestReviewConflictCheckTests
+// Parallel safe: each test owns its repository and stores; GitRunner overrides are flow-local.
+public sealed class PullRequestReviewConflictCheckTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Url = PullRequestLandingTestFixture.Url;
 

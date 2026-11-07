@@ -4,8 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTests
+public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private static readonly Lazy<string> GitRepositoryTemplate = new(() =>
     {

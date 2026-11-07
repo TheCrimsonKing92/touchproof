@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static LandingExecutorTests;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsIntegrationMergeBody
+public sealed class LandingExecutorTestsIntegrationMergeBody : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Xunit.Theory]
     [Xunit.InlineData("# Readable landing merges\nDetails", "Goal: Readable landing merges")]

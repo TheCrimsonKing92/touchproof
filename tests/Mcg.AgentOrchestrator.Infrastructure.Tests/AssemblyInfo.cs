@@ -29,11 +29,15 @@ public sealed class DotnetBuildEnvironmentManagerProcessSpawnGuardCollection;
 [Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
 public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// Fault injection replaces LandingExecutor.GitRunner process-wide; legacy landing
-// fixtures also require an isolated build root. Scoped cleanup tests need neither guard.
-[Xunit.CollectionDefinition(TestCollections.LandingGitRunner, DisableParallelization = true)]
-[ProcessLocalTestCollection("GitRunner and environment overrides are process-local; fixture storage roots are atomically claimed unique directories.")]
-public sealed class LandingGitRunnerCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+// The repository-template test changes process-wide GIT_AUTHOR_DATE, inherited by git children.
+// EnvMutation requires a different acceptance-lane resource key; guard only this local state here.
+// Other landing classes use flow-local GitRunner overrides and independent build-root class fixtures.
+[Xunit.CollectionDefinition(LandingGitAuthorDateEnvironmentCollection.CollectionName, DisableParallelization = true)]
+[ProcessLocalTestCollection("GIT_AUTHOR_DATE is process-local; repository and build storage roots are atomically claimed unique directories.")]
+public sealed class LandingGitAuthorDateEnvironmentCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
+{
+    public const string CollectionName = "LandingGitAuthorDateEnvironment";
+}
 
 // Persistent-runner and dispatch CLI fixtures overwrite process-wide environment variables
 // (worker sandbox enablement, dispatch-start suppression) that no per-operation context owns

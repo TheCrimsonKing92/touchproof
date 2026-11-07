@@ -1,8 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Xunit;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PullRequestLandingDeliveryFailureTests
+public sealed class PullRequestLandingDeliveryFailureTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData("origin", "no-github-origin")]

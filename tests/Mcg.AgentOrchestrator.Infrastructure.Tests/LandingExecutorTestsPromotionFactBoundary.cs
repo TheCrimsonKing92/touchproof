@@ -4,10 +4,9 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-// Serialized with the Landing lane because GitRunner is an existing shared test seam.
+// Parallel safe: GitRunner overrides are flow-local; the class fixture retains build-root isolation.
 // Every Git repository/database is private; correctness uses the injected instant.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsPromotionFactBoundary
+public sealed class LandingExecutorTestsPromotionFactBoundary : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private static readonly DateTimeOffset At = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
 

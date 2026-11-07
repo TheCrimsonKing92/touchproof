@@ -904,7 +904,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalTextView.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
-                ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal, Console.Error.WriteLine),
                 tasksOnly
                     ? null
                     : GoalPortfolioMembershipReader.Read(context.Workspace.PortfolioStorePath, context.CurrentGoal.Id.Value),
@@ -923,7 +923,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             MonitorTextView.Print(
                 context.Kernel.BuildMonitor(context.CurrentGoal.Id),
-                ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal, Console.Error.WriteLine));
             return false;
 
         case "goal-timing":

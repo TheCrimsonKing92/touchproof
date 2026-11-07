@@ -536,6 +536,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
                 Path.GetFullPath(dotnetIsolatedRoot);
         }
+        GitExecutable.Prepare(startInfo);
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
                 startInfo,

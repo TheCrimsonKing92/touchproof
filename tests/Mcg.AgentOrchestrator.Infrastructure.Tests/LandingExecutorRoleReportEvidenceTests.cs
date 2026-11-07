@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Real git repositories use the existing landing runner's isolated fixture and cleanup.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorRoleReportEvidenceTests
+// Parallel safe: real git repositories are fixture-owned; the class fixture retains build-root isolation.
+public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(true)]

@@ -5,8 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLandingDenylist;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class AcceptanceCohortWorkflowTestsDenylistOwnerHold : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsDenylistOwnerHold : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     internal const string Watched = "src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs";
 

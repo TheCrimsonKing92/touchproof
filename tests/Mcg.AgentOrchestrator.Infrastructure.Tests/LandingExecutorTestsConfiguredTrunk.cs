@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static LandingExecutorTests;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsConfiguredTrunk
+public sealed class LandingExecutorTestsConfiguredTrunk : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void MirrorPushesAndReportsConfiguredIntegrationBranch()

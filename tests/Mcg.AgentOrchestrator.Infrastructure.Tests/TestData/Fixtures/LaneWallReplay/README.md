@@ -1,0 +1,5 @@
+Synthetic recorded gate. Balanced 1 holds two 90-second serial classes sequentially on one slot; lanes 2 and 3 each run a 120-second class with measured zero slot occupancy. Sum-only LPT stacks the 90-second classes; the wall model separates them and predicts a 120-second maximum, versus the recorded 180-second maximum.
+
+Run: `gate-stats replay --gate <absolute-path-to-gate.json>` (repeat `--gate` for multiple gates). The JSON manifest explicitly binds a gate id, one-gate receipt JSONL, and per-lane TRX paths; all artifact paths are manifest-relative. Optional `classes` entries (`fullName`, `collection`) preserve recorded collection membership; unmapped classes are singleton units. Optional positive `slotCount` pins the replay configuration. Select balanced-pool receipts only, exactly one per lane, and their successful first-run TRX files with adjacent `.slot-timing.jsonl` sidecars. Replay is retrospective, not an out-of-sample forecast.
+
+`history.json` adds two members of a run-alone collection for packer coverage. It retains version 1 and the original `seconds` semantics.

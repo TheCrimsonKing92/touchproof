@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Isolated lifecycle/store fixtures; share the landing fixture's git-runner collection.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class CliAttentionPostLandingDutyReadTests
+// Parallel safe: lifecycle/store fixtures are private; the class fixture retains build-root isolation.
+public sealed class CliAttentionPostLandingDutyReadTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     private const string Unrelated = "ffffffffaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string Parked = "fffffffeaaaaaaaaaaaaaaaaaaaaaaaa";

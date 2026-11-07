@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Real git landing integration; shares the existing LandingGitRunner collection's global-runner isolation.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorGateTestObligationRenameTests
+// Real git landing integration with fixture-owned repositories and an isolated build-root class fixture.
+public sealed class LandingExecutorGateTestObligationRenameTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void ProvenGoalRename_LandsWithoutObligationWaiver()

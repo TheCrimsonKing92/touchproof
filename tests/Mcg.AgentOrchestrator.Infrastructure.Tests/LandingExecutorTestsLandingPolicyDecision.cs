@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static LandingExecutorTests;
 
-// Owns a temporary repository; shares the LandingExecutor git seam's serial collection.
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsLandingPolicyDecision
+// Parallel safe: owns a temporary repository; LandingExecutor git overrides are flow-local.
+public sealed class LandingExecutorTestsLandingPolicyDecision : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData("acceptance", 2, "acceptance-not-accepted")]

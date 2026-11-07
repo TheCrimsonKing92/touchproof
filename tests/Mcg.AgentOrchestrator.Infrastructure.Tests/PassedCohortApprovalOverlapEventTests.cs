@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 
-// Each scenario owns its repository and stores; the collection isolates landing git hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PassedCohortApprovalOverlapEventTests : AcceptanceCohortWorkflowTests
+// Parallel safe: each scenario owns its repository and stores; landing git hooks are flow-local.
+public sealed class PassedCohortApprovalOverlapEventTests : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(true)]

@@ -180,7 +180,7 @@ public sealed class GateLaneReceiptTests
 
     private static void AssertRow(JsonElement row, string lane, int run, double wall, string source, DateTimeOffset now)
     {
-        Assert.Equal(26, row.EnumerateObject().Count());
+        Assert.Equal(29, row.EnumerateObject().Count());
         Assert.True(row.TryGetProperty("slowdown_status", out var slowdownStatus));
         Assert.True(row.TryGetProperty("slowdown_ratio", out var slowdownRatio));
         if (slowdownStatus.GetString() != "slow") Assert.Equal(JsonValueKind.Null, slowdownRatio.ValueKind);

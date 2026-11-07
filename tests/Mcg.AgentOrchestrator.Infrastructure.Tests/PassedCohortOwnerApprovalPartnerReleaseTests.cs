@@ -3,9 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 
-// Each scenario owns its repository and stores; isolate the shared landing git hooks.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PassedCohortOwnerApprovalPartnerReleaseTests
+// Parallel safe: each scenario owns its repository and stores; landing git hooks are flow-local.
+public sealed class PassedCohortOwnerApprovalPartnerReleaseTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(0)]

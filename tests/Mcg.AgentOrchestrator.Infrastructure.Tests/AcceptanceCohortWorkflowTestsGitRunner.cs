@@ -6,8 +6,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void IntegrationCreationFailure_TombstonesPreparedGoalLandingIntents()

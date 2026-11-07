@@ -8,7 +8,7 @@ public sealed class GoalAcceptanceBuildSlotsSplitLaneTests
     private const string OldName = "Goal acceptance build slots";
     private const string Prefix = "GoalAcceptanceVerifierDotnetBuildSlotTests";
     private const string TraitSuffix = "&Category!=HostIntegration";
-    private const string OldFilter = "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~FocusedEvidenceOverflowContinuationTests|FullyQualifiedName~StructuralCoverageVerifierPermitWaitTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority|FullyQualifiedName~RemoteLaneDeadlineTests|FullyQualifiedName~RemoteShardInvalidationStopTests";
+    private const string OldFilter = "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~GateLanePlacementReceiptTests|FullyQualifiedName~FocusedEvidenceOverflowContinuationTests|FullyQualifiedName~StructuralCoverageVerifierPermitWaitTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority|FullyQualifiedName~RemoteLaneDeadlineTests|FullyQualifiedName~RemoteShardInvalidationStopTests";
     private static readonly string[] NewNames = [OldName + " A", OldName + " B", OldName + " C"];
     private static readonly AcceptanceTestLane OldLane = new(OldName, OldFilter, 335.4);
     private static readonly string[][] SuffixRosters =
@@ -158,7 +158,7 @@ public sealed class GoalAcceptanceBuildSlotsSplitLaneTests
             var expected = SuffixRosters[index].Select(suffix => Prefix + suffix).Concat(index switch
             {
                 0 => new[] { "RemoteShardInvalidationStopTests", "FocusedEvidenceOverflowContinuationTests" },
-                2 => new[] { "StructuralCoverageVerifierPermitWaitTests",
+                2 => new[] { "GateLanePlacementReceiptTests", "StructuralCoverageVerifierPermitWaitTests",
                     "StructuralCoverageVerifierPermitWaitTestsRetryAfterLanes", "RemoteLaneDeadlineTests" },
                 _ => Array.Empty<string>()
             }).Order(StringComparer.Ordinal).ToArray();

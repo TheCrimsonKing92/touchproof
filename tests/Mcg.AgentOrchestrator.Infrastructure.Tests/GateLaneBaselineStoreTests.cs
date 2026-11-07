@@ -121,7 +121,7 @@ public sealed class GateLaneBaselineStoreTests : IDisposable
         Assert.NotNull(receipt);
         using var document = System.Text.Json.JsonDocument.Parse(receipt);
         Assert.Equal("slow", document.RootElement.GetProperty("slowdown_status").GetString());
-        Assert.Equal(27, document.RootElement.EnumerateObject().Count());
+        Assert.Equal(30, document.RootElement.EnumerateObject().Count());
         var timingReason = document.RootElement.GetProperty("slot_timing_unavailable_reason").GetString();
         Assert.Contains("slot-timing-unreadable:", timingReason);
         Assert.Contains(LaneSlotTimingReader.PathFor(trx), timingReason);

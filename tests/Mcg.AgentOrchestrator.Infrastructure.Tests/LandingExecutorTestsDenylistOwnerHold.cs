@@ -9,8 +9,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLand
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsDenylistOwnerHold
+public sealed class LandingExecutorTestsDenylistOwnerHold : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     internal const string Protected = "src/Mcg.AgentOrchestrator.Core/Conductor/ConductorAutonomyPolicy.cs";
     private const string Ordinary = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/LandingDenylistProbe.cs";

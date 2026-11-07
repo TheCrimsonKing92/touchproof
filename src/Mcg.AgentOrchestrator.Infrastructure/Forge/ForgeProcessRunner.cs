@@ -22,16 +22,19 @@ public sealed class ForgeProcessRunner : IForgeProcessRunner
         };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         foreach (var pair in environment) start.Environment[pair.Key] = pair.Value;
-        using var process = new HandleListLaunchedProcess { StartInfo = start };
+        HandleListLaunchedProcess process;
         try
         {
-            if (!process.Start()) return new(false, -1, "", $"{fileName} did not start");
+            process = GitExecutable.Prepare(start)
+                ? HandleListProcessLauncher.StartSuppressed(start)
+                : HandleListProcessLauncher.Start(start);
         }
         catch (Exception exception) when (exception is Win32Exception or IOException)
         {
             return new(false, -1, "", exception.Message);
         }
 
+        using var processLifetime = process;
         process.StandardInput.Close();
         using var capture = new CancellationTokenSource();
         var stdout = process.StandardOutput.ReadToEndAsync(capture.Token);

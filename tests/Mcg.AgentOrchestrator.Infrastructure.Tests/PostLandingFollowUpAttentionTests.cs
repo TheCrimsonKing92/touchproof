@@ -4,9 +4,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Private git fixtures and in-memory kernels; collection owns landing runner hooks. No console capture.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PostLandingFollowUpAttentionTests
+// Parallel safe: private git fixtures and in-memory kernels; landing runner hooks are flow-local.
+public sealed class PostLandingFollowUpAttentionTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void Land_OriginalWaitRemainsVisibleAndAnswerableAfterGoalCompletes()

@@ -6,10 +6,9 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
-// Owns a unique real repository and stores; the collection protects the existing
-// LandingExecutor git-runner seam. No production transitions or wall-clock verdicts.
-[Collection(TestCollections.LandingGitRunner)]
-public sealed class PostLandingObligationTests
+// Parallel safe: owns a unique real repository and stores; LandingExecutor git overrides are flow-local.
+// The class fixture retains build-root isolation; verdicts do not depend on wall-clock timing.
+public sealed class PostLandingObligationTests : Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Theory]
     [InlineData(false)]

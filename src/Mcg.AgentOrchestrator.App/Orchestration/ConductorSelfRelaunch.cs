@@ -414,7 +414,9 @@ internal static partial class ConductorSelfRelaunch
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = HandleListProcessLauncher.Start(startInfo)
+        using var process = (GitExecutable.Prepare(startInfo)
+            ? HandleListProcessLauncher.StartSuppressed(startInfo)
+            : HandleListProcessLauncher.Start(startInfo))
             ?? throw new InvalidOperationException($"Failed to start {fileName}.");
         IDisposable? launchQos = null;
         try { launchQos = onStarted?.Invoke(process.Id); } catch (Exception) { }

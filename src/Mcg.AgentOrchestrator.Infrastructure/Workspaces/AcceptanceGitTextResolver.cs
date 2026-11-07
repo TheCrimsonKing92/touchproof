@@ -8,8 +8,7 @@ internal static class AcceptanceGitTextResolver
     {
         try
         {
-            using var process = new HandleListLaunchedProcess();
-            process.StartInfo = new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "git",
                 WorkingDirectory = worktreePath,
@@ -20,13 +19,12 @@ internal static class AcceptanceGitTextResolver
             };
             foreach (var argument in arguments)
             {
-                process.StartInfo.ArgumentList.Add(argument);
+                startInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start())
-            {
-                return null;
-            }
+            using var process = GitExecutable.Prepare(startInfo)
+                ? HandleListProcessLauncher.StartSuppressed(startInfo)
+                : HandleListProcessLauncher.Start(startInfo);
 
             // Drain both pipes concurrently BEFORE waiting for exit. Waiting first deadlocks as soon
             // as the child's output exceeds the pipe buffer (~4KB): the child blocks writing, the

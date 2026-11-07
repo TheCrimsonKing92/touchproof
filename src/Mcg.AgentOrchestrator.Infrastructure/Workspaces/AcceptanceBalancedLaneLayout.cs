@@ -13,7 +13,10 @@ internal sealed record AcceptanceBalancedLaneLayout(int HistoryWindow, double De
 internal sealed record AcceptanceBalancedLaneCommand(string Lane, int CommandLineCharacters, int Limit, bool UsesResponseFile);
 
 internal sealed record AcceptanceBalancedLanePrediction(string Name, double PredictedSeconds,
-    IReadOnlyList<string> Members);
+    IReadOnlyList<string> Members)
+{
+    public double PredictedWallSeconds { get; init; }
+}
 
 internal sealed record AcceptanceBalancedLaneExpansion(IReadOnlyList<AcceptanceTestLane> Lanes,
     AcceptanceBalancedLaneLayout? Layout);

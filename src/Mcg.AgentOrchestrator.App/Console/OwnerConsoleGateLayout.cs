@@ -22,7 +22,23 @@ internal static class OwnerConsoleGateLayout
                 lines.Add(OwnerConsoleGateFormatter.RunLine(run));
             }
         }
-        else if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate) + OwnerConsoleGateFormatter.Identity(gate));
+        else if (!gate.Live)
+        {
+            lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate) + OwnerConsoleGateFormatter.Identity(gate));
+            var failed = gate.FinishedAt is null ? [] : gate.Lanes.Where(row => !row.IsAttribution && Failed(row)).ToArray();
+            if (failed.Length > 0)
+            {
+                lines.Add("FAILED");
+                var columns = new Columns(failed, width);
+                foreach (var row in failed)
+                {
+                    var start = lines.Count;
+                    lines.Add(columns.Row(row));
+                    lines.AddRange((row.FailingTestNames ?? []).Select(name => "     " + name));
+                    if (fields is not null) for (var i = start; i < lines.Count; i++) fields[i] = OwnerConsoleGateProgress.LaneFields(row);
+                }
+            }
+        }
         else
         {
             var observed = OwnerConsoleGateConfirmation.Attach(gate.Lanes);

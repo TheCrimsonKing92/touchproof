@@ -3,8 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.LandingGitRunner)]
-public sealed class AcceptanceCohortWorkflowTestsRootCheckout : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsRootCheckout : AcceptanceCohortWorkflowTests, Xunit.IClassFixture<IsolatedDotnetRootFixture>
 {
     [Fact]
     public void TrackedChangeHoldsCohortBeforeAnyRefMoves()
