@@ -49,7 +49,7 @@ internal sealed record OwnerGoalDetailSnapshot(
             fields.AddRange(new OwnerConsoleField[] { new("event/" + i + "/at", "Recent event at", item.Timestamp.ToString("O")),
                 new("event/" + i + "/kind", "Recent event kind", item.EventKind),
                 new("event/" + i + "/detail", "Recent event detail", item.Detail),
-                new("event/" + i + "/phrase", "Recent event", OwnerActivityNarrator.StagePhrase(item, OwnerConsoleGoalDetailFormatter.Finding(goal, item))) });
+                new("event/" + i + "/phrase", "Recent event", OwnerLifecycleStageNarration.StagePhrase(item, OwnerConsoleGoalDetailFormatter.Finding(goal, item))) });
         }
         if (Gate is { } gate) fields.AddRange(gate.FieldSnapshot().Fields.Select(field => field with { Key = "gate/" + field.Key }));
         if (Evidence is { } evidence)

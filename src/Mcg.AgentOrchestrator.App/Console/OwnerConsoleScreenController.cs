@@ -62,7 +62,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             live = Model?.Decisions.Where(decision => snapshot.Live.Contains(decision.ToQuestion())).ToArray() ?? [];
         }, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
-        var explanation = OwnerActivityNarrator.ExplainWithFields(item, live);
+        var explanation = OwnerActivityExplanation.ExplainWithFields(item, live);
         await dialogs.ShowStructuredAsync("What this means", explanation.Text, explanation.Structured);
     }
     internal int SelectedIndex => Model is null ? -1 :

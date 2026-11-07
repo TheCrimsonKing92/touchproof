@@ -32,7 +32,7 @@ public sealed class OwnerActivityGoalListExplainTests
         for (var i = 0; i < count; i++)
             Assert.Equal(Titles[i], row.Substring(spans[i].Start, spans[i].Length));
 
-        var text = OwnerActivityNarrator.Explain(item);
+        var text = OwnerActivityExplanation.Explain(item);
         var lines = text.Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(count + 4, lines.Length);
         Assert.Equal("What happened: " + time + lead + count + " goals" + suffix, lines[0]);
@@ -50,7 +50,7 @@ public sealed class OwnerActivityGoalListExplainTests
     [Fact]
     public void NarrowLandingDetailKeepsEachGoalInItsOwnParagraph()
     {
-        var page = new OwnerConsoleTextPage(OwnerActivityNarrator.Explain(MultiGoal("landing")), 40, 50);
+        var page = new OwnerConsoleTextPage(OwnerActivityExplanation.Explain(MultiGoal("landing")), 40, 50);
         var header = page.Lines.ToList().FindIndex(line => line.StartsWith("What happened:", StringComparison.Ordinal));
         var sources = Ids.Take(2).Select(id =>
         {
@@ -74,7 +74,7 @@ public sealed class OwnerActivityGoalListExplainTests
             : [new(At, "loop-relaunch", Ids[0], "LOOP_RELAUNCH_SCHEDULED tick=7")];
         if (kind == "main") events = [.. events, new(At.AddSeconds(1), "canary-gate", null, "CANARY_GATE result=failed tests=Check.Main")];
         var item = OwnerActivityNarrator.Narrate(events, _ => Titles[0])[0];
-        var lines = OwnerActivityNarrator.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
+        var lines = OwnerActivityExplanation.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(4, lines.Length);
         Assert.Null(item.GoalPrefixes);
         Assert.Equal("What happened: " + OwnerActivityNarrator.Line(item), lines[0]);
@@ -91,7 +91,7 @@ public sealed class OwnerActivityGoalListExplainTests
             new(At, "goal-escalation", Ids[0], "ESCALATED reason=Resolve the spec clarification before dispatching planner work"),
             new(answeredAt, "goal-lifecycle", Ids[0], "HumanInputReceived resolution-verb=answer resolution-actor=author")], _ => Titles[0]);
         var item = Assert.Single(items, value => value.Kind == "goal-escalation");
-        var lines = OwnerActivityNarrator.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
+        var lines = OwnerActivityExplanation.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal($"Owner action: No. Resolved at {answeredAt.ToLocalTime():HH:mm:ss} by the Author.", lines[^1]);
         Assert.Contains($"resolved at {answeredAt.ToLocalTime():HH:mm:ss} by the Author", lines[^2]);
     }
@@ -104,7 +104,7 @@ public sealed class OwnerActivityGoalListExplainTests
             attention: [new(question, At)]));
         var decision = new OwnerConsoleDecision("q1", 1, Ids[0], Ids[0], OwnerQuestionKind.HumanInput,
             "Continue?", "Continue?", null, null, null);
-        var lines = OwnerActivityNarrator.Explain(item, [decision]).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
+        var lines = OwnerActivityExplanation.Explain(item, [decision]).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal("Owner action: Yes. Open DECISIONS row [1] 11111111 HumanInput: Continue?", lines[^1]);
     }
 

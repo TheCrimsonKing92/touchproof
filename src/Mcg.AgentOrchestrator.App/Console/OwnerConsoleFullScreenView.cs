@@ -542,15 +542,19 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         if (!refresh) _copySelectionValid = true;
         using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
-        { _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null; _summary.Select(null); RenderPreview(); return; }
+        {
+            _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null;
+            if (!_summary.Select(null)) RenderPreview();
+            return;
+        }
         var selectable = allowHeader && index >= 0 && index < BoardTable.Rows.Count && model.Board[index].IsDiagnostic
             ? index : OwnerConsoleBoardSection.NearestGoal(model.Board, model.BoardScope, index, direction);
         _selectedBoardIndex = selectable < 0 ? 0 : selectable;
         var row = model.Board[_selectedBoardIndex];
         SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
         SelectedProject = selectable < 0 ? null : row.Project;
-        _summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh);
-        RenderPreview();
+        if (!_summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh))
+            RenderPreview();
         if (selectable < 0 || BoardTable.Rows.Count == 0) return;
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
             _board.SetSelection(Math.Max(0, OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "")), _selectedBoardIndex, false);

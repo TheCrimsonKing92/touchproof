@@ -122,7 +122,7 @@ internal static class OwnerConsoleFullScreenHost
                     foreach (var item in items ?? [])
                     {
                         last = item.Timestamp;
-                        if (OwnerActivityNarrator.IsLanding(item) &&
+                        if (OwnerLandingNarration.IsLanding(item) &&
                             TimeZoneInfo.ConvertTime(item.Timestamp, clock.LocalTimeZone).Date == landingDate && countedLandings.Add(item)) landings++;
                         OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                     }
@@ -198,7 +198,7 @@ internal static class OwnerConsoleFullScreenHost
                     recent = loaded.Recent.Select(builder.EnrichEvent).ToList();
                     last = loaded.LastActivity;
                     landings = loaded.LandedToday;
-                    foreach (var landing in loaded.Recent.Where(OwnerActivityNarrator.IsLanding)) countedLandings.Add(landing);
+                    foreach (var landing in loaded.Recent.Where(OwnerLandingNarration.IsLanding)) countedLandings.Add(landing);
                 }, token, ownBoardGoalIds: boardIds);
             }
             catch { rebuild.Release(); throw; }

@@ -61,7 +61,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         foreach (var line in OwnerGoalReturnExplanation.Lines(goal, zone)) output.WriteLine(line);
         var lines = new List<(DateTimeOffset Time, string Phrase)>();
         foreach (var item in detail.RecentEvents)
-            if (OwnerActivityNarrator.StagePhrase(item, Finding(goal, item)) is { } phrase &&
+            if (OwnerLifecycleStageNarration.StagePhrase(item, Finding(goal, item)) is { } phrase &&
                 (lines.Count == 0 || lines[^1].Phrase != phrase)) lines.Add((item.Timestamp, phrase));
         output.WriteLine(lines.Count == 0 ? "Recent events: none" : "Recent events:");
         foreach (var line in lines.TakeLast(10)) output.WriteLine($"  {line.Time.ToLocalTime():HH:mm:ss} {Plain(line.Phrase)}");

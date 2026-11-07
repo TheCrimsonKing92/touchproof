@@ -42,7 +42,7 @@ public sealed class OwnerActivityDetailProjectionTests
             OwnerActivityDetailEvidence.From(raw, new("opaque", "Opaque", "  none_\r\n=  "), new("empty", "Empty", "")));
         var item = new OwnerConsoleActivityItem(source.Timestamp, source.EventKind, "tag", "full-goa", source.Detail,
             Evidence: [source]);
-        var detail = OwnerActivityNarrator.ExplainWithFields(item);
+        var detail = OwnerActivityExplanation.ExplainWithFields(item);
         Assert.Contains("\n\nOriginal event\nSource: unknown a=two words empty= none_\n    ", detail.Text);
         Assert.Equal(raw, detail.Fields.Fields.Single(field => field.Key == "event/0/original").Value);
         Assert.Equal("  none_\r\n=  ", detail.Fields.Fields.Single(field => field.Key == "event/0/opaque").Value);
@@ -57,7 +57,7 @@ public sealed class OwnerActivityDetailProjectionTests
         OwnerConductEvent[] sources = [new(at, "loop-relaunch", "first/full", "LOOP_RELAUNCH_SCHEDULED tick=1"),
             new(at, "loop-relaunch", "second/full", "LOOP_RELAUNCH_NOT_REQUIRED tick=1")];
         var grouped = Assert.Single(OwnerActivityNarrator.Narrate(sources, id => id!));
-        var detail = OwnerActivityNarrator.ExplainWithFields(grouped);
+        var detail = OwnerActivityExplanation.ExplainWithFields(grouped);
         Assert.Equal(sources, grouped.Evidence);
         foreach (var i in Enumerable.Range(0, 2))
         {
@@ -66,7 +66,7 @@ public sealed class OwnerActivityDetailProjectionTests
         }
         var line = JsonSerializer.Serialize(new { occurredAt = at, eventType = "TaskCompleted", taskId = "full-task", role = "Developer", message = "done none_ = \"full\"\r\nnext" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "full-goal", out var completed));
-        var normal = OwnerActivityNarrator.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([completed!], _ => "Title")));
+        var normal = OwnerActivityExplanation.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([completed!], _ => "Title")));
         Assert.Contains("Developer passed Title", normal.Text);
         Assert.Equal("done none_ = \"full\"\r\nnext", normal.Fields.Fields.Single(field => field.Key == "event/0/original").Value);
     }
@@ -81,7 +81,7 @@ public sealed class OwnerActivityDetailProjectionTests
         var question = new OwnerQuestion("q", "11111111", OwnerQuestionKind.HumanInput, "Continue?");
         var item = Assert.Single(OwnerActivityNarrator.Narrate([], _ => "Title", attention: [new(question, DateTimeOffset.UnixEpoch)]));
         var decision = new OwnerConsoleDecision(id, 1, goal, goal, OwnerQuestionKind.HumanInput, subject, subject, null, null, null);
-        var detail = OwnerActivityNarrator.ExplainWithFields(item, [decision]);
+        var detail = OwnerActivityExplanation.ExplainWithFields(item, [decision]);
         Assert.Equal(matches, detail.Fields.Fields.Single(field => field.Key == "act").Value!.StartsWith("Yes. Open DECISIONS"));
     }
 
@@ -94,7 +94,7 @@ public sealed class OwnerActivityDetailProjectionTests
         var item = Assert.Single(OwnerActivityNarrator.Narrate([], _ => "Title", attention: [new(question, DateTimeOffset.UnixEpoch)]));
         var unrelated = new OwnerConsoleDecision("q", 1, second, "11111111", OwnerQuestionKind.HumanInput,
             "Continue?", "Continue?", null, null, null);
-        var detail = OwnerActivityNarrator.ExplainWithFields(item, [unrelated]);
+        var detail = OwnerActivityExplanation.ExplainWithFields(item, [unrelated]);
         Assert.DoesNotContain("Yes. Open DECISIONS", detail.Text);
         using var fixture = OwnerActivityDetailFixture.Read();
         var record = fixture.RootElement.GetProperty("task_failure");
@@ -107,7 +107,7 @@ public sealed class OwnerActivityDetailProjectionTests
         var raw = OwnerActivityDiagnosticParserTests.Raw() + " reason=other-cause role=Reviewer";
         var source = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "goal-escalation", "goal", raw);
         var item = Assert.Single(OwnerActivityNarrator.Narrate([source], _ => "Title"));
-        var detail = OwnerActivityNarrator.ExplainWithFields(item);
+        var detail = OwnerActivityExplanation.ExplainWithFields(item);
         Assert.StartsWith("What happened: Worker completion was rejected.\n\nReason: Multiple rejection reasons were recorded", detail.Text);
         Assert.Equal("verification-pattern-unmatched", detail.Fields.Fields.Single(field => field.Key == "event/0/diagnostic/reason/0").Value);
         Assert.Equal("other-cause", detail.Fields.Fields.Single(field => field.Key == "event/0/diagnostic/reason/1").Value);
@@ -119,7 +119,7 @@ public sealed class OwnerActivityDetailProjectionTests
         var raw = OwnerActivityDiagnosticParserTests.Raw().Replace("role=Developer", "role=Reviewer", StringComparison.Ordinal);
         var line = JsonSerializer.Serialize(new { occurredAt = DateTimeOffset.UnixEpoch, eventType = "TaskFailed", role = "Developer", taskId = "typed-task", message = raw });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "full-goal", out var source));
-        var detail = OwnerActivityNarrator.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source!], _ => "Title")));
+        var detail = OwnerActivityExplanation.ExplainWithFields(Assert.Single(OwnerActivityNarrator.Narrate([source!], _ => "Title")));
         Assert.StartsWith("What happened: Developer completion was rejected.", detail.Text);
         Assert.Equal("Developer", detail.Fields.Fields.Single(field => field.Key == "event/0/recorded/role").Value);
         Assert.Equal("Reviewer", detail.Fields.Fields.Single(field => field.Key == "event/0/diagnostic/role/0").Value);
