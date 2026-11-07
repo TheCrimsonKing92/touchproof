@@ -25,8 +25,10 @@ internal sealed partial class ConductorDriver
         _startCohortGateBackground = start;
     }
 
+    internal bool MergeTrainsFeatureEnabled { get; init; } = true;
+
     internal bool MergeTrainsEnabled =>
-        !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
+        MergeTrainsFeatureEnabled &&
         GroupedAcceptanceAdmission.IsEnabled(_cohortWorkspace, _runMergeTrainOverride is not null,
             _cohortKernel is not null && _cohortWorkspace is not null &&
             _cohortAcceptanceVerifier is not null && _mergeTrainAcceptanceStore is not null);

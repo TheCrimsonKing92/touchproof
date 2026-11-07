@@ -7,11 +7,7 @@ internal sealed class ArchivedSnapshotCompressionCadence
 {
     internal const long BatchSourceBytes = 67_108_864;
     internal const int MaxBatchesPerRun = 32;
-    internal const string EnabledVariable = "MCG_ARCHIVED_SNAPSHOT_COMPRESSION";
     internal static readonly ArchivedSnapshotCompressionCadenceResult Disabled = new(0, 0, 0, 0, "disabled", null);
-
-    internal static bool IsEnabledFromEnvironment() =>
-        string.Equals(Environment.GetEnvironmentVariable(EnabledVariable), "1", StringComparison.Ordinal);
 
     internal static ArchivedSnapshotCompressionCadenceResult Run(Func<long, GoalSnapshotArchiveRecompressionResult> batch)
     {

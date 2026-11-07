@@ -125,8 +125,18 @@ internal sealed class WorkerBuildRequestChannel : IDisposable
                     throw new UnauthorizedAccessException("Unsupported worker build request.");
                 if (peer.HasExited || !owner.Group.Contains(peer.SafeHandle) || ReadIdentity(peer) != identity)
                     throw new UnauthorizedAccessException("Worker build peer identity changed.");
-                var response = await _service.ExecuteAsync(request, ReadIdentity(owner.Worker), _lifetime.Token)
-                    .ConfigureAwait(false);
+                var workerIdentity = ReadIdentity(owner.Worker);
+                WorkerBuildResponse response;
+                try
+                {
+                    response = await _service.ExecuteAsync(request, workerIdentity, _lifetime.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    response = new("", WorkerBuildOutcome.ApparatusFailure,
+                        $"Worker build host service failed: {ex.GetType().Name}: {ex.Message}");
+                }
                 // Disconnect is transport loss, not cancellation or evidence about compiler execution.
                 try { await writer.WriteLineAsync(JsonSerializer.Serialize(response)).ConfigureAwait(false); }
                 catch (IOException) { }
