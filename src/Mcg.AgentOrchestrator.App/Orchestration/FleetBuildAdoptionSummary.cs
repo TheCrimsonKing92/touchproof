@@ -13,6 +13,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
     private readonly TimeSpan _pollInterval;
     private readonly IConductLockPidProbe? _pidProbe;
     private readonly string? _homeRoot;
+    private readonly Action<string, string, string>? _onFinalized;
     private readonly object _gate = new();
     private readonly HashSet<string> _finalized = new(StringComparer.OrdinalIgnoreCase);
     private Observation? _pending;
@@ -22,11 +23,13 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
     internal FleetBuildAdoptionSummary(
         OrchestratorProjectRegistry registry, Action<string> append, TimeProvider time,
         TimeSpan? deadline = null, IConductLockPidProbe? pidProbe = null,
-        string? homeRoot = null, TimeSpan? pollInterval = null)
+        string? homeRoot = null, TimeSpan? pollInterval = null,
+        Action<string, string, string>? onFinalized = null)
     {
         _registry = registry;
         _append = append;
         _time = time;
+        _onFinalized = onFinalized;
         _deadline = deadline ?? TimeSpan.FromMinutes(15);
         _pollInterval = pollInterval ?? TimeSpan.FromSeconds(5);
         if (_deadline < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(deadline));
@@ -39,6 +42,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
     internal void OnHomeAdopted(string commit, DateTimeOffset? adoptedAt = null)
     {
         if (!HomeBuildAdoptionDetector.IsCommit(commit)) return;
+        var completed = new List<(string Commit, string Pending, string Failed)>();
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -46,7 +50,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
                 string.Equals(_pending?.Commit, commit, StringComparison.OrdinalIgnoreCase)) return;
 
             var now = _time.GetUtcNow();
-            if (_pending is not null) FinalizePending(now);
+            if (_pending is not null) FinalizePending(now, completed);
             // A registry read failure is surfaced by the activation caller, never an empty-fleet success.
             var expected = _registry.ListProjects()
                 .Where(project => !string.Equals(
@@ -58,21 +62,24 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
                 .Select(entry => new ExpectedProject(entry.Project.Name, entry.Workspace.ConductEventsLogPath))
                 .ToArray();
             _pending = new Observation(commit, adoptedAt ?? now, expected);
-            Evaluate(now);
+            Evaluate(now, completed);
             if (_pending is not null && _pollInterval != Timeout.InfiniteTimeSpan)
             {
                 _timer = _time.CreateTimer(_ => Tick(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 _timer.Change(_pollInterval, _pollInterval);
             }
         }
+        foreach (var item in completed) _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed);
     }
 
     internal void Tick()
     {
+        var completed = new List<(string Commit, string Pending, string Failed)>();
         lock (_gate)
         {
-            if (!_disposed && _pending is not null) Evaluate(_time.GetUtcNow());
+            if (!_disposed && _pending is not null) Evaluate(_time.GetUtcNow(), completed);
         }
+        foreach (var item in completed) _onFinalized?.Invoke(item.Commit, item.Pending, item.Failed);
     }
 
     private bool IsRunning(OrchestratorWorkspace workspace)
@@ -81,14 +88,15 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
         catch (InvalidOperationException) { return false; } // Malformed lock, not a live owner.
     }
 
-    private void Evaluate(DateTimeOffset now)
+    private void Evaluate(DateTimeOffset now, List<(string Commit, string Pending, string Failed)> completed)
     {
         var states = Observe(_pending!, now);
         if (states.All(state => state == ProjectState.Adopted) || now - _pending!.StartedAt >= _deadline)
-            FinalizePending(now, states);
+            FinalizePending(now, completed, states);
     }
 
-    private void FinalizePending(DateTimeOffset now, ProjectState[]? states = null)
+    private void FinalizePending(DateTimeOffset now,
+        List<(string Commit, string Pending, string Failed)> completed, ProjectState[]? states = null)
     {
         var observation = _pending!;
         states ??= Observe(observation, now);
@@ -103,6 +111,7 @@ internal sealed class FleetBuildAdoptionSummary : IDisposable
             .ToString(CultureInfo.InvariantCulture);
         _append($"FLEET_BUILD_ADOPTED commit={observation.Commit} adopted={Names(ProjectState.Adopted)} " +
             $"pending={Names(ProjectState.Pending)} failed={Names(ProjectState.Failed)} elapsedSeconds={elapsed}");
+        completed.Add((observation.Commit, Names(ProjectState.Pending), Names(ProjectState.Failed)));
     }
 
     private static ProjectState[] Observe(Observation observation, DateTimeOffset now) =>

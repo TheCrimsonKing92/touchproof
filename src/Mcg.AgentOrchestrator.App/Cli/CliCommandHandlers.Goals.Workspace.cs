@@ -13,7 +13,7 @@ internal static partial class CliCommandHandlers
 {
 private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
-    if (IsHelpRequested(parts))
+    if (parts.Any(CliCommandHelp.IsHelpFlag))
     {
         CliCommandHelp.TryPrintStartupHelp(parts);
         return false;

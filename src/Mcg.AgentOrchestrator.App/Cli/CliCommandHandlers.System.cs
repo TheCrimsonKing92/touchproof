@@ -517,6 +517,11 @@ internal static partial class CliCommandHandlers
                     throw new CliExitException(1);
                 return false;
 
+            case "push-adopted":
+                if (CliPushAdoptedCommand.Run(parts, context.Workspace) != 0)
+                    throw new CliExitException(1);
+                return false;
+
             case "repo-process-stop":
                 if (!RepoProcessCliCommand.Stop(parts, Console.Out))
                 {

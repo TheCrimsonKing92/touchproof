@@ -1338,7 +1338,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return HandleGoalsPrune(context, parts);
 
         case "conduct":
-            if (IsHelpRequested(parts))
+            if (parts.Any(CliCommandHelp.IsHelpFlag))
             {
                 CliCommandHelp.TryPrintStartupHelp(parts);
                 return false;

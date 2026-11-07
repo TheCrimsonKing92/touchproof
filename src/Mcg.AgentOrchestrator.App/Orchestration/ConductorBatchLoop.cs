@@ -417,7 +417,7 @@ internal sealed partial class ConductorBatchLoop
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
             $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
-            $"acceptanceWidth={policy.AcceptanceWidth} {policy.Features.ToLogFields()}" +
+            $"acceptanceWidth={policy.AcceptanceWidth} adoptedBuildPushEnabled={policy.AdoptedBuildPushEnabled} {policy.Features.ToLogFields()}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
