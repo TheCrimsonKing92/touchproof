@@ -51,6 +51,13 @@ internal sealed class MultiRepositoryAcceptanceGate(
                         Store.WriteEvidence(goal.Id, attemptId, key, result), result.OutputTail));
                 }
             }
+            catch (Exception ex) when (ex is DotnetBuildSlotsBusyException or BuildLockBlockedException
+                or AcceptanceInfrastructureDeferredException or AcceptanceAttemptCancelledException)
+            {
+                // These attempts did not produce a repository verdict. Leave the aggregate unpublished
+                // so both conductor and CLI hold without recording a failure or retrying the Developer.
+                return new(Waiting(state, key + ": " + ex.GetType().Name + ": " + ex.Message));
+            }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 var detail = ex.GetType().Name + ": " + ex.Message;
