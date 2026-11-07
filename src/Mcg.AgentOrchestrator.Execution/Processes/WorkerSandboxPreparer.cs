@@ -58,7 +58,9 @@ internal sealed record IntegrityLabelState(
     int? NativeQueryError = null,
     bool Unlabeled = false);
 
-internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
+internal sealed class WorkerSandboxPreparer(
+    IWorkerIntegrityLabeler labeler,
+    int maxDescendantEntries = WorktreeDescendantIntegrityScan.MaxDescendantEntries)
 {
     internal const string MarkerFileName = ".mcg-low-integrity-v1";
     internal const string ReceiptFileName = ".mcg-sandbox-prep-receipt-v1.json";
@@ -355,7 +357,10 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         bool reusedWorktree)
     {
         var receipt = TryReadValidReceipt(path, sandboxRoot);
-        if (receipt.Valid && IsPrepared(path))
+        if (receipt.Valid && IsPrepared(path) &&
+            (!allowRecursiveMigration ||
+             WorktreeDescendantIntegrityScan.Scan(path, labeler, maxDescendantEntries).Outcome ==
+             WorktreeDescendantIntegrityScanOutcome.Prepared))
         {
             var skippedProtectionPhases = path == sandboxRoot
                 ? receipt.SkippedProtectionPhases
