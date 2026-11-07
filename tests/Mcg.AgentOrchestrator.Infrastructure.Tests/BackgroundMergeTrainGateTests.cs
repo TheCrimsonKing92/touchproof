@@ -349,10 +349,12 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
         }
     }
 
-    [Fact]
-    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree(bool warmCopy)
     {
-        const string key = "stale-indexes";
+        var key = $"stale-indexes-{warmCopy}";
         const string path = "existing.txt";
         byte[]? rootIndex = null;
         byte[]? memberIndex = null;
@@ -370,6 +372,11 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             memberIndex = File.ReadAllBytes(Path.GetFullPath(
                 RunGitOutput(worktree, "rev-parse", "--git-path", "index").Trim(), worktree));
         });
+        if (warmCopy)
+        {
+            DeleteDirectory(copy.Repo);
+            copy = template.Copy(key, 1, (_, _) => throw new InvalidOperationException("Recipe rebuilt for warm copy."));
+        }
         try
         {
             var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
