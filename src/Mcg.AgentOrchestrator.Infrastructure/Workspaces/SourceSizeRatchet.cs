@@ -560,7 +560,9 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 adds the review owner at the existing landing-result mapping seam;
             // extracting only its initializer would separate ownership from the outcome it classifies.
             // Goal bc361051: two wiring lines attach failure facts; construction stays in ConductorOutcomeText.
-            new SourceClassCeiling("ConductorDriver", 14244, 70),
+            // Goal 0d141bc6 adds the immutable merge-train feature option at its existing admission consumer;
+            // extracting only that option would separate it from the dependency checks it gates (+2 lines).
+            new SourceClassCeiling("ConductorDriver", 14246, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -599,7 +601,9 @@ internal static class SourceSizeRatchet
             // Goal abc09fe0 adds 15 lines for answer-route flag validation in the existing handler.
             // Goal 509d0c91 adds route-only ruling-file validation and captures its text in the existing
             // adjudication preparation/payload seam; ruling application stays in OperatorIntentAdjudication.
-            new SourceClassCeiling("CliCommandHandlers", 11017, 30),
+            // Goal 0d141bc6 passes resolved policy features at the existing loop/watch construction seams;
+            // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
+            new SourceClassCeiling("CliCommandHandlers", 11023, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
