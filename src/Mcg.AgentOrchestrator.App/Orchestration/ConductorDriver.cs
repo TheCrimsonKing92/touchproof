@@ -1077,7 +1077,8 @@ internal sealed partial class ConductorDriver
         Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
         AgentOrchestratorKernel? findingStagnationKernel = null,
         Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null,
-        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null)
+        Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>? runAcceptanceVerificationWithOptions = null)
     {
         _prepareMissingWorkspace = prepareMissingWorkspace;
         _findingStagnationKernel = findingStagnationKernel;
@@ -1104,11 +1105,10 @@ internal sealed partial class ConductorDriver
         _buildServerShutdown = buildServerShutdown is null
             ? RunRetryOnlyRemediation
             : timeout => RunBoundedBuildServerShutdown(buildServerShutdown, timeout);
-        _runAcceptanceVerification = runAcceptanceVerificationWithLease is not null
-            ? ((goal, slot, lease, token, _) => runAcceptanceVerificationWithLease(goal, slot, lease, token))
-            : (runAcceptanceVerificationWithSlot is not null
-                ? ((goal, slot, _, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
-                : ((goal, _, _, _, _) => runAcceptanceVerification(goal)));
+        _runAcceptanceVerification = runAcceptanceVerificationWithOptions ?? ((goal, slot, lease, token, _) =>
+            runAcceptanceVerificationWithLease is not null ? runAcceptanceVerificationWithLease(goal, slot, lease, token) :
+            runAcceptanceVerificationWithSlot is not null ? runAcceptanceVerificationWithSlot(goal, slot) :
+            runAcceptanceVerification(goal));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
