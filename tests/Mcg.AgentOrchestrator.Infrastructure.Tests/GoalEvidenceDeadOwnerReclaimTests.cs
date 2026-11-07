@@ -16,7 +16,7 @@ public sealed class GoalEvidenceDeadOwnerReclaimTests : IDisposable
     public GoalEvidenceDeadOwnerReclaimTests()
     {
         Directory.CreateDirectory(_root);
-        _store = new ReconcileSweepRemediationStore(Path.Combine(_root, "state.db"));
+        _store = new ReconcileSweepRemediationStore(SetUpStateDatabase(Path.Combine(_root, "state.db")));
     }
 
     [Fact]

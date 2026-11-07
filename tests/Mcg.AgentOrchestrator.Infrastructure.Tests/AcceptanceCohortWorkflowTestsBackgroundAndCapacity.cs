@@ -647,6 +647,8 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(),
                 cleanupHooks: cleanupContext.Hooks);
+            Task? backgroundGate = null;
+            driver.SetCohortGateBackgroundStartForTests(action => backgroundGate = Task.Run(action));
             var fairnessStore = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             fairnessStore.RecordOvertake(firstGoal.Id);
@@ -754,6 +756,9 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
                 return readiness.Landable;
             }, TimeSpan.FromSeconds(30));
             Assert.True(landable, $"Iteration {iteration}: cohort did not become landable: {readiness.Detail}");
+            Assert.NotNull(backgroundGate);
+            Assert.True(backgroundGate.Wait(TimeSpan.FromSeconds(10)), "The background cohort gate did not complete.");
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             BatchTickSummary? landingTick = null;
             var landedSummary = new ConductorBatchLoop().Run(
                 kernel,

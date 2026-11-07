@@ -73,7 +73,7 @@ public sealed class GoalPromotionFactPersistenceTests
         if (malformed)
             fixture.Execute("UPDATE goal_promotion_facts SET promoted_at = 'not-an-instant'");
         else
-            fixture.Execute("DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number = 14");
+            fixture.Execute("DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number >= 14");
         // A terminal default metadata read must succeed despite unusable snapshot JSON.
         fixture.Execute("UPDATE goals SET status = 'Completed', snapshot_json = 'not-json'");
         var bytes = File.ReadAllBytes(fixture.Path);

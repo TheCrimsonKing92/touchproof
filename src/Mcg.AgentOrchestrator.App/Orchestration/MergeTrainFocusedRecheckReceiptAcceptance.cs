@@ -28,7 +28,7 @@ internal static class MergeTrainFocusedRecheckReceiptAcceptance
             string.IsNullOrWhiteSpace(proof.RedTrainId) || string.IsNullOrWhiteSpace(proof.RedReceiptId) ||
             string.IsNullOrWhiteSpace(proof.TrainAttemptId) || string.IsNullOrWhiteSpace(proof.RecheckAttemptId) ||
             receipt.GateAttemptId != proof.RecheckAttemptId ||
-            proof.AttributionSource is not ("ownership" or "impact" or "reach" or "path" or "reproduction" or "bisection") ||
+            proof.AttributionSource is not ("ownership" or "impact" or "reach" or "stack-frame" or "path" or "reproduction" or "bisection") ||
             !proof.DependencySelectionResolved || proof.LandingPathsDisjoint != true ||
             proof.NotRunSelectionCount != 0 || proof.Selection.Count == 0 ||
             proof.RecheckMainRevision != receipt.Identity.ObservedMainRevision ||

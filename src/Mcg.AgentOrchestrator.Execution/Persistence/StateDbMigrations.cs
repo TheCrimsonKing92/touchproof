@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 14;
+    private const int CurrentMigrationNumber = 15;
 
     public static StoreSetupPlanEntry Plan(string dbPath)
     {
@@ -165,7 +165,8 @@ public static class StateDbMigrations
                 new(11, "goal-replacement-assigned-agent-fingerprint-inputs", ApplyGoalReplacementAssignedAgentFingerprintInputSchema),
                 new(12, "goal-intake-request-ledger", ApplyGoalIntakeRequestSchema),
                 new(13, "owned-build-run-roots", ApplyOwnedRunRootsSchema),
-                new(14, "original-successful-promotion-facts", SqliteOrchestratorStateRepository.ApplyPromotionFactsSchema)
+                new(14, "original-successful-promotion-facts", SqliteOrchestratorStateRepository.ApplyPromotionFactsSchema),
+                new(15, "reconcile-sweep-remediation", ReconcileSweepRemediationStore.ApplyStateSchemaStep)
             };
             ValidateMigrationSequence(migrations);
 

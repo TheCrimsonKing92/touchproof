@@ -63,7 +63,7 @@ internal static class MergeTrainRedAttribution
 
     // The retained TRX history also contains checks that passed their rerun. The
     // gate's failed-check coverage, not filenames or row ordering, selects RED.
-    private static IReadOnlySet<string>? ReadConfirmedIdentities(MergeTrainReceipt receipt)
+    internal static IReadOnlySet<string>? ReadConfirmedIdentities(MergeTrainReceipt receipt)
     {
         var evidence = receipt.FailedCheckEvidence;
         if (evidence is null || receipt.FailedChecks.Count == 0 ||

@@ -588,7 +588,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id).Blockers);
             var executionOutput = string.Empty;
             var coordinator = new ReconcileSweepRemediationCoordinator(
-                new ReconcileSweepRemediationStore(OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath),
+                new ReconcileSweepRemediationStore(SetUpStateDatabase(OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath)),
                 ReconcileSweepOptions.Default,
                 _ =>
                 {

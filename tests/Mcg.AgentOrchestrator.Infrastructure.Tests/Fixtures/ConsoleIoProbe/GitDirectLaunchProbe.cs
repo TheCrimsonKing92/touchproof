@@ -28,17 +28,6 @@ internal static class GitDirectLaunchProbe
             var before = Total(job);
             string? image = null;
             uint flags = 0;
-            string? fileName = null;
-            Dictionary<string, string?>? launchEnvironment = null;
-            var baselineEnvironment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
-                .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value, StringComparer.OrdinalIgnoreCase);
-            // This pre-existing GitCli hardening setting is present in legacy mode too.
-            baselineEnvironment["GIT_OPTIONAL_LOCKS"] = "0";
-            GitCli.StartInfoObserver = info =>
-            {
-                fileName = info.FileName;
-                launchEnvironment = new(info.Environment, StringComparer.OrdinalIgnoreCase);
-            };
             void Observe(HandleListLaunchedProcess process)
             {
                 image = Image(process);
@@ -48,7 +37,6 @@ internal static class GitDirectLaunchProbe
             GitCli.GitResult result;
             string[] execMarkers = [], hookMarkers = [];
             bool rebaseDirectoryExists = false;
-            string? readerResponse = null;
             if (args[1] == "shell")
             {
                 Git(directory, "init", "-q");
@@ -76,38 +64,19 @@ internal static class GitDirectLaunchProbe
                 hookMarkers = ReadMarkers(directory, "hook-marker");
                 rebaseDirectoryExists = Directory.Exists(Path.Combine(directory, ".git", "rebase-merge"));
             }
-            else if (args[1] == "reader")
-            {
-                Git(directory, "init", "-q");
-                var reader = GitRevisionReader.ReaderProcess.Start(Path.Combine(directory, ".git"));
-                try
-                {
-                    var field = typeof(GitRevisionReader.ReaderProcess).GetField("process", BindingFlags.Instance | BindingFlags.NonPublic)!;
-                    Observe((HandleListLaunchedProcess)field.GetValue(reader)!);
-                    readerResponse = reader.Query("HEAD", 120_000);
-                    result = new(0, readerResponse ?? "", "");
-                }
-                finally { reader.Terminate(); }
-            }
             else
             {
-                if (args[1] == "toggle")
-                {
-                    Git(directory, "--version");
-                    Environment.SetEnvironmentVariable(GitExecutable.LegacyLaunchVariable, "0");
-                    baselineEnvironment[GitExecutable.LegacyLaunchVariable] = "0";
-                }
-                result = GitCli.RunExecutable("git", directory, 120_000, ["--version"], null, null, Observe);
+                result = GitCli.RunExecutable(args[1] == "shim-version" ? shim : "git",
+                    directory, 120_000, ["--version"], null, null, Observe);
             }
 
             File.WriteAllText(reportPath, JsonSerializer.Serialize(new
             {
                 error = (string?)null, shim, consoleWindow, consoleProcessCount,
                 cacheCreatedBefore, cacheCreatedAfter = cache.IsValueCreated,
-                before, after = Total(job), image, flags, fileName,
-                baselineEnvironment, launchEnvironment, result.ExitCode, result.Output, gitError = result.Error,
+                before, after = Total(job), image, flags, result.ExitCode, result.Output, gitError = result.Error,
                 result.DrainTimedOut, result.ProcessStarted,
-                execMarkers, hookMarkers, rebaseDirectoryExists, readerResponse
+                execMarkers, hookMarkers, rebaseDirectoryExists
             }));
             return result.Succeeded ? 0 : 1;
         }
@@ -116,7 +85,6 @@ internal static class GitDirectLaunchProbe
             File.WriteAllText(reportPath, JsonSerializer.Serialize(new { error = exception.ToString() }));
             return 1;
         }
-        finally { GitCli.StartInfoObserver = null; }
     }
 
     private static void Git(string directory, params string[] args)

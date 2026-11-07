@@ -60,7 +60,7 @@ public abstract class GoalWorktreeRecoveryTestBase : GoalWorktreeTestBase
             GoalWorktrees.RecoverMissing(Repo, Goal.Id, owner ?? (() => null), Receipts.Add, hooks);
 
         internal GoalEvidenceOperationCoordinator Coordinator() => new(
-            new ReconcileSweepRemediationStore(System.IO.Path.Combine(Repo, "recovery-state.db")),
+            new ReconcileSweepRemediationStore(SetUpStateDatabase(System.IO.Path.Combine(Repo, "recovery-state.db"))),
             Repo, TimeSpan.FromMinutes(30), pidProbe: new ConductLockPidProbe());
 
         internal void AssertTip()
