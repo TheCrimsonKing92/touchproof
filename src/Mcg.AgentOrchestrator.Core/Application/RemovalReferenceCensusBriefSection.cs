@@ -8,7 +8,7 @@ public static class RemovalReferenceCensusBriefSection
     internal static IEnumerable<TaskBriefSegment> Segments(Goal goal, AgentRole role)
     {
         if (role is not (AgentRole.Planner or AgentRole.Developer)) yield break;
-        var stored = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+        var stored = goal.Timeline.LastOrDefault(evt => evt.Kind == ProgressKind.RemovalReferenceCensusRecorded &&
             evt.Message.StartsWith(StoredPrefix + "\n", StringComparison.Ordinal));
         if (stored is not null)
             yield return TaskBriefSegment.Fixed([

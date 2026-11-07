@@ -61,7 +61,7 @@ internal static class GoalLifecycleCommands
             {
                 var rendered = RemovalReferenceCensus.RenderBriefList(
                     RemovalReferenceCensus.Run(removedNames, workspace.ExecutionDirectory));
-                kernel.RecordGoalPolicyDecision(goal.Id, RemovalReferenceCensusBriefSection.StoredPrefix + "\n" + rendered);
+                kernel.RecordRemovalReferenceCensus(goal.Id, rendered);
             }
             catch (Exception error)
             {

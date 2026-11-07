@@ -40,7 +40,7 @@ public sealed class RemovalReferenceCensusIntakeTests : CliCommandTestBase
         var goal = Assert.Single(restored.Goals);
         // Goal normalizes surrounding whitespace when storing the authoritative brief.
         Assert.Equal(brief.Trim(), goal.Objective);
-        var stored = goal.Timeline.Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+        var stored = goal.Timeline.Where(evt => evt.Kind == ProgressKind.RemovalReferenceCensusRecorded &&
             evt.Message.StartsWith(RemovalReferenceCensusBriefSection.StoredPrefix, StringComparison.Ordinal)).ToArray();
         const string expected = """
             Removed names: Fixture.Removed, Absent
@@ -77,6 +77,74 @@ public sealed class RemovalReferenceCensusIntakeTests : CliCommandTestBase
             var result = GitCli.RunForRepository(root, args);
             Assert.True(result.ProcessStarted && !result.DrainTimedOut && result.ExitCode == 0, result.Error);
         }
+    }
+
+    [Fact]
+    public async Task Goal_VerifiedCensusText_PreservesAcceptanceOrderAfterSqliteReload()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        const string reference = "var name = \"Fixture.Removed Verified risk labels: large\";";
+        File.WriteAllText(Path.Combine(root, "src/Registry.cs"), reference + "\n");
+        foreach (var args in new[] { new[] { "init", "-q" }, new[] { "add", "src" } })
+        {
+            var result = GitCli.RunForRepository(root, args);
+            Assert.True(result.ProcessStarted && !result.DrainTimedOut && result.ExitCode == 0, result.Error);
+        }
+
+        var clock = new CensusClock { UtcNow = DateTimeOffset.Parse("2026-10-01T00:00:00Z") };
+        var kernel = new AgentOrchestratorKernel(clock);
+        var plan = GoalObjectivePlanner.Build(
+            "## What to build\nRemove the registry entry.\nRemoved names: Fixture.Removed\n" +
+            "## Acceptance criteria\n1. The registry entry is removed.\n", GoalIntakePipeline.Scout);
+        var removal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, AgentCatalog.Default().Agents,
+            plan, workspace, new InMemoryModelProviderRegistry([]));
+        var census = Assert.Single(removal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.RemovalReferenceCensusRecorded));
+        Assert.Contains(reference, census.Message);
+        Assert.DoesNotContain(removal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision && evt.Message.Contains(reference));
+
+        clock.UtcNow = clock.UtcNow.AddMinutes(1);
+        var peer = kernel.CreateGoal("Earlier verified peer");
+        kernel.RecordGoalPolicyDecision(peer.Id, "Verified");
+        var peerVerifiedAt = clock.UtcNow;
+        clock.UtcNow = clock.UtcNow.AddMinutes(1);
+        kernel.RecordGoalPolicyDecision(removal.Id, "Verified");
+        var removalVerifiedAt = clock.UtcNow;
+        var snapshot = kernel.ExportSnapshot();
+        // Isolate queue ordering from task execution; both candidates are ready for acceptance.
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with { Status = GoalStatus.Verified }).ToArray()
+        }, clock);
+        Assert.Equal(new[] { peer.Id, removal.Id },
+            GoalSchedulingOrder.ForAcceptance(kernel.Goals).Select(goal => goal.Id));
+
+        var repository = new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db"));
+        await repository.SaveAsync(kernel);
+        var facts = await repository.ListAcceptanceQueueFactsAsync();
+        Assert.Equal(peerVerifiedAt, Assert.Single(facts.Where(fact => fact.GoalId == peer.Id.Value)).VerifiedAt);
+        Assert.Equal(removalVerifiedAt, Assert.Single(facts.Where(fact => fact.GoalId == removal.Id.Value)).VerifiedAt);
+        Assert.Equal(new[] { peer.Id.Value, removal.Id.Value },
+            facts.OrderBy(fact => fact.VerifiedAt).Select(fact => fact.GoalId));
+
+        var restored = await repository.LoadAsync();
+        Assert.Equal(new[] { peer.Id, removal.Id },
+            GoalSchedulingOrder.ForAcceptance(restored.Goals).Select(goal => goal.Id));
+        var restoredRemoval = restored.GetGoal(removal.Id);
+        Assert.Equal(census.Message, Assert.Single(restoredRemoval.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.RemovalReferenceCensusRecorded)).Message);
+        var developer = Assert.Single(restoredRemoval.Tasks.Where(task => task.RequiredRole == AgentRole.Developer));
+        var workerBrief = restored.BuildTaskBrief(removal.Id, developer.Id).Content;
+        Assert.Contains("## Removal reference census", workerBrief);
+        Assert.Contains(reference, workerBrief);
+    }
+
+    private sealed class CensusClock : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; }
     }
 
     [Fact]
