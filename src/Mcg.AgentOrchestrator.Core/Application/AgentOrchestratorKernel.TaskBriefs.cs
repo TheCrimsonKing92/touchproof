@@ -314,9 +314,9 @@ public sealed partial class AgentOrchestratorKernel
         instructionLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(instructionLines));
 
+        segments.AddRange(RemovalReferenceCensusBriefSection.Segments(goal, task.RequiredRole));
         if (declarationContext.RemovalLines.Count > 0)
             segments.Add(TaskBriefSegment.Fixed(declarationContext.RemovalLines));
-
         var plannerEvidenceLines = PlannerEvidenceBriefSection.Build(goal, HumanInputRequests);
         if (plannerEvidenceLines.Count > 0)
             segments.Add(TaskBriefSegment.Fixed(plannerEvidenceLines));

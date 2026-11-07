@@ -55,6 +55,19 @@ internal static class GoalLifecycleCommands
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         EnsureRequestedPipelineCanBeSatisfied(plan, agents);
         var goal = CreateGoalFromPlan(kernel, plan);
+        if (RemovalReferenceCensus.TryParseRemovedNames(plan.Objective, out var removedNames))
+        {
+            try
+            {
+                var rendered = RemovalReferenceCensus.RenderBriefList(
+                    RemovalReferenceCensus.Run(removedNames, workspace.ExecutionDirectory));
+                kernel.RecordGoalPolicyDecision(goal.Id, RemovalReferenceCensusBriefSection.StoredPrefix + "\n" + rendered);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"Removal reference census unavailable: {error.Message}");
+            }
+        }
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -307,4 +320,3 @@ internal static class GoalLifecycleCommands
         }
     }
 }
-
