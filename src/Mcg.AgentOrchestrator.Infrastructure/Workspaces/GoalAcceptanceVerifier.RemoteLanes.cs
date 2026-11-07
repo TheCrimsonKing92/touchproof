@@ -105,7 +105,7 @@ public sealed partial class GoalAcceptanceVerifier
             failures.TryGetValue((check.Name, ShortHash(filter)), out var streak);
             return new RemoteLaneOfferInputs(check.Name, local.MedianSeconds, local.Samples,
                 check.EstimatedSerialSeconds, remote?.MedianSeconds, remote?.Samples ?? 0, 0,
-                streak?.Count ?? 0, streak?.NewestFailureAt, decisionTime);
+                streak?.Count ?? 0, streak?.NewestFailureAt, decisionTime, remote?.SoloMedianSeconds, remote?.ConcurrentMedianSeconds);
         }, StringComparer.Ordinal);
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
@@ -121,7 +121,7 @@ public sealed partial class GoalAcceptanceVerifier
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
             }) { RemoteLaneHistory = history, WaitCollector = LaneWaitCollector, HostTestSettings = hostTestSettings, OfferOutcomes = new() };
-        _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
+        _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs, configuration.Executors.Select(entry => entry.Slots).ToArray(), lane => coordinator.IsCandidate(lanes.First(check => check.Name == lane))));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
         return coordinator;

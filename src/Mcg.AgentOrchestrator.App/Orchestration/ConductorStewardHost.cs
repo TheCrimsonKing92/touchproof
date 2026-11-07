@@ -251,7 +251,8 @@ internal sealed partial class ConductorStewardHost
                 continue;
             }
             if (stored.Status != "pending") continue;
-            OperatorIntentRecord intent;
+            OperatorIntentRecord? intent = null;
+            string? skipReason;
             try
             {
                 var version = _version(goal.Id);
@@ -268,13 +269,19 @@ internal sealed partial class ConductorStewardHost
                     version.Value, _workingDirectory(goal), Reversibility: "reversible-with-cost",
                     Precedent: $"steward-case=G trigger={trigger.Identity}",
                     Precondition: AdjudicationPrecondition.Capture(goal, task));
-                var intentId = Guid.NewGuid().ToString("N");
-                intent = _intents.EnqueueAsync(new OperatorIntentRecord(
-                    intentId, $"steward-{stored.Key}", OperatorIntentVerbs.Adjudicate,
-                    trigger.GoalId, trigger.TaskId, JsonSerializer.Serialize(payload, _json), [],
-                    "steward", "conductor-steward", OperatorIntentAdjudication.StewardAssurance,
-                    now, ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
-                _triggers.MarkServiced(stored.Key, "route-submitted", intent.Id);
+                skipReason = ConductorStewardSubmitAdmission.Evaluate(goal, task, payload, _utcNow(), _version);
+                if (skipReason is not null)
+                    _triggers.MarkServiced(stored.Key, "no-action", null);
+                else
+                {
+                    var intentId = Guid.NewGuid().ToString("N");
+                    intent = _intents.EnqueueAsync(new OperatorIntentRecord(
+                        intentId, $"steward-{stored.Key}", OperatorIntentVerbs.Adjudicate,
+                        trigger.GoalId, trigger.TaskId, JsonSerializer.Serialize(payload, _json), [],
+                        "steward", "conductor-steward", OperatorIntentAdjudication.StewardAssurance,
+                        now, ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
+                    _triggers.MarkServiced(stored.Key, "route-submitted", intent.Id);
+                }
             }
             catch (Exception ex)
             {
@@ -283,8 +290,14 @@ internal sealed partial class ConductorStewardHost
                 Record(trigger, "no-action", $"case-G-failure:{ex.GetType().Name}", null);
                 continue;
             }
+            if (skipReason is not null)
+            {
+                _conduct.Append("steward-skip", trigger.GoalId,
+                    $"trigger={trigger.Identity} case={trigger.CaseLetter} candidate={trigger.CandidateSha} reason={skipReason}");
+                continue;
+            }
             // Logging failure must not erase the submitted remedy's reconciliation identity.
-            Record(trigger, "reopen-regate", "reopen-regate-submitted", intent.Id);
+            Record(trigger, "reopen-regate", "reopen-regate-submitted", intent!.Id);
         }
     }
 

@@ -17,13 +17,16 @@ public sealed record BriefLintFinding(string Kind, BriefLintSeverity Severity, s
     };
 }
 
-/// <summary>Pure early warnings about brief text; findings never authorize or block execution.</summary>
+/// <summary>Early warnings; repository I/O is opt-in via an explicit root. Findings never authorize or block execution.</summary>
 public static partial class BriefLint
 {
     internal const string PreChangeFailureRemedy =
         "Make the pre-change half a Reviewer reading, or a committed negative-control test that runs on the candidate.";
 
     public static IReadOnlyList<BriefLintFinding> Lint(string briefText)
+        => Lint(briefText, null);
+
+    public static IReadOnlyList<BriefLintFinding> Lint(string briefText, string? repositoryRoot)
     {
         ArgumentNullException.ThrowIfNull(briefText);
         var text = briefText.ReplaceLineEndings("\n");
@@ -116,6 +119,16 @@ public static partial class BriefLint
             foreach (Match match in RemovalLanguage().Matches(text))
                 Add("missing-test-removal-bullet", BriefLintSeverity.Advisory, match.Index, match.Length,
                     "Declare each removed test as a - test-removal: Class.Method bullet in the acceptance criteria.");
+        }
+
+        if (repositoryRoot is not null && RemovalReferenceCensus.TryParseRemovedNames(text, out var removedNames))
+        {
+            string message;
+            try { message = RemovalReferenceCensus.RenderBriefList(RemovalReferenceCensus.Run(removedNames, repositoryRoot)); }
+            catch (Exception error) { message = $"Removal reference census unavailable: {error.Message}"; }
+            findings.Add((text.IndexOf("Removed names:", StringComparison.OrdinalIgnoreCase),
+                new("removal-reference-census", BriefLintSeverity.Advisory, message,
+                    "Carry the must-change references into the Developer brief.")));
         }
 
         return findings.OrderBy(item => item.Finding.Severity).ThenBy(item => item.Offset)
