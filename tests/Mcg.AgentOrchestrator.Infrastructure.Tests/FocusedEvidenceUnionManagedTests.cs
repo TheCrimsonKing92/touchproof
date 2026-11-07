@@ -1,5 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
-using static FocusedEvidenceUnionPlanningTests;
+using static FocusedEvidenceUnionPlanningSupport;
 using static MtpTestRunnerScriptTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]

@@ -12,7 +12,12 @@ public sealed class RemainderBalanceDLaneMoveTests
     private const string SharedKey = "machine:GitHeavyLanes";
     private static readonly string[] MovedClassNames =
     [
-        "MergeTrainFocusedRecheckReceiptAcceptanceTests",
+        "MergeTrainFocusedRecheckReceiptContractTests",
+        "MergeTrainFocusedRecheckRedReceiptRefusalTests",
+        "MergeTrainFocusedRecheckRedCheckEvidenceRefusalTests",
+        "MergeTrainFocusedRecheckAttemptRefusalTests",
+        "MergeTrainFocusedRecheckSelectionRefusalTests",
+        "MergeTrainFocusedRecheckCompositionRefusalTests",
         "MergeTrainPrefixBisectionTrainTests",
         "PassedCohortReceiptApprovalHoldTests",
         "IntegrationMergeRatchetOnlyCleanTests",
@@ -69,7 +74,7 @@ public sealed class RemainderBalanceDLaneMoveTests
         var types = RunnableTypes();
         var moved = Assert.Single(types, type => type.Name == "MergeTrainFocusedRecheckTests");
         var coupled = Assert.Single(types,
-            type => type.Name == "MergeTrainFocusedRecheckReceiptAcceptanceTests");
+            type => type.Name == "MergeTrainFocusedRecheckReceiptContractTests");
         const string exclusion = "&FullyQualifiedName!~MergeTrainFocusedRecheckTests";
         const string inclusion = "|FullyQualifiedName~MergeTrainFocusedRecheckTests";
         var remainder = Assert.Single(loaded, lane => lane.Name == Remainder);

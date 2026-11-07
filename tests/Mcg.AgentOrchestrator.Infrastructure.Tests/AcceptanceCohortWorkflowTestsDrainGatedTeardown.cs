@@ -7,7 +7,7 @@ public sealed class AcceptanceCohortWorkflowTestsDrainGatedTeardown
     {
         using var resources = new TeardownResources();
 
-        var result = AcceptanceCohortWorkflowTestsBackgroundAndCapacity.RemoveAfterObservedDrain(
+        var result = AcceptanceCohortWorkflowBackgroundSupport.RemoveAfterObservedDrain(
             () => false, "ActiveRootCount == 0", TimeSpan.FromMilliseconds(50), resources.Removals);
 
         Assert.True(File.Exists(resources.Trx), "Undrained teardown removed the TRX file.");
@@ -27,7 +27,7 @@ public sealed class AcceptanceCohortWorkflowTestsDrainGatedTeardown
         using var drained = new ManualResetEventSlim();
         drained.Set();
 
-        var result = AcceptanceCohortWorkflowTestsBackgroundAndCapacity.RemoveAfterObservedDrain(
+        var result = AcceptanceCohortWorkflowBackgroundSupport.RemoveAfterObservedDrain(
             () => drained.IsSet, "ActiveRootCount == 0", TimeSpan.FromSeconds(10), resources.Removals);
 
         Assert.False(File.Exists(resources.Trx));
