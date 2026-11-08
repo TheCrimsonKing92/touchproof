@@ -28,9 +28,17 @@ internal sealed class MultiRepositoryAcceptanceGate(
             return new(Waiting(state, captured.Failure));
         }
         var existing = Store.TryRead(goal.Id);
-        if (IsPassedCurrent(goal, existing, captured.Tuple)) return LandingHold(goal, state);
+        if (IsPassedCurrent(goal, existing, captured.Tuple)) return new(null, Landable: existing);
 
         var attemptId = Guid.NewGuid().ToString("N");
+        var bases = new Dictionary<string, string>(StringComparer.Ordinal);
+        var baseErrors = new Dictionary<string, Exception>(StringComparer.Ordinal);
+        var resolver = new MultiRepositoryIntegrationBases(workspace, registry);
+        foreach (var key in goal.Repositories!.Keys)
+        {
+            try { bases[key] = resolver.Resolve(key).Tip; }
+            catch (Exception ex) { baseErrors[key] = ex; }
+        }
         var outcomes = new List<RepositoryAcceptanceOutcome>();
         var projectVerifier = new MultiRepositoryProjectVerifier(registry, verifier);
         foreach (var key in new[] { "default" }.Concat(goal.Repositories!.Keys.Where(key => key != "default")))
@@ -38,6 +46,7 @@ internal sealed class MultiRepositoryAcceptanceGate(
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                if (baseErrors.TryGetValue(key, out var baseError)) throw baseError;
                 if (key == "default")
                 {
                     var summary = runHome();
@@ -65,12 +74,12 @@ internal sealed class MultiRepositoryAcceptanceGate(
             }
         }
 
-        var receipt = new MultiRepositoryAcceptanceReceipt(goal.Id, captured.Tuple.Canonical, outcomes, DateTimeOffset.UtcNow);
+        var receipt = new MultiRepositoryAcceptanceReceipt(goal.Id, captured.Tuple.Canonical, outcomes, DateTimeOffset.UtcNow, bases);
         Store.Write(receipt, goal.Repositories.Repositories);
         var current = CurrentTuple(goal);
         if (current.Tuple is null || !receipt.IsCurrentFor(current.Tuple))
             return new(Waiting(state, "candidate changed during acceptance; re-gate every declared repository. " + current.Failure));
-        if (receipt.Passed) return LandingHold(goal, state);
+        if (receipt.Passed) return new(null, Landable: receipt);
 
         return Failure(receipt.Outcomes.Where(outcome => !outcome.Passed).ToArray());
     }
@@ -83,13 +92,12 @@ internal sealed class MultiRepositoryAcceptanceGate(
             "Repository acceptance failed: " + string.Join(", ", failed.Select(outcome => outcome.Key)), checks.Select(check => check.Name).ToArray()));
     }
 
-    internal MultiRepositoryAcceptanceResult LandingHold(Goal goal, GoalLifecycleState state)
+    internal MultiRepositoryAcceptanceResult Inspect(Goal goal, GoalLifecycleState state)
     {
         var current = CurrentTuple(goal);
         var receipt = Store.TryRead(goal.Id);
-        return new(IsPassedCurrent(goal, receipt, current.Tuple)
-            ? MultiRepositoryLandingHold.Create(goal, state, receipt!)
-            : Waiting(state, "a current passing repository receipt is required; run acceptance. " + current.Failure));
+        return IsPassedCurrent(goal, receipt, current.Tuple) ? new(null, Landable: receipt)
+            : new(Waiting(state, "a current passing repository receipt is required; run acceptance. " + current.Failure));
     }
 
     internal bool HasCurrentPass(Goal goal) => IsPassedCurrent(goal, Store.TryRead(goal.Id), CurrentTuple(goal).Tuple);
@@ -99,13 +107,7 @@ internal sealed class MultiRepositoryAcceptanceGate(
         if (tuple is null || receipt is not { Passed: true } || receipt.GoalId != goal.Id
             || !receipt.IsComplete(goal.Repositories!.Repositories) || !receipt.IsCurrentFor(tuple)
             || !AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal)) return false;
-        try
-        {
-            foreach (var key in goal.Repositories.Keys.Where(key => key != "default"))
-                _ = MultiRepositoryProjectVerifier.ResolveProject(registry, goal, key);
-            return true;
-        }
-        catch (Exception) { return false; } // Re-run to capture the keyed resolution failure as evidence.
+        return true; // Registry target changes are checked against recorded bases by the landing preflight.
     }
 
     private (RepositoryCandidateTuple? Tuple, string Failure) CurrentTuple(Goal goal)

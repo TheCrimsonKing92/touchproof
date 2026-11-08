@@ -17,7 +17,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.AcceptanceCarryForward.cs : CompleteLandingAfterRacingLandingCarryForward : Racing landing carry-forward hold lacks a decision.",
         "ConductorDriver.AcceptanceCohortExecution.cs : CohortHeld : Cohort hold member results have no decisions.",
         "ConductorDriver.AcceptanceCohortExecution.cs : CohortInFlight : In-flight cohort hold has no decision.",
-        "ConductorDriver.AcceptanceLanding.cs : ExecuteRepositoryAcceptance : Repository acceptance precondition holds lack typed decisions.",
         "ConductorDriver.DeferredNoChangeEvidence.cs : TryRunDeferredNoChangeEvidence : Deferred evidence escalation and pending hold lack attribution.",
         "ConductorDriver.DeveloperCompletionStructuralPreflight.cs : TryRunDeveloperCompletionStructuralPreflight : Conflict integration validation failure escalates without a typed decision.",
         "ConductorDriver.FindingEvidenceDeveloperHandoff.cs : TryRouteDeliveredFindingEvidenceToDeveloper : Developer evidence handoff hold has no decision.",

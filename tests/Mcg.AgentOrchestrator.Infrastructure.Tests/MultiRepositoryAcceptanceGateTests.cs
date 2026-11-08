@@ -9,15 +9,13 @@ using Xunit;
 public sealed class MultiRepositoryAcceptanceGateTests
 {
     [Fact]
-    public void AdvanceOnce_TwoRepositoriesPass_RecordsTupleReceiptAndHoldsForLanding()
+    public void AdvanceOnce_TwoRepositoriesPass_RecordsTupleReceiptAndLands()
     {
         using var fixture = new MultiRepositoryAcceptanceGateFixture();
         var tuple = fixture.Tuple();
         var result = fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
 
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Equal(MultiRepositoryLandingHold.Kind, held.Decision!.DiscriminatingEvidence);
-        Assert.Contains(held.Decision.Facts, fact => fact.Name == "owner" && fact.Value == "operator");
+        Assert.Contains("Landed:", Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome).Description);
         Assert.Equal(new[] { ("default", fixture.HomeWorktree), ("crosswalk", fixture.SecondaryWorktree) }, fixture.Calls);
         var receipt = Assert.IsType<MultiRepositoryAcceptanceReceipt>(fixture.Gate.Store.TryRead(fixture.Goal.Id));
         Assert.True(receipt.Passed);
@@ -25,10 +23,8 @@ public sealed class MultiRepositoryAcceptanceGateTests
         Assert.Equal(new[] { "crosswalk", "default" }, receipt.Outcomes.Select(outcome => outcome.Key));
         Assert.All(receipt.Outcomes, outcome => Assert.True(File.Exists(outcome.EvidenceReference)));
         Assert.Single(Directory.GetFiles(fixture.Gate.Store.DirectoryPath, "*.json"));
-        ConductorLandingBlockerRecorder.Observe(fixture.Repositories.Kernel, fixture.Goal, held, DateTimeOffset.UtcNow, []);
-        Assert.Equal("operator", fixture.Goal.LandingBlocker!.NextActor);
-        Assert.Equal("wait-for-the-landing-slice", fixture.Goal.LandingBlocker.NextVerb);
-        Assert.Equal(0, fixture.LandingCalls);
+        Assert.Equal(2, receipt.IntegrationBases.Count);
+        Assert.Equal(1, fixture.LandingCalls);
     }
 
     [Fact]
@@ -56,12 +52,12 @@ public sealed class MultiRepositoryAcceptanceGateTests
     {
         using var fixture = new MultiRepositoryAcceptanceGateFixture();
         var driver = fixture.Driver();
-        AssertLandingHold(driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative));
+        Assert.NotNull(fixture.Gate.Run(fixture.Goal, GoalLifecycleState.Verified, fixture.RunHome).Landable);
         var old = fixture.Gate.Store.TryRead(fixture.Goal.Id)!;
         GoalRepositoryWorktreeProvisionerFixture.CommitChange(fixture.SecondaryWorktree);
         fixture.FailSecondary = true;
         Assert.False(old.IsCurrentFor(fixture.Tuple()));
-        Assert.Null(fixture.Gate.LandingHold(fixture.Goal, GoalLifecycleState.Verified).Hold!.Decision);
+        Assert.Null(fixture.Gate.Inspect(fixture.Goal, GoalLifecycleState.Verified).Hold!.Decision);
 
         var result = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
 
@@ -106,7 +102,7 @@ public sealed class MultiRepositoryAcceptanceGateTests
         File.WriteAllText(fixture.SecondaryManifest, MultiRepositoryAcceptanceGateFixture.Manifest("revised secondary check", "--version"));
         Assert.False(old.IsCurrentFor(fixture.Tuple()));
         var result = fixture.Gate.Run(fixture.Goal, GoalLifecycleState.Verified, fixture.RunHome);
-        Assert.Equal(MultiRepositoryLandingHold.Kind, result.Hold!.Decision!.DiscriminatingEvidence);
+        Assert.NotNull(result.Landable);
         Assert.Equal(4, fixture.Calls.Count);
     }
 
@@ -173,14 +169,14 @@ public sealed class MultiRepositoryAcceptanceGateTests
         Assert.True(CliCommandHandlers.Execute(["land", fixture.Goal.Id.Value], fixture.Context()));
 
         Assert.Equal(calls, fixture.Calls.Count);
-        Assert.DoesNotContain(MultiRepositoryLandingHold.Kind, fixture.Goal.LandingBlocker?.Kind ?? "");
+        Assert.DoesNotContain(MultiRepositoryGoal.Route, fixture.Goal.LandingBlocker?.Kind ?? "");
         Assert.Equal(head, fixture.Repositories.Home.Git("rev-parse", "HEAD"));
         Assert.True(Directory.Exists(fixture.HomeWorktree));
         Assert.True(Directory.Exists(fixture.SecondaryWorktree));
     }
 
     [Fact]
-    public void Run_RegistryCheckoutChanges_RejectsPassingReceiptAndRecordsFailure()
+    public void Execute_RegistryCheckoutChanges_ValidatesRecordedIntegrationBase()
     {
         using var fixture = new MultiRepositoryAcceptanceGateFixture();
         fixture.Gate.Run(fixture.Goal, GoalLifecycleState.Verified, fixture.RunHome);
@@ -192,17 +188,14 @@ public sealed class MultiRepositoryAcceptanceGateTests
         var candidate = GoalRepositoryCandidateIdentity.Compute(fixture.Goal, fixture.Repositories.Workspace, registry);
         Assert.Equal(receipt.TupleCanonical, candidate.Identity!.RepositoryTupleCanonical);
         var gate = new MultiRepositoryAcceptanceGate(fixture.Repositories.Workspace, registry, fixture.Verifier);
-        Assert.False(gate.HasCurrentPass(fixture.Goal));
-        Assert.Null(gate.LandingHold(fixture.Goal, GoalLifecycleState.Verified).Hold!.Decision);
-
-        var result = gate.Run(fixture.Goal, GoalLifecycleState.Verified, fixture.RunHome);
-
-        Assert.Null(result.Hold);
-        Assert.Contains("crosswalk", result.Failure!.FailureDetail);
-        var failed = Assert.Single(gate.Store.TryRead(fixture.Goal.Id)!.Outcomes, outcome => !outcome.Passed);
-        Assert.Contains("registered checkout differs", failed.Detail);
-        Assert.True(File.Exists(failed.EvidenceReference));
-        Assert.Equal(3, fixture.Calls.Count); // Both initial checks, then the home re-gate.
+        Assert.True(gate.HasCurrentPass(fixture.Goal));
+        Assert.NotNull(gate.Inspect(fixture.Goal, GoalLifecycleState.Verified).Landable);
+        var landing = new MultiRepositoryTupleLanding(fixture.Repositories.Workspace, registry);
+        var result = landing.Execute(fixture.Goal, GoalLifecycleState.Verified, receipt,
+            () => throw new InvalidOperationException("Must not land a stale base"), () => null);
+        Assert.Equal("multi-repository-acceptance-stale", result.Hold!.Decision!.DiscriminatingEvidence);
+        Assert.Contains("crosswalk", result.Hold.Reason);
+        Assert.Equal(2, fixture.Calls.Count);
     }
 
     [Theory]
@@ -217,10 +210,7 @@ public sealed class MultiRepositoryAcceptanceGateTests
         Assert.Equal(2, fixture.Calls.Count);
         Assert.Equal(before, fixture.Repositories.Home.Git("rev-parse", "HEAD"));
         Assert.True(Directory.Exists(fixture.HomeWorktree));
-        Assert.Equal("multi-repository-landing/" + MultiRepositoryLandingHold.Kind, fixture.Goal.LandingBlocker!.Kind);
+        Assert.Equal("multi-repository-landing/" + MultiRepositoryGoal.Route, fixture.Goal.LandingBlocker!.Kind);
     }
 
-    private static void AssertLandingHold(ConductorAdvanceResult result) =>
-        Assert.Equal(MultiRepositoryLandingHold.Kind,
-            Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome).Decision!.DiscriminatingEvidence);
 }

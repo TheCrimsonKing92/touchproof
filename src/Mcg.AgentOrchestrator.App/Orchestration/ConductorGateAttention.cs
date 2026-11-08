@@ -12,6 +12,7 @@ internal static class ConductorGateAttention
         OrchestratorProjectRegistry? registry = null)
     {
         driver.RepositoryAcceptanceGate = new(workspace, registry ?? OrchestratorProjectRegistry.CreateDefault(), verifier);
+        driver.RepositoryTupleLanding = new(workspace, registry ?? OrchestratorProjectRegistry.CreateDefault());
         Configure(driver, workspace.OrchestratorDirectory, resolvePassedGateHold);
     }
 
@@ -21,7 +22,7 @@ internal static class ConductorGateAttention
         var store = CollaborationItemStore.ForDirectory(orchestratorDirectory);
         driver.PassedGateHoldAttention = new(store, resolvePassedGateHold);
         driver.AwaitingVerificationGateAttention = new(store);
-        driver.MultiRepositoryLandingHoldAttention = new(store, goal => driver.RepositoryAcceptanceGate?.HasCurrentPass(goal) == true);
+        driver.MultiRepositoryLandingHoldAttention = new(store, goal => driver.RepositoryTupleLanding?.Store.ReadFailure(goal.Id));
         driver.StalledEvidenceWaitAttention = new(store,
             goal => (driver._cohortKernel ?? driver._conductorTickKernel)?.GetPendingHumanInput(goal.Id));
     }
