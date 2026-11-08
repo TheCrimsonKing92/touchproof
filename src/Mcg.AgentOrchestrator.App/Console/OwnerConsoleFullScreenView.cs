@@ -9,7 +9,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKeySurface, IOwnerConsoleBindingSurface
 {
     private readonly OwnerConsoleScreenController _controller;
-    private readonly OwnerConsoleKeyRouter _router;
+    private readonly OwnerConsoleKeyObserver _keys;
+    private readonly OwnerConsoleViewTrace _trace;
+    private readonly OwnerConsoleBoardSelection _selection;
     private readonly OwnerConsoleBindingRunner _bindingRunner;
     private readonly IApplication _app;
     private readonly IKeyboard? _keyboard;
@@ -47,7 +49,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private string? _completionHint;
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
-    private int _selectedBoardIndex = -1;
     private readonly OwnerConsoleBoardCollapse _collapse = new();
     private OwnerConsoleViewModel? _arrangedBoard;
     private int _activityWidth;
@@ -66,29 +67,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public TableView BoardPane => _board;
     private readonly OwnerConsoleClipboard _clipboard;
     private string? _selectedFieldKey = "goal";
-    private bool _copySelectionValid = true;
-    public OwnerConsoleFieldSnapshot? SelectedBoardFields
-    {
-        get
-        {
-            if (!_copySelectionValid || _controller.Model is not { } model || _selectedBoardIndex < 0 ||
-                _selectedBoardIndex >= model.Board.Length || model.Board[_selectedBoardIndex].IsDiagnostic) return null;
-            var row = model.Board[_selectedBoardIndex];
-            var snapshot = row.Fields();
-            return _previewPane.Row?.Project == row.Project && _previewPane.Preview.GoalId == row.GoalId && _previewPane.Preview.Summary is { } summary
-                ? snapshot with { Fields = [.. snapshot.Fields, .. summary.Fields().Select(item => item with { Key = "preview/" + item.Key })] }
-                : snapshot;
-        }
-    }
+    public OwnerConsoleFieldSnapshot? SelectedBoardFields => _selection.Fields;
     public ListView DecisionsPane => _decisions;
     public ListView ActivityPane => _activity;
     internal string HintText => _hints.Text;
     internal IReadOnlyList<string> DecisionLines => _decisionsPane.Lines;
     public IReadOnlyList<string> ActivityLines => _activityPane.Lines;
-    public string? SelectedGoalId { get; private set; }
-    public string? SelectedProject { get; private set; }
-    private OwnerConsoleBoardRow? SelectedBoardRow => _controller.Model is { } model &&
-        _selectedBoardIndex >= 0 && _selectedBoardIndex < model.Board.Length ? model.Board[_selectedBoardIndex] : null;
+    public string? SelectedGoalId => _selection.GoalId;
+    public string? SelectedProject => _selection.Project;
+    private OwnerConsoleBoardRow? SelectedBoardRow => _selection.Row;
     public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
@@ -96,15 +83,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     string? IOwnerConsoleKeySurface.CompletionHint { set => _completionHint = value; }
     public View? CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
     int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
-    int IOwnerConsoleKeySurface.SelectedBoardIndex => _selectedBoardIndex;
+    int IOwnerConsoleKeySurface.SelectedBoardIndex => _selection.Index;
     string? IOwnerConsoleKeySurface.SelectedFieldKey { get => _selectedFieldKey; set => _selectedFieldKey = value; }
-    bool IOwnerConsoleKeySurface.CopySelectionValid { set => _copySelectionValid = value; }
+    bool IOwnerConsoleKeySurface.CopySelectionValid { set => _selection.CopyValid = value; }
     OwnerConsoleViewModel? IOwnerConsoleKeySurface.ArrangedBoard => _arrangedBoard;
     public bool Rendering { set => _rendering = value; }
     public OwnerConsoleActivityPane ActivityModel => _activityPane;
     OwnerConsoleFieldSnapshot? IOwnerConsoleKeySurface.DecisionFields => _decisionsPane.SelectedFields;
     int IOwnerConsoleBindingSurface.ActivityWidth => _activityWidth;
-    IDisposable? IOwnerConsoleBindingSurface.BeginActivitySourceReplacement() => _diagnostics?.Begin("activity-source-replacement", TraceState);
+    IDisposable? IOwnerConsoleBindingSurface.BeginActivitySourceReplacement() => _trace.BeginActivitySourceReplacement();
     void IOwnerConsoleBindingSurface.RequestStop() => _app.RequestStop(Window);
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
@@ -136,6 +123,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _previewPane = new(_layout.PreviewFrame, _clock, controller.LoadGoalSummaryAsync, Invoke,
             () => SelectedBoardRow, id => _controller.Model?.Board.FirstOrDefault(row =>
                 row.Project == SelectedProject && row.GoalId == id), _token);
+        _trace = new(this, app, Window, controller, diagnostics);
+        _selection = new(this, controller, _previewPane, _board, BoardTable, diagnostics, _trace.State, () => _selectedFieldKey);
         _board.Table = new DataTableSource(BoardTable);
         _epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
@@ -144,18 +133,19 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _layout.Compose(Window, _status, _notice, _hints, _epicHint, _command, EpicView, GateView);
         new OwnerConsoleFullScreenWiring(
             _previewPane.Body, _notice, _status, _decisions, _board, _activity, _command, _activityPane,
-            _controller, _diagnostics, TraceState,
-            () => _rendering, value => _rendering = value, value => _copySelectionValid = value,
+            _controller, _diagnostics, _trace.State,
+            () => _rendering, value => _rendering = value, value => _selection.CopyValid = value,
             value => _selectedFieldKey = value, () => _completionHint, value => _completionHint = value,
             () => _activityWidth, () => _boardTitleWidth,
             RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, RenderDecisions,
             index => SelectBoard(index), PaneFocusChanged, Fit, ActivityRow).Attach();
         RenderHints();
-        _router = new(this, _controller, _operation, _clipboard, _collapse, _token);
+        _keys = new(this, app, Window, new(this, _controller, _operation, _clipboard, _collapse, _token),
+            diagnostics, _trace.State, _token);
         _bindingRunner = new(this, _controller, _operation, _boardSource is null ? null : _boardSource.HandleScope, _refresh, _token);
         _keyboard = app.Initialized ? app.Keyboard : null;
-        if (_keyboard is not null) _keyboard.KeyDown += OnKeyDown;
-        if (_diagnostics is not null) _app.LayoutAndDrawComplete += OnLayoutAndDrawComplete;
+        if (_keyboard is not null) _keyboard.KeyDown += _keys.OnKeyDown;
+        if (_diagnostics is not null) _app.LayoutAndDrawComplete += _trace.OnLayoutAndDrawComplete;
     }
 
     private static DataTable CreateBoardTable()
@@ -168,7 +158,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal void Render(OwnerConsoleViewModel model)
     {
         GateView.Render(model.Gate);
-        using var trace = _diagnostics?.Begin("render", TraceState);
+        using var trace = _diagnostics?.Begin("render", _trace.State);
         _rendering = true;
         try
         {
@@ -184,8 +174,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             var index = Array.FindIndex(model.Board.ToArray(), row =>
                 (selectedHeader ? row.IsDiagnostic : row.GoalId == SelectedGoalId) &&
                 string.Equals(row.Project, SelectedProject, StringComparison.OrdinalIgnoreCase));
-            if (SelectedGoalId is not null && index < 0) _copySelectionValid = false;
-            SelectBoard(index < 0 ? _selectedBoardIndex : index, refresh: true,
+            if (SelectedGoalId is not null && index < 0) _selection.CopyValid = false;
+            SelectBoard(index < 0 ? _selection.Index : index, refresh: true,
                 allowHeader: selectedHeader && index >= 0);
             RenderActivity();
             RenderHints();
@@ -198,7 +188,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     internal void Fit(int activityWidth, int boardTitleWidth)
     {
-        using var trace = _diagnostics?.Begin("fit", TraceState);
+        using var trace = _diagnostics?.Begin("fit", _trace.State);
         if (_rendering) { if (trace is not null) trace.Outcome = "skipped-rendering"; return; }
         _activityWidth = activityWidth;
         _boardTitleWidth = boardTitleWidth;
@@ -210,7 +200,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     public void RenderBoard()
     {
-        using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
+        using var trace = _diagnostics?.Begin("board-source-replacement", _trace.State);
         if (_controller.Model is not { } model) return;
         _layout.BoardFooterSegments = OwnerConsoleBoardSection.Footer(model);
         var footerVisible = _layout.BoardFooterSegments.Count > 0;
@@ -224,14 +214,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             model.BoardScope is { Sections: not null });
         var fieldColumn = OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "");
         if (fieldColumn < 0 || !_board.Style.GetOrCreateColumnStyle(fieldColumn).Visible) _selectedFieldKey = null;
-        if (fieldColumn >= 0 && _selectedBoardIndex >= 0 && _selectedBoardIndex < BoardTable.Rows.Count)
-            _board.SetSelection(fieldColumn, _selectedBoardIndex, false);
+        if (fieldColumn >= 0 && _selection.Index >= 0 && _selection.Index < BoardTable.Rows.Count)
+            _board.SetSelection(fieldColumn, _selection.Index, false);
         RenderPreview();
     }
 
     private void RenderDecisions()
     {
-        using var trace = _diagnostics?.Begin("decisions-source-replacement", TraceState);
+        using var trace = _diagnostics?.Begin("decisions-source-replacement", _trace.State);
         if (_controller.Model is not { } model) return;
         _decisionsPane.Render(model, _controller.SelectedIndex, _decisions.Viewport.Width);
         RenderOverflow();
@@ -304,7 +294,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     private void RenderActivity()
     {
-        using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
+        using var trace = _diagnostics?.Begin("activity-source-replacement", _trace.State);
         _activityPane.Render(_controller.Model, _activityWidth);
     }
     private int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
@@ -313,7 +303,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _rendering = true;
         try
         {
-            using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
+            using var trace = _diagnostics?.Begin("activity-source-replacement", _trace.State);
             _activityPane.FollowLatest(_controller.Model, _activityWidth);
         }
         finally { _rendering = false; }
@@ -321,46 +311,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         RenderOverflow();
     }
 
-    private async void OnKeyDown(object? sender, Key key)
-    {
-        if (_diagnostics is null && _app.TopRunnableView != Window) return;
-        try
-        {
-            await (_diagnostics is null ? HandleKeyCoreAsync(key) :
-                ObserveKeyAsync(key, _app.TopRunnableView == Window, "keyboard-callback"));
-        }
-        catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
-        catch (Exception ex) { ShowNotice($"key action failed: {ex.Message}", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }
-    }
+    internal Task HandleKeyAsync(Key key) => _keys.HandleKeyAsync(key);
 
-    // The production callback and headless tests share routing; their input boundaries remain distinct.
-    internal Task HandleKeyAsync(Key key) => _diagnostics is null ? HandleKeyCoreAsync(key) :
-        ObserveKeyAsync(key, true, "headless-input");
-
-    internal async Task ObserveKeyAsync(Key key, bool routeToWindow, string boundary)
-    {
-        using var input = _diagnostics?.Begin(boundary, TraceState, key.ToString(), input: true);
-        if (!routeToWindow)
-        {
-            if (input is not null) input.Outcome = "excluded-top-window";
-            return;
-        }
-        using var handler = _diagnostics?.Begin("handler", TraceState);
-        try
-        {
-            await HandleKeyCoreAsync(key);
-            if (handler is not null) handler.Outcome = key.Handled ? "handled" : "unhandled";
-            if (input is not null) input.Outcome = key.Handled ? "handled" : "unhandled";
-        }
-        catch (Exception ex)
-        {
-            if (handler is not null) handler.Outcome = ex is OperationCanceledException ? "cancelled" : "faulted";
-            if (input is not null) input.Outcome = handler?.Outcome ?? "faulted";
-            throw;
-        }
-    }
-
-    private Task HandleKeyCoreAsync(Key key) => _router.RouteAsync(key);
+    internal Task ObserveKeyAsync(Key key, bool routeToWindow, string boundary) => _keys.ObserveKeyAsync(key, routeToWindow, boundary);
 
     public Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false) => _bindingRunner.RunAsync(binding, argument, fromKey);
 
@@ -420,66 +373,21 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
 
-    public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false)
-    {
-        if (!refresh) _copySelectionValid = true;
-        using var trace = _diagnostics?.Begin("select-board", TraceState);
-        if (_controller.Model is not { Board.Length: > 0 } model)
-        {
-            _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null;
-            if (!_previewPane.Select(null)) RenderPreview();
-            return;
-        }
-        var selectable = allowHeader && index >= 0 && index < BoardTable.Rows.Count && model.Board[index].IsDiagnostic
-            ? index : OwnerConsoleBoardSection.NearestGoal(model.Board, model.BoardScope, index, direction);
-        _selectedBoardIndex = selectable < 0 ? 0 : selectable;
-        var row = model.Board[_selectedBoardIndex];
-        SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
-        SelectedProject = selectable < 0 ? null : row.Project;
-        if (!_previewPane.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh))
-            RenderPreview();
-        if (selectable < 0 || BoardTable.Rows.Count == 0) return;
-        if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
-            _board.SetSelection(Math.Max(0, OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "")), _selectedBoardIndex, false);
-        _board.EnsureCursorIsVisible();
-        RenderOverflow();
-    }
+    public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
+        _selection.Select(index, refresh, direction, allowHeader);
 
     private void RenderPreview() => _previewPane.Render();
 
-    public bool RefuseSelectedBoardRow()
-    {
-        if (FocusedPane != OwnerConsolePane.Board || SelectedBoardRow is not { } row ||
-            !row.IsForeign && !row.IsDiagnostic) return false;
-        StartAction();
-        ShowNotice(row.IsDiagnostic ? row.Title : OwnerConsoleBoardSource.ForeignRowMessage(row),
-            OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
-        return true;
-    }
+    public bool RefuseSelectedBoardRow() => _selection.Refuse();
 
     private void Invoke(Action action)
     {
         if (_app.Initialized && _diagnostics is not null)
         {
-            _app.Invoke(_diagnostics.ObservePost("view-invoke", action, TraceState));
+            _app.Invoke(_diagnostics.ObservePost("view-invoke", action, _trace.State));
         }
         else if (_app.Initialized) _app.Invoke(action);
         else action();
-    }
-
-    private void OnLayoutAndDrawComplete(object? sender, EventArgs args) =>
-        _diagnostics?.Mark("layout-draw-complete", TraceState);
-
-    private OwnerConsoleTraceState TraceState()
-    {
-        static OwnerConsoleTracePane Pane(View view, int index, string? identity, int count) =>
-            new(index, identity, count, view.Viewport.X, view.Viewport.Y, view.Viewport.Width, view.Viewport.Height);
-        return new(_editingCommand || _command.HasFocus ? "Command" : FocusedPane.ToString(),
-            _editingCommand, EpicView.IsOpen || GateView.IsOpen || (_app.Initialized && _app.TopRunnableView != Window),
-            Pane(_decisions, _decisions.SelectedItem ?? -1, _controller.SelectedDecisionId, _controller.Model?.Decisions.Length ?? 0),
-            Pane(_board, _selectedBoardIndex, SelectedGoalId, _controller.Model?.Board.Length ?? 0) with
-                { RowOffset = _board.RowOffset, ColumnOffset = _board.ColumnOffset },
-            Pane(_activity, _activity.SelectedItem ?? -1, null, ActivityLines.Count));
     }
 
     public void Dispose()
@@ -488,8 +396,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _previewPane.Dispose();
         _noticeExpiry.Dispose();
         _controller.Dispose();
-        if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;
-        if (_diagnostics is not null) _app.LayoutAndDrawComplete -= OnLayoutAndDrawComplete;
+        if (_keyboard is not null) _keyboard.KeyDown -= _keys.OnKeyDown;
+        if (_diagnostics is not null) _app.LayoutAndDrawComplete -= _trace.OnLayoutAndDrawComplete;
         Window.Dispose();
         BoardTable.Dispose();
         _lifetime.Dispose();
