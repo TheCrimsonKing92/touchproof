@@ -13,8 +13,8 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     private readonly Label _notice = new() { Width = Dim.Fill() };
     private readonly Label _hint = new() { Width = Dim.Fill() };
     private readonly Label _fieldsHint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1, Text = "F2 fields (snapshot)" };
-    private readonly Button _answer = new() { Text = "Answer (r)" };
-    private readonly Button _accept = new() { Text = "Accept default (a)" };
+    private readonly Button _answer = new() { Text = $"Answer ({OwnerConsoleBindings.Answer.Key})" };
+    private readonly Button _accept = new() { Text = $"Accept default ({OwnerConsoleBindings.Accept.Key})" };
     private readonly Button _close = new() { Text = "Close", IsDefault = true };
     private OwnerConsoleTextPage _page = new("", 60, 15);
     private string? _text;
@@ -58,8 +58,8 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
         if (key == OwnerConsoleBindings.OpenFields && _body.HasFocus)
         { key.Handled = true; if (state.Fields is { } fields) FieldsRequested?.Invoke(fields); return; }
         var character = char.ToLowerInvariant((char)key.AsRune.Value);
-        if (character == 'r' && state.CanAnswer || character == 'a' && state.CanAcceptDefault)
-        { key.Handled = true; await AnswerAsync(character == 'a'); }
+        if (character == OwnerConsoleBindings.Answer.Key && state.CanAnswer || character == OwnerConsoleBindings.Accept.Key && state.CanAcceptDefault)
+        { key.Handled = true; await AnswerAsync(character == OwnerConsoleBindings.Accept.Key); }
         else if (character == '?')
         {
             key.Handled = true;

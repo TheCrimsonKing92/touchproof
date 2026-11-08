@@ -23,6 +23,7 @@ internal sealed class AcceptanceGateEngineSettings
     public IReadOnlyList<AcceptanceManifestCheck> DeclaredDotnetTestChecks { get; private set; } = [];
     [JsonIgnore] public AcceptanceManifestCheck? DeclaredGoTestCheck { get; private set; }
     [JsonIgnore] public AcceptanceManifestCheck? DeclaredCrosswalkTestCheck { get; private set; }
+    [JsonIgnore] public AcceptanceManifestCheck? DeclaredRustNextestCheck { get; private set; }
     [JsonIgnore] public IReadOnlyList<DeclaredToolHome> DeclaredToolHomes { get; private set; } = [];
     [JsonIgnore] public IReadOnlyDictionary<string, string> DeclaredTestSettings { get; private set; } = AcceptanceDeclaredTestSettings.Empty;
     public AcceptanceGateTimeoutSettings Timeouts { get; init; } = new();
@@ -58,7 +59,8 @@ internal sealed class AcceptanceGateEngineSettings
                 DeclaredToolHomes = toolHomes,
                 DeclaredTestSettings = testSettings,
                 DeclaredGoTestCheck = GoPackageFocusedEvidence.ReadDeclaredCheck(document.RootElement),
-                DeclaredCrosswalkTestCheck = CrosswalkFocusedEvidence.ReadDeclaredCheck(document.RootElement)
+                DeclaredCrosswalkTestCheck = CrosswalkFocusedEvidence.ReadDeclaredCheck(document.RootElement),
+                DeclaredRustNextestCheck = RustNextestFocusedEvidence.ReadDeclaredCheck(document.RootElement)
             };
         }
 
@@ -69,6 +71,7 @@ internal sealed class AcceptanceGateEngineSettings
         settings.DeclaredTestSettings = testSettings;
         settings.DeclaredGoTestCheck = GoPackageFocusedEvidence.ReadDeclaredCheck(document.RootElement);
         settings.DeclaredCrosswalkTestCheck = CrosswalkFocusedEvidence.ReadDeclaredCheck(document.RootElement);
+        settings.DeclaredRustNextestCheck = RustNextestFocusedEvidence.ReadDeclaredCheck(document.RootElement);
         settings.Validate();
         return settings;
     }

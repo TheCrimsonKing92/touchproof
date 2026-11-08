@@ -8,6 +8,8 @@ internal static class FocusedEvidenceProjectResolver
     {
         if (CrosswalkFocusedEvidence.Applies(settings))
             return CrosswalkFocusedEvidence.TryResolveProject(alias, settings, out project);
+        if (RustNextestFocusedEvidence.Applies(settings))
+            return RustNextestFocusedEvidence.TryResolveProject(alias, settings, out project);
 
         var normalized = alias.Replace('\\', '/').Trim();
         project = normalized switch

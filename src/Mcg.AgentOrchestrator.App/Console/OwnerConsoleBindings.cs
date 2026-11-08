@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleBindings
 {
+    internal const char CommandLineKey = ':';
     internal static Terminal.Gui.Input.Key OpenFields => Terminal.Gui.Input.Key.F2;
     internal static Terminal.Gui.Input.Key CopyField => Terminal.Gui.Input.Key.C.WithCtrl;
     internal const string FieldsHint = "F2 fields  Left/Right cell  Ctrl+C copy cell";
@@ -40,6 +41,10 @@ internal static class OwnerConsoleBindings
             key is null ? null : hint ?? command, key is null ? null : $"{key}: {keyHelp}", help);
     }
 
+    internal static OwnerConsoleBinding Accept => All.Single(row => row.Scope == OwnerConsoleScope.Decisions && row.Command == "accept");
+    internal static OwnerConsoleBinding Answer => All.Single(row => row.Scope == OwnerConsoleScope.Decisions && row.Command == "answer");
+    internal static OwnerConsoleBinding Goal => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "goal");
+    internal static bool RequiresSelectedBoardRow(OwnerConsoleBinding row) => row == Goal || row == Gate || row == Accept || row == Answer;
     internal static OwnerConsoleBinding Epics => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "epics");
     internal static OwnerConsoleBinding Gate => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "gate");
     internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");

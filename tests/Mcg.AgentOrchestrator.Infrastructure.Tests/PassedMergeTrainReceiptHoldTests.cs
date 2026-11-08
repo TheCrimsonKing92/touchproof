@@ -347,6 +347,232 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
         Assert.Empty(fixture.Holds.HeldGoalIds);
     }
 
+    [Fact]
+    public void PendingLanding_SameMainNonMember_HoldsAdmission()
+    {
+        var fixture = new MemoryFixture(includeOutsider: true) { Blocked = true };
+        var tick = fixture.Tick(1);
+
+        AssertReceiptMembersHeld(fixture, tick);
+        AssertPendingLandingHeld(fixture, tick);
+    }
+
+    [Fact]
+    public void PendingLanding_SoloNonMember_UsesProjectionOutsideCandidateArray()
+    {
+        var fixture = new MemoryFixture(includeOutsider: true) { Blocked = true, OmitOutsiderCandidate = true };
+
+        AssertPendingLandingHeld(fixture, fixture.Tick(1));
+    }
+
+    [Fact]
+    public void PendingLanding_OverlappingHeldReceipts_UsesSmallestReceiptId()
+    {
+        var fixture = new MemoryFixture(includeOutsider: true) { Blocked = true };
+        fixture.AdditionalReceipt = fixture.Receipt with { ReceiptId = "aaa-overlapping-receipt" };
+
+        var tick = fixture.Tick(1);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(tick.Results[fixture.Outsider!.Id.Value].Result.Outcome);
+        Assert.Equal(ConductorHoldOwner.AcceptanceQueue, held.Owner);
+        Assert.Equal("waiting for pending landing aaa-overlapping-receipt", held.Reason);
+        Assert.DoesNotContain(tick.Eligible, goal => goal.Id == fixture.Outsider.Id);
+        Assert.DoesNotContain(tick.Candidates, candidate => candidate.GoalId == fixture.Outsider.Id);
+        Assert.Single(tick.Progress.Where(line => line.Contains("result=held reason=PendingLanding", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("expired")]
+    [InlineData("landed")]
+    [InlineData("released")]
+    public void PendingLanding_LandHeldBeforeMutation_ClearsOnExpiryOrResolution(string resolution)
+    {
+        using var fixture = CreatePassedTrain(materializeReceipt: true);
+        var wait = fixture.Kernel.RequestHumanInputDeduplicated(fixture.Goals[1].Id, null,
+            "Required landing receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+            evidenceOwner: "Acceptance").Request;
+        var selection = ProjectTrainSelection(fixture.Driver, fixture.Goals);
+        var outsider = CreateCompletedGoal(fixture.Kernel, "Independent gate candidate", fixture.Repo);
+        var outsiderProjection = new GateReadyCandidateProjectionResult.Ready(new GateReadyCandidateProjection(
+            outsider.Id, GoalLifecycleState.Verified, GateReadyVerificationState.Satisfied,
+            ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
+            ["src/outsider.cs"], ["resource:outsider"],
+            new GateReadyMergeEvidence(new string('d', 40), fixture.Receipt.Identity.ObservedMainRevision,
+                GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected)));
+        var candidates = selection.Members.Select(member => new ConductorSpeculativeAcceptanceCandidate(
+                member.GoalId, new GateReadyCandidateProjectionResult.Ready(member)))
+            .Append(new ConductorSpeculativeAcceptanceCandidate(outsider.Id, outsiderProjection)).ToArray();
+        Goal[] eligible = [.. fixture.Goals, outsider];
+        var now = DateTimeOffset.UnixEpoch;
+        var holds = new PassedMergeTrainReceiptHolds(() => now);
+        var reportedStale = new HashSet<string>();
+        var hasReceipt = true;
+        var operations = new PassedMergeTrainReceiptAdmission.Operations(
+            (_, _, _, _, _, _) => hasReceipt ? [(selection, fixture.Receipt)] : [],
+            (goal, _) => candidates.Single(candidate => candidate.GoalId == goal.Id).ProjectionResult,
+            (train, _, policy) => fixture.Driver.RunMergeTrain(train, fixture.Goals, policy,
+                landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value));
+
+        MemoryTick Apply(int tick)
+        {
+            var results = new Dictionary<string, ParallelLandingOutcome>();
+            var progress = new List<string>();
+            var admission = PassedMergeTrainReceiptAdmission.Apply(operations, ConductorAutonomyPolicy.Permissive,
+                eligible, candidates, eligible, results, tick, [], holds, reportedStale,
+                progress.Add, (line, _) => progress.Add(line),
+                (goal, reason) => new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], "Permissive",
+                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason)
+                    {
+                        Owner = ConductorHoldOwner.AcceptanceQueue
+                    }));
+            return new(admission.Eligible, admission.Candidates, results, progress);
+        }
+
+        void AssertHeld(MemoryTick tick)
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(tick.Results[outsider.Id.Value].Result.Outcome);
+            Assert.Equal(ConductorHoldOwner.AcceptanceQueue, held.Owner);
+            Assert.Equal($"waiting for pending landing {fixture.Receipt.ReceiptId}", held.Reason);
+            Assert.DoesNotContain(tick.Eligible, goal => goal.Id == outsider.Id);
+            Assert.DoesNotContain(tick.Candidates, candidate => candidate.GoalId == outsider.Id);
+            Assert.Contains(tick.Progress, line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+                line.Contains($"result=held reason=PendingLanding train={fixture.Receipt.Identity.Value} " +
+                    $"receipt={fixture.Receipt.ReceiptId} goal={outsider.Id.Value[..8]}", StringComparison.Ordinal));
+        }
+
+        void AssertCleared(MemoryTick tick)
+        {
+            Assert.Contains(outsider, tick.Eligible);
+            Assert.Contains(tick.Candidates, candidate => candidate.GoalId == outsider.Id);
+            Assert.False(tick.Results.ContainsKey(outsider.Id.Value));
+            Assert.DoesNotContain(tick.Progress, line => line.Contains("reason=PendingLanding", StringComparison.Ordinal));
+        }
+
+        var first = Apply(1);
+        AssertHeld(first);
+        Assert.Contains(first.Progress, line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
+            line.Contains("landing held before mutation", StringComparison.Ordinal));
+        if (resolution == "expired")
+        {
+            now += TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1);
+            var beforeExpiry = Apply(2);
+            AssertHeld(beforeExpiry);
+            Assert.DoesNotContain(beforeExpiry.Progress, line => line.StartsWith("PENDING_LANDING_HOLD_EXPIRED ", StringComparison.Ordinal));
+            now += TimeSpan.FromSeconds(1);
+        }
+        else if (resolution == "landed")
+            fixture.Kernel.SubmitHumanInput(wait.Id, "Receipt verified", supersedeSiblings: false);
+        else
+            hasReceipt = false;
+
+        var cleared = Apply(3);
+        AssertCleared(cleared);
+        if (resolution == "expired")
+        {
+            Assert.Contains(cleared.Progress, line => line ==
+                $"PENDING_LANDING_HOLD_EXPIRED tick=3 receipt={fixture.Receipt.ReceiptId} reason=hold-limit limitMinutes=30");
+            Assert.Contains(cleared.Progress, line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
+                line.Contains("landing held before mutation", StringComparison.Ordinal));
+            now += TimeSpan.FromMinutes(1);
+        }
+        else if (resolution == "landed")
+            Assert.Contains(cleared.Progress, line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
+                line.Contains("outcome=passed", StringComparison.Ordinal));
+        // The same held landing must not restart its budget or repeat the expiry notification.
+        hasReceipt = resolution == "expired";
+        var next = Apply(4);
+        AssertCleared(next);
+        Assert.DoesNotContain(next.Progress, line => line.StartsWith("PENDING_LANDING_HOLD_EXPIRED ", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PendingLanding_NoReceiptOrDifferentMain_LeavesAdmissionUnchanged(bool hasReceipt)
+    {
+        var fixture = new MemoryFixture(includeOutsider: true)
+        {
+            Blocked = true,
+            HasReceipt = hasReceipt,
+            OutsiderMainRevision = hasReceipt ? new string('e', 40) : null
+        };
+        var tick = fixture.Tick(1);
+
+        AssertPendingLandingCleared(fixture, tick);
+        if (hasReceipt)
+        {
+            AssertReceiptMembersHeld(fixture, tick);
+            Assert.Equal([fixture.Outsider!], tick.Eligible);
+            Assert.Equal([fixture.Outsider!.Id], tick.Candidates.Select(candidate => candidate.GoalId));
+        }
+        else
+        {
+            Assert.Empty(tick.Results);
+            Assert.Equal(fixture.AllGoals, tick.Eligible);
+            Assert.Equal(fixture.AllGoals.Select(goal => goal.Id), tick.Candidates.Select(candidate => candidate.GoalId));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PendingLanding_ReceiptReleasedOrLanded_ReadmitsNonMember(bool releaseByLimit)
+    {
+        var fixture = new MemoryFixture(includeOutsider: true) { Blocked = true };
+        var clearTick = releaseByLimit ? PassedMergeTrainReceiptHolds.PassedTrainReceiptHoldTickLimit : 2;
+        for (var tick = 1; tick < clearTick; tick++)
+        {
+            var held = fixture.Tick(tick);
+            AssertReceiptMembersHeld(fixture, held);
+            AssertPendingLandingHeld(fixture, held);
+        }
+        if (!releaseByLimit) fixture.Blocked = false;
+
+        var cleared = fixture.Tick(clearTick);
+
+        AssertPendingLandingCleared(fixture, cleared);
+        Assert.Contains(cleared.Progress, line => releaseByLimit
+            ? line.StartsWith("TRAIN_RECEIPT_RELEASED ", StringComparison.Ordinal) &&
+              line.Contains($"receipt={fixture.Receipt.ReceiptId} reason=hold-limit", StringComparison.Ordinal)
+            : line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
+              line.Contains($"outcome=passed attempts=1 landings=3 receipt={fixture.Receipt.ReceiptId}", StringComparison.Ordinal));
+        AssertPendingLandingCleared(fixture, fixture.Tick(clearTick + 1));
+    }
+
+    private static void AssertReceiptMembersHeld(MemoryFixture fixture, MemoryTick tick)
+    {
+        foreach (var goal in fixture.Goals)
+        {
+            var outcome = Assert.IsType<ConductorAdvanceOutcome.Held>(tick.Results[goal.Id.Value].Result.Outcome);
+            Assert.Equal(ConductorHoldOwner.AcceptanceQueue, outcome.Owner);
+            Assert.Contains("reason=PassedTrainReceiptHeld", outcome.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(tick.Eligible, eligible => eligible.Id == goal.Id);
+            Assert.DoesNotContain(tick.Candidates, candidate => candidate.GoalId == goal.Id);
+        }
+    }
+
+    private static void AssertPendingLandingHeld(MemoryFixture fixture, MemoryTick tick)
+    {
+        var goal = fixture.Outsider!;
+        var outcome = Assert.IsType<ConductorAdvanceOutcome.Held>(tick.Results[goal.Id.Value].Result.Outcome);
+        Assert.Equal(ConductorHoldOwner.AcceptanceQueue, outcome.Owner);
+        Assert.Equal($"waiting for pending landing {fixture.Receipt.ReceiptId}", outcome.Reason);
+        Assert.DoesNotContain(tick.Eligible, eligible => eligible.Id == goal.Id);
+        Assert.DoesNotContain(tick.Candidates, candidate => candidate.GoalId == goal.Id);
+        Assert.Single(tick.Progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+            line.Contains("result=held reason=PendingLanding", StringComparison.Ordinal) &&
+            line.Contains($"receipt={fixture.Receipt.ReceiptId} goal={goal.Id.Value[..8]}", StringComparison.Ordinal)));
+    }
+
+    private static void AssertPendingLandingCleared(MemoryFixture fixture, MemoryTick tick)
+    {
+        var goal = fixture.Outsider!;
+        Assert.Contains(goal, tick.Eligible);
+        Assert.Contains(tick.Candidates, candidate => candidate.GoalId == goal.Id);
+        Assert.False(tick.Results.ContainsKey(goal.Id.Value));
+        Assert.DoesNotContain(tick.Progress, line => line.Contains("reason=PendingLanding", StringComparison.Ordinal));
+    }
+
     private sealed record MemoryTick(Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates,
         Dictionary<string, ParallelLandingOutcome> Results, List<string> Progress);
 
@@ -356,20 +582,28 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
     {
         internal AgentOrchestratorKernel Kernel { get; } = new();
         internal Goal[] Goals { get; }
+        internal Goal? Outsider { get; }
+        internal Goal[] AllGoals => Outsider is { } outsider ? [.. Goals, outsider] : Goals;
         internal MergeTrainReceipt Receipt { get; }
+        internal MergeTrainReceipt? AdditionalReceipt { get; set; }
         internal PassedMergeTrainReceiptHolds Holds { get; } = new();
         internal Dictionary<GoalId, string> Revisions { get; } = [];
         internal string MainRevision { get; set; } = new string('a', 40);
+        internal string? OutsiderMainRevision { get; set; }
+        internal bool HasReceipt { get; set; } = true;
         internal bool Blocked { get; set; }
+        internal bool OmitOutsiderCandidate { get; set; }
         internal List<ConductorMergeTrainSelection> LandingRequests { get; } = [];
         private readonly List<string> _events = [];
         private readonly HashSet<string> _reportedStale = [];
 
-        internal MemoryFixture()
+        internal MemoryFixture(bool includeOutsider = false)
         {
             Goals = Enumerable.Range(0, 3).Select(index =>
                 CreateCompletedGoal(Kernel, $"Memory receipt member {index}", "in-memory")).ToArray();
-            foreach (var goal in Goals)
+            if (includeOutsider)
+                Outsider = CreateCompletedGoal(Kernel, "Memory non-member", "in-memory");
+            foreach (var goal in AllGoals)
             {
                 Revisions[goal.Id] = new string('b', 40);
                 Kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
@@ -394,11 +628,13 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
                 goal.Id, GoalLifecycleState.Verified, GateReadyVerificationState.Satisfied,
                 ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
                 [$"src/{goal.Id.Value}.cs"], [$"resource:{goal.Id.Value}"],
-                new GateReadyMergeEvidence(Revisions[goal.Id], MainRevision,
+                new GateReadyMergeEvidence(Revisions[goal.Id],
+                    goal.Id == Outsider?.Id ? OutsiderMainRevision ?? MainRevision : MainRevision,
                     GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected)));
 
-        internal ConductorSpeculativeAcceptanceCandidate[] Candidates() => Goals
+        internal ConductorSpeculativeAcceptanceCandidate[] Candidates() => AllGoals
             .Where(goal => goal.Status == GoalStatus.Verified)
+            .Where(goal => !OmitOutsiderCandidate || goal.Id != Outsider?.Id)
             .Select(goal => new ConductorSpeculativeAcceptanceCandidate(goal.Id, Project(goal))).ToArray();
 
         internal IReadOnlyList<(ConductorMergeTrainSelection Selection, MergeTrainReceipt Receipt)> Find(
@@ -410,7 +646,9 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
             Func<GoalId, IReadOnlyList<MergeTrainReceipt>>? receipts = null) =>
             PassedMergeTrainReceiptSelector.Find(candidates, ineligible, stale, blocked, scopedGoals, observed,
                 heads ?? (goal => (Revisions[goal.Id], MainRevision)), Goals,
-                receipts ?? (_ => [Receipt]), () => new HashSet<string>(),
+                receipts ?? (goalId => HasReceipt && goalId != Outsider?.Id
+                    ? AdditionalReceipt is { } additional ? [Receipt, additional] : [Receipt]
+                    : []), () => new HashSet<string>(),
                 (selection, receipt) => selection.Members.Select(member => member.GoalId)
                     .SequenceEqual(receipt.Identity.Members.Select(member => member.GoalId)), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
@@ -445,9 +683,12 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, C
                         [], $"outcome=passed attempts=1 landings=3 receipt={Receipt.ReceiptId}");
                 });
             var admission = PassedMergeTrainReceiptAdmission.Apply(operations, ConductorAutonomyPolicy.Permissive,
-                Goals.Where(goal => goal.Status == GoalStatus.Verified).ToArray(), Candidates(), Goals,
+                AllGoals.Where(goal => goal.Status == GoalStatus.Verified).ToArray(), Candidates(), AllGoals,
                 results, tick, [], Holds, _reportedStale, Record, (line, _) => Record(line),
-                (goal, reason) => Result(goal.Id, new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason)));
+                (goal, reason) => Result(goal.Id, new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason)
+                {
+                    Owner = ConductorHoldOwner.AcceptanceQueue
+                }));
             return new(admission.Eligible, admission.Candidates, results, progress);
         }
 

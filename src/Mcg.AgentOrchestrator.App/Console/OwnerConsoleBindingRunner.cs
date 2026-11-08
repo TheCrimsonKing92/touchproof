@@ -41,7 +41,7 @@ internal sealed class OwnerConsoleBindingRunner(IOwnerConsoleBindingSurface surf
             return;
         }
         if (surface.ActionRunning) return;
-        if ((binding.Command is "goal" or "gate" or "accept" or "answer") && surface.RefuseSelectedBoardRow()) return;
+        if (OwnerConsoleBindings.RequiresSelectedBoardRow(binding) && surface.RefuseSelectedBoardRow()) return;
         if (binding == OwnerConsoleBindings.ProjectScope)
         {
             surface.StartAction();
