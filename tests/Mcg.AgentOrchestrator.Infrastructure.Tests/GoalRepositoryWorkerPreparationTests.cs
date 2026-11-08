@@ -90,7 +90,8 @@ public sealed class GoalRepositoryWorkerPreparationTests
     public void NoDeclarationKeepsRepositoryParametersAbsent()
     {
         using var fixture = new Fixture();
-        var goal = new AgentOrchestratorKernel().CreateGoal("Undeclared", []);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Undeclared",
+            [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
         Assert.Empty(GoalRepositoryWorkerPreparation.ResolveTargets(goal, AgentRole.Developer));
         var file = Path.Combine(fixture.Home, "parameters.json");
         DispatchProcessHost.WriteParameters(file, new("command", fixture.Home, "stdout", "stderr", "exit", null, false));
@@ -111,7 +112,8 @@ public sealed class GoalRepositoryWorkerPreparationTests
         {
             Home = Directory.CreateDirectory(Path.Combine(root, "home")).FullName;
             var kernel = new AgentOrchestratorKernel();
-            Goal = kernel.CreateGoal("Prepare repositories", []);
+            Goal = kernel.CreateGoal("Prepare repositories",
+                [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
             var roots = new Dictionary<string, string> { ["default"] = Home };
             foreach (var key in new[] { "second", "third" })
             {

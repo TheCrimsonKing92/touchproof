@@ -60,7 +60,8 @@ public sealed class GoalRepositoryWorkerCommitTests : GoalWorktreeTestBase
                 Assert.DoesNotContain(commands, command => command.Directory.StartsWith(Path.Combine(target.CheckoutRoot, ".git")));
             }
             commands.Clear();
-            var undeclared = new AgentOrchestratorKernel().CreateGoal("Undeclared", []);
+            var undeclared = new AgentOrchestratorKernel().CreateGoal("Undeclared",
+                [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
             Assert.Empty(BackgroundDispatchRunner.CommitRepositoryWorktreeEdits(undeclared, task, true, WorkerOutput, string.Empty, committer));
             Assert.Empty(BackgroundDispatchRunner.CommitRepositoryWorktreeEdits(goal,
                 new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer), true, WorkerOutput, string.Empty, committer));
