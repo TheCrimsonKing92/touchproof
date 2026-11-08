@@ -9,7 +9,8 @@ internal static class MultiRepositoryAcceptanceExecution
     internal static MultiRepositoryAcceptanceResult Run(Goal goal, GoalLifecycleState state,
         MultiRepositoryAcceptanceGate? gate, MultiRepositoryTupleLanding? landing,
         Func<AcceptanceVerificationSummary> runHome, Func<LandingResult> landHome,
-        Func<string?> mutationBlocker, Action clearAcceptanceFailure, Action<LandingResult> onLanded)
+        Func<string?> homeAdmissibility, Func<string?> mutationBlocker,
+        Action clearAcceptanceFailure, Action<LandingResult> onLanded)
     {
         if (landing?.RequiresRecovery(goal) == true) return new(landing.Recover(goal, state).Hold);
         if (gate is null || !AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
@@ -29,7 +30,7 @@ internal static class MultiRepositoryAcceptanceExecution
                     "multi-repository-landing-blocked", "next-tick", [new PolicyDecisionFact("blocker", blocked)])
             });
         if (landing is null) throw new InvalidOperationException("Tuple landing is not configured.");
-        var landed = landing.Execute(goal, state, receipt, landHome, mutationBlocker);
+        var landed = landing.Execute(goal, state, receipt, landHome, mutationBlocker, homeAdmissibility);
         if (landed.HomeLanding is { } home) onLanded(home);
         return new(landed.Hold, Landing: landed.HomeLanding);
     }
