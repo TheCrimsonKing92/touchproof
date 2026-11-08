@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -82,6 +83,40 @@ public sealed class LauncherAdoptedBuildTests
         Assert.DoesNotContain("build ", call);
         Assert.False(File.Exists(fixture.PowerShellLog));
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".build-lock")));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("adopted")]
+    [Xunit.InlineData("escape-hatch")]
+    [Xunit.InlineData("runtime-cache-root")]
+    public void LauncherRewrittenWhileAppRuns_ExitsWithAppCodeWithoutReadingReplacement(string route)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new LauncherFixture();
+
+        var result = fixture.RunRewritingLauncher(route);
+
+        Assert.Equal(37, result.ExitCode);
+        foreach (var output in new[] { result.Stdout, result.Stderr })
+        {
+            Assert.DoesNotContain("is not recognized", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("REWRITTEN-LAUNCHER-MARKER", output);
+        }
+        Assert.Equal(File.ReadAllBytes(fixture.Replacement), File.ReadAllBytes(fixture.Launcher));
+        var arguments = File.ReadAllLines(fixture.ArgumentsLog);
+        Assert.Equal(new[] { "goals", "--name", "two words", "--limit", "5" }, arguments.Skip(1));
+        if (route == "adopted")
+        {
+            Assert.Equal(fixture.AdoptedDll, arguments[0]);
+            Assert.Equal(new[] { "app" }, File.ReadAllLines(fixture.DotnetLog));
+        }
+        else
+        {
+            var cache = route == "runtime-cache-root" ? fixture.SelectedCache : Path.Combine(fixture.Root, "mcg-run");
+            Assert.StartsWith(Path.Combine(cache, "v2") + Path.DirectorySeparatorChar, arguments[0]);
+            Assert.Equal("Mcg.AgentOrchestrator.App.dll", Path.GetFileName(arguments[0]));
+            Assert.Equal(new[] { "build", "app" }, File.ReadAllLines(fixture.DotnetLog));
+        }
     }
 
     private sealed class LauncherFixture : IDisposable
@@ -186,6 +221,88 @@ public sealed class LauncherAdoptedBuildTests
             return AcceptanceProcessTestContext.RunManifestCommandAsync(
                 [Path.Combine(Root, "mcg-orchestrator.cmd"), "goals", "--name", "two words", "--limit", "5"],
                 CallerDirectory, TimeSpan.FromMinutes(2), environment, resolveBareCommand: false, default);
+        }
+
+        internal string Launcher => Path.Combine(Root, "mcg-orchestrator.cmd");
+        internal string Replacement => Path.Combine(Root, "replacement.cmd");
+        internal string SelectedCache => Path.Combine(Root, "c");
+        private string RewriteHost => Path.Combine(ShimDirectory, "rewrite-host.exe");
+
+        internal TestChildProcessCapture.Result RunRewritingLauncher(string route)
+        {
+            // Repeated lines extend beyond every old resume offset. The broken launcher
+            // must execute marker lines (or command fragments), rather than hit EOF quietly.
+            const string replacementLine = "echo REWRITTEN-LAUNCHER-MARKER\r\n";
+            var repeats = checked((int)(new FileInfo(Launcher).Length * 2 / replacementLine.Length + 2));
+            File.WriteAllText(Replacement, string.Concat(Enumerable.Repeat(replacementLine, repeats)), Encoding.ASCII);
+
+            // A batch shim would transfer control away from the launcher and mask the bug.
+            // The executable completes the rewrite before returning, with no timing race.
+            var compileScript = Path.Combine(Root, "compile-rewrite-host.ps1");
+            File.WriteAllText(compileScript, """
+                $ErrorActionPreference = 'Stop'
+                Add-Type -OutputType ConsoleApplication -OutputAssembly $env:FIXTURE_REWRITE_HOST -TypeDefinition @'
+                using System;
+                using System.IO;
+                public static class RewriteHost {
+                    public static int Main(string[] args) {
+                        bool build = args.Length > 0 && args[0] == "build";
+                        File.AppendAllText(Environment.GetEnvironmentVariable("FIXTURE_DOTNET_LOG"),
+                            build ? "build\n" : "app\n");
+                        if (build) {
+                            File.WriteAllText(Environment.GetEnvironmentVariable("FIXTURE_APP_DLL"), "INTREE-REBUILT");
+                            return 0;
+                        }
+                        File.WriteAllLines(Environment.GetEnvironmentVariable("FIXTURE_ARGUMENTS_LOG"), args);
+                        File.Copy(Environment.GetEnvironmentVariable("FIXTURE_REPLACEMENT"),
+                            Environment.GetEnvironmentVariable("FIXTURE_LAUNCHER"), true);
+                        return 37;
+                    }
+                }
+                '@
+                """);
+            var powerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "WindowsPowerShell", "v1.0", "powershell.exe");
+            var compile = RewriteStartInfo(powerShell);
+            foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", compileScript })
+                compile.ArgumentList.Add(argument);
+            var compiled = TestChildProcessCapture.Run(compile, TimeSpan.FromMinutes(3));
+            Assert.True(compiled.ExitCode == 0, $"Native rewrite host compilation failed: {compiled}");
+            Assert.True(File.Exists(RewriteHost), "Native rewrite host was not compiled.");
+
+            var start = RewriteStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"));
+            start.Environment["MCG_ORCHESTRATOR_LAUNCHER_INTREE"] = route == "escape-hatch" ? "1" : "0";
+            var prefix = route == "runtime-cache-root" ? $"--runtime-cache-root \"{SelectedCache}\" " : "";
+            start.Arguments = $"/d /s /c \"\"{Launcher}\" {prefix}goals --name \"two words\" --limit 5\"";
+            return TestChildProcessCapture.Run(start, TimeSpan.FromMinutes(3));
+        }
+
+        private ProcessStartInfo RewriteStartInfo(string executable)
+        {
+            var start = new ProcessStartInfo(executable)
+            {
+                WorkingDirectory = CallerDirectory, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            start.Environment.Clear();
+            foreach (var name in new[] { "SystemRoot", "WINDIR", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA" })
+                start.Environment[name] = Environment.GetEnvironmentVariable(name);
+            start.Environment["OS"] = "Windows_NT";
+            start.Environment["PATH"] = ShimDirectory + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            start.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
+            start.Environment["TEMP"] = Root;
+            start.Environment["TMP"] = Root;
+            start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            start.Environment["GIT_CONFIG_GLOBAL"] = "NUL";
+            start.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            start.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = RewriteHost;
+            start.Environment["FIXTURE_REWRITE_HOST"] = RewriteHost;
+            start.Environment["FIXTURE_DOTNET_LOG"] = DotnetLog;
+            start.Environment["FIXTURE_APP_DLL"] = AppDll;
+            start.Environment["FIXTURE_ARGUMENTS_LOG"] = ArgumentsLog;
+            start.Environment["FIXTURE_REPLACEMENT"] = Replacement;
+            start.Environment["FIXTURE_LAUNCHER"] = Launcher;
+            return start;
         }
 
         private void WriteBatch(string name, string text) => File.WriteAllText(

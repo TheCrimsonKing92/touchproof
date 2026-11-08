@@ -101,7 +101,7 @@ public sealed class CliTimingRecordTests
     {
         var lines = File.ReadAllLines(Path.Combine(VerifiedRepositoryRoot.Find(), "mcg-orchestrator.cmd"));
         var adopted = Assert.Single(lines.Select((line, index) => (line, index))
-            .Where(item => item.line == "\"%DOTNET_HOST%\" \"%ADOPTED_DLL%\" %*"));
+            .Where(item => item.line == "\"%DOTNET_HOST%\" \"%ADOPTED_DLL%\" %* & call exit /b %%ERRORLEVEL%%"));
         Assert.Equal("set \"MCG_CLI_LAUNCHER_PATH=fast\"", lines[adopted.index - 1]);
         Assert.DoesNotContain(lines.Take(adopted.index),
             line => line.Contains("powershell", StringComparison.OrdinalIgnoreCase));
