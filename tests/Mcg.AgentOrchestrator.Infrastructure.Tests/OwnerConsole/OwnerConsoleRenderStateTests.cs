@@ -107,7 +107,8 @@ public sealed class OwnerConsoleRenderStateTests
         var activity = new OwnerConsoleActivityPane();
         using var activityList = activity.List;
         activity.Render(expectedModel, ((IOwnerConsoleBindingSurface)view).ActivityWidth);
-        Assert.Equal(populated, activity.Lines.Count > 0);
+        // Both fixtures have activity: owner questions produce lines even without board goals.
+        Assert.NotEmpty(activity.Lines);
         Assert.Equal(activity.Lines, view.ActivityLines);
         view.Fit(37, 0);
         Assert.Equal(37, ((IOwnerConsoleBindingSurface)view).ActivityWidth);
