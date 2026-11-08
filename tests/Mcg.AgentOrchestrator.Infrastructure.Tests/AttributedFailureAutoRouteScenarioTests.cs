@@ -33,6 +33,20 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
     [InlineData(false)]
     public void TrainRoutesOwnershipOrReachCulprit(bool ownership)
     {
+        WithTrainScenario(ownership, [true, true], scenario =>
+        {
+            Assert.Equal(2, scenario.AdmissionIdentities.Count);
+            Assert.NotEqual(scenario.AdmissionIdentities[0], scenario.AdmissionIdentities[1]);
+            Assert.Equal(0, scenario.DelayCount);
+            Assert.Equal(2, scenario.VerifierRunCount);
+            Assert.DoesNotContain(CohortStableSlotAcquisitionRounds.DeferredVerdict, scenario.Run.Detail);
+            scenario.AssertRoutesCulpritOnce();
+        });
+    }
+
+    internal static void WithTrainScenario(bool ownership, IReadOnlyList<bool> grantedRounds,
+        Action<TrainScenario> inspect)
+    {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
         try
@@ -77,28 +91,71 @@ public sealed class AttributedFailureAutoRouteScenarioTests : AcceptanceCohortWo
                 new(false, false, 1, "train failed", Checks: [new("train", false, 1, "train failed")], TestResultPaths: paths),
                 new(true, false, 0, null, Checks: [new("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")])
             ]);
-            var trainDriver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var admissionIdentities = new List<string>();
+            var delays = 0;
+            // Uncontrolled AcquireCohortStableSlotLeaseInRounds can defer either attempt, leaving
+            // the culprit Verified; attempt 1 returns before completeAttributedFailure:
+            // "Assert.Equal() Failure: Values differ / Expected: AcceptanceFailed / Actual: Verified".
+            // Real admission also scans host processes, polls for 20s and delays 10s between rounds.
+            // Script admission and its bookkeeping snapshot to remove those host waits; the recorded hang was
+            // "Test execution timed out after 300000 milliseconds" (no stack retained to prove its frame).
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
+                buildStorageRoot: cleanup.Hooks.BuildStorageRoot,
+                acquireCohortStableSlotRound: (identity, label, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    Assert.StartsWith("merge-train:", label);
+                    var round = admissionIdentities.Count;
+                    admissionIdentities.Add(identity);
+                    Assert.True(round < grantedRounds.Count, "The train requested an unscripted admission round.");
+                    if (!grantedRounds[round])
+                        throw new DotnetBuildSlotsBusyException(new("first-available-stable-slot", []));
+                    return AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(cleanup.Hooks.BuildStorageRoot!.RootPath);
+                },
+                cohortStableSlotRoundDelay: (_, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    delays++;
+                    return Task.CompletedTask;
+                });
+            var trainDriver = new ConductorDriver(kernel, workspace, verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), coordinator, cleanup.Hooks);
             var selection = ProjectTrainSelection(trainDriver, goals);
-            trainDriver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: true);
+            ConductorMergeTrainRunResult run;
+            using (DotnetBuildEnvironmentManager.UseProcessCommandLineSnapshot(() => ProcessCommandLineSnapshot.Empty))
+                run = trainDriver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: true);
             var culpritIndex = ownership ? 1 : 0;
-            var culprit = goals[culpritIndex];
-            Assert.Equal(GoalStatus.AcceptanceFailed, culprit.Status);
             var candidate = selection.Members[culpritIndex].CandidateRevision;
-            var receipt = new MergeTrainAcceptanceStore(Path.Combine(OrchestratorWorkspace.ForDirectory(repo).OrchestratorDirectory,
+            var receipt = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory,
                 "merge-train-acceptance.db")).ReadReceiptsSince(DateTimeOffset.MinValue).Single(item => item.Outcome == MergeTrainGateOutcome.Failed);
-            var harness = new RouteHarness(kernel, candidate);
+            inspect(new TrainScenario(kernel, goals, culpritIndex, candidate, receipt, names, ownership,
+                run, admissionIdentities.ToArray(), delays, verifier.RunCount));
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    internal sealed record TrainScenario(AgentOrchestratorKernel Kernel, Goal[] Goals, int CulpritIndex,
+        string CandidateRevision, MergeTrainReceipt FailedReceipt, string[] TestNames, bool Ownership,
+        ConductorMergeTrainRunResult Run, IReadOnlyList<string> AdmissionIdentities, int DelayCount, int VerifierRunCount)
+    {
+        internal Goal Culprit => Goals[CulpritIndex];
+
+        internal void AssertRoutesCulpritOnce()
+        {
+            Assert.Equal(GoalStatus.AcceptanceFailed, Culprit.Status);
+            var harness = new RouteHarness(Kernel, CandidateRevision);
             var driver = harness.Configure();
             for (var tick = 1; tick <= 2; tick++)
             {
-                driver.BeginTick(kernel, tick);
-                driver.AdvanceOnce(culprit, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
+                driver.BeginTick(Kernel, tick);
+                driver.AdvanceOnce(Culprit, ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
             }
-            AssertRoute(culprit, culprit.Tasks.Single(), harness, receipt.ReceiptId, candidate, names);
-            Assert.Contains("source=train-" + (ownership ? "ownership" : "reach"), MarkerRetries(culprit).Single().Message);
-            Assert.All(goals.Where(goal => goal != culprit), goal => Assert.Empty(MarkerRetries(goal)));
+            AssertRoute(Culprit, Culprit.Tasks.Single(), harness, FailedReceipt.ReceiptId, CandidateRevision, TestNames);
+            Assert.Contains("source=train-" + (Ownership ? "ownership" : "reach"), MarkerRetries(Culprit).Single().Message);
+            Assert.All(Goals.Where(goal => goal != Culprit), goal => Assert.Empty(MarkerRetries(goal)));
         }
-        finally { DeleteDirectory(repo); }
     }
 
     private static string TestSource(string name) =>
