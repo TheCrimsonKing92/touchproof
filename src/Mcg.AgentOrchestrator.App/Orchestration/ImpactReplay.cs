@@ -80,14 +80,11 @@ internal static class ImpactReplay
                 var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
                 var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
                 var unmapped = false;
-                var attemptUnmappedClasses = new List<ImpactReplayUnmappedTestClasses.Occurrence>();
                 foreach (var selector in selection.TestClassNames.Concat(augmented.QualifiedClasses).Distinct(StringComparer.Ordinal))
                 {
-                    var simpleName = selector.Split('.', '+').Last();
                     var matches = classes.Where(item => selector.Contains('.') || selector.Contains('+')
                         ? item.FullName == selector : item.FullName.Split('.', '+').Last() == selector).ToArray();
                     if (matches.Length == 0) unmapped = true;
-                    var singleMatchHasLane = false;
                     foreach (var item in matches)
                     {
                         selectedFullNames.Add(item.FullName);
@@ -95,12 +92,10 @@ internal static class ImpactReplay
                         var inPool = observedPool.Classes.Any(record => record.ClassName == item.FullName);
                         if (memberships.Count == 0 && !inPool) unmapped = true;
                         selectedLanes.UnionWith(memberships.Select(lane => lane.Name));
-                        if (matches.Length == 1) singleMatchHasLane = memberships.Count > 0 || inPool;
                     }
-                    var diagnostic = ImpactReplayUnmappedTestClasses.Classify(attempt.AttemptId, simpleName,
-                        matches.Select(item => item.FullName).ToArray(), singleMatchHasLane);
-                    if (diagnostic is not null) attemptUnmappedClasses.Add(diagnostic);
                 }
+                var attemptUnmappedClasses = ImpactReplaySelectedClassDiagnostics.Read(attempt.AttemptId,
+                    checkout, changedTests, augmented.Classes, classes, lanes, observedPool.Classes);
                 var resolved = selection.Outcome == ReverseDependencySelectionOutcome.Resolved && !unmapped && augmented.AbandonReason is null;
                 var ran = evidence.LaneOutcomes.Select(item => item.Lane).Order(StringComparer.Ordinal).ToArray();
                 if (!resolved) selectedLanes.UnionWith(ran);
