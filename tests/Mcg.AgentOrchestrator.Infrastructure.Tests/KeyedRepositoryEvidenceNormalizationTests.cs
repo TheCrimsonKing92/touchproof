@@ -53,10 +53,15 @@ public sealed class KeyedRepositoryEvidenceNormalizationTests
         var home = new FindingEvidenceRequest([new("Sample.Tests", "ProbeTests")], Repository: key);
         Assert.True(FindingEvidenceRequestNormalization.TryNormalizeForGoal(home, goal, HomeSettings,
             (_, _) => throw new InvalidOperationException("Home request called keyed resolver"), (_, _) => [],
-            out var normalized, out _, out target, out _, out detail), detail);
+            out var normalized, out var executor, out target, out _, out detail), detail);
         Assert.Null(target);
         Assert.Equal(key, normalized.Repository);
-        Assert.Equal(new FindingEvidenceSelection("Sample.Tests", "ProbeTests"), Assert.Single(normalized.Selections));
+        Assert.Equal(new FindingEvidenceSelection("tests/Sample.Tests/Sample.Tests.csproj", "ProbeTests"), Assert.Single(normalized.Selections));
+        Assert.True(FindingEvidenceRequestNormalization.TryNormalize(home, HomeSettings, (_, _) => [],
+            out var legacy, out var legacyExecutor, out _, out detail), detail);
+        Assert.Equal(legacy.Selections, normalized.Selections);
+        Assert.Equal("tests/Sample.Tests/Sample.Tests.csproj:ProbeTests", executor);
+        Assert.Equal(legacyExecutor, executor);
     }
 
     [Theory]

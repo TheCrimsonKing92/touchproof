@@ -78,7 +78,7 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
         };
 
         Assert.True(driver.TryBuildFindingEvidenceRequest(fixture.Goal, fixture.Reviewer, ConductorAutonomyPolicy.Permissive, out _));
-        Assert.Equal("Sample.Tests:HomeTests", Assert.Single(homeCalls));
+        Assert.Equal("tests/Sample.Tests/Sample.Tests.csproj:HomeTests", Assert.Single(homeCalls));
         Assert.Empty(keyedCalls);
         Assert.Equal(fixture.HomeHead, Assert.Single(receipts).CandidateSha);
         Assert.Equal(homeRepository, receipts[0].Request.Repository);
@@ -169,7 +169,8 @@ public sealed class KeyedRepositoryEvidenceExecutionTests
     }
 
     private static ReviewFinding Finding(string id, FindingEvidenceRequest request) =>
-        new(id, ReviewFindingState.Open, new("src/Record.cs", "Record.Read"), "Prove repository evidence", EvidenceRequest: request);
+        new(id, ReviewFindingState.Open, new("src/Record.cs", "Record.Read"), "Prove repository evidence",
+            EvidenceRequest: request, Category: FindingCategory.TestEvidence);
 
     private static FocusedEvidenceRunResult Green(string request, string head)
     {
