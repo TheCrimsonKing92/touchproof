@@ -75,8 +75,10 @@ internal static class PassedMergeTrainReceiptAdmission
             .Concat(holds.HeldGoalIds).ToHashSet();
         var ineligibleGoalIds = ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(eligible);
         var heldMembers = new Dictionary<GoalId, MergeTrainReceipt>();
+        var heldReceipts = new Dictionary<string, MergeTrainReceipt>(StringComparer.Ordinal);
         void ReportStale(MergeTrainReceipt receipt, string moved)
         {
+            holds.PendingLandings.Release(receipt.ReceiptId);
             if (reportedStaleReceiptIds.Add(receipt.ReceiptId))
             {
                 if (AcceptanceRevalidationReceipt.TryReport(receipt, moved, candidates, operations, tick, emitProgress))
@@ -102,6 +104,8 @@ internal static class PassedMergeTrainReceiptAdmission
                          }
                          var decision = holds.Observe(receipt,
                              observation with { LandingHeldRequestIds = landingHeldRequestIds });
+                         if (decision.Released || decision.Moved is not null)
+                             holds.PendingLandings.Release(receipt.ReceiptId);
                          if (decision.Moved is not null)
                          {
                              ReportStale(receipt, decision.Moved);
@@ -121,6 +125,8 @@ internal static class PassedMergeTrainReceiptAdmission
                          }
                          else if (decision.BlockedMember is { } blocked)
                          {
+                             holds.PendingLandings.ObserveExisting(receipt);
+                             heldReceipts.TryAdd(receipt.ReceiptId, receipt);
                              var blockedGoal = scopedGoals.SingleOrDefault(goal => goal.Id == blocked);
                              var projection = candidates.SingleOrDefault(candidate => candidate.GoalId == blocked)
                                  ?.ProjectionResult ?? (blockedGoal is null ? null :
@@ -148,6 +154,10 @@ internal static class PassedMergeTrainReceiptAdmission
                 continue;
             }
             var run = operations.Land(selection, eligible, policy);
+            if (run is { LandingOutcome: AcceptanceCohortLandingOutcome.RetryableHold, Receipt: { } pending })
+                holds.PendingLandings.Observe(pending);
+            else
+                holds.PendingLandings.Release(receipt.ReceiptId);
             foreach (var member in run.MemberResults)
             {
                 results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
@@ -163,6 +173,8 @@ internal static class PassedMergeTrainReceiptAdmission
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
                 // Landing moved main, so the observations made before it no longer justify a hold.
                 heldMembers.Clear();
+                heldReceipts.Clear();
+                holds.PendingLandings.Clear();
                 candidates = candidates
                     .Where(candidate => !results.ContainsKey(candidate.GoalId.Value))
                     .Select(candidate => new ConductorSpeculativeAcceptanceCandidate(
@@ -187,7 +199,10 @@ internal static class PassedMergeTrainReceiptAdmission
         }
         foreach (var decision in PendingLandingAdmissionHold.Evaluate(
                      eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
-                     candidates, heldMembers.Values))
+                     candidates, heldReceipts.Values.Concat(holds.PendingLandings.Active(receipt =>
+                         recordProgress($"PENDING_LANDING_HOLD_EXPIRED tick={tick} receipt={receipt.ReceiptId} " +
+                             "reason=hold-limit limitMinutes=30", changedGoalLines))),
+                     goal => operations.Project(goal, policy)))
         {
             var goal = eligible.Single(goal => goal.Id == decision.GoalId);
             results[goal.Id.Value] = new ParallelLandingOutcome(

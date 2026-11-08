@@ -302,7 +302,7 @@ internal sealed partial class ConductorDriver
                     LandingMutationBlocker);
                 if (!landing.MainAdvanced)
                 {
-                    return new ConductorMergeTrainRunResult(receipt, Hold(goals, landing.Message), allEjections, landing.Message);
+                    return new ConductorMergeTrainRunResult(receipt, Hold(goals, landing.Message), allEjections, landing.Message, landing.Outcome);
                 }
                 foreach (var goal in goals)
                 {
@@ -332,7 +332,7 @@ internal sealed partial class ConductorDriver
                                 $"Landed by merge train receipt {receipt.ReceiptId}.")),
                         StringComparer.Ordinal),
                     allEjections,
-                    $"outcome=passed attempts={attempt + 1} landings={goals.Length} receipt={receipt.ReceiptId}");
+                    $"outcome=passed attempts={attempt + 1} landings={goals.Length} receipt={receipt.ReceiptId}", landing.Outcome);
             }
 
             var attributed = MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members, out var subjects);

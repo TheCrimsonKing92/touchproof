@@ -7,6 +7,11 @@ internal sealed class PassedMergeTrainReceiptHolds
 {
     internal const int PassedTrainReceiptHoldTickLimit = 10;
 
+    internal PassedMergeTrainReceiptHolds(Func<DateTimeOffset>? utcNow = null)
+        => PendingLandings = new(utcNow);
+
+    internal PendingMergeTrainLandingHolds PendingLandings { get; }
+
     internal sealed record Observation(
         string MainRevision,
         IReadOnlyDictionary<GoalId, string?> CandidateRevisions,
@@ -28,9 +33,13 @@ internal sealed class PassedMergeTrainReceiptHolds
     private readonly HashSet<string> _observed = new(StringComparer.Ordinal);
 
     internal IReadOnlySet<GoalId> HeldGoalIds => _heldTicks.Values
-        .SelectMany(hold => hold.Members).ToHashSet();
+        .SelectMany(hold => hold.Members).Concat(PendingLandings.HeldGoalIds).ToHashSet();
 
-    internal void BeginPass() => _observed.Clear();
+    internal void BeginPass()
+    {
+        _observed.Clear();
+        PendingLandings.BeginPass();
+    }
 
     internal Decision Observe(MergeTrainReceipt receipt, Observation observation)
     {
@@ -95,6 +104,7 @@ internal sealed class PassedMergeTrainReceiptHolds
 
     internal void EndPass()
     {
+        PendingLandings.EndPass();
         foreach (var id in _heldTicks.Keys.Where(id => !_observed.Contains(id)).ToArray())
         {
             _heldTicks.Remove(id);

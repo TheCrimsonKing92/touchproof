@@ -10,7 +10,8 @@ internal static class PendingLandingAdmissionHold
     internal static IReadOnlyList<Decision> Evaluate(
         IReadOnlyList<Goal> remainingEligible,
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
-        IEnumerable<MergeTrainReceipt> heldReceipts)
+        IEnumerable<MergeTrainReceipt> heldReceipts,
+        Func<Goal, GateReadyCandidateProjectionResult> project)
     {
         var receipts = heldReceipts.DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .OrderBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
@@ -21,9 +22,10 @@ internal static class PendingLandingAdmissionHold
         var decisions = new List<Decision>();
         foreach (var goal in remainingEligible)
         {
-            if (members.Contains(goal.Id) ||
-                candidates.FirstOrDefault(candidate => candidate.GoalId == goal.Id)?.ProjectionResult is not
-                    GateReadyCandidateProjectionResult.Ready ready ||
+            if (members.Contains(goal.Id)) continue;
+            var projection = candidates.FirstOrDefault(candidate => candidate.GoalId == goal.Id)?.ProjectionResult
+                ?? project(goal);
+            if (projection is not GateReadyCandidateProjectionResult.Ready ready ||
                 string.IsNullOrEmpty(ready.Projection.MainRevision))
                 continue;
 
