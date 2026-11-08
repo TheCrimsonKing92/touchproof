@@ -82,6 +82,7 @@ public class CanaryEngineSurfaceCoverageTests
     [InlineData("AcceptanceLaneStallPolicy")]
     [InlineData("AcceptanceLaneTimeoutBudget")]
     [InlineData("AcceptanceTestClassSourceScanner")]
+    [InlineData("VstestOutputCompletenessProbe")]
     public void Indirect_acceptance_helpers_trigger_canary(string helper)
     {
         var prefix = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper;

@@ -85,6 +85,7 @@ public static class AcceptanceShardCompletionPredicates
     public const string TimedOut = "timed-out";
     public const string NonzeroExit = "nonzero-exit";
     public const string MissingTrx = "missing-trx";
+    public const string IncompleteVstestOutput = "incomplete-vstest-output";
     public const string MalformedTrx = "malformed-trx";
     public const string ZeroTests = "zero-tests";
     public const string IncompleteExecution = "incomplete-execution";
@@ -2676,11 +2677,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotLease,
                 attemptName,
                 cancellationToken).ConfigureAwait(false);
-        if (!buildRun.Run.Result.Passed)
-        {
-            return (AcceptanceDotnetBuildPhase.FailureResult(check, buildRun.Run.Result,
-                IsCaptureLimitFailureName(buildRun.Run.Result.Name)), buildRun.Run.Retried);
-        }
+        if (VstestOutputCompletenessProbe.BeforeNoBuildRun(check, testArguments, dotnetTestBuildPhase?.BuildEnvironment,
+            buildRun.Run.Result, IsCaptureLimitFailureName(buildRun.Run.Result.Name)) is { } preflightFailure)
+            return (preflightFailure, buildRun.Run.Retried);
 
         var testRun = await RunManagedDotnetCheckAsync(
             check,

@@ -17,6 +17,8 @@ public static class AcceptanceEngineSurfaceRegistry
     [
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+            // VSTest output completeness is reached through the verifier's no-build preflight.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/VstestOutputCompletenessProbe",
             // Selection coverage is reached through the verifier's telemetry collaborator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",

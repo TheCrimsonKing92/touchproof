@@ -23,7 +23,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             CancellationToken ___) =>
             throw new InvalidOperationException("owned process lifecycle failed");
 
-        var verifier = new GoalAcceptanceVerifier(TestOverrides, ThrowUnexpectedRunnerFault);
+        var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, ThrowUnexpectedRunnerFault);
 
         var exception = await Xunit.Record.ExceptionAsync(() =>
             verifier.RunAsync(root));
@@ -562,7 +562,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "should not run"));
@@ -604,7 +604,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, async (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, async (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test" && args.Contains("tests/First.Tests.csproj"))
@@ -677,7 +677,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -789,7 +789,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
                 {
@@ -1061,7 +1061,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -1152,7 +1152,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")                              // dotnet test - retry passes
         ]);
 
-        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+        var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());
@@ -1189,7 +1189,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         using var shutdownBuildServersScope = DotnetBuildServerRecovery.UseShutdownBuildServers(() => events.Add("shutdown"));
 
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
                 {
@@ -1242,7 +1242,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         try
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, attemptPrefix);
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -1292,7 +1292,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         try
         {
             TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = 2;
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -1349,7 +1349,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -1380,7 +1380,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(1, "error CS2012: Cannot open 'Core.dll' for writing")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+        var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());
@@ -1412,7 +1412,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var calls = new List<string[]>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -1459,7 +1459,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(0, "Test run succeeded.")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+        var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());

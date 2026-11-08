@@ -725,8 +725,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
+            var calls = new List<string[]>();
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (arguments, _, _) =>
             {
+                calls.Add(arguments);
                 if (arguments.Length >= 2 &&
                     arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
                     arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
@@ -740,6 +742,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             var result = await verifier.RunAsync(root, stableSlotIndex: 1);
 
             Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Contains(calls, arguments => arguments.Length >= 2 && arguments[1] == "build");
+            Xunit.Assert.Contains(calls, arguments => arguments.Length >= 2 && arguments[1] == "test" &&
+                arguments.Contains("--no-build"));
         }
         finally
         {
