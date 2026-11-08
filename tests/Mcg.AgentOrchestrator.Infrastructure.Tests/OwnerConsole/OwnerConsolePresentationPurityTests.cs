@@ -30,6 +30,7 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerGateFailureEvidence.cs",
         ConsolePath + "OwnerGoalChangeSummaryQuery.cs",
         ConsolePath + "OwnerGoalLifecycleTail.cs",
+        ConsolePath + "OwnerGoalSummarySectionReader.cs",
         ConsolePath + "OwnerJointGateFailureEvidence.cs",
         ConsolePath + "OwnerLandingsQuery.cs",
         ConsolePath + "OwnerQuestionReadModel.cs",
