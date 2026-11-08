@@ -8,7 +8,11 @@ internal static class ConductorLandingBlockerRecorder
     private static readonly IReadOnlyDictionary<string, (string Actor, string Verb)> NextActions =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)
         {
-            ["multi-repository-landing-not-built"] = ("operator", "wait-for-the-landing-slice"),
+            ["multi-repository-landing-failed"] = ("operator", "repair-multi-repository-landing"),
+            ["multi-repository-tuple-landing"] = ("conductor", "next-tick"),
+            ["multi-repository-acceptance-stale"] = ("conductor", "next-tick"),
+            ["multi-repository-acceptance-pending"] = ("conductor", "next-tick"),
+            ["multi-repository-landing-blocked"] = ("conductor", "next-tick"),
             ["criterion-evidence-hold"] = ("evidence-owner", "criterion-evidence-record"),
             ["acceptance-apparatus-hold"] = ("operator", "acceptance-retry"),
             ["environmental-apparatus-hold"] = ("operator", "acceptance-retry"),

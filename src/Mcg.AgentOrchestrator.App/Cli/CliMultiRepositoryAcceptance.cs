@@ -10,10 +10,18 @@ internal static class CliMultiRepositoryAcceptance
     // True means this command belongs to the repository-set path, never the merge/cleanup path.
     internal static bool Apply(CliExecutionContext context, Goal goal, bool runGate = true)
     {
-        if (!MultiRepositoryLandingHold.Applies(goal)) return false;
+        if (!MultiRepositoryGoal.Applies(goal)) return false;
         var gate = new MultiRepositoryAcceptanceGate(context.Workspace,
             context.ProjectRegistry ?? OrchestratorProjectRegistry.CreateDefault(), context.AcceptanceVerifier);
         var state = GoalLifecycle.ResolveState(goal);
+        var landings = new MultiRepositoryLandingRecordStore(context.Workspace.OrchestratorDirectory);
+        if (landings.ReadFailure(goal.Id) is { } landingFailure)
+        {
+            var failedHold = MultiRepositoryLandingFailedHold.Create(state, landingFailure);
+            ConductorLandingBlockerRecorder.Observe(context.Kernel, goal, failedHold, DateTimeOffset.UtcNow, []);
+            Console.WriteLine(failedHold.Reason);
+            return true;
+        }
         var owner = $"multi-repository-acceptance:{Environment.ProcessId}:{Guid.NewGuid():N}";
         using var lease = new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath)
             .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
@@ -23,13 +31,14 @@ internal static class CliMultiRepositoryAcceptance
             return true;
         }
         var result = runGate && AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal)
-            ? gate.Run(goal, state, () => RunHome(context, goal)) : gate.LandingHold(goal, state);
-        if (result.Hold is { } hold)
+            ? gate.Run(goal, state, () => RunHome(context, goal)) : gate.Inspect(goal, state);
+        if (result.Landable is not null || result.Hold is not null)
         {
-            if (hold.Decision?.DiscriminatingEvidence == MultiRepositoryLandingHold.Kind)
+            var hold = result.Hold ?? MultiRepositoryGoal.Routed(goal, state);
+            if (result.Landable is not null)
                 context.Kernel.ClearAcceptanceFailure(goal.Id);
             ConductorLandingBlockerRecorder.Observe(context.Kernel, goal, hold, DateTimeOffset.UtcNow, []);
-            Console.WriteLine(hold.Decision?.DiscriminatingEvidence == MultiRepositoryLandingHold.Kind ? hold.Reason : "BLOCKER " + hold.Reason);
+            Console.WriteLine(hold.Reason);
         }
         else
         {
@@ -44,7 +53,8 @@ internal static class CliMultiRepositoryAcceptance
             }
             Console.WriteLine(failure.FailureDetail);
         }
-        new MultiRepositoryLandingHoldAttention(CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory), gate.HasCurrentPass).Reconcile(goal);
+        new MultiRepositoryLandingHoldAttention(CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory),
+            current => landings.ReadFailure(current.Id)).Reconcile(goal);
         return true;
     }
 

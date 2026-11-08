@@ -37,6 +37,15 @@ public sealed class MultiRepositoryAcceptanceReceiptStore(string orchestratorDir
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    public void MarkStale(GoalId goalId)
+    {
+        var path = ReceiptPath(goalId);
+        if (!File.Exists(path)) return;
+        var directory = Path.Combine(DirectoryPath, "stale");
+        Directory.CreateDirectory(directory);
+        File.Move(path, Path.Combine(directory, goalId.Value + "-" + Guid.NewGuid().ToString("N") + ".json"));
+    }
+
     public string WriteEvidence(GoalId goalId, string attemptId, string key, object evidence)
     {
         if (!GoalRepositorySet.IsCanonicalKey(key)) throw new ArgumentException("Invalid repository key.", nameof(key));

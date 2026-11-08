@@ -1382,7 +1382,7 @@ internal sealed partial class ConductorDriver
             _recordTaskNote(goal.Id, retryTask.Id, AcceptanceRetryRoutingHoldGate.Describe(retryTask, _utcNow()));
         return ExecuteDispatchAndStart(retryGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
-    internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
+    internal GoalLifecycleFacts GetFacts(Goal goal) => RepositoryTupleLanding?.ProjectFacts(goal, _getFacts(goal)) ?? _getFacts(goal);
 
     internal bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,

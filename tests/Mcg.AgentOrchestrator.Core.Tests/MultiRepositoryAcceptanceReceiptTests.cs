@@ -13,7 +13,9 @@ public sealed class MultiRepositoryAcceptanceReceiptTests
     {
         var outcomes = new List<RepositoryAcceptanceOutcome> {
             new("default", true, "home-evidence", null), new("crosswalk", true, "secondary-evidence", null) };
-        var receipt = new MultiRepositoryAcceptanceReceipt(GoalId.New(), Tuple().Canonical, outcomes, DateTimeOffset.UtcNow);
+        var bases = new Dictionary<string, string> { ["default"] = new('a', 40), ["crosswalk"] = new('b', 40) };
+        var receipt = new MultiRepositoryAcceptanceReceipt(GoalId.New(), Tuple().Canonical, outcomes, DateTimeOffset.UtcNow, bases);
+        bases.Clear();
         outcomes.Clear();
         var restored = JsonSerializer.Deserialize<MultiRepositoryAcceptanceReceipt>(JsonSerializer.Serialize(receipt))!;
         Assert.True(restored.Passed);
@@ -22,6 +24,8 @@ public sealed class MultiRepositoryAcceptanceReceiptTests
         Assert.True(restored.IsCurrentFor(Tuple()));
         Assert.False(restored.IsCurrentFor(Tuple("changed")));
         Assert.False(restored.IsComplete(new GoalRepositorySet(["default"])));
+        Assert.Equal(new string('a', 40), restored.IntegrationBases["default"]);
+        Assert.Equal(new string('b', 40), restored.IntegrationBases["crosswalk"]);
     }
 
     [Fact]
@@ -47,5 +51,15 @@ public sealed class MultiRepositoryAcceptanceReceiptTests
         if (defect == "duplicate") outcomes.Add(outcomes[0]);
         if (defect == "extra") outcomes.Add(new("other", true, "evidence", null));
         Assert.Throws<ArgumentException>(() => new MultiRepositoryAcceptanceReceipt(GoalId.New(), Tuple().Canonical, outcomes, DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
+    [InlineData("other", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("default", "not-a-commit")]
+    public void Construct_InvalidIntegrationBase_RejectsReceipt(string key, string commit)
+    {
+        Assert.Throws<ArgumentException>(() => new MultiRepositoryAcceptanceReceipt(GoalId.New(), Tuple().Canonical,
+            [new("default", true, "home", null), new("crosswalk", true, "other", null)], DateTimeOffset.UtcNow,
+            new Dictionary<string, string> { [key] = commit }));
     }
 }
