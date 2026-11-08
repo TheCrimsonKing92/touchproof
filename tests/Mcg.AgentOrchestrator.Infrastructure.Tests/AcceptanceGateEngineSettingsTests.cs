@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
+[LiveTreeStructural]
 public sealed class AcceptanceGateEngineSettingsTests
 {
     private GoalAcceptanceVerifierTestOverrides TestOverrides { get; } = new();

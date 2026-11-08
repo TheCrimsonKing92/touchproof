@@ -405,7 +405,9 @@ public sealed class PullRequestTrunkDriftTests(WorktreeSetupTemplate setupTempla
         {
             Git("checkout", "-b", "remote-change-" + ++_advances, "refs/remotes/origin/main");
             AppendCommit(Root, path ?? "trunk-" + _advances + ".txt", "unrelated trunk work");
-            var trunk = Git("rev-parse", "HEAD");
+            // Setup only needs the commit just created; retain Git for unsupported metadata.
+            var trunk = InfrastructureTestSupport.TryReadGitHeadInProcess(Root, out var head) && head is not null
+                ? head : Git("rev-parse", "HEAD");
             Git("push", "origin", "HEAD:main");
             Git("checkout", "main");
             return trunk;

@@ -9,22 +9,26 @@ internal sealed class PreTesterGuardSelections
     private readonly DeveloperDeferredTestSelection _changedFileGuards;
     private readonly IReadOnlyList<FindingEvidenceSelection> _guardSelections;
     private readonly IReadOnlyList<FindingEvidenceSelection> _cliSelections;
+    private readonly IReadOnlyList<FindingEvidenceSelection> _coupledSelections;
     internal IReadOnlyList<FindingEvidenceSelection> Selections { get; }
     internal IReadOnlyList<string> NotRun => _changedFileGuards.NotRun;
 
     private PreTesterGuardSelections(DeveloperDeferredTestSelection changedFileGuards,
-        IReadOnlyList<FindingEvidenceSelection> selections, IReadOnlyList<FindingEvidenceSelection> cliSelections)
+        IReadOnlyList<FindingEvidenceSelection> selections, IReadOnlyList<FindingEvidenceSelection> cliSelections,
+        IReadOnlyList<FindingEvidenceSelection> coupledSelections)
     {
         _changedFileGuards = changedFileGuards;
         _guardSelections = selections;
-        Selections = selections.Concat(cliSelections).ToArray();
+        Selections = selections.Concat(cliSelections).Concat(coupledSelections).Distinct().ToArray();
         _cliSelections = cliSelections;
+        _coupledSelections = coupledSelections;
     }
 
     internal static PreTesterGuardSelections Create(PreTesterChangedFileGuardClasses cache,
         string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
         Action<string>? progress = null, AcceptanceGateEngineSettings? settings = null,
-        IReadOnlyList<string>? priorSelections = null)
+        IReadOnlyList<string>? priorSelections = null,
+        Func<string, string, IReadOnlyList<string>?>? structuralPathReader = null)
     {
         var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
         foreach (var selection in changedFileGuards.Selections)
@@ -40,9 +44,16 @@ internal sealed class PreTesterGuardSelections
         foreach (var reason in cli.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
+        var structuralPaths = changedPaths.Any(PreTesterLiveTreeStructuralSelections.IsTreePath)
+            ? (structuralPathReader ?? PreTesterCoupledClassSelections.ReadStructuralPaths)(worktreePath, mainRevision)
+            : [];
+        var coupled = PreTesterCoupledClassSelections.Select(worktreePath, changedPaths, settings, progress, structuralPaths);
+        foreach (var reason in coupled.Provenance)
+            (progress ?? Console.WriteLine)(
+                $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
         return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
             .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
-            .Concat(changedFileGuards.Selections).ToArray(), cli.Selections);
+            .Concat(changedFileGuards.Selections).ToArray(), cli.Selections, coupled.Selections);
     }
 
     internal static string ReadMainRevision(string worktreePath, OrchestratorWorkspace? workspace)
@@ -74,6 +85,10 @@ internal sealed class PreTesterGuardSelections
         // Retain project identity for rejected CLI obligations, so resume need not rediscover their origin.
         notRun.AddRange(normalizedCli.NotRun.Select(name => format(
             new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(PreTesterCliSurfaceSelections.Project), name))));
+        var normalizedCoupled = DeveloperDeferredTestSelectionNormalization.Normalize(new(_coupledSelections, []), settings);
+        selected.AddRange(normalizedCoupled.Selections);
+        notRun.AddRange(normalizedCoupled.NotRun.Where(name => prior?.Outcome != "started" ||
+            prior.NotRun.Contains(name, StringComparer.Ordinal)));
         if (prior?.Outcome == "started")
         {
             // CLI discovery belongs to attempt creation. Recorded obligations survive later inventory edits.
@@ -98,7 +113,8 @@ internal sealed class PreTesterGuardSelections
         return selected.DistinctBy(format).Where(selection => priorSelections is null ||
             !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) ||
               PreTesterTestSourceGuardClasses.ContainsClass(selection.TestClass) ||
-              PreTesterChangedFileGuardClasses.ContainsClass(_changedFileGuards.Selections, selection.TestClass)) ||
+              PreTesterChangedFileGuardClasses.ContainsClass(_changedFileGuards.Selections, selection.TestClass) ||
+              _coupledSelections.Any(item => format(item).Equals(format(selection), StringComparison.OrdinalIgnoreCase))) ||
             priorSelections.Contains(format(selection), StringComparer.OrdinalIgnoreCase)).ToArray();
     }
 

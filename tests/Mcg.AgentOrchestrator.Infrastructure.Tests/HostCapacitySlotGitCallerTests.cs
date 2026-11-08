@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: owned repositories/sidecars and local census identities. The disabled
 // path uses a local observer target, never changing the gate's global environment.
+[LiveTreeStructural]
 public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("slot-git-callers-").FullName;

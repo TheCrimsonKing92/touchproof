@@ -15,6 +15,8 @@
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />
     <ProjectReference Include="..\..\scripts\OrchestratorSqliteTools\OrchestratorSqliteTools.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.TestSupport\Mcg.AgentOrchestrator.TestSupport.csproj" />
+    <!-- The structural-marker parity test reflects over the separately compiled Core test assembly. -->
+    <ProjectReference Include="..\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\RealProcessShardProbe\Mcg.AgentOrchestrator.RealProcessShardProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\ConsoleIoProbe\Mcg.AgentOrchestrator.ConsoleIoProbe.csproj" ReferenceOutputAssembly="false" />

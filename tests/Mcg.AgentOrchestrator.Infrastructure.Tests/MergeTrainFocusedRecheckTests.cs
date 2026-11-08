@@ -204,8 +204,12 @@ public sealed class MergeTrainFocusedRecheckTests(ITestOutputHelper output) : Ac
                 };
                 driver.MergeTrainRecheckRunner = (path, identity, selection, _, _) =>
                 {
-                    trainCommit = RunGitOutput(path, "rev-parse", "HEAD").Trim();
-                    var tree = RunGitOutput(path, "rev-parse", "HEAD^{tree}").Trim();
+                    // Observe both objects through real Git in one launch.
+                    var revisions = RunGitOutput(path, "rev-parse", "HEAD", "HEAD^{tree}")
+                        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                    Assert.Equal(2, revisions.Length);
+                    trainCommit = revisions[0];
+                    var tree = revisions[1];
                     var changes = RunGitOutput(path, "diff", "--name-only", identity.ObservedMainRevision, "HEAD")
                         .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal).ToArray();
                     calls.Add(new(identity, selection, changes, tree, File.Exists(Path.Combine(path, Paths[2]))));

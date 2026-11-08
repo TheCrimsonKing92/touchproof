@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 
 // Parallel-safe: these contracts only read files from the candidate repository.
+[LiveTreeStructural]
 public sealed class ReadmeFrontPageContractTests
 {
     [Xunit.Fact]
