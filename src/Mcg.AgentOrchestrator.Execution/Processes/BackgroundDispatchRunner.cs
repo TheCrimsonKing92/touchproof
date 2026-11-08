@@ -291,6 +291,9 @@ public sealed partial class BackgroundDispatchRunner
         var prepRecordPath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.json") : null;
         var prepHeartbeatPath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.heartbeat.json") : null;
         var prepExitCodePath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.exit.txt") : null;
+        var repositoryWorktrees = useSandbox
+            ? GoalRepositoryWorkerPreparation.ResolveTargets(kernel.GetGoal(goalId), task.RequiredRole)
+            : [];
 
         var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
         if (useSandbox)
@@ -305,7 +308,8 @@ public sealed partial class BackgroundDispatchRunner
                 _clock.UtcNow,
                 sandboxProvider,
                 sandboxWorktreeWritable,
-                null));
+                null,
+                repositoryWorktrees.Count == 0 ? null : repositoryWorktrees.Select(target => target.WorktreePath).ToArray()));
         }
 
         // Claude credential source: the conductor's dispatch preflight selected and reported it while
@@ -356,7 +360,8 @@ public sealed partial class BackgroundDispatchRunner
             ClaudeCredentialSelection: credentialSelection,
             TaskIntentAdmission: taskIntentAdmission,
             StartGatePath: startGatePath, OptOutExecutionThrottling: ExecutionThrottlingOptOut?.Invoke() == true,
-            NodeDependencyInstall: NodeDependencyInstall?.Invoke(dispatch.WorkingDirectory));
+            NodeDependencyInstall: NodeDependencyInstall?.Invoke(dispatch.WorkingDirectory),
+            RepositoryWorktrees: repositoryWorktrees.Count == 0 ? null : repositoryWorktrees);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
@@ -1621,6 +1626,9 @@ public sealed partial class BackgroundDispatchRunner
                 }
             }
 
+            var repositoryCommitFailures = CommitRepositoryWorktreeEdits(goal, task, shouldCommitDirtyWorktree,
+                decisionStandardOutput, decisionStandardError, _worktreeCommitter);
+
             if (task.RequiredRole == AgentRole.Developer && exitCode == 0 &&
                 InScopeIgnoredFileCheck.Evaluate(processRecord.WorkingDirectory, goal, task) is { Diagnostic.Length: > 0 } inScopeIgnored)
             {
@@ -1708,6 +1716,13 @@ public sealed partial class BackgroundDispatchRunner
                             $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}."),
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing));
                 }
+            }
+
+            if (repositoryCommitFailures.Count > 0)
+            {
+                if (exitCode == 0) exitCode = 1;
+                foreach (var failure in repositoryCommitFailures)
+                    standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, failure);
             }
 
             failedRoundReceipt = TryBuildFailedRoundReceipt(task, BuildDispatchId(goalId, taskId, task.LastDispatch),
@@ -1947,6 +1962,53 @@ public sealed partial class BackgroundDispatchRunner
         return match.Success && match.Groups["id"].Value is { Length: > 0 } value
             ? value
             : null;
+    }
+
+    internal static IReadOnlyList<string> CommitRepositoryWorktreeEdits(
+        Goal goal, TaskSpec task, bool shouldCommitDirtyWorktree,
+        string standardOutput, string standardError, DispatchWorktreeCommitter committer)
+    {
+        var failures = new List<string>();
+        foreach (var target in GoalRepositoryWorkerPreparation.ResolveTargets(goal, task.RequiredRole))
+        {
+            try
+            {
+                GoalRepositoryWorkerPreparation.ValidateTarget(target, goal.Id, new SystemWorkerSandboxFileSystem());
+                var dispatch = task.LastDispatch ?? throw new InvalidOperationException("Repository commit requires a dispatch.");
+                var branch = GoalRepositoryWorktreeLayout.BranchName(goal.Id, target.Key);
+                var inspection = committer.InspectGoalWorktree(target.WorktreePath, goal.Id,
+                    dispatch.DispatchedAt, forceRefresh: true, expectedBranch: branch);
+                if (!inspection.IsAvailable)
+                {
+                    failures.Add($"repository={target.Key}; worktree inspection refused; " +
+                        $"reason={inspection.UnavailableReason}; git_receipt={inspection.GitReceipt}.");
+                    continue;
+                }
+                if (inspection.Evidence.IsClean) continue;
+
+                var attempt = shouldCommitDirtyWorktree
+                    ? committer.TryCommitWorktreeEdits(target.WorktreePath,
+                        DispatchWorktreeCommitter.BuildOrchestratorCommitMessage(goal, task,
+                            BuildDispatchId(goal.Id, task.Id, dispatch), standardOutput,
+                            standardError, inspection.Evidence.DirtyPaths), inspection.Evidence.DirtyPaths)
+                    : CommitWorktreeEditsResult.Failed("Commit-on-behalf guards refused repository edits.");
+                var afterCommit = attempt.Succeeded
+                    ? committer.InspectGoalWorktree(target.WorktreePath, goal.Id,
+                        dispatch.DispatchedAt, forceRefresh: true, expectedBranch: branch)
+                    : inspection;
+                if (!attempt.Succeeded || !afterCommit.IsAvailable || !afterCommit.Evidence.IsClean ||
+                    !afterCommit.Evidence.HasRelevantCommitAfterDispatch)
+                    failures.Add($"repository={target.Key}; " + DispatchWorktreeCommitter.BuildCommitOnBehalfFailureDiagnostic(
+                        attempt.Succeeded ? "Repository worktree did not verify clean after commit." : attempt.Diagnostic,
+                        afterCommit.Evidence));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                failures.Add($"repository={target.Key}; commit-on-behalf refused: " +
+                    DispatchWorktreeCommitter.NormalizeDiagnosticText(ex.Message));
+            }
+        }
+        return failures;
     }
 
     internal static bool RequiresFileChangeEvidence(TaskSpec task)

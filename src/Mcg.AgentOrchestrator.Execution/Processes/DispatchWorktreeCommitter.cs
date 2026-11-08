@@ -256,16 +256,17 @@ internal sealed class DispatchWorktreeCommitter
         string workingDirectory,
         GoalId goalId,
         DateTimeOffset dispatchedAt,
-        bool forceRefresh = false)
+        bool forceRefresh = false,
+        string? expectedBranch = null)
     {
-        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt);
+        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt, expectedBranch);
         if (!forceRefresh && _worktreeInspectionCache.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
         _beforeWorktreeInspection?.Invoke();
-        var result = InspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt);
+        var result = InspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt, expectedBranch);
         _worktreeInspectionCache[key] = result;
         return result;
     }
@@ -285,7 +286,8 @@ internal sealed class DispatchWorktreeCommitter
     private GoalWorktreeInspectionResult InspectGoalWorktreeCore(
         string workingDirectory,
         GoalId goalId,
-        DateTimeOffset dispatchedAt)
+        DateTimeOffset dispatchedAt,
+        string? expectedBranch = null)
     {
         if (!_directoryExists(workingDirectory))
         {
@@ -298,7 +300,7 @@ internal sealed class DispatchWorktreeCommitter
         }
 
         var branch = _runGit(workingDirectory, ["branch", "--show-current"]);
-        var expectedBranch = GoalWorktreeLayout.BranchName(goalId);
+        expectedBranch ??= GoalWorktreeLayout.BranchName(goalId);
         if (branch.ExitCode != 0)
         {
             return GoalWorktreeInspectionResult.Unavailable(
@@ -375,7 +377,8 @@ internal sealed class DispatchWorktreeCommitter
     private sealed record WorktreeInspectionCacheKey(
         string WorkingDirectory,
         GoalId GoalId,
-        DateTimeOffset DispatchedAt);
+        DateTimeOffset DispatchedAt,
+        string? ExpectedBranch);
 
     internal static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
     {
