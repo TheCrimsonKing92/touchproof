@@ -93,7 +93,9 @@ public static class DispatchProcessHost
         string? StartGatePath = null,
         WorkerBuildHostReference? WorkerBuildHost = null,
         bool OptOutExecutionThrottling = false,
-        NodeDependencyInstall? NodeDependencyInstall = null);
+        NodeDependencyInstall? NodeDependencyInstall = null,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        IReadOnlyList<GoalRepositoryWorkerPreparation.Target>? RepositoryWorktrees = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -111,7 +113,9 @@ public static class DispatchProcessHost
         DateTimeOffset StartedAt,
         WorkerSandboxProvider Provider,
         bool SandboxWorktreeWritable,
-        DateTimeOffset? CompletedAt);
+        DateTimeOffset? CompletedAt,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        IReadOnlyList<string>? RepositoryWorktrees = null);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -413,6 +417,14 @@ public static class DispatchProcessHost
             TrackAction("verify-git-metadata-integrity", () => WorkerSandboxGitBoundary.EnsureSharedGitMetadataNotLowWritable(
                 linkedWorktreeGitFile, gitMetadataLabeler ?? ResolveIntegrityLabeler(), sandboxFileSystem!));
             WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
+        }
+
+        if (parameters.SandboxWorktreeWritable && parameters.RepositoryWorktrees is { Count: > 0 } repositoryWorktrees)
+        {
+            TrackAction("prepare-repository-worktrees", () => GoalRepositoryWorkerPreparation.Prepare(
+                repositoryWorktrees,
+                new GoalId(parameters.PrepGoalId ?? throw new InvalidOperationException("Repository preparation requires a goal identity.")),
+                sandboxRoot, preparer, gitMetadataLabeler ?? ResolveIntegrityLabeler(), sandboxFileSystem!));
         }
 
         var effectivePreparation = preparation with { PrepReceiptHit = receiptFastPath };
@@ -1297,6 +1309,15 @@ public static void DropToLow() {
         }
     }
 
+    internal static void ProtectLinkedWorktreeGitFile(string gitFile, IWorkerIntegrityLabeler labeler)
+    {
+        if (!SetMediumIntegrity(gitFile, labeler))
+            throw new InvalidOperationException($"Failed to protect linked worktree git file '{gitFile}'.");
+        var state = labeler.Query(gitFile);
+        if (!state.Exists || state.Low || !state.Medium || state.NativeQueryError is not null)
+            throw new WorkerSandboxRefusedException(WorkerSandboxGitBoundary.UnverifiableMetadata, gitFile);
+    }
+
     private static bool SetMediumIntegrity(string path, IWorkerIntegrityLabeler? integrityLabeler = null)
     {
         return (integrityLabeler ?? ResolveIntegrityLabeler()).SetIntegrity(
@@ -1858,7 +1879,8 @@ public static void DropToLow() {
                         startedAt,
                         parameters.Provider,
                         parameters.SandboxWorktreeWritable,
-                        DateTimeOffset.UtcNow));
+                        DateTimeOffset.UtcNow,
+                        parameters.RepositoryWorktrees?.Select(target => target.WorktreePath).ToArray()));
                 }
                 catch
                 {

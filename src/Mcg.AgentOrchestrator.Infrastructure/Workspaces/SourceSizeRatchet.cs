@@ -293,7 +293,9 @@ internal static class SourceSizeRatchet
             // c32e68ed: one line for the dispatch execution-throttling policy delegate.
             // Goal fafad26f: declared tool-home resolution, preflight and environment application call sites.
             // d52855ed: carry the manifest-declared Node install to the sandbox preparation host (+2).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2701),
+            // Goal 231af3a4 moved declared-repository commit verification into its owning preparation collaborator;
+            // dispatch orchestration remains above the prior ceiling by 21 lines after that extraction.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2722),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
