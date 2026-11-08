@@ -84,6 +84,7 @@ $shimLog = Join-Path $temporaryRoot "dotnet-arguments.log"
 $shellPath = (Get-Process -Id $PID).Path
 $originalPath = $env:PATH
 $originalIsolatedRoot = $env:MCG_DOTNET_ISOLATED_ROOT
+$originalScopeCache = $env:MCG_WORKER_BUILD_SCOPE_TOOL_CACHE
 $originalScenario = $env:MCG_BUILD_FIXTURE_SCENARIO
 $originalShimLog = $env:DOTNET_SHIM_LOG
 $originalRealDotnet = $env:MCG_SCOPE_REAL_DOTNET
@@ -183,11 +184,13 @@ exit $exitCode
     $shimCommand = @'
 @echo off
 set "DOTNET_SHIM_RAW_ARGUMENTS=%*"
+if "%~1"=="--version" goto version
 if not "%DOTNET_SHIM_RAW_ARGUMENTS:WorkerBuildScopeTool=%"=="%DOTNET_SHIM_RAW_ARGUMENTS%" goto scope
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1"
 exit /b %ERRORLEVEL%
 :scope
 if "%MCG_BUILD_FIXTURE_SCENARIO%"=="ScopeBootstrapFailure" exit /b 9
+:version
 "%MCG_SCOPE_REAL_DOTNET%" %*
 exit /b %ERRORLEVEL%
 '@
@@ -202,6 +205,7 @@ exit $LASTEXITCODE
 
     $env:PATH = $shimDirectory + [System.IO.Path]::PathSeparator + $originalPath
     $env:MCG_DOTNET_ISOLATED_ROOT = $isolatedRoot
+    if ($Scenario -eq 'ScopeBootstrapFailure') { $env:MCG_WORKER_BUILD_SCOPE_TOOL_CACHE = Join-Path $temporaryRoot 'scope-cache' }
     $env:MCG_BUILD_FIXTURE_SCENARIO = $Scenario
     $env:DOTNET_SHIM_LOG = $shimLog
     $env:MCG_SCOPE_REAL_DOTNET = $realDotnet
@@ -317,6 +321,7 @@ exit $LASTEXITCODE
 finally {
     $env:PATH = $originalPath
     $env:MCG_DOTNET_ISOLATED_ROOT = $originalIsolatedRoot
+    $env:MCG_WORKER_BUILD_SCOPE_TOOL_CACHE = $originalScopeCache
     $env:MCG_BUILD_FIXTURE_SCENARIO = $originalScenario
     $env:DOTNET_SHIM_LOG = $originalShimLog
     $env:MCG_SCOPE_REAL_DOTNET = $originalRealDotnet
