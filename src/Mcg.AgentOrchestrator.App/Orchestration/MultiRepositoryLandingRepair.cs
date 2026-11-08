@@ -8,6 +8,7 @@ internal sealed record MultiRepositoryLandingRepairResult(bool Repaired, string 
 /// <summary>Rebuilds compensated candidates; integration refs are never written here.</summary>
 internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspace, OrchestratorProjectRegistry registry)
 {
+    private const string WorktreeLeaf = "candidate";
     private readonly MultiRepositoryLandingRecordStore store = new(workspace.OrchestratorDirectory);
     private readonly MultiRepositoryAcceptanceReceiptStore receipts = new(workspace.OrchestratorDirectory);
 
@@ -73,7 +74,10 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                 if (progress?.RebuiltTip is null || progress.StartingTip != repository.Tip)
                 {
                     if (progress is not null) Cleanup(repository.Root, progress.WorktreePath, goal.Id, repository.Key);
-                    var path = Path.Combine(OrchestratorTempRoot.GetParent(), WorktreePrefix(goal.Id, repository.Key) + Guid.NewGuid().ToString("N"));
+                    // Git derives .git/worktrees/<name> from the leaf. Keep that name short:
+                    // merge's stash child can reject a long explicit GIT_DIR on Windows.
+                    var path = Path.Combine(OrchestratorTempRoot.GetParent(),
+                        WorktreePrefix(goal.Id, repository.Key) + Guid.NewGuid().ToString("N"), WorktreeLeaf);
                     // Observe the local integration base when this repository actually starts,
                     // after any earlier repository has finished rebuilding.
                     var integrationTip = new MultiRepositoryIntegrationBases(workspace, registry).Resolve(repository.Key).Tip;
@@ -81,6 +85,7 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                     store.RecordRepairProgress(goal.Id, failure.TupleCanonical, repository.Key, progress);
                     // All intermediate commits live off-branch. A conflict or process stop cannot
                     // leave half a rebuild on the candidate or require a destructive branch reset.
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     Git(repository.Root, "worktree", "add", "--detach", path, progress.StartingTip);
                     try
                     {
@@ -176,10 +181,14 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
     {
         // A persisted path is a reference, not permission to remove arbitrary worktrees.
         var full = Path.GetFullPath(path);
-        if (!Path.GetFileName(full).StartsWith(WorktreePrefix(id, key), StringComparison.Ordinal) ||
-            !string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(OrchestratorTempRoot.GetParent()).TrimEnd(Path.DirectorySeparatorChar),
+        // Accept the previous flat layout too, so an interrupted repair survives an upgrade.
+        var container = Path.GetFileName(full) == WorktreeLeaf ? Path.GetDirectoryName(full)! : full;
+        if (!Path.GetFileName(container).StartsWith(WorktreePrefix(id, key), StringComparison.Ordinal) ||
+            !string.Equals(Path.GetDirectoryName(container), Path.GetFullPath(OrchestratorTempRoot.GetParent()).TrimEnd(Path.DirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Invalid repair worktree path.");
         if (Directory.Exists(full)) Git(root, "worktree", "remove", "--force", full);
+        // Non-recursive removal refuses unexpected contents rather than discarding them.
+        if (container != full && Directory.Exists(container)) Directory.Delete(container);
     }
 }

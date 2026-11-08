@@ -181,6 +181,10 @@ public sealed class MultiRepositoryLandingRepairTests
         var progress = Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!["crosswalk"];
         Assert.NotNull(progress.RebuiltTip);
         Assert.True(Directory.Exists(progress.WorktreePath));
+        // The retry needs a non-fast-forward merge, which invokes Git's stash child.
+        // Bound the administrative name independently of the case's temporary root length.
+        var gitDirectory = Git(progress.WorktreePath, "rev-parse", "--absolute-git-dir");
+        Assert.InRange(Path.GetFileName(gitDirectory).Length, 1, 32);
         var movedTip = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
         Assert.NotEqual(progress.StartingTip, movedTip);
         Assert.Equal(1, GitCli.Run(f.SecondaryWorktree,
@@ -244,9 +248,11 @@ public sealed class MultiRepositoryLandingRepairTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Run_PublicationInterrupted_ResumesWithoutDoubleRevert(bool published)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Run_PublicationInterrupted_ResumesWithoutDoubleRevert(bool published, bool legacyPath)
     {
         using var f = FailedTuple();
         var candidate = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
@@ -271,10 +277,22 @@ public sealed class MultiRepositoryLandingRepairTests
         Assert.NotNull(progress.RebuiltTip);
         Assert.NotNull(Store(f).ReadFailure(f.Goal.Id));
         Assert.Equal(published ? progress.RebuiltTip : candidate, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
+        if (legacyPath)
+        {
+            // Persist an older flat-layout path to exercise recovery across the layout change.
+            var container = Path.GetDirectoryName(progress.WorktreePath)!;
+            var previousPath = Path.Combine(OrchestratorTempRoot.GetParent(), Path.GetFileName(container));
+            var legacyWorktree = previousPath + "-legacy";
+            Git(f.Repositories.Crosswalk.CheckoutPath, "worktree", "move", progress.WorktreePath, legacyWorktree);
+            Directory.Delete(container); // Empty, case-owned container only.
+            progress = progress with { WorktreePath = legacyWorktree };
+            Store(f).RecordRepairProgress(f.Goal.Id, f.Tuple().Canonical, "crosswalk", progress);
+        }
 
         var result = Repair(f).Run(f.Goal);
 
         Assert.True(result.Repaired, result.Detail);
+        Assert.False(Directory.Exists(progress.WorktreePath));
         Assert.Equal(progress.RebuiltTip, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
         Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
         Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
