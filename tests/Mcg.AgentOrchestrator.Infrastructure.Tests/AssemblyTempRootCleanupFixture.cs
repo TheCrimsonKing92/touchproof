@@ -13,10 +13,11 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     private readonly Func<ProcessCommandLineSnapshot> processSnapshot;
     private readonly Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader;
     private readonly IDisposable? sharedReaders;
+    private readonly LaunchLockAttribution? attribution;
 
     public AssemblyTempRootCleanupFixture()
         : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null,
-            sharedReaders: ResolveSharedGitReaders())
+            sharedReaders: ResolveSharedGitReaders(), attribution: InstallLaunchAttribution())
     {
     }
 
@@ -25,13 +26,22 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
         TextWriter? diagnostics,
         Func<ProcessCommandLineSnapshot>? processSnapshot = null,
         Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader = null,
-        IDisposable? sharedReaders = null)
+        IDisposable? sharedReaders = null,
+        LaunchLockAttribution? attribution = null)
     {
         this.releaseOwnedRoot = releaseOwnedRoot;
         this.diagnostics = diagnostics;
         this.processSnapshot = processSnapshot ?? ProcessCommandLines.Snapshot;
         this.currentDirectoryReader = currentDirectoryReader;
         this.sharedReaders = sharedReaders;
+        this.attribution = attribution;
+    }
+
+    private static LaunchLockAttribution InstallLaunchAttribution()
+    {
+        var attribution = LaunchLockTelemetry.Attribution;
+        attribution.SetProvider(static () => Xunit.TestContext.Current.TestClass?.TestClassName ?? "(none)");
+        return attribution;
     }
 
     // This fixture is also linked into Execution.Tests, which has no Infrastructure reference.
@@ -55,8 +65,9 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     {
         try
         {
-            (diagnostics ?? Console.Error).WriteLine(
-                LaunchLockTelemetry.FormatSummary(LaunchLockTelemetry.Process.Snapshot(), Environment.ProcessId));
+            foreach (var line in LaunchLockTelemetry.FormatTeardownLines(
+                         LaunchLockTelemetry.Process.Snapshot(), attribution, Environment.ProcessId))
+                (diagnostics ?? Console.Error).WriteLine(line);
             try
             {
                 sharedReaders?.Dispose();
