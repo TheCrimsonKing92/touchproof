@@ -18,7 +18,8 @@ internal sealed class MultiRepositoryTupleLanding(OrchestratorWorkspace workspac
         ? facts with { IsMerged = false, IsRecorded = false, IsCleanedUp = false } : facts;
 
     internal MultiRepositoryTupleLandingResult Execute(Goal goal, GoalLifecycleState state,
-        MultiRepositoryAcceptanceReceipt receipt, Func<LandingResult> landHome, Func<string?> mutationBlocker)
+        MultiRepositoryAcceptanceReceipt receipt, Func<LandingResult> landHome, Func<string?> mutationBlocker,
+        Func<string?>? homeAdmissibility = null)
     {
         if (Store.ReadFailure(goal.Id) is { } failure)
             return new(Hold: MultiRepositoryLandingFailedHold.Create(state, failure));
@@ -45,6 +46,16 @@ internal sealed class MultiRepositoryTupleLanding(OrchestratorWorkspace workspac
         if (currentCandidate.Identity?.RepositoryTupleCanonical != receipt.TupleCanonical)
             return Stale(goal, state, "tuple", receipt.TupleCanonical, currentCandidate.Failure);
         RepositoryCandidateTuple.TryParse(receipt.TupleCanonical, out var acceptedTuple);
+
+        string? homeRefusal;
+        try { homeRefusal = homeAdmissibility?.Invoke(); }
+        catch (Exception ex) { homeRefusal = ex.GetType().Name + ": " + ex.Message; }
+        if (homeRefusal is { Length: > 0 })
+            return new(Hold: new ConductorAdvanceOutcome.Held(state, "multi-repository-landing-blocked-by-home: " + homeRefusal)
+            {
+                Decision = new PolicyDecisionRecord("multi-repository-landing", "Hold", 1,
+                    "multi-repository-landing-blocked-by-home", "next-tick", [new PolicyDecisionFact("blocker", homeRefusal)])
+            });
 
         var attempt = new MultiRepositoryLandingAttempt(goal.Id, receipt.TupleCanonical, []);
         LandingResult? homeResult = null;
