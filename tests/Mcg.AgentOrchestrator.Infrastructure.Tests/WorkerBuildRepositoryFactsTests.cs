@@ -99,7 +99,8 @@ public sealed class WorkerBuildRepositoryFactsTests
         fixture.Write("a.cs", "baseline");
         fixture.Write("b.cs", "baseline");
         fixture.Commit();
-        fixture.SetMetadata(fixture.Metadata() with { GoalBaseline = fixture.Git("rev-parse", "HEAD").Trim() });
+        var baseline = fixture.Git("rev-parse", "HEAD").Trim();
+        fixture.SetMetadata(fixture.Metadata() with { GoalBaseline = baseline, DispatchBase = baseline });
         fixture.Write("a.cs", "committed");
         fixture.Write("b.cs", "committed");
         fixture.Commit();
