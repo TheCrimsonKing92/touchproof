@@ -246,10 +246,13 @@ internal static class GitCli
             var useConsolePolicy = ApplyLaunchSettings(startInfo, readCommand: true);
 
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
-            using var process = useConsolePolicy
-                ? HandleListProcessLauncher.StartSuppressed(startInfo,
-                    entry: LaunchLockEntryPoint.GitCli, errorModeAccess: errorModeAccess)
-                : HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.GitCli, errorModeAccess);
+            HandleListLaunchedProcess? launchedProcess;
+            using (LaunchLockTelemetry.Attribution.IsActive ? LaunchLockSiteCapture.BeginGit(args) : null)
+                launchedProcess = useConsolePolicy
+                    ? HandleListProcessLauncher.StartSuppressed(startInfo,
+                        entry: LaunchLockEntryPoint.GitCli, errorModeAccess: errorModeAccess)
+                    : HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.GitCli, errorModeAccess);
+            using var process = launchedProcess;
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
