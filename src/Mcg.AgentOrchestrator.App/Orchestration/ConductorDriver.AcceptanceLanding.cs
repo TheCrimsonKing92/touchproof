@@ -223,8 +223,8 @@ internal sealed partial class ConductorDriver
         if (EnvironmentGate?.Check(goal, policy, state, forGate: true) is { } environmentHold) return environmentHold;
         var result = MultiRepositoryAcceptanceExecution.Run(goal, state, RepositoryAcceptanceGate, RepositoryTupleLanding,
             () => RunInlineLandingSourceSizePreflight(goal) ?? _runAcceptanceVerification(goal, null, null, CancellationToken.None, SoloLandingGateExecutionOptions.Create(goal)),
-            () => _land(goal, policy), () => LandingMutationBlocker?.Invoke() is { Length: > 0 } blocked
-                ? blocked : InFlightTrainLandingHold.Describe(goal.Id, GetActiveAcceptanceCohortCapacity()), () => _clearAcceptanceFailure(goal),
+            () => _land(goal, policy), () => HomeLandingAdmissibility.Evaluate(_cohortKernel ?? _conductorTickKernel, goal, _cohortWorkspace),
+            () => LandingMutationBlocker?.Invoke() is { Length: > 0 } blocked ? blocked : InFlightTrainLandingHold.Describe(goal.Id, GetActiveAcceptanceCohortCapacity()), () => _clearAcceptanceFailure(goal),
             home => { SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, home.ChangedFiles ?? [], home.MergeCommitSha)); _afterSuccessfulLanding(goal, home); });
         if (result.Hold is { } held) return MakeResult(goal.Id.Value, prefix, policy, held);
         if (result.Failure is { } failure)
