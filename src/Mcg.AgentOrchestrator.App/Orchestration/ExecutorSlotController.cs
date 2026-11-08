@@ -38,8 +38,9 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
                         RemoteExecutorHealthLedger.ResolveStorePath(hostRoot), executor.Id, now.AddHours(-settings.LookbackHours), now)
                         : readSamples(executor.Id, now.AddHours(-settings.LookbackHours), now))
                         .OrderBy(s => s.AttemptId, StringComparer.Ordinal).ThenBy(s => s.ObservedAt).ToArray();
+                    // Expiry only removes evidence; only arrivals or corrections bypass the interval.
                     if (_evaluated.TryGetValue(executor.Id, out var last) && now - last.At < TimeSpan.FromSeconds(60) &&
-                        samples.SequenceEqual(last.Samples)) continue;
+                        !samples.Except(last.Samples).Any()) continue;
                     var result = EvaluateExecutor(executor, _previous.GetValueOrDefault(executor.Id), settings, now, samples);
                     lines.Add(result.Line);
                     if (result.Succeeded) _evaluated[executor.Id] = (now, samples);

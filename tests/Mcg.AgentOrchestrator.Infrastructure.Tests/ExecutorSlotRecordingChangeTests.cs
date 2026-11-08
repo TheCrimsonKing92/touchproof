@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: every test owns its temporary host and injected clock.
@@ -39,6 +40,49 @@ public sealed class ExecutorSlotRecordingChangeTests
         Assert.Contains("recorded=no", Assert.Single(controller.Evaluate()));
         Assert.Single(File.ReadAllLines(fixture.LedgerPath));
         Assert.Single(fixture.DecisionEvents);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void SampleExpiry_WithoutArrival_WaitsForEvaluationInterval(int retainedCount)
+    {
+        using var fixture = new ExecutorSlotControllerFixture();
+        fixture.Settings = fixture.Settings with { LookbackHours = 1, MinimumSoloSamples = 5 };
+        var healthPath = RemoteExecutorHealthLedger.ResolveStorePath(fixture.Root);
+        var binding = new RemoteLaneBinding("exec", "lane", "commit", "tree", "main", "filter", "manifest");
+        RemoteExecutorHealthLedger.Append(healthPath, new(fixture.Now.AddHours(-1).AddSeconds(5),
+            "exec", "expiring", "lane", RemoteLaneOutcomeCode.Accepted, null, binding, binding,
+            GoalId: "goal", RemoteDurationSeconds: 10));
+        if (retainedCount == 1)
+            RemoteExecutorHealthLedger.Append(healthPath, new(fixture.Now.AddMinutes(-1),
+                "exec", "retained", "lane", RemoteLaneOutcomeCode.Accepted, null, binding, binding,
+                GoalId: "goal", RemoteDurationSeconds: 10));
+        // Use the production reader: the clock alone removes outcomes from its lookback.
+        var controller = new ExecutorSlotController(fixture.Root, fixture.ConfigurationPath,
+            new ExecutorSettingIntentHandler(fixture.ConfigurationPath, fixture.EventsPath),
+            new ConductEventLogWriter(fixture.EventsPath), () => fixture.Settings, utcNow: () => fixture.Now);
+        Assert.Contains("recorded=first", Assert.Single(controller.Evaluate()));
+        Assert.Equal(retainedCount + 1, fixture.Latest.Decision.TotalSamples);
+        var initialId = fixture.Latest.EvaluationId;
+
+        fixture.Now = fixture.Now.AddSeconds(10);
+        Assert.Equal(retainedCount, ExecutorSlotSampleReader.Read(healthPath, "exec",
+            fixture.Now.AddHours(-1), fixture.Now).Count);
+        Assert.Empty(controller.Evaluate());
+        fixture.Now = fixture.Now.AddSeconds(49);
+        Assert.Empty(controller.Evaluate());
+        Assert.Single(File.ReadAllLines(fixture.LedgerPath));
+        Assert.Single(fixture.DecisionEvents);
+        Assert.Equal(initialId, fixture.Latest.EvaluationId);
+
+        fixture.Now = fixture.Now.AddSeconds(1);
+        Assert.Contains("recorded=change", Assert.Single(controller.Evaluate()));
+        Assert.Equal(retainedCount, fixture.Latest.Decision.TotalSamples);
+        Assert.Equal(fixture.Now, fixture.Latest.ObservedAt);
+        Assert.NotEqual(initialId, fixture.Latest.EvaluationId);
+        Assert.Equal(2, File.ReadAllLines(fixture.LedgerPath).Length);
+        Assert.Equal(2, fixture.DecisionEvents.Length);
     }
 
     [Fact]
