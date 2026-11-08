@@ -74,11 +74,12 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
                 }
             }
             var persistedState = state ?? new ExecutorSlotControllerState(executor.Slots, settings);
+            var beforeTransition = application == "pending-handler" ? persistedState : null;
             // Holds/keep progress without a setting write. Busy/pinned transitions never begin a trial.
-            // An authorized transition stores its proposal once; restore reconciles it with the actual setting.
+            // Pending transitions retain their committed state as well as the proposal for recovery.
             if ((!transition || application == "pending-handler") && !decision.Pinned) persistedState = decision.NextState;
             var row = new ExecutorSlotDecisionRecord(Guid.NewGuid().ToString("n"), now, executor.Id,
-                settings, decision, persistedState, application);
+                settings, decision, persistedState, application, BeforeTransitionState: beforeTransition);
             Exception? ledgerFailure = null;
             try
             {
