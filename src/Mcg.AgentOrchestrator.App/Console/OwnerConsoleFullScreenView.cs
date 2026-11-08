@@ -17,7 +17,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly IKeyboard? _keyboard;
     private readonly OwnerConsoleInputDiagnostics? _diagnostics;
     private readonly Func<Task> _refresh;
-    private readonly OwnerConsoleBoardSource? _boardSource;
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
     private readonly OwnerConsoleNoticeExpiry _noticeExpiry;
@@ -44,8 +43,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
-    private readonly TimeProvider _clock;
-    private readonly TimeSpan _refreshInterval;
     private bool _editingCommand;
     private string? _completionHint;
     private bool _acting;
@@ -57,13 +54,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public bool ActionRunning => _acting || _operation.IsRunning;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
-    public DataTable BoardTable { get; } = CreateBoardTable();
+    public DataTable BoardTable { get; } = OwnerConsoleFullScreenComposer.CreateBoardTable();
     internal string StatusText => _status.Text;
     internal OwnerConsoleNoticeStrip NoticeStrip { get; }
     internal string NoticeText => _notice.Text;
     public TextField CommandLine => _command;
     public TableView BoardPane => _board;
-    private readonly OwnerConsoleClipboard _clipboard;
     public OwnerConsoleFieldSnapshot? SelectedBoardFields => _selection.Fields;
     public ListView DecisionsPane => _decisions;
     public ListView ActivityPane => _activity;
@@ -72,7 +68,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public IReadOnlyList<string> ActivityLines => _activityPane.Lines;
     public string? SelectedGoalId => _selection.GoalId;
     public string? SelectedProject => _selection.Project;
-    private OwnerConsoleBoardRow? SelectedBoardRow => _selection.Row;
+    internal OwnerConsoleBoardRow? SelectedBoardRow => _selection.Row;
     public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
@@ -100,60 +96,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _activity = _activityPane.List;
         if (projectLabel is not null) Window.Title = $"Owner console - {projectLabel}";
         _app = app;
-        _clipboard = clipboard ?? OwnerConsoleClipboard.For(app);
         _diagnostics = diagnostics;
         _controller = controller;
         _refresh = refresh;
-        _boardSource = boardSource;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _token = _lifetime.Token;
-        _clock = clock ?? TimeProvider.System;
-        NoticeStrip = new(_clock);
-        _refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
-        if (_refreshInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(options), "Refresh interval must be positive.");
-        _noticeExpiry = new(_clock, Invoke, RenderNotices, _token);
-        _operation = new(_clock,
-            label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
-            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
-            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
-        _layout = new(_decisions, _decisionsPane.EmptyLabel, _board, _activity);
-        _renderCoordinator = new(_layout, _decisionsPane, _board, _activityPane, BoardTable, _controller, NoticeStrip,
-            _notice, _status, _statusPresenter, _clock, _refreshInterval, app, _noticeExpiry, _token, () => _state.RefreshedAt, () => _working.Values);
-        _previewPane = new(_layout.PreviewFrame, _clock, controller.LoadGoalSummaryAsync, Invoke,
-            () => SelectedBoardRow, id => _controller.Model?.Board.FirstOrDefault(row =>
-                row.Project == SelectedProject && row.GoalId == id), _token);
-        _trace = new(this, app, Window, controller, diagnostics);
-        _selection = new(this, controller, _previewPane, _board, BoardTable, diagnostics, _trace.State, () => _state.SelectedFieldKey);
-        _paneRenderer = new(_state, _controller, _diagnostics, _trace, _collapse, _clock, _renderCoordinator,
-            _selection, _layout, _board, _decisionsPane, _activityPane, _previewPane, RenderHints,
-            GateView, Window, BoardTable, NoticeStrip);
-        _board.Table = new DataTableSource(BoardTable);
-        _epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
-        _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
-        _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
-        EpicView = new(controller, Invoke, token);
-        _layout.Compose(Window, _status, _notice, _hints, _epicHint, _command, EpicView, GateView);
-        new OwnerConsoleFullScreenWiring(
-            _previewPane.Body, _notice, _status, _decisions, _board, _activity, _command, _activityPane,
-            _controller, _diagnostics, _trace.State,
-            _state, value => _selection.CopyValid = value,
-            () => _completionHint, value => _completionHint = value,
-            RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, _paneRenderer.RenderDecisions,
-            index => SelectBoard(index), PaneFocusChanged, Fit, ActivityRow).Attach();
-        RenderHints();
-        _keys = new(this, app, Window, new(this, _controller, _operation, _clipboard, _collapse, _token),
-            diagnostics, _trace.State, _token);
-        _bindingRunner = new(this, _controller, _operation, _boardSource is null ? null : _boardSource.HandleScope, _refresh, _token);
-        _keyboard = app.Initialized ? app.Keyboard : null;
-        if (_keyboard is not null) _keyboard.KeyDown += _keys.OnKeyDown;
-        if (_diagnostics is not null) _app.LayoutAndDrawComplete += _trace.OnLayoutAndDrawComplete;
-    }
-
-    private static DataTable CreateBoardTable()
-    {
-        var table = new DataTable();
-        foreach (var name in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" }) table.Columns.Add(name);
-        return table;
+        (NoticeStrip, _noticeExpiry, _operation, _layout, _renderCoordinator, _previewPane, _trace, _selection, _paneRenderer, EpicView) =
+            OwnerConsoleFullScreenComposer.Build(this, app, controller, token, _token, clock ?? TimeProvider.System, options, diagnostics,
+                _decisionsPane, _activityPane, _board, _notice, _status, _hints, _epicHint, _statusPresenter, _state, _working, _collapse);
+        (_keys, _bindingRunner, _keyboard) = OwnerConsoleFullScreenComposer.Attach(this, app, controller, refresh, _token,
+            diagnostics, boardSource, clipboard, _layout, _previewPane, _trace, _selection, _paneRenderer, _operation,
+            _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
     }
 
     internal void Render(OwnerConsoleViewModel model) => _paneRenderer.Render(model);
@@ -181,12 +134,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     }
 
     public void ShowNotice(string message, OwnerConsoleNoticeSeverity severity, OwnerConsoleNoticeSource source) => _renderCoordinator.ShowNotice(message, severity, source);
-    private void RenderNotices() => _renderCoordinator.RenderNotices();
-    private void RenderStatus() => _renderCoordinator.RenderStatus();
+    internal void RenderNotices() => _renderCoordinator.RenderNotices();
+    internal void RenderStatus() => _renderCoordinator.RenderStatus();
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
     internal void RefreshStatus() => _renderCoordinator.RefreshStatus();
 
-    private int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
+    internal int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
     public void FollowLatest()
     {
         _state.Rendering = true;
@@ -250,7 +203,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         RenderHints();
     }
 
-    private void PaneFocusChanged(View view, OwnerConsolePane pane)
+    internal void PaneFocusChanged(View view, OwnerConsolePane pane)
     {
         if (view.HasFocus) _focusedPane = pane;
         RenderHints();
@@ -265,11 +218,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
         _selection.Select(index, refresh, direction, allowHeader);
 
-    private void RenderPreview() => _previewPane.Render();
+    internal void RenderPreview() => _previewPane.Render();
 
     public bool RefuseSelectedBoardRow() => _selection.Refuse();
 
-    private void Invoke(Action action)
+    internal void Invoke(Action action)
     {
         if (_app.Initialized && _diagnostics is not null)
         {
