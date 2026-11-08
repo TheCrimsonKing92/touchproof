@@ -40,8 +40,7 @@ if not defined ADOPTED_COMMIT goto intree_path
 if not defined ADOPTED_DLL goto intree_path
 if not exist "%ADOPTED_DLL%" goto intree_path
 set "MCG_CLI_LAUNCHER_PATH=fast"
-"%DOTNET_HOST%" "%ADOPTED_DLL%" %*
-exit /b %ERRORLEVEL%
+"%DOTNET_HOST%" "%ADOPTED_DLL%" %* & exit /b
 
 :selected_cache_path
 if "%~2"=="" goto invalid_cache_option
@@ -154,11 +153,9 @@ if not defined RUNDIR (
     exit /b 1
 )
 if defined RUNTIME_CACHE_ROOT goto run_selected_cache
-"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %*
-exit /b %ERRORLEVEL%
+"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %* & exit /b
 :run_selected_cache
-"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %NATIVE_ARGS%
-exit /b %ERRORLEVEL%
+"%DOTNET_HOST%" "%RUNDIR%\Mcg.AgentOrchestrator.App.dll" %NATIVE_ARGS% & exit /b
 
 :build_failed
 if not exist "%APP_DLL%" goto show_build_error
