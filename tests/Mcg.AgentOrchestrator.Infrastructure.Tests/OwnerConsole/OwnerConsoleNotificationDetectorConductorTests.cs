@@ -12,8 +12,9 @@ public sealed class OwnerConsoleNotificationDetectorConductorTests
         var running = Model(true);
         var stopped = Model(false);
         Assert.Empty(detector.Detect(null, running, Now, OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
-        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(1), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
+        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(stopped, stopped, Now.AddMinutes(1), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
         Assert.Empty(new OwnerConsoleNotificationDetector(new()).Detect(null, stopped, Now, OwnerConsoleBellTiers.All));
     }
 
@@ -44,8 +45,9 @@ public sealed class OwnerConsoleNotificationDetectorConductorTests
         var older = Model(true, Now.AddMinutes(-20));
         Assert.Empty(detector.Detect(stale, older, Now.AddMinutes(4), OwnerConsoleBellTiers.All));
         var stopped = Model(false, Now.AddMinutes(-20));
-        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(older, stopped, Now.AddMinutes(5), OwnerConsoleBellTiers.All));
-        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(6), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(older, stopped, Now.AddMinutes(5), OwnerConsoleBellTiers.All));
+        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(stopped, stopped, Now.AddMinutes(6), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(7), OwnerConsoleBellTiers.All));
     }
 
     [Fact]
@@ -59,7 +61,8 @@ public sealed class OwnerConsoleNotificationDetectorConductorTests
         Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(fresh, fresh, Now.AddMinutes(16), OwnerConsoleBellTiers.All));
         var missing = Model(true);
         Assert.Empty(detector.Detect(fresh, missing, Now.AddMinutes(17), OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(missing, Model(false), Now.AddMinutes(18), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(missing, Model(false), Now.AddMinutes(18), OwnerConsoleBellTiers.All));
+        Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(Model(false), Model(false), Now.AddMinutes(19), OwnerConsoleBellTiers.All));
     }
 
     [Fact]

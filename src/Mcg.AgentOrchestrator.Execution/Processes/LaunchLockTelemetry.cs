@@ -126,10 +126,57 @@ internal sealed class LaunchLockCounters
     }
 }
 
+internal sealed record LaunchLockClassSnapshot(string Key, long Launches, long CreateTicksTotal, long[] ByEntry);
+
+// Optional process-lifetime attribution. Tests use private instances rather than changing the live provider.
+internal sealed class LaunchLockAttribution
+{
+    private Func<string?>? provider;
+    private readonly ConcurrentDictionary<string, ClassCounters> counters = new(StringComparer.Ordinal);
+
+    internal void SetProvider(Func<string?>? value) => Volatile.Write(ref provider, value);
+
+    internal void Record(LaunchLockEntryPoint entry, long createTicks)
+    {
+        var currentProvider = Volatile.Read(ref provider);
+        if (currentProvider is null) return;
+        string? key;
+        try { key = currentProvider(); }
+        catch { return; } // Diagnostics must never prevent a process launch.
+        if (key is null) return;
+        counters.GetOrAdd(key, static _ => new ClassCounters()).Record(entry, createTicks);
+    }
+
+    internal IReadOnlyList<LaunchLockClassSnapshot> Snapshot() =>
+        counters.Select(pair => pair.Value.Snapshot(pair.Key)).ToArray();
+
+    private sealed class ClassCounters
+    {
+        private readonly long[] byEntry = new long[Enum.GetValues<LaunchLockEntryPoint>().Length];
+        private long launches;
+        private long createTicksTotal;
+
+        internal void Record(LaunchLockEntryPoint entry, long createTicks)
+        {
+            Interlocked.Increment(ref byEntry[(int)entry]);
+            Interlocked.Add(ref createTicksTotal, Math.Max(0, createTicks));
+            Interlocked.Increment(ref launches);
+        }
+
+        internal LaunchLockClassSnapshot Snapshot(string key)
+        {
+            var entries = new long[byEntry.Length];
+            for (var i = 0; i < entries.Length; i++) entries[i] = Interlocked.Read(ref byEntry[i]);
+            return new(key, Interlocked.Read(ref launches), Interlocked.Read(ref createTicksTotal), entries);
+        }
+    }
+}
+
 internal static class LaunchLockTelemetry
 {
     private static readonly AsyncLocal<Capture?> ActiveCapture = new();
     internal static LaunchLockCounters Process { get; } = new();
+    internal static LaunchLockAttribution Attribution { get; } = new();
 
     internal static Capture BeginCapture()
     {
@@ -139,8 +186,13 @@ internal static class LaunchLockTelemetry
     }
 
     internal static void Record(LaunchLockEntryPoint entry, long waitTicks, long holdTicks, long createTicks = 0)
+        => RecordInto(Process, Attribution, entry, waitTicks, holdTicks, createTicks);
+
+    internal static void RecordInto(LaunchLockCounters process, LaunchLockAttribution attribution,
+        LaunchLockEntryPoint entry, long waitTicks, long holdTicks, long createTicks = 0)
     {
-        Process.Record(entry, waitTicks, holdTicks, createTicks);
+        process.Record(entry, waitTicks, holdTicks, createTicks);
+        attribution.Record(entry, createTicks);
         var capture = ActiveCapture.Value;
         if (capture is not null)
         {
@@ -166,6 +218,28 @@ internal static class LaunchLockTelemetry
                $"hold_ms_total={Ms(snapshot.HoldTicksTotal)} hold_p50_ms={Ms(snapshot.HoldP50Ticks)} " +
                $"hold_p95_ms={Ms(snapshot.HoldP95Ticks)} hold_max_ms={Ms(snapshot.HoldMaxTicks)} " +
                $"create_ms_total={Ms(snapshot.CreateTicksTotal)} by_entry={byEntry}";
+    }
+
+    internal static IEnumerable<string> FormatTeardownLines(
+        LaunchLockSnapshot snapshot, LaunchLockAttribution? attribution, int processId)
+    {
+        yield return FormatSummary(snapshot, processId);
+        if (attribution is not null)
+            foreach (var line in FormatByClass(attribution.Snapshot(), processId)) yield return line;
+    }
+
+    internal static IEnumerable<string> FormatByClass(IReadOnlyList<LaunchLockClassSnapshot> snapshots, int processId)
+    {
+        foreach (var snapshot in snapshots.OrderByDescending(row => row.Launches)
+                     .ThenBy(row => row.Key, StringComparer.Ordinal).Take(50))
+        {
+            var key = snapshot.Key.Length == 0 ? "(none)" :
+                new string(snapshot.Key.Select(character => char.IsWhiteSpace(character) ? '_' : character).ToArray());
+            var byEntry = string.Join(',', Enum.GetValues<LaunchLockEntryPoint>().Select((entry, index) =>
+                $"{entry}:{snapshot.ByEntry[index].ToString(CultureInfo.InvariantCulture)}"));
+            yield return FormattableString.Invariant(
+                $"LAUNCH_LOCK_BY_CLASS pid={processId} class={key} launches={snapshot.Launches} create_ms_total={snapshot.CreateTicksTotal * 1000.0 / Stopwatch.Frequency:F3} by_entry={byEntry}");
+        }
     }
 
     internal sealed class Capture(Capture? previous) : IDisposable

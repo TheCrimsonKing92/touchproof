@@ -1,8 +1,11 @@
+using System.Globalization;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceLaunchLockSummary
 {
     private const string LaunchLockSummaryPrefix = "LAUNCH_LOCK_SUMMARY ";
+    private const string ByClassPrefix = "LAUNCH_LOCK_BY_CLASS ";
 
     internal static void Preserve(
         string output,
@@ -45,6 +48,24 @@ internal static class AcceptanceLaunchLockSummary
         }
 
         Directory.CreateDirectory(attemptDirectory);
-        File.WriteAllText(summaryPath, summary + Environment.NewLine);
+        var lines = new List<string> { summary };
+        if (TryReadPid(summary, out var processId))
+        {
+            using var classReader = new StringReader(selectedOutput);
+            while (classReader.ReadLine() is { } line)
+                if (line.StartsWith(ByClassPrefix, StringComparison.Ordinal) &&
+                    TryReadPid(line, out var classProcessId) && classProcessId == processId)
+                    lines.Add(line);
+        }
+        File.WriteAllText(summaryPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
+    }
+
+    private static bool TryReadPid(string line, out int processId)
+    {
+        foreach (var token in line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            if (token.StartsWith("pid=", StringComparison.Ordinal))
+                return int.TryParse(token.AsSpan(4), NumberStyles.None, CultureInfo.InvariantCulture, out processId);
+        processId = 0;
+        return false;
     }
 }
