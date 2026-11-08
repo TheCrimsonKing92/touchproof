@@ -1,7 +1,9 @@
+using System.Drawing;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
+using Terminal.Gui.Views;
 
 // Parallel-safe: instance application without terminal initialization or global drivers.
 public sealed class OwnerConsoleFullScreenPaneTests
@@ -411,6 +413,42 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Contains("Shift+Tab: Previous pane (ACTIVITY, BOARD, DECISIONS).", lines);
         foreach (var command in OwnerConsoleKeyHints.Commands)
             Assert.Contains(lines, line => line.StartsWith(":" + command.Command + ":", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RenderCoordinator_OverflowAndNotice_PreserveExactText()
+    {
+        var clock = new OwnerConsoleTestClock();
+        var harness = new OwnerConsoleHarness(clock);
+        for (var index = 0; index < 20; index++)
+        {
+            var id = index.ToString("D8");
+            harness.AddGoal(id, "Goal " + index, AgentRole.Developer);
+            harness.Questions.Items.Add(new("q" + index, id, OwnerQuestionKind.HumanInput, "Question " + index));
+        }
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, new Dialogs()),
+            () => Task.CompletedTask, clock: clock);
+        view.Render(await Model(harness));
+
+        foreach (var pane in new[] { view.DecisionsPane, view.ActivityPane })
+        {
+            Assert.IsType<FrameView>(pane.SuperView).Frame = new Rectangle(0, 0, 200, 7);
+            pane.Frame = new Rectangle(0, 0, 200, 5);
+        }
+        var headers = 1 + (view.BoardPane.Style.ShowHorizontalHeaderOverline ? 1 : 0) +
+            (view.BoardPane.Style.ShowHorizontalHeaderUnderline ? 1 : 0);
+        Assert.IsType<FrameView>(view.BoardPane.SuperView).Frame = new Rectangle(0, 0, 200, 7 + headers);
+        view.BoardPane.Frame = new Rectangle(0, 0, 200, 5 + headers);
+        view.RenderOverflow();
+        view.ShowNotice("render coordinator notice", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+
+        Assert.Equal("conductor: running | active: 20 | decisions: 20 | last event: unknown | landed today: 0 | bell: on | refreshed 00:05:00", view.StatusText);
+        Assert.Equal("00:05:00 render coordinator notice", view.NoticeText);
+        Assert.Equal("DECISIONS · 15 below", view.PaneTitle(OwnerConsolePane.Decisions));
+        Assert.Equal("BOARD · 15 below", view.PaneTitle(OwnerConsolePane.Board));
+        Assert.Equal(20, view.ActivityLines.Count);
+        Assert.Equal("ACTIVITY · following · 15 below", view.PaneTitle(OwnerConsolePane.Activity));
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs, IGoalEventTail? tail = null) =>
