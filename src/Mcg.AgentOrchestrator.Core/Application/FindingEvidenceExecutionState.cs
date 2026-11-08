@@ -91,7 +91,9 @@ public static class FindingEvidenceExecutionClassifier
         };
         identity = request.RevertPaths is null ? identity : identity + "|revert_paths=" +
             System.Text.Json.JsonSerializer.Serialize(FindingEvidenceRevertPaths.Canonicalize(request.RevertPaths));
-        return request.Mutation is null ? identity : identity + "|mutation=" + FindingEvidenceMutation.IdentityJson(request.Mutation);
+        identity = request.Mutation is null ? identity : identity + "|mutation=" + FindingEvidenceMutation.IdentityJson(request.Mutation);
+        return request.Repository is null ? identity : identity + "|repository=" +
+            System.Text.Json.JsonSerializer.Serialize(request.Repository);
     }
 
     /// <summary>

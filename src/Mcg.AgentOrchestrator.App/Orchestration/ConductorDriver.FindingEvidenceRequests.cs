@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private bool TryBuildFindingEvidenceRequest(
+    internal bool TryBuildFindingEvidenceRequest(
         Goal goal,
         TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
@@ -102,31 +102,44 @@ internal sealed partial class ConductorDriver
 
         var preTesterCoverage = PreTesterCoverageComposition.ReadCoverage(this, goal, telemetryCandidateSha, executionBasisIdentity);
         var groups = new List<FindingEvidenceRequestGroup>();
+        var repositoryTargets = new Dictionary<string, KeyedRepositoryEvidenceTarget>(StringComparer.Ordinal);
+        var resolvedTargets = new Dictionary<string, (KeyedRepositoryEvidenceTarget? Target, string Failure)>(StringComparer.OrdinalIgnoreCase);
+        (KeyedRepositoryEvidenceTarget? Target, string Failure) ResolveTarget(Goal requestedGoal, string key)
+        {
+            if (!resolvedTargets.TryGetValue(key, out var resolved))
+                resolvedTargets[key] = resolved = ResolveKeyedEvidenceTarget(requestedGoal, key);
+            return resolved;
+        }
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
         var reattachedReceiptIds = new List<string>();
         foreach (var finding in requestingFindings)
         {
-            if (!TryNormalizeFindingEvidenceRequest(
-                    finding.EvidenceRequest!, findingEvidenceEngineSettings,
+            if (!FindingEvidenceRequestNormalization.TryNormalizeForGoal(
+                    finding.EvidenceRequest!, goal, findingEvidenceEngineSettings, ResolveTarget,
                     (project, requestedClass) =>
                         _resolveFindingEvidenceSiblingClasses(goal, project, requestedClass),
-                    out var typedRequest, out var request,
+                    out var typedRequest, out var request, out var repositoryTarget,
                     out var refusalReason, out var refusalDetail))
             {
                 normalizationRefused = true;
                 RecordNotHonoured(
-                    goal.Id, requestingTask, finding, refusalReason, refusalDetail, telemetryCandidateSha, findingEvidenceEngineSettings);
+                    goal.Id, requestingTask, finding, refusalReason, refusalDetail,
+                    repositoryTarget?.CandidateHead ?? telemetryCandidateSha,
+                    repositoryTarget?.EngineSettings ?? findingEvidenceEngineSettings);
                 continue;
             }
 
             var identity = BuildFindingEvidenceIdentity(typedRequest);
+            var requestCandidateSha = repositoryTarget?.CandidateHead ?? telemetryCandidateSha;
+            var requestSettings = repositoryTarget?.EngineSettings ?? findingEvidenceEngineSettings;
+            if (repositoryTarget is not null) repositoryTargets[identity] = repositoryTarget;
             IReadOnlyList<FindingEvidenceReceipt> reusedSourceReceipts = [];
             string? coverageDecisionReason = null;
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             var priorOutcome = mergedFinding?.EvidenceOutcome;
-            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome) && FocusedEvidenceInventoryIdentity.StillBinds(priorOutcome, findingEvidenceEngineSettings))
+            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome) && FocusedEvidenceInventoryIdentity.StillBinds(priorOutcome, requestSettings))
             {
                 continue;
             }
@@ -136,14 +149,14 @@ internal sealed partial class ConductorDriver
                         requestingTask,
                         mergedFinding,
                         typedRequest,
-                        telemetryCandidateSha,
+                        requestCandidateSha,
                         findingRoundFingerprint,
                         executionBasisIdentity))
             {
                 continue;
             }
 
-            if (PreTesterCoverageComposition.TryResumeRemainder(this, goal, requestingTask, telemetryCandidateSha,
+            if (repositoryTarget is null && PreTesterCoverageComposition.TryResumeRemainder(this, goal, requestingTask, telemetryCandidateSha,
                     findingRoundFingerprint, identity, executionBasisIdentity, typedRequest, out var pendingRemainder, out var pendingSources))
             {
                 typedRequest = pendingRemainder;
@@ -151,7 +164,7 @@ internal sealed partial class ConductorDriver
                 reusedSourceReceipts = pendingSources;
                 coverageDecisionReason = pendingSources.Count == 0 ? "pre-tester-authority-missing" : "partial";
             }
-            else if (typedRequest.NegativeControl is null && TryResolveFindingEvidenceCoverage(
+            else if (repositoryTarget is null && typedRequest.NegativeControl is null && TryResolveFindingEvidenceCoverage(
                     requestingTask,
                     typedRequest,
                     telemetryCandidateSha,
@@ -174,7 +187,7 @@ internal sealed partial class ConductorDriver
                 coverageDecisionReason = coverageReason;
             }
 
-            if (!FindingRoundRedCoverage.HasCompletedRedRequest(requestingTask, finding, typedRequest, identity,
+            if (repositoryTarget is null && !FindingRoundRedCoverage.HasCompletedRedRequest(requestingTask, finding, typedRequest, identity,
                     telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline) &&
                 TryRouteReusableRedFindingEvidence(
                     goal, requestingTask, finding, typedRequest, request, identity,
@@ -217,6 +230,33 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
+        var homeGroups = groups.Where(group => !repositoryTargets.ContainsKey(group.Identity)).ToArray();
+        if (homeGroups.Length > 0 && TryExecuteFindingEvidenceGroups(goal, requestingTask, policy, homeGroups,
+                requestingFindings, candidateSha, findingRoundFingerprint, executionBasisIdentity, findingEvidenceEngineSettings,
+                null, out decision))
+            return true;
+        foreach (var partition in groups.Where(group => repositoryTargets.ContainsKey(group.Identity))
+                     .GroupBy(group => repositoryTargets[group.Identity].Key).OrderBy(partition => partition.Key, StringComparer.Ordinal))
+        {
+            var target = repositoryTargets[partition.First().Identity];
+            if (TryExecuteFindingEvidenceGroups(goal, requestingTask, policy, partition.ToArray(),
+                    partition.SelectMany(group => group.Findings).ToArray(), target.CandidateHead,
+                    findingRoundFingerprint, executionBasisIdentity, target.EngineSettings, target, out decision))
+                return true;
+        }
+        return false;
+    }
+
+    private bool TryExecuteFindingEvidenceGroups(
+        Goal goal, TaskSpec requestingTask, ConductorAutonomyPolicy policy,
+        IReadOnlyList<FindingEvidenceRequestGroup> groups, IReadOnlyList<ReviewFinding> requestingFindings,
+        string? candidateSha, string findingRoundFingerprint, string executionBasisIdentity,
+        AcceptanceGateEngineSettings findingEvidenceEngineSettings, KeyedRepositoryEvidenceTarget? repositoryTarget,
+        out FailedGoalFindingObservation decision)
+    {
+        decision = FailedGoalFindingObservation.None;
+        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
+        var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
         var plan = FindingRoundBatchSchedule.Plan(PreTesterCoverageComposition.BindExecutionIdentities(
                 FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups)),
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
@@ -277,7 +317,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        if (!_focusedEvidenceRunnerConfigured)
+        if (repositoryTarget is null && !_focusedEvidenceRunnerConfigured)
         {
             foreach (var group in batches)
             foreach (var finding in group.Findings)
@@ -297,7 +337,8 @@ internal sealed partial class ConductorDriver
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
-            initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths, Mutation: runnable.TypedRequest.Mutation);
+            initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths,
+            Mutation: runnable.TypedRequest.Mutation, RepositoryTarget: repositoryTarget);
         if (TryResumeUnconfirmedCandidateRed(
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision))
@@ -558,64 +599,9 @@ internal sealed partial class ConductorDriver
         Goal goal,
         string candidateSha,
         IReadOnlyList<FindingEvidenceArmReceipt> arms,
-        FindingEvidenceBatch batch)
-    {
-        var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
-        var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
-        if (candidate is not { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red,
-                FailingTestIdentities.Count: > 0 } ||
-            !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-            (baseline is null &&
-                !EveryFailingTestIsInsideCandidateChanges(goal, batch, candidate.FailingTestIdentities)))
-        {
-            return null;
-        }
-
-        var (failures, baselineFailures) = CandidateRedBaselineInheritance.AttributableFailures(candidate, baseline);
-        if (failures is null)
-        {
-            return null;
-        }
-        var attributableFindings = new List<ReviewFinding>();
-        var attributableFailingTests = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var member in batch.Members)
-        {
-            var matchingFailures = batch.Members.Count == 1
-                ? failures
-                : failures
-                    .Where(failingIdentity => member.TypedRequest.Selections.Any(selection =>
-                        FindingEvidenceFailureSelectionMatch.Matches(failingIdentity, selection.TestClass.Trim())))
-                    .ToArray();
-            if (matchingFailures is not { Count: > 0 })
-            {
-                continue;
-            }
-
-            var developerFindings = member.Findings.Where(finding =>
-                finding.Category is not (
-                    FindingCategory.OperatorOwned or
-                    FindingCategory.SpecDefect or
-                    FindingCategory.AcceptanceOwned) &&
-                IsDeveloperOwnedFindingAnchor(finding.Location.File));
-            foreach (var finding in developerFindings)
-            {
-                attributableFindings.Add(finding);
-                attributableFailingTests.UnionWith(matchingFailures);
-            }
-        }
-
-        return attributableFindings.Count == 0
-            ? null
-            : new ActionableCandidateRedAttribution(
-                attributableFindings.DistinctBy(finding => finding.StableId).ToArray(),
-                attributableFailingTests.ToArray(), candidate.TestResultPaths ?? [], baselineFailures);
-    }
-
-    private static bool IsDeveloperOwnedFindingAnchor(string path) =>
-        RepositoryOwnershipMap.Classify(path).Area is
-            RepositoryOwnershipArea.Source or
-            RepositoryOwnershipArea.Test or
-            RepositoryOwnershipArea.SharedInfrastructure;
+        FindingEvidenceBatch batch) =>
+        FindingEvidenceCandidateAttribution.TryAttribute(candidateSha, arms, batch,
+            failures => EveryFailingTestIsInsideCandidateChanges(goal, batch, failures));
 
     internal static string CreateFindingEvidenceReceiptId(
         string candidateSha,
