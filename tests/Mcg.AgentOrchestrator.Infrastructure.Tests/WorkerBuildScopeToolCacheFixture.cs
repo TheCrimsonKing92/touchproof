@@ -3,66 +3,101 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// All processes, caches, logs and event names belong to this fixture. The only
-// real cold builds are the seed and corrupt-entry repair in the integration test.
+// Exercise the real helper/cache scripts with a tiny home and a recorded dotnet
+// command. No scope-tool compilation or candidate project closure is needed.
 internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
 {
     internal string Parent { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp", "sc-" + Guid.NewGuid().ToString("N"));
     internal string Candidate { get; } = VerifiedRepositoryRoot.Find();
     internal string Cache => Path.Combine(Parent, "cache");
-    internal string Shim => Path.Combine(Parent, "shim");
-    private readonly string _dotnet;
+    internal string Home => Path.Combine(Parent, "home");
+    internal string Stub => Path.Combine(Parent, "dotnet.ps1");
 
     internal WorkerBuildScopeToolCacheFixture()
     {
-        Directory.CreateDirectory(Shim);
-        var lookup = Run(Shell(Candidate, "-Command", "@(Get-Command dotnet -CommandType Application)[0].Source"));
-        Assert.True(lookup.ExitCode == 0, lookup.Stdout + lookup.Stderr);
-        _dotnet = lookup.Stdout.Trim();
-        Assert.True(File.Exists(_dotnet), "Real dotnet executable was not resolved: " + _dotnet);
-        File.WriteAllText(Path.Combine(Shim, "dotnet.cmd"), """
-            @echo off
-            set "CACHE_RAW=%*"
-            if "%~1"=="--version" goto real
-            if not "%CACHE_RAW:WorkerBuildScopeTool.dll=%"=="%CACHE_RAW%" goto real
-            if not "%CACHE_RAW:WorkerBuildScopeTool.csproj=%"=="%CACHE_RAW%" if "%CACHE_BUILD_MODE%"=="real" goto buildreal
-            "%CACHE_SHELL%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0shim.ps1"
-            exit /b %ERRORLEVEL%
-            :buildreal
-            "%CACHE_SHELL%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0shim.ps1" -LogOnly
-            if errorlevel 1 exit /b %ERRORLEVEL%
-            :real
-            "%CACHE_DOTNET%" %*
-            exit /b %ERRORLEVEL%
+        foreach (var relative in new[]
+        {
+            "scripts/Invoke-WorkerBuildCheck.ps1", "scripts/WorkerBuildScopeToolCache.ps1", "scripts/WorkerBuildReceipt.psm1",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs"
+        })
+        {
+            var destination = Path.Combine(Home, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(Candidate, relative), destination);
+        }
+        WriteHome("scripts/WorkerBuildScopeTool/WorkerBuildScopeTool.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../../src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj" /></ItemGroup></Project>
             """);
-        File.WriteAllText(Path.Combine(Shim, "shim.ps1"), """
-            param([switch]$LogOnly)
+        WriteHome("scripts/WorkerBuildScopeTool/Program.cs", "// Tiny scope tool fixture; dotnet is replaced at the process boundary.");
+        WriteHome("src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj", """
+            <Project><ItemGroup><ProjectReference Include="../Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj" /><ProjectReference Include="../Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" /></ItemGroup></Project>
+            """);
+        WriteHome("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project />");
+        WriteHome("src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj", "<Project />");
+        WriteHome("Directory.Build.props", "<Project />");
+        WriteHome("Directory.Build.targets", "<Project />");
+        WriteHome("Directory.Build.rsp", "-nodeReuse:false");
+        WriteHome("global.json", "{}");
+        WriteHome(".gitignore", "**/bin/\n**/obj/\n");
+        InitGit(Home);
+        File.WriteAllText(Stub, """
+            # Replace only the external command. Both production scripts and their
+            # git, validation, publication and receipt logic execute unchanged.
+            function global:dotnet {
+                $values = [string[]]@($args)
+                $global:LASTEXITCODE = 0
+                if ($values.Count -eq 1 -and $values[0] -eq '--version') { '10.0.100-fixture'; return }
+                [IO.File]::AppendAllText($env:CACHE_VECTOR_LOG, (ConvertTo-Json -InputObject $values -Compress) + "`n")
+                if ($values[0] -eq 'build' -and $values[1].EndsWith('WorkerBuildScopeTool.csproj')) {
+                    if ($env:CACHE_BUILD_MODE -eq 'fail') { $global:LASTEXITCODE = 9; return }
+                    if ($env:CACHE_BUILD_MODE -eq 'barrier') {
+                        $ready = [Threading.EventWaitHandle]::OpenExisting($env:CACHE_READY)
+                        $release = [Threading.EventWaitHandle]::OpenExisting($env:CACHE_RELEASE)
+                        try {
+                            [void]$ready.Set()
+                            if (-not $release.WaitOne(300000)) { throw 'Cache concurrent-build release event was not signaled.' }
+                        }
+                        finally { $ready.Dispose(); $release.Dispose() }
+                    }
+                    elseif ($env:CACHE_BUILD_MODE -ne 'stub') { throw 'Unknown scope build fixture mode.' }
+                    $index = [Array]::IndexOf($values, '--output')
+                    if ($index -lt 0) { throw 'Scope build omitted --output.' }
+                    $output = $values[$index + 1]
+                    [void][IO.Directory]::CreateDirectory($output)
+                    [IO.File]::WriteAllText((Join-Path $output 'WorkerBuildScopeTool.dll'), 'fixture scope-tool output v1')
+                    [IO.File]::WriteAllText((Join-Path $output 'WorkerBuildScopeTool.runtimeconfig.json'), '{}')
+                    [IO.File]::WriteAllText((Join-Path $output 'WorkerBuildScopeTool.deps.json'), '{}')
+                    return
+                }
+                if ([IO.Path]::GetFileName($values[0]) -eq 'WorkerBuildScopeTool.dll') {
+                    if ([IO.File]::ReadAllText($values[0]) -cne 'fixture scope-tool output v1') { throw 'Executed corrupt scope output.' }
+                    if ($values.Count -ne 4 -or [IO.Path]::GetFileName($values[3]) -ne 'One.csproj') { throw 'Unexpected fixture scope arguments.' }
+                    @{ Projects = @('One.csproj'); RequestedProjects = @('One.csproj'); RequiredProjects = @('One.csproj')
+                       MetadataDigest = 'none'; StableMetadataDigest = 'none'; Identity = 'fixture-scope-v1' } |
+                        ConvertTo-Json | Set-Content -LiteralPath $values[2] -Encoding UTF8
+                    return
+                }
+                if ($values[0] -ne 'build') { throw "Unexpected fixture dotnet command: $values" }
+                $logger = @($values | Where-Object { $_.StartsWith('-flp:LogFile=') })
+                if ($logger.Count -ne 1) { throw 'Requested build omitted file logger.' }
+                $path = $logger[0].Substring('-flp:LogFile='.Length).Split(';')[0]
+                [IO.File]::WriteAllText($path, 'Build succeeded.')
+            }
+            """);
+        File.WriteAllText(Path.Combine(Parent, "helper.ps1"), """
             Set-StrictMode -Version Latest
             $ErrorActionPreference = 'Stop'
-            $raw = $env:CACHE_RAW
-            Add-Content -LiteralPath $env:CACHE_VECTOR_LOG -Value $raw
-            if ($LogOnly) { exit 0 }
-            if ($raw -like '*WorkerBuildScopeTool.csproj*') {
-                if ($env:CACHE_BUILD_MODE -eq 'fail') { exit 9 }
-                if ($env:CACHE_BUILD_MODE -ne 'copy') { throw 'Unknown scope build fixture mode.' }
-                $ready = [Threading.EventWaitHandle]::OpenExisting($env:CACHE_READY)
-                $release = [Threading.EventWaitHandle]::OpenExisting($env:CACHE_RELEASE)
-                try {
-                    [void]$ready.Set()
-                    if (-not $release.WaitOne(300000)) { throw 'Cache concurrent-build release event was not signaled.' }
-                }
-                finally { $ready.Dispose(); $release.Dispose() }
-                $output = [regex]::Match($raw, '--output\s+(?:"(?<p>[^"]+)"|(?<p>\S+))').Groups['p'].Value
-                if ([string]::IsNullOrWhiteSpace($output)) { throw 'Scope build omitted --output.' }
-                [void][IO.Directory]::CreateDirectory($output)
-                Get-ChildItem -LiteralPath $env:CACHE_SEED -Force | Copy-Item -Destination $output -Recurse -Force
-                exit 0
-            }
-            $logger = [regex]::Match($raw, '(?i)(?:^|\s)"?-flp:LogFile=(?<p>.+?);Verbosity=normal;Encoding=UTF-8;Append=false"?(?:\s|$)')
-            if (-not $logger.Success) { throw "Requested build omitted file logger: $raw" }
-            [IO.File]::WriteAllText($logger.Groups['p'].Value, 'Build succeeded.')
-            exit 0
+            . $env:CACHE_STUB
+            & (Join-Path $env:CACHE_HOME 'scripts/Invoke-WorkerBuildCheck.ps1') $env:CACHE_PROJECT
+            exit $LASTEXITCODE
             """);
+    }
+
+    private void WriteHome(string relative, string content)
+    {
+        var path = Path.Combine(Home, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
     }
 
     internal ProcessStartInfo Shell(string cwd, params string[] arguments)
@@ -84,9 +119,8 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
     internal ProcessStartInfo CacheShell(string cwd, string mode, string log, params string[] arguments)
     {
         var info = Shell(cwd, arguments);
-        info.Environment["PATH"] = Shim + Path.PathSeparator + info.Environment["PATH"];
-        info.Environment["CACHE_DOTNET"] = _dotnet;
-        info.Environment["CACHE_SHELL"] = WorkerShell.Executable;
+        info.Environment["CACHE_HOME"] = Home;
+        info.Environment["CACHE_STUB"] = Stub;
         info.Environment["CACHE_VECTOR_LOG"] = log;
         info.Environment["CACHE_BUILD_MODE"] = mode;
         info.Environment["MCG_WORKER_BUILD_SCOPE_TOOL_CACHE"] = Cache;
@@ -104,7 +138,8 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
 
     internal ProcessStartInfo Helper(string work, string mode, string log)
     {
-        var info = CacheShell(work, mode, log, "-File", Path.Combine(Candidate, "scripts", "Invoke-WorkerBuildCheck.ps1"), Path.Combine(work, "One.csproj"));
+        var info = CacheShell(work, mode, log, "-File", Path.Combine(Parent, "helper.ps1"));
+        info.Environment["CACHE_PROJECT"] = Path.Combine(work, "One.csproj");
         info.Environment["MCG_DOTNET_ISOLATED_ROOT"] = work + "-outputs";
         return info;
     }
@@ -119,15 +154,10 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
 
     internal string Git(string root, params string[] arguments)
     {
-        // The home-copy file listing can exceed the probe's bounded diagnostic
-        // prefix. Read its owned capture before cleanup to preserve every path.
-        string? output = null;
-        var result = InfrastructureTestSupport.RunGitProbe(root, arguments,
-            beforeOwnedCaptureRead: (stdout, _) => output = File.ReadAllText(stdout));
+        var result = InfrastructureTestSupport.RunGitProbe(root, arguments);
         Assert.True(result.Succeeded, result.ToString());
-        if (output is null)
-            InfrastructureTestSupport.RequireCompleteGitOutput(result);
-        return output ?? result.StandardOutput;
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        return result.StandardOutput;
     }
 
     internal static TestChildProcessCapture.Result Run(ProcessStartInfo info) =>
@@ -149,13 +179,6 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
         Assert.Equal(Hash(Path.Combine(entry, "WorkerBuildScopeTool.dll")), manifest.RootElement.GetProperty("dllSha256").GetString());
         Assert.True(File.Exists(Path.Combine(entry, "WorkerBuildScopeTool.runtimeconfig.json")));
         Assert.True(File.Exists(Path.Combine(entry, "WorkerBuildScopeTool.deps.json")));
-    }
-
-    internal static void CopyDirectory(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-        foreach (var file in Directory.GetFiles(source)) File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
-        foreach (var directory in Directory.GetDirectories(source)) CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
     }
 
     public void Dispose() => ScriptSandboxCleanup.DeleteOrThrow([Parent]);

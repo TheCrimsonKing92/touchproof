@@ -12,55 +12,55 @@ public sealed class WorkerBuildScopeToolCacheTests
         using var fixture = new WorkerBuildScopeToolCacheFixture();
         var work = fixture.Work("work");
         var log = Path.Combine(fixture.Parent, "vectors.txt");
-        var first = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "real", log));
+        var first = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
         Success(first);
         var miss = CacheLine(first.Stdout);
         Assert.Matches(@"^scope-tool: cache=miss digest=[a-f0-9]{12} build_ms=\d+$", miss);
-        Assert.Single(BuildVectors(log)); // positive control: this logger sees real bootstraps
+        Assert.Single(BuildVectors(log)); // positive control: this logger sees the bootstrap command
+        Assert.Equal(2, ScopeVectors(log).Length); // discovery and the final scope re-check
         var entry = Assert.Single(Directory.GetDirectories(fixture.Cache));
         WorkerBuildScopeToolCacheFixture.ValidEntry(entry);
         Assert.Contains("digest=" + Path.GetFileName(entry)[..12], miss);
 
         File.Delete(log);
-        var second = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "real", log));
+        var second = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
         Success(second);
         Assert.Equal("scope-tool: cache=hit digest=" + Path.GetFileName(entry)[..12], CacheLine(second.Stdout));
         Assert.Empty(BuildVectors(log));
+        Assert.Equal(2, ScopeVectors(log).Length);
         Assert.Equal(ScopeLine(first.Stdout), ScopeLine(second.Stdout));
         Assert.True(first.Stdout.IndexOf(miss, StringComparison.Ordinal) < first.Stdout.IndexOf(ScopeLine(first.Stdout), StringComparison.Ordinal));
 
-        var seed = Path.Combine(fixture.Parent, "seed");
-        WorkerBuildScopeToolCacheFixture.CopyDirectory(entry, seed);
         var dll = Path.Combine(entry, "WorkerBuildScopeTool.dll");
         var bytes = File.ReadAllBytes(dll);
         bytes[0] ^= 0xff;
         File.WriteAllBytes(dll, bytes);
         File.Delete(log);
-        var repaired = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "real", log));
+        var repaired = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
         Success(repaired);
         Assert.Equal(Digest(miss), Digest(CacheLine(repaired.Stdout)));
         Assert.Contains("cache=miss", CacheLine(repaired.Stdout));
         Assert.Single(BuildVectors(log));
+        Assert.Equal(2, ScopeVectors(log).Length);
         WorkerBuildScopeToolCacheFixture.ValidEntry(entry);
         Assert.Single(Directory.GetDirectories(fixture.Cache));
         File.Delete(log);
-        var afterRepair = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "real", log));
+        var afterRepair = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
         Success(afterRepair);
         Assert.Equal(CacheLine(second.Stdout), CacheLine(afterRepair.Stdout));
         Assert.Empty(BuildVectors(log));
 
-        // A seed copy avoids two redundant real compilations. Both helper processes
-        // must reach the bootstrap vector before either is allowed to publish.
+        // Both real helper processes must reach the stubbed bootstrap command
+        // before either is allowed to publish. No wall-clock pacing is involved.
         Directory.Delete(entry, recursive: true);
         var name = "Local\\scope-cache-" + Guid.NewGuid().ToString("N");
         using var readyOne = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-one");
         using var readyTwo = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-two");
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-release");
-        var startOne = fixture.Helper(fixture.Work("one"), "copy", Path.Combine(fixture.Parent, "one.txt"));
-        var startTwo = fixture.Helper(fixture.Work("two"), "copy", Path.Combine(fixture.Parent, "two.txt"));
+        var startOne = fixture.Helper(fixture.Work("one"), "barrier", Path.Combine(fixture.Parent, "one.txt"));
+        var startTwo = fixture.Helper(fixture.Work("two"), "barrier", Path.Combine(fixture.Parent, "two.txt"));
         foreach (var start in new[] { startOne, startTwo })
         {
-            start.Environment["CACHE_SEED"] = seed;
             start.Environment["CACHE_RELEASE"] = name + "-release";
         }
         startOne.Environment["CACHE_READY"] = name + "-one";
@@ -97,4 +97,5 @@ public sealed class WorkerBuildScopeToolCacheTests
     private static string ScopeLine(string text) => Assert.Single(text.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.StartsWith("build-scope:", StringComparison.Ordinal)));
     private static string Digest(string line) => Regex.Match(line, @"digest=([a-f0-9]{12})").Groups[1].Value;
     private static string[] BuildVectors(string log) => File.Exists(log) ? File.ReadAllLines(log).Where(line => line.Contains("WorkerBuildScopeTool.csproj", StringComparison.Ordinal)).ToArray() : [];
+    private static string[] ScopeVectors(string log) => File.Exists(log) ? File.ReadAllLines(log).Where(line => line.Contains("WorkerBuildScopeTool.dll", StringComparison.Ordinal)).ToArray() : [];
 }
