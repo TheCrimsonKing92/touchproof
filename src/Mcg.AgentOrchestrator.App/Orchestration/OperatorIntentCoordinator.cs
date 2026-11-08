@@ -89,6 +89,10 @@ internal sealed partial class OperatorIntentCoordinator
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory);
         var grouped = OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(workspace, null);
         var events = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        var executorsPath = RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory);
+        var executorSettings = new ExecutorSettingIntentHandler(executorsPath, workspace.ConductEventsLogPath,
+            new RemoteExecutorSlotsFileSync(GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
+                workspace.ExecutionDirectory, TimeSpan.FromSeconds(30)));
         var refinement = new GoalRefinementService(
             new InMemoryModelProviderRegistry([]), ModelFunctionCatalog.Empty, collaboration,
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
@@ -165,10 +169,11 @@ internal sealed partial class OperatorIntentCoordinator
             Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath),
             ProviderResets = new ProviderResetRetainedSourceRecorder(() => new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)),
             ClaudeUsageBackfills = new ClaudeUsageBackfillIntentHandler(() => new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)),
-            ExecutorSettings = new ExecutorSettingIntentHandler(
-                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath,
-                new RemoteExecutorSlotsFileSync(GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
-                    workspace.ExecutionDirectory, TimeSpan.FromSeconds(30)))
+            ExecutorSettings = executorSettings,
+            SlotController = new ExecutorSlotController(
+                AcceptancePartitionVerdictCache.ResolveHostStateRoot(workspace.ExecutionDirectory), executorsPath,
+                executorSettings, events, () => ExecutorSlotSampleReader.ReadSettings(
+                    Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json")))
         };
     }
 

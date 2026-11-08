@@ -23,6 +23,8 @@ internal sealed partial class OperatorIntentCoordinator
     internal EpicOutcomeIntentHandler? EpicOutcomes { get; init; }
     internal OperatorDirectiveIntentHandler? Directives { get; init; }
     internal ExecutorSettingIntentHandler? ExecutorSettings { get; init; }
+    internal ExecutorSlotController? SlotController { get; init; }
+    internal IReadOnlyList<string> EvaluateExecutorSlots() => SlotController?.Evaluate() ?? [];
     internal ProviderResetRetainedSourceRecorder? ProviderResets { get; init; }
     internal ClaudeUsageBackfillIntentHandler? ClaudeUsageBackfills { get; init; }
 
