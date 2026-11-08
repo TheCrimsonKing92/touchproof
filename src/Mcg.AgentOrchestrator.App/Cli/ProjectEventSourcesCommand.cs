@@ -64,7 +64,7 @@ internal static class ProjectEventSourcesCommand
             var home = homeWorkspace ?? OrchestratorWorkspace.ForDirectory(repositoryRoot, null, tenant, registry);
             if (home.IsProjectScoped) throw new InvalidOperationException("The supplied home binding is project scoped.");
             binding?.Verify(home);
-            return OwnerConsoleBoardSource.ReadWorkspaceCatalog(repositoryRoot, tenant, registry, home);
+            return OwnerConsoleWorkspaceCatalog.ReadWorkspaceCatalog(repositoryRoot, tenant, registry, home);
         }
     }
 
