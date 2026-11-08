@@ -14,12 +14,12 @@ internal static class OwnerConsoleKeyHints
         $"{key}: not available here ({pane.ToString().ToUpperInvariant()}); use DECISIONS.";
 
     internal static string DecisionDetailHint(bool canAnswer, bool canAcceptDefault) =>
-        (canAnswer ? "r answer  " : "") + (canAcceptDefault ? "a accept default  " : "") +
+        (canAnswer ? $"{OwnerConsoleBindings.Answer.Key} {OwnerConsoleBindings.Answer.HintLabel}  " : "") + (canAcceptDefault ? $"{OwnerConsoleBindings.Accept.Key} {OwnerConsoleBindings.Accept.HintLabel}  " : "") +
         "Up/Down PgUp/PgDn scroll  ? help  Esc close";
 
     internal static string DecisionDetailHelpText(bool canAnswer, bool canAcceptDefault) => string.Join("\n",
-        (canAnswer ? new[] { "r: Answer this decision." } : [])
-        .Concat(canAcceptDefault ? ["a: Accept this decision's proposed default after confirmation."] : [])
+        (canAnswer ? new[] { $"{OwnerConsoleBindings.Answer.Key}: Answer this decision." } : [])
+        .Concat(canAcceptDefault ? [$"{OwnerConsoleBindings.Accept.Key}: Accept this decision's proposed default after confirmation."] : [])
         .Concat(["Up/Down: Scroll the detail.", "PgUp/PgDn: Scroll one page.",
             "Tab/Shift+Tab: Move between the detail and its buttons.", "Enter: Activate the focused button.",
             "?: Open this help dialog.", "Esc: Close the detail."]));

@@ -101,13 +101,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         else if (key == ConsoleKey.DownArrow) SelectIndex(SelectedIndex + 1);
         else if (key == ConsoleKey.Enter && Selected() is { } detail)
             await ShowDecisionAsync(detail, operation, cancellationToken);
-        else if (character is 'a' or 'r') await Decisions.AnswerAsync(Selected(), character == 'a', operation, cancellationToken);
-        else if (character == ':')
+        else if (character == OwnerConsoleBindings.Accept.Key || character == OwnerConsoleBindings.Answer.Key) await Decisions.AnswerAsync(Selected(), character == OwnerConsoleBindings.Accept.Key, operation, cancellationToken);
+        else if (character == OwnerConsoleBindings.CommandLineKey)
         {
             var command = await dialogs.PromptTextAsync("Command", OwnerConsoleKeyHints.CommandPrompt);
             if (command is not null) await RunCommandAsync(command, operation, cancellationToken);
         }
-        else if (character == 'q') QuitRequested = true;
+        else if (character == OwnerConsoleBindings.Quit.Key) QuitRequested = true;
     }
 
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
@@ -182,7 +182,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var line = raw.Trim().TrimStart(':').Trim();
+        var line = raw.Trim().TrimStart(OwnerConsoleBindings.CommandLineKey).Trim();
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
@@ -251,8 +251,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     }
                     else output.WriteLine("usage: bell on|off | bell <calm|attention|alarm> on|off");
                     break;
-                case "goal":
-                    if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
+                case var verb when verb == OwnerConsoleBindings.Goal.Command:
+                    if (parts.Length != 2) { output.WriteLine("usage: " + OwnerConsoleBindings.Goal.Usage); break; }
                     goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);
                     break;
                 default:
