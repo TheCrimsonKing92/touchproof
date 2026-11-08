@@ -5,8 +5,54 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static AttributedFailureDeveloperRouteTests;
 
+// Parallel-safe: every fixture owns its repositories, database and dispatch seam.
 public sealed class SoloAttributedFailureRouteControlTests
 {
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public async Task EarlyStopProof_ReloadAndAdvance_RoutesDeveloperWithoutNewHold()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        AcceptanceCheckResult[] covering =
+        [
+            new AcceptanceLaneEarlyStop("solo tests", ["not run"], [], []).ToReceiptCheck(),
+            new("infrastructure tests", false, 1, "failed lane", CoveredBy: ["solo tests"])
+        ];
+        fixture.ReplaceProof(proof => proof with
+        {
+            Checks = covering.Select(check => new SoloAcceptanceCheckEvidence(check, [],
+                new Dictionary<string, SoloAcceptanceArtifact>())).Concat(proof.Checks).ToArray()
+        });
+        var summary = fixture.Summary with
+        {
+            FailedChecks = fixture.Summary.FailedChecks!.Concat(covering.Select(check => check.Name)).ToArray(),
+            UnmetCriteria = fixture.Summary.UnmetCriteria.Concat(covering).ToArray(),
+            CheckAttributions = fixture.Summary.CheckAttributions!.Concat(covering.Select(check =>
+                new AcceptanceCheckAttribution(check.Name, AcceptanceFailureOrigin.Unattributed, "no own identities"))).ToArray()
+        };
+        fixture.Complete(summary);
+        await fixture.Restart();
+        var timelineCount = fixture.Goal.Timeline.Count;
+        var driver = fixture.Driver();
+        driver.BeginTick(fixture.Kernel, 2);
+        var result = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive with
+            { AutomaticRetryOperatorRoutingHoldSeconds = 0 });
+
+        Assert.IsNotType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        var retry = Assert.Single(MarkerRetries(fixture.Goal));
+        var developer = fixture.Goal.Tasks.Single();
+        Assert.Equal(AgentRole.Developer, developer.RequiredRole);
+        Assert.Equal(developer.Id, Assert.Single(fixture.Starts));
+        Assert.Equal(RetryCause.NewTestFinding, developer.PendingRetryCause);
+        Assert.Contains("reproduced " + SoloAttributedFailureRouteFixture.First + ": exact first line", retry.Message);
+        Assert.DoesNotContain(AcceptanceLaneEarlyStop.ReceiptName, retry.Message);
+        Assert.DoesNotContain("infrastructure tests", retry.Message);
+        Assert.Equal(1, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.DoesNotContain(fixture.Goal.Timeline.Skip(timelineCount), evt =>
+            evt.Message.Contains("Solo acceptance correction held", StringComparison.Ordinal));
+    }
+
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task BuildFailure_WithoutTestIdentities_RetriesCriterion()
     {
