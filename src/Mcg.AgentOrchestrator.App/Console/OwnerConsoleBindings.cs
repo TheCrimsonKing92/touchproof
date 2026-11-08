@@ -129,7 +129,8 @@ internal static class OwnerConsoleBindings
         .Concat(Commands.Where(row => row.Key.HasValue).SelectMany(row =>
             new[] { row.KeyHelp!, $":{row.Usage}: {Description(row)}" }.Concat(ExtraHelp(row))))
         .Concat(OwnerActivityNarrator.JumpKeyHelp)
-        .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}")));
+        .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}"))
+        .Append(OwnerConsoleDialogBindings.FleetExpand.KeyHelp!));
 
     private static readonly string[] NavigationHelp =
     [

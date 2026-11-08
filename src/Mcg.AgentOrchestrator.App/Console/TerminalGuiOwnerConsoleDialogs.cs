@@ -65,6 +65,26 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
     public Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null) => OnUiAsync(() =>
         ShowPageCore(title, text, choiceLines, null));
 
+    public Task ShowFleetAsync(OwnerFleetViewKeys keys, OwnerFleetViewModel model, int width) => OnUiAsync(() =>
+    {
+        var rendered = keys.Render(model, width);
+        using var dialog = new OwnerConsoleTextDialog("Fleet", rendered.Text) { Structured = rendered.Fields };
+        dialog.CloseRequested += () => app.RequestStop(dialog);
+        var close = new Button { Text = "Close", IsDefault = true };
+        close.Accepting += (_, args) => { args.Handled = true; app.RequestStop(dialog); };
+        dialog.AddButton(close);
+        Run(dialog, key =>
+        {
+            if (key.IsAlt || !keys.Handle((char)key.AsRune.Value, key.IsCtrl)) return false;
+            var updated = keys.Render(model, width);
+            dialog.Page.Replace(updated.Text);
+            dialog.Structured = updated.Fields;
+            dialog.Render();
+            return true;
+        });
+        return true;
+    });
+
     private Task<int?> ShowPageCoreAsync(string title, string text, IReadOnlyList<int>? choiceLines,
         OwnerConsoleStructuredText? fields) => OnUiAsync(() => ShowPageCore(title, text, choiceLines, fields));
 
@@ -164,12 +184,16 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         return true;
     });
 
-    private void Run(OwnerConsoleTextDialog dialog)
+    private void Run(OwnerConsoleTextDialog dialog, Func<Key, bool>? handle = null)
     {
         void Fields(OwnerConsoleFieldSnapshot fields) { _ = ShowFieldsAsync(fields, dialog.SelectedFieldKey); dialog.Body.SetFocus(); }
         dialog.FieldsRequested += Fields;
         void Handle(object? sender, Key key)
-        { if (app.TopRunnableView == dialog) dialog.HandleFocusedKey(key); }
+        {
+            if (app.TopRunnableView != dialog) return;
+            if (handle?.Invoke(key) == true) key.Handled = true;
+            else dialog.HandleFocusedKey(key);
+        }
         var keyboard = app.Keyboard;
         if (keyboard is not null) keyboard.KeyDown += Handle;
         try { app.Run(dialog); }

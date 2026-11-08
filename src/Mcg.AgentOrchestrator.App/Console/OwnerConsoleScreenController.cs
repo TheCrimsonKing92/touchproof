@@ -12,6 +12,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     OwnerConsoleSoundCommand? sound = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
+    private readonly OwnerFleetViewKeys _fleetKeys = new();
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
     private readonly OwnerConsoleLastGood<string, OwnerConsoleGoalDialog.Content> _goalLastGood = new();
     private readonly object _notificationGate = new();
@@ -183,14 +184,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
-        string? fleetText = null;
-        OwnerConsoleStructuredText? fleetFields = null;
+        OwnerFleetViewModel? fleetModel = null;
         OwnerLandingsPage? landingsPage = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
-        if (fleetText is not null) { await dialogs.ShowStructuredAsync("Fleet", fleetText, fleetFields!); return; }
+        if (fleetModel is not null) { await dialogs.ShowFleetAsync(_fleetKeys, fleetModel, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth)); return; }
         if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
         if ((output.Structured ?? control.Fields) is { } commandFields)
             await dialogs.ShowStructuredAsync("Command result", output.Text, commandFields);
@@ -214,12 +214,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                 case "fleet":
                     if (parts.Length != 1) output.WriteLine("usage: fleet");
                     else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
-                    else
-                    {
-                        var fields = new Dictionary<int, OwnerConsoleFieldSnapshot>();
-                        fleetText = OwnerFleetDiagram.Render(fleet(), OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth), fields);
-                        fleetFields = new(null, fields);
-                    }
+                    else fleetModel = fleet();
                     break;
                 case "landings":
                     if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);

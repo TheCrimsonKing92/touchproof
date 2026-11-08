@@ -10,6 +10,7 @@ public sealed class OwnerConsoleDialogBindingsTests
         Assert.Equal(new[] { "d", "f", "e", "g", "q" }, Keys(OwnerConsoleScope.GoalDetail));
         Assert.Equal(new[] { "w", "Ctrl+R", "q" }, Keys(OwnerConsoleScope.EpicView));
         Assert.Equal(new[] { "q" }, Keys(OwnerConsoleScope.GateView));
+        Assert.Equal(new[] { "x" }, Keys(OwnerConsoleScope.FleetView));
         Assert.Single(OwnerConsoleBindings.All.Where(row => row.Scope == OwnerConsoleScope.GateView && row.Key is null));
         Assert.All(OwnerConsoleDialogBindings.All, row => Assert.False(string.IsNullOrWhiteSpace(row.KeyHelp)));
     }
@@ -80,6 +81,7 @@ public sealed class OwnerConsoleDialogBindingsTests
             "Goal detail e: Open the goal's epic.", "Goal detail g: Open the GATE view on this goal's gate (same as :gate <goal-id-prefix>).",
             "Goal detail q: Back out of goal detail." }, lines.Skip(gate + 1).Take(5));
         Assert.Contains("Epic view Ctrl+R (list and detail): Reload the epic view.", lines);
+        Assert.Contains(OwnerConsoleDialogBindings.FleetExpand.KeyHelp!, lines);
         Assert.DoesNotContain(lines, line => line.StartsWith("Epic view r", StringComparison.Ordinal));
     }
 

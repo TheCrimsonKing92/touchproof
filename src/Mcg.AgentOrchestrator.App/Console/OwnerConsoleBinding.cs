@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal enum OwnerConsoleScope { Global, Decisions, GoalDetail, EpicView, GateView }
+internal enum OwnerConsoleScope { Global, Decisions, GoalDetail, EpicView, GateView, FleetView }
 internal enum OwnerConsoleEffect { View, ConsoleLocal, External }
 internal enum OwnerConsoleCommandOwner { View, Controller }
 
