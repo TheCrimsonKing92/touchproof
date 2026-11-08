@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 public sealed class OwnerConsolePresentationPurityTests
 {
     private const string ConsolePath = "src/Mcg.AgentOrchestrator.App/Console/";
-    // Data-access and composition users measured with ForbiddenUses at the goal's original HEAD.
+    // Data-access and composition owners; presentation files remain subject to ForbiddenUses.
     private static readonly HashSet<string> Exemptions = new(StringComparer.Ordinal)
     {
         ConsolePath + "ChangeStreamFileReader.cs",
@@ -25,6 +25,8 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerConsoleLandedToday.cs",
         ConsolePath + "OwnerConsoleNotificationSettings.cs",
         ConsolePath + "OwnerConsoleRefreshTimingsFile.cs",
+        // The sound command owns library access and atomic settings persistence, not presentation.
+        ConsolePath + "OwnerConsoleSoundCommand.cs",
         ConsolePath + "OwnerConsoleStartupActivity.cs",
         ConsolePath + "OwnerConsoleVerb.cs",
         ConsolePath + "OwnerGateFailureEvidence.cs",
@@ -99,6 +101,17 @@ public sealed class OwnerConsolePresentationPurityTests
         const string source = "class Reader { string Read() => File.ReadAllText(\"x\"); }";
         var sources = new Dictionary<string, string> { ["Reader.cs"] = source, ["View.cs"] = source };
         Assert.Equal(["View.cs: file-system use File"], Violations(sources, ["Reader.cs"]));
+    }
+
+    [Fact]
+    public void CommandPersistence_UnderPresentationNameIsRejected()
+    {
+        var commandPath = ConsolePath + "OwnerConsoleSoundCommand.cs";
+        var source = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), commandPath));
+        Assert.Contains(commandPath, Exemptions);
+        var sources = new Dictionary<string, string> { [commandPath] = source, ["View.cs"] = source };
+        Assert.Equal(["View.cs: file-system use Directory", "View.cs: file-system use File"],
+            Violations(sources, [commandPath]).Order(StringComparer.Ordinal));
     }
 
     [Fact]
