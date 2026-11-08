@@ -33,8 +33,8 @@ public sealed class OwnerConsoleSoundSelectionTests
             var harness = new OwnerConsoleHarness();
             var dialogs = new Dialogs();
             var clock = new ManualClock();
-            using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
-                new OwnerGoalDetailQuery(harness.State, harness.Tail), harness.Conductor, harness.DigestReport,
+            using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
+                harness.State, harness.Tail, harness.Conductor, harness.DigestReport,
                 harness.Digest, clock, notifier: notifier, notifications: provider.Current, sound: command);
             controller.Apply(Model(0));
             Assert.Empty(audio.Files);

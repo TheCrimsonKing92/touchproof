@@ -22,13 +22,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerDecisionWorkflow? _decisionWorkflow;
     private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
     public void Dispose() => _answerTracking.Dispose();
-
     internal event Action? ModelApplied;
-
     internal Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
         string? detailId, CancellationToken cancellationToken) =>
         _epicDetail.LoadAsync(window, detailId, cancellationToken);
-
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get { lock (_notificationGate) return _bellTiers != OwnerConsoleBellTiers.None; } }
@@ -68,7 +65,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     }
     internal int SelectedIndex => Model is null ? -1 :
         Array.FindIndex(Model.Decisions.ToArray(), item => item.Id == SelectedDecisionId);
-
     internal void Apply(OwnerConsoleViewModel model)
     {
         IReadOnlyList<OwnerConsoleNotificationTier> tiers;
@@ -88,7 +84,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         }
         ModelApplied?.Invoke();
     }
-
     internal void SelectIndex(int index)
     {
         if (Model is { Decisions.Length: > 0 })
