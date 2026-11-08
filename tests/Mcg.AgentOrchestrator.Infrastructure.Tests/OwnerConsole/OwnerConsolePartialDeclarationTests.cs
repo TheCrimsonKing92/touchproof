@@ -6,14 +6,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 public sealed class OwnerConsolePartialDeclarationTests
 {
     private const string ConsolePath = "src/Mcg.AgentOrchestrator.App/Console/";
-    private static readonly string[] Expected =
-    [
-        ConsolePath + "OwnerConsoleGateExecutionProjection.cs::OwnerConsoleGateProgress",
-        ConsolePath + "OwnerConsoleGateProgress.cs::OwnerConsoleGateProgress"
-    ];
+    private static readonly string[] Expected = [];
 
     [Fact]
-    public void PartialDeclarations_EqualTheTwoExistingRecordParts()
+    public void PartialDeclarations_AreNone()
     {
         var root = VerifiedRepositoryRoot.Find();
         var sources = Directory.EnumerateFiles(Path.Combine(root, ConsolePath), "*.cs", SearchOption.AllDirectories)
@@ -28,7 +24,7 @@ public sealed class OwnerConsolePartialDeclarationTests
     [InlineData("partial class Extra { partial void Draw(); }")]
     public void ThirdPartialDeclaration_IsRejected(string source)
     {
-        var sources = ExistingParts();
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         sources.Add("Extra.cs", source);
         Assert.Contains(Violations(sources), finding => finding.StartsWith("unexpected partial: Extra.cs::", StringComparison.Ordinal));
     }
@@ -36,24 +32,10 @@ public sealed class OwnerConsolePartialDeclarationTests
     [Fact]
     public void CommentAndIdentifierContainingPartial_Pass()
     {
-        var sources = ExistingParts();
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         sources.Add("View.cs", "// partial class Extra {}\nclass View { int _partial; }");
         Assert.Empty(Violations(sources));
     }
-
-    [Fact]
-    public void MissingExistingPart_IsRejected()
-    {
-        var sources = ExistingParts();
-        sources.Remove(ConsolePath + "OwnerConsoleGateProgress.cs");
-        Assert.Equal(["missing partial: " + ConsolePath + "OwnerConsoleGateProgress.cs::OwnerConsoleGateProgress"], Violations(sources));
-    }
-
-    private static Dictionary<string, string> ExistingParts() => new(StringComparer.Ordinal)
-    {
-        [ConsolePath + "OwnerConsoleGateProgress.cs"] = "partial record OwnerConsoleGateProgress;",
-        [ConsolePath + "OwnerConsoleGateExecutionProjection.cs"] = "partial record OwnerConsoleGateProgress;"
-    };
 
     private static IReadOnlyList<string> Violations(IReadOnlyDictionary<string, string> sources)
     {
