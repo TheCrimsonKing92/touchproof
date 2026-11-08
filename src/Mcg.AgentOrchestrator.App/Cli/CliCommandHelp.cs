@@ -723,6 +723,10 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ObligationRebind = new(
         ObligationRebindUsage, "Queue an operator class rebind for a pending gate test obligation at the current brief on the next tick.",
         ["--selector", "--to", "--drop", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+    public const string MultiRepositoryLandingRepairUsage = "Usage: repair-multi-repository-landing <goal-prefix> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    private static readonly CommandHelpEntry MultiRepositoryLandingRepair = new(
+        MultiRepositoryLandingRepairUsage, "Queue repair of a compensated tuple landing on the next conductor tick; re-gating is required.",
+        ["--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry GateCancel = new(
         GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
         ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
@@ -958,6 +962,7 @@ internal static class CliCommandHelp
         Console.WriteLine("mcg-orchestrator.cmd still works as an alias.");
         Console.WriteLine();
         Console.WriteLine("Commands:");
+        Console.WriteLine("  repair-multi-repository-landing Repair a compensated tuple landing.");
         Console.WriteLine("  goal              Create a goal.");
         Console.WriteLine("  author-draft      Draft a checked goal brief from a backlog item.");
         Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
@@ -1380,6 +1385,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("obligation-rebind", StringComparison.OrdinalIgnoreCase))
         {
             entry = ObligationRebind;
+            return true;
+        }
+        if (args[0].Equals("repair-multi-repository-landing", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = MultiRepositoryLandingRepair;
             return true;
         }
         if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
