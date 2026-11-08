@@ -124,7 +124,8 @@ internal static class OwnerConsoleFullScreenHost
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
-                    notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
+                    notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists,
+                        Directory.Exists, path => Directory.EnumerateFiles(path, "*.wav", SearchOption.TopDirectoryOnly), Random.Shared.Next),
                     notifications: notifications,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
