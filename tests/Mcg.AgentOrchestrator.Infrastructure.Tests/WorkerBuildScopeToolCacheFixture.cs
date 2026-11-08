@@ -119,15 +119,15 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
 
     internal string Git(string root, params string[] arguments)
     {
-        var info = Shell(root);
-        info.FileName = "git";
-        info.ArgumentList.Clear();
-        foreach (var argument in new[] { "-c", "core.fsmonitor=false", "-c", "gc.auto=0" }) info.ArgumentList.Add(argument);
-        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        foreach (var argument in arguments) info.ArgumentList.Add(argument);
-        var result = Run(info);
-        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
-        return result.Stdout;
+        // The home-copy file listing can exceed the probe's bounded diagnostic
+        // prefix. Read its owned capture before cleanup to preserve every path.
+        string? output = null;
+        var result = InfrastructureTestSupport.RunGitProbe(root, arguments,
+            beforeOwnedCaptureRead: (stdout, _) => output = File.ReadAllText(stdout));
+        Assert.True(result.Succeeded, result.ToString());
+        if (output is null)
+            InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        return output ?? result.StandardOutput;
     }
 
     internal static TestChildProcessCapture.Result Run(ProcessStartInfo info) =>
