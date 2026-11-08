@@ -658,7 +658,7 @@ public sealed class CliFleetAttentionTests
             Registry.CreateProject(name, Repository);
             return OrchestratorWorkspace.ForProject(name, Repository, dataRootDirectory: Data);
         }
-        internal AttentionWorkspaceCatalog Catalog() => OwnerConsoleBoardSource.ReadWorkspaceCatalog(Repository, null, Registry);
+        internal AttentionWorkspaceCatalog Catalog() => OwnerConsoleWorkspaceCatalog.ReadWorkspaceCatalog(Repository, null, Registry);
         internal async Task SeedAsync(OrchestratorWorkspace workspace, AgentOrchestratorKernel? kernel = null)
         {
             StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);

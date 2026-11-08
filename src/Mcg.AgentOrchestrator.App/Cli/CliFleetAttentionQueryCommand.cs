@@ -37,7 +37,7 @@ internal static class CliFleetAttentionQueryCommand
     {
         var options = Parse(args);
         cancellationToken.ThrowIfCancellationRequested();
-        var catalog = OwnerConsoleBoardSource.ReadWorkspaceCatalog(repositoryRoot, tenant, registry,
+        var catalog = OwnerConsoleWorkspaceCatalog.ReadWorkspaceCatalog(repositoryRoot, tenant, registry,
             launchWorkspace, cancellationToken);
         var result = await FleetAttentionReader.ReadAsync(catalog, options.Limit,
             (time ?? TimeProvider.System).GetUtcNow(), cancellationToken).ConfigureAwait(false);
