@@ -34,6 +34,17 @@ internal sealed class OwnerConsoleSession(
     private long _coveredSequence;
     private readonly Dictionary<string, OwnerGoalCard> _board = new(StringComparer.OrdinalIgnoreCase);
 
+    private OwnerConsoleSessionPrinter? _printer;
+    private OwnerConsoleCommandHandler? _commands;
+
+    private OwnerConsoleSessionPrinter Printer => _printer ??= new(
+        state, liveness, digest, eventTail, output, clock, projectLabel, _open, _board,
+        () => _bell, () => _hiddenCount, () => _lastConductEvent, LoadActiveAsync, Announce);
+
+    private OwnerConsoleCommandHandler Commands => _commands ??= new(
+        answers, _answerTracking, _control, Printer, output, fleet, terminalWidth,
+        _open, _retired, value => _bell = value, RefreshQuestionsAsync, Announce);
+
     internal async Task StartAsync(DateTimeOffset? lastActivity, CancellationToken cancellationToken)
     {
         _lastConductEvent = lastActivity;
@@ -41,8 +52,8 @@ internal sealed class OwnerConsoleSession(
         foreach (var line in digest.ReadSummaryLines().Take(5))
             Announce(line);
         var metadata = await RefreshQuestionsAsync(cancellationToken);
-        await PrintHeaderAsync(metadata, cancellationToken);
-        await PrintBoardAsync(metadata, cancellationToken);
+        await Printer.PrintHeaderAsync(metadata, cancellationToken);
+        await Printer.PrintBoardAsync(metadata, cancellationToken);
         Announce("Type help for commands.");
     }
 
@@ -56,7 +67,7 @@ internal sealed class OwnerConsoleSession(
         }
         var metadata = await RefreshQuestionsAsync(cancellationToken);
         if (item.EventKind is "watch-transition" or "acceptance" or "loop-relaunch" or "goal-escalation")
-            await PrintBoardAsync(metadata, cancellationToken);
+            await Printer.PrintBoardAsync(metadata, cancellationToken);
     }
 
     private async Task ApplyChangesAsync(CancellationToken cancellationToken)
@@ -105,7 +116,7 @@ internal sealed class OwnerConsoleSession(
                 {
                     var card = ToCard(goal);
                     _board[id] = card;
-                    PrintBoardRow(card);
+                    Printer.PrintBoardRow(card);
                 }
             }
             _coveredSequence = record.Sequence;
@@ -116,94 +127,12 @@ internal sealed class OwnerConsoleSession(
     {
         var anchor = changes!.Reanchor();
         var metadata = await RefreshQuestionsAsync(cancellationToken);
-        await PrintBoardAsync(metadata, cancellationToken);
+        await Printer.PrintBoardAsync(metadata, cancellationToken);
         _coveredSequence = anchor;
     }
 
-    internal async Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken)
-    {
-        var line = raw.TrimEnd('\r').Trim();
-        if (line.Length == 0) return true;
-        var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        var command = parts[0].ToLowerInvariant();
-        if (command == "fleet")
-        {
-            if (parts.Length != 1) Announce("usage: fleet");
-            else if (fleet is null) Announce("fleet view unavailable in this session");
-            else
-            {
-                try
-                {
-                    foreach (var row in OwnerFleetDiagram.Render(fleet(), OwnerConsoleDialogWidth.ForDiagram(terminalWidth?.Invoke())).Split('\n')) output.WriteLine(row);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { Announce($"fleet unavailable: {ex.Message}"); }
-            }
-            return true;
-        }
-        var metadata = await RefreshQuestionsAsync(cancellationToken);
-        switch (command)
-        {
-            case "quit": return false;
-            case "help":
-                Announce("board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit");
-                output.WriteLine("conductor start [--clear-stop] | conductor stop [--yes] | conductor status");
-                output.WriteLine("digest | metrics | board");
-                output.WriteLine("fleet: Show the fleet diagram: host and executor boxes.");
-                break;
-            case "board": await PrintBoardAsync(metadata, cancellationToken); break;
-            case "conductor": _control.HandleConductor(line); break;
-            case "digest":
-                if (parts.Length != 1) Announce("usage: digest");
-                else await PrintDigestAsync(metadata, cancellationToken);
-                break;
-            case "metrics": _control.HandleMetrics(line); break;
-            case "goal":
-                if (parts.Length < 2) Announce("usage: goal <id-prefix>");
-                else await PrintGoalAsync(parts[1], cancellationToken);
-                break;
-            case "bell":
-                if (parts.Length < 2 || parts[1] is not ("on" or "off")) Announce("usage: bell on|off");
-                else { _bell = parts[1] == "on"; Announce($"bell {parts[1]}"); }
-                break;
-            case "answer":
-            case "accept":
-                if (parts.Length < 2 || !int.TryParse(parts[1], out var number) || number < 1)
-                { Announce($"usage: {command} <n>{(command == "answer" ? " <text>" : "")}"); break; }
-                await SubmitAsync(command, number, parts.Length == 3 ? parts[2] : null, cancellationToken);
-                break;
-            default: Announce("unknown command; type help"); break;
-        }
-        return true;
-    }
-
-    private async Task SubmitAsync(string command, int number, string? text, CancellationToken cancellationToken)
-    {
-        if (!_open.TryGetValue(number, out var question))
-        {
-            Announce(_retired.Contains(number) ? $"question {number} is no longer open" : $"no question {number}");
-            return;
-        }
-        if (OwnerQuestionViewOnly.IsViewOnly(question.Kind))
-        { Announce(OwnerQuestionViewOnly.Notice(question.Kind, question.GoalId)); return; }
-        if (command == "accept")
-        {
-            text = question.ProposedDefault;
-            if (string.IsNullOrWhiteSpace(text)) { Announce($"question {number} has no proposed default"); return; }
-        }
-        if (string.IsNullOrWhiteSpace(text) || text.StartsWith("--", StringComparison.Ordinal))
-        { Announce("usage: answer <n> <text> (text cannot start with --)"); return; }
-        try
-        {
-            var submission = answers.Submit(question, text);
-            var prefix = question.GoalId[..Math.Min(8, question.GoalId.Length)];
-            Announce(AnswerIntentStatusTracker.Queued(number, prefix));
-            _answerTracking.Track(submission.IntentId, number, prefix, Announce);
-            await RefreshQuestionsAsync(cancellationToken);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
-        { Announce($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
-    }
+    internal Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken) =>
+        Commands.HandleCommandAsync(raw, cancellationToken);
 
     private async Task<IReadOnlyList<GoalSummary>?> RefreshQuestionsAsync(CancellationToken cancellationToken)
     {
@@ -224,60 +153,10 @@ internal sealed class OwnerConsoleSession(
         foreach (var question in current)
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
-            { number = _nextNumber++; _numbers.Add(question.ItemId, number); PrintQuestion(number, question); }
+            { number = _nextNumber++; _numbers.Add(question.ItemId, number); Printer.PrintQuestion(number, question); }
             if (!_retired.Contains(number)) _open[number] = question;
         }
         return metadata;
-    }
-
-    private void PrintQuestion(int number, OwnerQuestion question)
-    {
-        if (_bell) output.Write("\a");
-        var fields = new[]
-        {
-            question.BlastRadius is null ? null : $"blast radius: {question.BlastRadius}",
-            question.Confidence is null ? null : $"confidence: {question.Confidence}",
-            question.ProposedDefault is null ? null : $"default: {question.ProposedDefault}"
-        }.Where(field => field is not null);
-        var stewardGuidance = question.Kind == OwnerQuestionKind.StewardHold
-            ? $" | view only | CLI: touchproof.cmd retry --goal {question.GoalId} <task-number> <message> or touchproof.cmd adjudicate --goal {question.GoalId} <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>"
-            : string.Empty;
-        Announce($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
-    }
-
-    private async Task PrintHeaderAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
-    {
-        var goals = await LoadActiveAsync(metadata, cancellationToken);
-        var age = _lastConductEvent is null ? "unknown" : Age(_lastConductEvent.Value);
-        var hidden = _hiddenCount > 0 ? $" | hidden: {_hiddenCount}" : string.Empty;
-        Announce((projectLabel is null ? "" : $"project: {projectLabel} | ") +
-            $"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
-    }
-
-    private async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
-    {
-        var goals = await LoadActiveAsync(metadata, cancellationToken);
-        _board.Clear();
-        foreach (var goal in goals) _board[goal.Id] = goal;
-        Announce($"board | active goals: {goals.Count} | owner questions: {_open.Count}");
-        foreach (var goal in goals)
-            PrintBoardRow(goal);
-    }
-
-    private void PrintBoardRow(OwnerGoalCard goal) =>
-        output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
-
-    private async Task PrintGoalAsync(string prefix, CancellationToken cancellationToken)
-    {
-        var metadata = await state.ListGoalMetadataAsync(cancellationToken);
-        var matches = metadata.Where(item => item.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length == 0) { Announce($"no goal matches '{prefix}'"); return; }
-        if (matches.Length > 1) { Announce($"ambiguous goal: {string.Join(", ", matches.Select(item => item.Id[..8]))}"); return; }
-        var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], cancellationToken);
-        var goal = kernel.Goals.SingleOrDefault();
-        if (goal is null) { Announce("goal state unavailable"); return; }
-        Announce($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
-        foreach (var line in eventTail.ReadLast(goal.Id.Value, 15)) output.WriteLine(line);
     }
 
     private async Task<IReadOnlyList<OwnerGoalCard>> LoadActiveAsync(
@@ -302,19 +181,4 @@ internal sealed class OwnerConsoleSession(
         (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded);
 
     private void Announce(string line) => output.WriteLine(ConsoleAnnouncementFormatter.Format(clock, line));
-
-    private async Task PrintDigestAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
-    {
-        foreach (var line in digest.ReadSummaryLines().Take(5)) Announce(line);
-        await PrintHeaderAsync(metadata, cancellationToken);
-        await PrintBoardAsync(metadata, cancellationToken);
-    }
-
-    private string Age(DateTimeOffset? timestamp)
-    {
-        if (timestamp is null) return "unknown";
-        var span = clock.GetUtcNow() - timestamp.Value;
-        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
-        return span.TotalMinutes < 1 ? $"{span.TotalSeconds:0}s" : span.TotalHours < 1 ? $"{span.TotalMinutes:0}m" : $"{span.TotalHours:0}h";
-    }
 }
