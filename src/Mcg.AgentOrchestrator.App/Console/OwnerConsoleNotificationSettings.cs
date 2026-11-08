@@ -6,6 +6,7 @@ internal sealed record OwnerConsoleNotificationSettings
 {
     internal TimeSpan AttentionThreshold { get; init; } = TimeSpan.FromMinutes(30);
     internal TimeSpan StaleTickThreshold { get; init; } = TimeSpan.FromMinutes(15);
+    internal TimeSpan UnplannedStopGrace { get; init; } = TimeSpan.FromSeconds(60);
     internal TimeSpan CalmCoalesce { get; init; } = TimeSpan.FromSeconds(60);
     internal string? CalmSoundFile { get; init; }
     internal string? AttentionSoundFile { get; init; }
@@ -25,6 +26,7 @@ internal sealed record OwnerConsoleNotificationSettings
             {
                 AttentionThreshold = Duration("attentionThresholdMinutes", 60, defaults.AttentionThreshold),
                 StaleTickThreshold = Duration("staleTickThresholdMinutes", 60, defaults.StaleTickThreshold),
+                UnplannedStopGrace = Duration("unplannedStopGraceSeconds", 1, defaults.UnplannedStopGrace),
                 CalmCoalesce = Duration("calmCoalesceSeconds", 1, defaults.CalmCoalesce),
                 CalmSoundFile = Sound("calmSoundFile"),
                 AttentionSoundFile = Sound("attentionSoundFile"),
