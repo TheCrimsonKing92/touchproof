@@ -169,9 +169,13 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
     {
         try
         {
-            if (JsonNode.Parse(File.ReadAllText(_settingsPath)) is JsonObject document)
+            using var parsed = JsonDocument.Parse(File.ReadAllText(_settingsPath));
+            if (parsed.RootElement.ValueKind == JsonValueKind.Object)
             {
-                _ = document.ToArray(); // Materialize within the malformed-document failure boundary.
+                var document = new JsonObject();
+                // Match the loader's last-wins handling of duplicate top-level keys.
+                foreach (var field in parsed.RootElement.EnumerateObject())
+                    document[field.Name] = JsonNode.Parse(field.Value.GetRawText());
                 return document;
             }
         }

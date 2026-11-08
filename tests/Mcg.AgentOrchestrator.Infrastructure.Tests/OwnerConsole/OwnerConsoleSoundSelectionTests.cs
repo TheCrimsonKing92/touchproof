@@ -1,11 +1,14 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Parallel-safe: every test owns its directory, settings, audio output and clock.
 public sealed class OwnerConsoleSoundSelectionTests
 {
-    [Fact]
-    public async Task SetAndClear_ControllerDispatch_PreservesKeysAndChangesNextAlert()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SetAndClear_ControllerDispatch_PreservesKeysAndChangesNextAlert(bool exactDuplicateKey)
     {
         var root = SharedTestSupport.CreateTempDirectory();
         try
@@ -42,7 +45,13 @@ public sealed class OwnerConsoleSoundSelectionTests
 
             // A key added after startup must survive the command's fresh read, too.
             document["addedAfterStartup"] = new JsonArray("keep", 2);
-            File.WriteAllText(path, document.ToJsonString());
+            var text = document.ToJsonString();
+            if (exactDuplicateKey) text = "{\"attentionThresholdMinutes\":99," + text[1..];
+            File.WriteAllText(path, text);
+            using (var input = JsonDocument.Parse(File.ReadAllText(path)))
+                Assert.Equal(exactDuplicateKey ? 2 : 1, input.RootElement.EnumerateObject()
+                    .Count(field => field.Name == "attentionThresholdMinutes"));
+            Assert.Equal(TimeSpan.FromMinutes(7), OwnerConsoleNotificationSettings.Load(path).AttentionThreshold);
             await controller.RunCommandAsync("sound set calm 2");
             Assert.Equal("sound set calm: second.wav", dialogs.Texts[^1].Trim());
             var saved = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
