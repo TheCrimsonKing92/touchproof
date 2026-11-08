@@ -22,6 +22,8 @@ public sealed class OwnerFleetLineModeWidthScenarioTests
 
         Assert.Equal(1, reads);
         FleetFixture.AssertDiagram(harness.Output.Text.TrimEnd('\r', '\n').Replace("\r\n", "\n"), expected);
+        Assert.Contains("slowdown - decision none", harness.Output.Text);
+        Assert.DoesNotContain("median 47.3s n=", harness.Output.Text);
     }
 
     [Theory]

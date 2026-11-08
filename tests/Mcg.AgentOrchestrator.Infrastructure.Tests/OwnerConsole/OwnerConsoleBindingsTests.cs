@@ -161,7 +161,8 @@ public sealed class OwnerConsoleBindingsTests
             ":goal <id-prefix>: Open live goal detail, landing status and actions.",
             ":fleet: Show the fleet diagram: host and executor boxes.",
             ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
-            ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same)."
+            ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).",
+            "Fleet view x: Toggle between the top five lanes and all lanes for every executor."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);
         var lines = OwnerConsoleBindings.HelpText.Split('\n');

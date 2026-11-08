@@ -6,7 +6,7 @@ public sealed class OwnerFleetLaneWrapTests
 {
     [Theory]
     [InlineData("short lane", 10)]
-    [InlineData("  solo 2.0s conc -", 30)]
+    [InlineData("  indented detail", 30)]
     [InlineData("", 4)]
     public void FittingLineIsUnchanged(string text, int columns) =>
         Assert.Equal(text, Assert.Single(OwnerFleetLaneWrap.Wrap(text, columns)));
@@ -30,9 +30,9 @@ public sealed class OwnerFleetLaneWrapTests
     }
 
     [Fact]
-    public void WrappingPreservesWordsAndSoloIndent()
+    public void WrappingPreservesWordsAndIndent()
     {
-        const string text = "  solo 47.3s conc 123.4s";
+        const string text = "  indented detail with words";
         var rows = OwnerFleetLaneWrap.Wrap(text, 12);
         Assert.All(rows, row => Assert.StartsWith("  ", row));
         Assert.Equal(text.Split(' ', StringSplitOptions.RemoveEmptyEntries),
