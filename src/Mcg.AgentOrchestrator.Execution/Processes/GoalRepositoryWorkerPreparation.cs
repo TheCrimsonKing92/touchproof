@@ -52,4 +52,51 @@ public static class GoalRepositoryWorkerPreparation
             DispatchProcessHost.ProtectLinkedWorktreeGitFile(Path.Combine(target.WorktreePath, ".git"), labeler);
         }
     }
+
+    internal static IReadOnlyList<string> Commit(
+        Goal goal, TaskSpec task, bool shouldCommitDirtyWorktree,
+        string standardOutput, string standardError, DispatchWorktreeCommitter committer)
+    {
+        var failures = new List<string>();
+        foreach (var target in ResolveTargets(goal, task.RequiredRole))
+        {
+            try
+            {
+                ValidateTarget(target, goal.Id, new SystemWorkerSandboxFileSystem());
+                var dispatch = task.LastDispatch ?? throw new InvalidOperationException("Repository commit requires a dispatch.");
+                var branch = GoalRepositoryWorktreeLayout.BranchName(goal.Id, target.Key);
+                var inspection = committer.InspectGoalWorktree(target.WorktreePath, goal.Id,
+                    dispatch.DispatchedAt, forceRefresh: true, expectedBranch: branch);
+                if (!inspection.IsAvailable)
+                {
+                    failures.Add($"repository={target.Key}; worktree inspection refused; " +
+                        $"reason={inspection.UnavailableReason}; git_receipt={inspection.GitReceipt}.");
+                    continue;
+                }
+                if (inspection.Evidence.IsClean) continue;
+
+                var attempt = shouldCommitDirtyWorktree
+                    ? committer.TryCommitWorktreeEdits(target.WorktreePath,
+                        DispatchWorktreeCommitter.BuildOrchestratorCommitMessage(goal, task,
+                            BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, dispatch), standardOutput,
+                            standardError, inspection.Evidence.DirtyPaths), inspection.Evidence.DirtyPaths)
+                    : CommitWorktreeEditsResult.Failed("Commit-on-behalf guards refused repository edits.");
+                var afterCommit = attempt.Succeeded
+                    ? committer.InspectGoalWorktree(target.WorktreePath, goal.Id,
+                        dispatch.DispatchedAt, forceRefresh: true, expectedBranch: branch)
+                    : inspection;
+                if (!attempt.Succeeded || !afterCommit.IsAvailable || !afterCommit.Evidence.IsClean ||
+                    !afterCommit.Evidence.HasRelevantCommitAfterDispatch)
+                    failures.Add($"repository={target.Key}; " + DispatchWorktreeCommitter.BuildCommitOnBehalfFailureDiagnostic(
+                        attempt.Succeeded ? "Repository worktree did not verify clean after commit." : attempt.Diagnostic,
+                        afterCommit.Evidence));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                failures.Add($"repository={target.Key}; commit-on-behalf refused: " +
+                    DispatchWorktreeCommitter.NormalizeDiagnosticText(ex.Message));
+            }
+        }
+        return failures;
+    }
 }
