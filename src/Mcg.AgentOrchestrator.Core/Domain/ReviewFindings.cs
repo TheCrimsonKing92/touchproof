@@ -207,7 +207,10 @@ public sealed record FindingEvidenceRequest(
     IReadOnlyList<string>? RevertPaths = null,
     [property: JsonPropertyName("mutation")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    FindingEvidenceMutation? Mutation = null);
+    FindingEvidenceMutation? Mutation = null,
+    [property: JsonPropertyName("repository")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Repository = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceArm>))]
 public enum FindingEvidenceArm
@@ -1164,6 +1167,7 @@ public static partial class ReviewFindingConvergence
             .ToArray();
 
         return left.NegativeControl == right.NegativeControl &&
+            string.Equals(left.Repository, right.Repository, StringComparison.Ordinal) &&
             FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths) &&
             FindingEvidenceMutation.Same(left.Mutation, right.Mutation) &&
             Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);

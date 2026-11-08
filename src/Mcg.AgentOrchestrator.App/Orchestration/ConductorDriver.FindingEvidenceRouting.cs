@@ -645,6 +645,9 @@ internal sealed partial class ConductorDriver
         FindingEvidenceBatch batch,
         IReadOnlyList<string> failingTestIdentities)
     {
+        // The home change/source inventory cannot attribute a failure in another repository.
+        // Keyed requests need their selected repository's baseline arm instead.
+        if (!FindingEvidenceRequestNormalization.IsHomeRepository(batch.TypedRequest.Repository)) return false;
         var changedPaths = _getLandingFileScopes(goal)
             .Select(NormalizeFindingEvidencePath)
             .Where(path => path.Length > 0)
@@ -678,10 +681,11 @@ internal sealed partial class ConductorDriver
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null,
+        KeyedRepositoryEvidenceTarget? repositoryTarget = null) =>
         ConductorParallelAcceptanceRunResult.Focused(
             candidate,
-            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths, mutation)(
+            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths, mutation, repositoryTarget)(
                 candidate.Goal, request, stableSlotLease, cancellationToken));
 
     private static bool IsCandidateOnlyRed(

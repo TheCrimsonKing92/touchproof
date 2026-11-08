@@ -158,7 +158,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? FocusedEvidenceRevertPaths = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    FindingEvidenceMutation? FocusedEvidenceMutation = null)
+    FindingEvidenceMutation? FocusedEvidenceMutation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? FocusedEvidenceRepository = null)
 {
     public int? BriefVersion { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -196,7 +198,8 @@ internal sealed record ConductorFocusedEvidenceRequestContext(
     FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
     FindingEvidenceNegativeControl? NegativeControl = null,
     IReadOnlyList<string>? RevertPaths = null, FindingEvidenceMutation? Mutation = null,
-    string? ExecutionBasisIdentity = null, string? ReceiptId = null);
+    string? ExecutionBasisIdentity = null, string? ReceiptId = null,
+    KeyedRepositoryEvidenceTarget? RepositoryTarget = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -870,6 +873,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
         FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
         FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
+        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal) &&
         string.Equals(
             attempt.FindingRoundFingerprint,
             requestContext?.FindingRoundFingerprint,
@@ -934,7 +938,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) ||
             attempt.FocusedEvidenceNegativeControl != requestContext?.NegativeControl ||
             !FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) ||
-            !FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation))
+            !FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) ||
+            !string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal))
         {
             return ConductorEvidenceSupersessionCause.FocusedRequestChanged;
         }
@@ -1405,15 +1410,16 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     throw new InvalidOperationException("pre-review evidence attempt metadata did not contain a request");
                 }
 
+                var repositoryTarget = driver.ResolveAttemptEvidenceTarget(goal, activeAttempt);
                 RunPreReviewEvidenceAttempt(
                     coordinator, activeAttempt, candidate, policy,
                     (attemptCandidate, request, lease, runBaselineArm, cancellationToken, continuation) =>
                         continuation is not null
                         ? driver.RunContinuableSourceRevertEvidence(attemptCandidate, request, lease, cancellationToken,
-                            activeAttempt.FocusedEvidenceRevertPaths!, continuation)
+                            activeAttempt.FocusedEvidenceRevertPaths!, continuation, repositoryTarget)
                         : driver.RunPreReviewBaselineArmFocusedEvidence(
                             attemptCandidate, request, lease, runBaselineArm, cancellationToken,
-                            activeAttempt.FocusedEvidenceNegativeControl, activeAttempt.FocusedEvidenceRevertPaths, activeAttempt.FocusedEvidenceMutation));
+                            activeAttempt.FocusedEvidenceNegativeControl, activeAttempt.FocusedEvidenceRevertPaths, activeAttempt.FocusedEvidenceMutation, repositoryTarget));
             }
             else
             {
@@ -2288,6 +2294,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             FocusedEvidenceNegativeControl: requestContext?.NegativeControl,
             FocusedEvidenceRevertPaths: requestContext?.RevertPaths,
             FocusedEvidenceMutation: requestContext?.Mutation,
+            FocusedEvidenceRepository: requestContext?.RepositoryTarget?.Key,
             CandidateEvidenceBeforeBaseline: requestContext?.CandidateEvidenceBeforeBaseline,
             FocusedEvidenceMemberRequests: focusedMembers,
             FocusedEvidenceRequestDisposition: requestContext?.RequestDispositions

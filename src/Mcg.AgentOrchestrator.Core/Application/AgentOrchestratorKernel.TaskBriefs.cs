@@ -283,7 +283,7 @@ public sealed partial class AgentOrchestratorKernel
                 headerLines.Add($"- HEAD commit: {targetHeadCommit.Trim()}");
             }
         }
-        headerLines.AddRange(GoalRepositoryBriefSection.Render(repositoryWorktrees));
+        headerLines.AddRange(GoalRepositoryBriefSection.Render(repositoryWorktrees, task.RequiredRole));
         if (task.RequiredRole == AgentRole.Reviewer && reviewRetryCap is not null)
         {
             headerLines.Add($"Review retry budget: round {reviewRetryCap.Round}/{reviewRetryCap.StopRound}.");
