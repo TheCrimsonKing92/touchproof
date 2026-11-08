@@ -10,6 +10,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
     private bool _tickConsumed;
     private bool _initialized;
     private bool _stopSuppressed;
+    private DateTimeOffset? _pendingStopAt;
 
     internal IReadOnlyList<OwnerConsoleNotificationTier> Detect(OwnerConsoleViewModel? previous,
         OwnerConsoleViewModel current, DateTimeOffset now, OwnerConsoleBellTiers enabled)
@@ -44,12 +45,29 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         if (current.ConductorRunning)
         {
             _stopSuppressed = false;
+            _pendingStopAt = null;
             return false;
         }
         if (previous.ConductorRunning)
         {
             _stopSuppressed = current.PlannedStopReason is not null;
-            return !_stopSuppressed;
+            _pendingStopAt = _stopSuppressed ? null : now;
+            return false;
+        }
+        if (_pendingStopAt is { } pendingAt)
+        {
+            if (current.PlannedStopReason is not null)
+            {
+                _pendingStopAt = null;
+                _stopSuppressed = true;
+            }
+            else
+            {
+                if (now - pendingAt < settings.UnplannedStopGrace) return false;
+                // Consume the crossing even when the Alarm tier is muted.
+                _pendingStopAt = null;
+                return true;
+            }
         }
         if (!_stopSuppressed) return false;
         if (current.PlannedStopReason is null ||

@@ -58,9 +58,11 @@ public sealed class OwnerConsoleNotificationDetectorNegativeControlTests
             "Answer?", "Answer?", null, null, null, Now.AddMinutes(-29));
         var baseline = Model(0) with { Decisions = [decision], Status = Model(0).Status with { ConductorRunning = true } };
         detector.Detect(null, baseline, Now, OwnerConsoleBellTiers.All);
+        var stopped = Model(0) with { Decisions = [decision] };
+        Assert.Empty(detector.Detect(baseline, stopped, Now.AddSeconds(30), OwnerConsoleBellTiers.All));
         var current = Model(1) with { Decisions = [decision] };
         Assert.Equal([OwnerConsoleNotificationTier.Calm, OwnerConsoleNotificationTier.Attention, OwnerConsoleNotificationTier.Alarm],
-            detector.Detect(baseline, current, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
+            detector.Detect(stopped, current, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
     }
 
     private static OwnerConsoleViewModel Model(int landed) => new(new(false, 0, 0, 0, null, landed), [], [], []);
