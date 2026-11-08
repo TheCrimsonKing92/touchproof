@@ -26,8 +26,11 @@ internal static class WorkerBuildEvidenceRecoveryHold
                 : "existing completion-build coordinator unavailable";
         var reason = $"Completion build evidence hold: task={task.Id.Value}; {operationState}. " +
             "Candidate edits are retained; genuine successful current build evidence with exact project coverage is required. " +
-            "An operator decision is required before further build execution; no paid coding retry is authorized solely for missing evidence.";
+            "An operator decision is required before further build execution; no paid coding retry is authorized solely for missing evidence. " +
+            $"Next action: the operator runs {OrchestratorBuildEvidenceCheck.ScriptRelativePath} on the goal worktree for this candidate, " +
+            $"then closes task {task.Id.Value} with operator evidence. " + ConductorDriver.BuildAdjudicateRemedy(goal.Status);
         return new ConductorAdvanceOutcome.Held(state, reason) {
+            Owner = ConductorHoldOwner.Operator,
             Decision = FailedGoalRecoveryDecisionRecords.CompletionBuildEvidenceHeld(identity, reason) };
     }
 
