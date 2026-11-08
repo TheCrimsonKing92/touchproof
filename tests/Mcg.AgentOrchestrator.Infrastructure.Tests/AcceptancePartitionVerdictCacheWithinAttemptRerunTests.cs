@@ -37,7 +37,7 @@ public sealed class AcceptancePartitionVerdictCacheWithinAttemptRerunTests : IDi
             FailureClassification: predicate,
             CompletionDecision: new AcceptanceShardCompletionDecision(false, predicate, false, 0, 351, 0, "missing"));
         if (predicate == AcceptanceShardCompletionPredicates.IncompleteVstestOutput)
-            Assert.True(cache.ShouldRerunWithinAttempt(_partition, first.CompletionDecision));
+            Assert.False(cache.ShouldRerunWithinAttempt(_partition, first.CompletionDecision));
         cache.RecordWithinAttemptRetry(
             _partition, first, "attempt:partition:0", "attempt:partition:1",
             new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
