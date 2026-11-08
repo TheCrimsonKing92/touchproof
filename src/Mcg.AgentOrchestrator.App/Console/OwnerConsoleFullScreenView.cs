@@ -142,78 +142,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
         _layout.Compose(Window, _status, _notice, _hints, _epicHint, _command, EpicView, GateView);
-        _previewPane.Body.ViewportChanged += (_, _) => RenderPreview();
-        RenderPreview();
-        _notice.ViewportChanged += (_, _) => RenderNotices();
-        _status.ViewportChanged += (_, _) => RenderStatus();
-        _decisions.ValueChanged += (_, _) =>
-        {
-            if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
-            if (!_rendering) RenderHints();
-            _diagnostics?.Mark("decision-selection", TraceState);
-        };
-        _board.ValueChanged += (_, args) =>
-        {
-            if (!_rendering && args.NewValue?.SelectedCell is { } cell)
-            {
-                _copySelectionValid = true;
-                _selectedFieldKey = OwnerConsoleBoardRenderer.FieldKeys.ElementAtOrDefault(cell.X);
-                SelectBoard(cell.Y);
-            }
-            _diagnostics?.Mark("board-selection", TraceState);
-        };
-        _board.MouseEvent += (_, mouse) =>
-        {
-            // Re-selecting the same numerical cell after its old row disappeared may
-            // not raise ValueChanged. A click is still an explicit choice of the new item.
-            if (_rendering || !mouse.Flags.HasFlag(MouseFlags.LeftButtonClicked) || mouse.Position is not { } position ||
-                _board.ScreenToCell(position.X, position.Y) is not { } cell) return;
-            _selectedFieldKey = OwnerConsoleBoardRenderer.FieldKeys.ElementAtOrDefault(cell.X);
-            _copySelectionValid = true;
-            SelectBoard(cell.Y);
-        };
-        _activity.ValueChanged += (_, _) =>
-        {
-            if (!_rendering && ActivityRow() is { } row) { _activityPane.Inspect(row); RenderHints(); RenderOverflow(); }
-            _diagnostics?.Mark("activity-selection", TraceState);
-        };
-        _activity.ViewportChanged += (_, args) =>
-        {
-            var viewport = _activity.Viewport; // NewViewport is empty before Terminal.Gui initialization.
-            if (!_rendering && args.OldViewport.Size == viewport.Size && args.OldViewport.X == viewport.X && args.OldViewport.Y != viewport.Y && ActivityRow() is { } row)
-            { _activityPane.Scrolled(row); RenderHints(); RenderOverflow(); }
-        };
-        _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
-        _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
-        _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
-        _command.HasFocusChanged += (_, _) => RenderHints();
-        _command.TextChanged += (_, _) =>
-        {
-            if (_completionHint is null) return;
-            _completionHint = null;
-            RenderHints();
-        };
-        _activity.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("activity-viewport", TraceState);
-            Fit(_activity.Viewport.Width, _boardTitleWidth);
-            RenderOverflow();
-        };
-        _board.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("board-viewport", TraceState);
-            Fit(_activityWidth, 0);
-            RenderOverflow();
-        };
-        _decisions.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("decisions-viewport", TraceState);
-            if (_rendering) return;
-            _rendering = true;
-            try { RenderDecisions(); }
-            finally { _rendering = false; }
-            RenderOverflow();
-        };
+        new OwnerConsoleFullScreenWiring(
+            _previewPane.Body, _notice, _status, _decisions, _board, _activity, _command, _activityPane,
+            _controller, _diagnostics, TraceState,
+            () => _rendering, value => _rendering = value, value => _copySelectionValid = value,
+            value => _selectedFieldKey = value, () => _completionHint, value => _completionHint = value,
+            () => _activityWidth, () => _boardTitleWidth,
+            RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, RenderDecisions,
+            index => SelectBoard(index), PaneFocusChanged, Fit, ActivityRow).Attach();
         RenderHints();
         _router = new(this, _controller, _operation, _clipboard, _collapse, _token);
         _bindingRunner = new(this, _controller, _operation, _boardSource is null ? null : _boardSource.HandleScope, _refresh, _token);

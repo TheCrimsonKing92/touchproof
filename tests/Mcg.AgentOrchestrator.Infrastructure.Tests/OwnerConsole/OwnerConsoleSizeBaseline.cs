@@ -9,7 +9,7 @@ internal static class OwnerConsoleSizeBaseline
     {
         ["OwnerConsoleBoardSource.cs"] = 289,
         ["OwnerConsoleEpicDialog.cs"] = 309,
-        ["OwnerConsoleFullScreenView.cs"] = 561,
+        ["OwnerConsoleFullScreenView.cs"] = 497,
         ["OwnerConsoleGateExecutionProjection.cs"] = 298,
         ["OwnerConsoleGateProgress.cs"] = 355,
         ["OwnerConsoleLoop.cs"] = 278,
@@ -30,7 +30,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleBoardSource.cs::OwnerConsoleBoardSource.ComposeAsync",
         "OwnerConsoleEpicDialog.cs::OwnerConsoleEpicDialog.HandleKeyAsync",
         "OwnerConsoleFullScreenHost.cs::OwnerConsoleFullScreenHost.RunCoreAsync",
-        "OwnerConsoleFullScreenView.cs::OwnerConsoleFullScreenView.OwnerConsoleFullScreenView",
         "OwnerConsoleGateExecutionProjection.cs::OwnerConsoleGateProgress.Reconstruct",
         "OwnerConsoleGateLayout.cs::OwnerConsoleGateLayout.Lines",
         "OwnerConsoleGateProgress.cs::OwnerConsoleGateProgress.Build",
