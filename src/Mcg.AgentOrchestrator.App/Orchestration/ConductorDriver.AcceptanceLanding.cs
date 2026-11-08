@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly Action<string, string> _acceptanceEventSink;
-    internal MultiRepositoryGateHoldAttention? MultiRepositoryGateHoldAttention { get; set; }
+    internal MultiRepositoryLandingHoldAttention? MultiRepositoryLandingHoldAttention { get; set; }
+    internal MultiRepositoryAcceptanceGate? RepositoryAcceptanceGate { get; set; }
     private readonly Func<AcceptanceEngineHealthSnapshot?> _readAcceptanceEngineHealth;
     private readonly Action<TimeSpan> _noTickAcceptancePollDelay;
     private readonly TimeSpan _noTickAcceptancePollTimeout;
@@ -114,7 +115,7 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        if (MultiRepositoryGateHold.Applies(goal)) return MakeResult(goal.Id.Value, goalPrefix, policy, MultiRepositoryGateHold.Create(goal, GoalLifecycleState.Verified));
+        if (MultiRepositoryLandingHold.Applies(goal)) return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
         var facts = new VerifiedAdmissionFacts(goal.Status);
         if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
             return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!,
@@ -211,12 +212,38 @@ internal sealed partial class ConductorDriver
         }
     }
 
+    private ConductorAdvanceResult ExecuteRepositoryAcceptance(Goal goal, string prefix,
+        ConductorAutonomyPolicy policy, GoalLifecycleState state)
+    {
+        if (RepositoryAcceptanceGate is null)
+            return MakeResult(goal.Id.Value, prefix, policy, new ConductorAdvanceOutcome.Held(state,
+                "multi-repository-acceptance-pending: repository gate is not configured."));
+        if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
+            return MakeResult(goal.Id.Value, prefix, policy, new ConductorAdvanceOutcome.Held(state,
+                "multi-repository-acceptance-pending: every task requires passing verification."));
+        if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
+            return OwnerReviewHeld(goal, prefix, policy, ownerSha, ownerReceipt!);
+        using var lease = _tryAcquireEvidenceMutationLease(goal, "conductor:multi-repository-acceptance");
+        if (lease is null) return ReplacementEvidenceMutationHeld(goal, prefix, policy);
+        if (EnvironmentGate?.Check(goal, policy, state, forGate: true) is { } environmentHold) return environmentHold;
+        var result = RepositoryAcceptanceGate.Run(goal, state, () => RunInlineLandingSourceSizePreflight(goal)
+            ?? _runAcceptanceVerification(goal, null, null, CancellationToken.None, SoloLandingGateExecutionOptions.Create(goal)));
+        if (result.Hold is { } held)
+        {
+            if (held.Decision?.DiscriminatingEvidence == MultiRepositoryLandingHold.Kind) _clearAcceptanceFailure(goal);
+            return MakeResult(goal.Id.Value, prefix, policy, held);
+        }
+        var failure = result.Failure!;
+        _recordAcceptanceFailure(goal, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha, null, null);
+        return CompleteLandingAfterAcceptance(goal, prefix, policy, failure);
+    }
+
     private ConductorAdvanceResult ExecuteVerifying(
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy)
     {
-        if (MultiRepositoryGateHold.Applies(goal)) return MakeResult(goal.Id.Value, goalPrefix, policy, MultiRepositoryGateHold.Create(goal, GoalLifecycleState.Verifying));
+        if (MultiRepositoryLandingHold.Applies(goal)) return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying);
         if (!_isConductorTick)
         {
             var decision = VerifyingStagePolicy.Evaluate(new(

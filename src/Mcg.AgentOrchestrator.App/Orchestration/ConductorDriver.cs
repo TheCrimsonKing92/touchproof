@@ -935,7 +935,7 @@ internal sealed partial class ConductorDriver
                 new ForgeProcessRunner(), CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
                 eventWriter, refreshJournal: RefreshJournal, mutationBlocker: () => LandingMutationBlocker?.Invoke(),
                 landingSink: receipt => SuccessfulLandingSink?.Invoke(receipt), acceptanceAttempts: _parallelAcceptanceAttemptCoordinator, conflictCheck: PullRequestReviewConflictCheck.CreateDefault(workspace));
-        ConductorGateAttention.Configure(this, workspace.OrchestratorDirectory, goal => PassedGateRegateAdmission.Resolve(
+        ConductorGateAttention.Configure(this, workspace, acceptanceVerifier, goal => PassedGateRegateAdmission.Resolve(
             goal, _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), _resolveAcceptanceHeads(goal).BranchHeadSha));
         RefreshHeldGateReceipts = goals => PassedReceiptManifestInvalidation.CheckAll(goals,
             _parallelAcceptanceAttemptCoordinator, dir, goal => _resolveAcceptanceHeads(goal).BranchHeadSha);

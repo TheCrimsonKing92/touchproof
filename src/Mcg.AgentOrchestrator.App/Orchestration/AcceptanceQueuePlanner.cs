@@ -101,12 +101,12 @@ public static class AcceptanceQueuePlanner
                 $"monitor {goalPrefix}");
         }
 
-        if (MultiRepositoryGateHold.Applies(goal))
+        if (MultiRepositoryLandingHold.Applies(goal))
         {
             return Item(
                 AcceptanceQueueDisposition.Held,
-                MultiRepositoryGateHold.Kind,
-                MultiRepositoryGateHold.NextAction);
+                MultiRepositoryLandingHold.Kind,
+                MultiRepositoryLandingHold.NextAction);
         }
 
         if (worktreePath is null)

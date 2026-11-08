@@ -41,6 +41,8 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance)
     {
         goal = GetCurrentGoal(goal);
+        if (acceptance.Passed && MultiRepositoryLandingHold.Applies(goal))
+            return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycle.ResolveState(goal));
         var decision = LandingGoalStateGuardPolicy.Evaluate(new(null, goal.LifecycleStatus,
             goal.AcceptanceFailureDeferredForRetry, acceptance.Passed));
         if (decision.Action == LandingGoalStateGuardAction.Hold)

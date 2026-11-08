@@ -152,7 +152,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
             // Goal 387027bb snapshots the routing deadline and emits its initial waiting event (+7 integration lines).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 603),
+            // Goal c1182160: two defensive routing lines prevent any passing repository-set result from landing a single branch.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 605),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
@@ -568,7 +569,8 @@ internal static class SourceSizeRatchet
             // Goal 871a6f45 keeps retry, hold opening and dispatch ordered in the shared attributed-failure
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
-            new SourceClassCeiling("ConductorDriver", 14256, 70),
+            // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
+            new SourceClassCeiling("ConductorDriver", 14285, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -610,7 +612,8 @@ internal static class SourceSizeRatchet
             // Goal 0d141bc6 passes resolved policy features at the existing loop/watch construction seams;
             // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
             // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
-            new SourceClassCeiling("CliCommandHandlers", 11030, 30),
+            // Goal c1182160: one defensive guard protects direct callers of the acceptance merge core from repository-set landing.
+            new SourceClassCeiling("CliCommandHandlers", 11031, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
