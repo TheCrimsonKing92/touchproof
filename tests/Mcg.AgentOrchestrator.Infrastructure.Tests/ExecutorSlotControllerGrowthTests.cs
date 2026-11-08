@@ -35,8 +35,10 @@ public sealed class ExecutorSlotControllerGrowthTests
         controller.Evaluate();
         // A second history read would throw. The running controller already owns this state.
         File.AppendAllText(fixture.LedgerPath, "malformed\n");
+        fixture.Now = fixture.Now.AddSeconds(60);
         Assert.Contains("action=hold", Assert.Single(controller.Evaluate()));
-        var last = JsonSerializer.Deserialize<ExecutorSlotDecisionRecord>(File.ReadAllLines(fixture.LedgerPath)[^1],
+        Assert.Equal(2, File.ReadAllLines(fixture.LedgerPath).Length);
+        var last = JsonSerializer.Deserialize<ExecutorSlotDecisionRecord>(File.ReadAllLines(fixture.LedgerPath)[0],
             ExecutorSlotDecisionLedger.JsonOptions)!;
         Assert.Equal(1, last.ControllerState.StableWindows);
         Assert.Throws<JsonException>(() => ExecutorSlotDecisionLedger.ReadLatest(fixture.LedgerPath));
