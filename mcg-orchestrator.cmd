@@ -39,13 +39,6 @@ set "ADOPTED_DLL="
 if not defined ADOPTED_COMMIT goto intree_path
 if not defined ADOPTED_DLL goto intree_path
 if not exist "%ADOPTED_DLL%" goto intree_path
-set "CURRENT_HEAD="
-for /f "usebackq delims=" %%H in (`git -C "%ROOT%." rev-parse HEAD 2^>nul ^|^| echo HEAD_UNAVAILABLE`) do set "CURRENT_HEAD=%%H"
-if not defined CURRENT_HEAD goto intree_path
-if "%CURRENT_HEAD%"=="HEAD_UNAVAILABLE" goto intree_path
-if not "%ADOPTED_COMMIT%"=="%CURRENT_HEAD%" goto intree_path
-git -C "%ROOT%." diff --quiet HEAD -- src Directory.Build.props Directory.Build.rsp global.json >nul 2>&1
-if not "%ERRORLEVEL%"=="0" goto intree_path
 set "MCG_CLI_LAUNCHER_PATH=fast"
 "%DOTNET_HOST%" "%ADOPTED_DLL%" %*
 exit /b %ERRORLEVEL%
