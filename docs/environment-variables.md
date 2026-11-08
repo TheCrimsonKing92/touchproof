@@ -90,6 +90,14 @@ The census deliberately includes output markers, a prefix constant, and cmd-shim
 | `MCG_WORKER_CREDENTIAL_TARGET` | `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxOptions.cs:46` | identity (credential-target selection) | mcg-orchestrator-worker | operator; tests | argument |
 | `MCG_WORKER_SANDBOX` | `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxOptions.cs:44` | setting | Disabled; Windows only, enabled by 1 or true | operator; tests | config |
 
+## Launcher build selection
+
+An ordinary `mcg-orchestrator.cmd` invocation, including starting the console, runs the adopted DLL named by `.orchestrator/continuity/home-build-adoption.cmd.txt`, regardless of checkout HEAD or local changes. This route preserves arguments and the process exit code and performs no build or PowerShell checks.
+
+Set `MCG_ORCHESTRATOR_LAUNCHER_INTREE=1` to run a CLI built from the checkout using the existing freshness check, build and run cache. That route is also used when the pointer is missing or incomplete (one line, an empty commit or an empty DLL path), or its DLL does not exist. An adopted invocation that fails returns its exit code without retrying through a build.
+
+The existing `--runtime-cache-root` prefix option still selects and validates an explicit run cache and uses the checkout freshness and build route.
+
 ## Worker environment finding
 
 Worker launch now passes only four allowlisted MCG_ names: `MCG_DISPATCH_HOST_START_GATE`, `MCG_ORCHESTRATOR_WORKER_DISPATCH`, `MCG_DOTNET_ISOLATED_ROOT` and `MCG_ORCHESTRATOR_DOTNET_PATH`. The allowlist and scrub are defined in `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerMcgEnvironmentAllowlist.cs`. This is a source finding about the launch construction path, not a live-worker observation.

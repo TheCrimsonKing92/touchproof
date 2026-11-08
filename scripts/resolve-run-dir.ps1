@@ -222,13 +222,16 @@ function Remove-UnusedRunDirectories {
     param(
         [Parameter(Mandatory = $true)][string]$BasePath,
         [Parameter(Mandatory = $true)][string]$CurrentDigest,
-        [Parameter(Mandatory = $true)][string]$AppLeaf
+        [Parameter(Mandatory = $true)][string]$AppLeaf,
+        [string]$AdoptedRunDirectory
     )
 
     foreach ($candidate in (Get-ChildItem -LiteralPath $BasePath -Directory -Force -ErrorAction SilentlyContinue)) {
         if (($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
             $candidate.Name -notmatch '^[0-9A-Fa-f]{64}$' -or
-            $candidate.Name.Equals($CurrentDigest, [StringComparison]::OrdinalIgnoreCase)) {
+            $candidate.Name.Equals($CurrentDigest, [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFullPath($candidate.FullName).TrimEnd([char[]]'\/').Equals(
+                $AdoptedRunDirectory, [StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
@@ -453,5 +456,20 @@ if ([string]::IsNullOrWhiteSpace($resolvedRun)) {
     throw "Could not seal a stable orchestrator application closure after $script:SourceSnapshotAttempts attempts. $lastSnapshotFailure"
 }
 
-Remove-UnusedRunDirectories -BasePath $base -CurrentDigest (Split-Path $resolvedRun -Leaf) -AppLeaf $leaf
+$adoptedRunDirectory = $null
+try {
+    $adoptionPointer = Join-Path (Split-Path $PSScriptRoot -Parent) '.orchestrator\continuity\home-build-adoption.cmd.txt'
+    $adoptionLines = [IO.File]::ReadAllLines($adoptionPointer)
+    if ($adoptionLines.Length -ge 2 -and -not [string]::IsNullOrWhiteSpace($adoptionLines[1])) {
+        # Cleanup protects the referenced directory even during a missing-DLL window.
+        $adoptedRunDirectory = [IO.Path]::GetDirectoryName(
+            [IO.Path]::GetFullPath($adoptionLines[1])).TrimEnd([char[]]'\/')
+    }
+}
+catch {
+    # Missing, unreadable or malformed pointers do not prevent resolving a run.
+    $adoptedRunDirectory = $null
+}
+
+Remove-UnusedRunDirectories -BasePath $base -CurrentDigest (Split-Path $resolvedRun -Leaf) -AppLeaf $leaf -AdoptedRunDirectory $adoptedRunDirectory
 Write-Output $resolvedRun
