@@ -1,0 +1,162 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+// The conductor owns evaluation. The existing handler remains the sole setting writer.
+internal sealed class ExecutorSlotController(string hostRoot, string executorsPath,
+    ExecutorSettingIntentHandler handler, ConductEventLogWriter events,
+    Func<ExecutorSlotControllerSettings>? readSettings = null, Func<string, bool>? isPinned = null,
+    Func<DateTimeOffset>? utcNow = null,
+    Func<string, DateTimeOffset, DateTimeOffset, IReadOnlyList<ExecutorSlotSample>>? readSamples = null,
+    Action<string, ExecutorSlotDecisionRecord>? appendDecision = null,
+    Func<ExecutorSlotDecisionRecord, bool>? appendEvent = null)
+{
+    private readonly object _gate = new();
+    private Dictionary<string, ExecutorSlotDecisionRecord>? _previous;
+    private readonly Dictionary<string, (DateTimeOffset At, ExecutorSlotSample[] Samples)> _evaluated = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (DateTimeOffset At, string Signature, ExecutorSlotSample[] Samples)> _recorded = new(StringComparer.Ordinal);
+    private readonly ExecutorSlotSampleReader _samples = new();
+    internal string LedgerPath => Path.Combine(Path.GetDirectoryName(executorsPath)!, ExecutorSlotDecisionLedger.FileName);
+
+    internal IReadOnlyList<string> Evaluate()
+    {
+        lock (_gate)
+        {
+            var lines = new List<string>();
+            var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
+            var settings = (readSettings ?? (() => new ExecutorSlotControllerSettings()))();
+            settings.Validate();
+            _previous ??= new(ExecutorSlotDecisionLedger.ReadLatest(LedgerPath), StringComparer.Ordinal);
+            foreach (var executor in RemoteLaneExecutorConfiguration.LoadExecutors(executorsPath).Where(e => e.AdmissionEnabled))
+            {
+                try
+                {
+                    // Read the incremental cursor on every tick so arrivals can bypass the interval.
+                    var samples = (readSamples is null ? _samples.ReadRecent(
+                        RemoteExecutorHealthLedger.ResolveStorePath(hostRoot), executor.Id, now.AddHours(-settings.LookbackHours), now)
+                        : readSamples(executor.Id, now.AddHours(-settings.LookbackHours), now))
+                        .OrderBy(s => s.AttemptId, StringComparer.Ordinal).ThenBy(s => s.ObservedAt).ToArray();
+                    // Expiry only removes evidence; only arrivals or corrections bypass the interval.
+                    if (_evaluated.TryGetValue(executor.Id, out var last) && now - last.At < TimeSpan.FromSeconds(60) &&
+                        !samples.Except(last.Samples).Any()) continue;
+                    var result = EvaluateExecutor(executor, _previous.GetValueOrDefault(executor.Id), settings, now, samples);
+                    lines.Add(result.Line);
+                    if (result.Succeeded) _evaluated[executor.Id] = (now, samples);
+                    else _evaluated.Remove(executor.Id); // Failed audits must not delay recovery.
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+                {
+                    _evaluated.Remove(executor.Id);
+                    lines.Add($"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} result=failed reason={JsonSerializer.Serialize(error.Message)}");
+                }
+            }
+            return lines;
+        }
+    }
+
+    private (string Line, bool Succeeded) EvaluateExecutor(RemoteLaneExecutorEntry executor, ExecutorSlotDecisionRecord? previous,
+        ExecutorSlotControllerSettings settings, DateTimeOffset now, ExecutorSlotSample[] samples)
+    {
+        var state = ExecutorSlotDecisionLedger.Restore(previous, executor.Slots);
+        var decision = ExecutorSlotDecision.Decide(samples, settings, state, executor.Slots,
+            isPinned?.Invoke(executor.Id) ?? false, now);
+        var transition = !decision.Pinned && decision.ProposedSlots != executor.Slots;
+        var claims = new List<IDisposable>();
+        try
+        {
+            var application = decision.Pinned ? "pinned" : "no-change";
+            if (transition)
+            {
+                application = "deferred-busy";
+                if (!RemoteExecutorOccupancy.IsOccupied(hostRoot, executor.Id))
+                {
+                    // Old configuration snapshots can dispatch any of the 16 accepted indices.
+                    for (var slot = 0; slot < RemoteLaneExecutorConfiguration.MaximumSlots; slot++)
+                    {
+                        var claim = RemoteExecutorOccupancy.TryClaimExclusive(hostRoot, executor.Id, slot);
+                        if (claim is null) break;
+                        claims.Add(claim);
+                    }
+                    if (claims.Count == RemoteLaneExecutorConfiguration.MaximumSlots &&
+                        !RemoteExecutorOccupancy.IsOccupied(hostRoot, executor.Id))
+                    {
+                        var observed = RemoteLaneExecutorConfiguration.LoadExecutors(executorsPath)
+                            .SingleOrDefault(e => e.Id == executor.Id);
+                        application = observed is not null && observed.Slots == executor.Slots && observed.AdmissionEnabled
+                            ? "pending-handler" : "deferred-setting-changed";
+                    }
+                }
+            }
+            var persistedState = state ?? new ExecutorSlotControllerState(executor.Slots, settings);
+            var beforeTransition = application == "pending-handler" ? persistedState : null;
+            // Holds/keep progress without a setting write. Busy/pinned transitions never begin a trial.
+            // Pending transitions retain their committed state as well as the proposal for recovery.
+            if ((!transition || application == "pending-handler") && !decision.Pinned) persistedState = decision.NextState;
+            var row = new ExecutorSlotDecisionRecord(Guid.NewGuid().ToString("n"), now, executor.Id,
+                settings, decision, persistedState, application, BeforeTransitionState: beforeTransition);
+            var signature = RecordingSignature(row);
+            var selectedSamples = samples.Where(s => s.ObservedAt >= now.AddHours(-settings.LookbackHours) && s.ObservedAt <= now).ToArray();
+            var recorded = !_recorded.TryGetValue(executor.Id, out var last) ? "first" :
+                application == "pending-handler" ? "actuation" :
+                signature != last.Signature || !selectedSamples.SequenceEqual(last.Samples) ? "change" :
+                now - last.At >= TimeSpan.FromHours(1) ? "heartbeat" : "no";
+            if (recorded == "no")
+                return ($"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} action={decision.Action} target={decision.ProposedSlots} application={application} recorded=no", true);
+            Exception? ledgerFailure = null;
+            try
+            {
+                (appendDecision ?? ExecutorSlotDecisionLedger.Append)(LedgerPath, row);
+                _previous![executor.Id] = row;
+                _recorded[executor.Id] = (now, signature, selectedSamples);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+            { ledgerFailure = error; }
+            // Independent attempts: an unavailable ledger must not suppress the required event.
+            var eventRow = ledgerFailure is null ? row : row with { AuditStatus = "failed-ledger" };
+            var eventWritten = appendEvent?.Invoke(eventRow) ?? events.AppendRequired("executor-slot-decision", null,
+                JsonSerializer.Serialize(new
+                {
+                    row.EvaluationId, row.ExecutorId, decision.Action, decision.CurrentSlots, decision.ProposedSlots,
+                    row.ApplicationStatus, eventRow.AuditStatus, decision.TotalSamples, decision.UnattributedSamples,
+                    SamplesPerK = decision.Estimates.Select(e => e.Samples).ToArray()
+                }, ExecutorSlotDecisionLedger.JsonOptions), now);
+            if (ledgerFailure is not null || !eventWritten)
+                return ($"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} evaluation={row.EvaluationId} result=audit-failed ledger={(ledgerFailure is null ? "written" : "failed")} event={(eventWritten ? "written" : "failed")}", false);
+            if (application == "pending-handler")
+            {
+                var intent = new OperatorIntentRecord(row.EvaluationId, row.EvaluationId, OperatorIntentVerbs.ExecutorSetSlots,
+                    OperatorIntentScopes.Workspace, null,
+                    JsonSerializer.Serialize(new ExecutorSetSlotsOperatorIntentPayload(executor.Id, decision.ProposedSlots), OperatorIntentJson.Options),
+                    [], "conductor", "conductor-slot-controller", "local-process", now, ActorKind: OperatorActorKind.Agent);
+                var change = handler.Apply(intent, now);
+                application = change.Changed ? "applied" : "no-change";
+            }
+            return ($"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} evaluation={row.EvaluationId} action={decision.Action} target={decision.ProposedSlots} application={application} recorded={recorded}", true);
+        }
+        finally { foreach (var claim in claims) claim.Dispose(); }
+    }
+
+    private static string RecordingSignature(ExecutorSlotDecisionRecord row)
+    {
+        var state = row.ControllerState;
+        // Compare substantive progress, never generated ids or clock-only state fields.
+        return JsonSerializer.Serialize(new
+        {
+            row.Decision.Action, row.Decision.ProposedSlots, row.ApplicationStatus,
+            state.ObservedSlots, state.Settings, state.StableWindows, state.LastDirection,
+            CompletedThrough = state.CompletedThrough?.AttemptId,
+            PreviousWindow = WindowSignature(state.PreviousWindow),
+            Trial = state.Trial is { } trial ? new
+            {
+                trial.Id, trial.PriorSlots, trial.TargetSlots, Baseline = WindowSignature(trial.Baseline)
+            } : null
+        }, ExecutorSlotDecisionLedger.JsonOptions);
+    }
+
+    private static object? WindowSignature(ExecutorSlotWindow? window) => window is null ? null : new
+    {
+        window.Id, AttemptIds = window.AttemptIds.Order(StringComparer.Ordinal).ToArray(), window.Estimate
+    };
+}

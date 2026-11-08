@@ -3,7 +3,6 @@ using Terminal.Gui.App;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
-using Timeout = System.Threading.Timeout;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -19,7 +18,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly OwnerConsoleBoardSource? _boardSource;
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
-    private ITimer? _noticeExpiryTimer;
+    private readonly OwnerConsoleNoticeExpiry _noticeExpiry;
     private readonly OwnerStatusPresenter _statusPresenter = new();
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
     private readonly Label _notice = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
@@ -27,21 +26,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly OwnerConsoleActivityPane _activityPane = new();
     private readonly ListView _decisions;
     private readonly OwnerConsoleBoardPane _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
-    private readonly View _boardFooter = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1, Visible = false };
-    private IReadOnlyList<(string Text, bool Dimmed)> _boardFooterSegments = [];
-    private readonly Label _preview = new() { Width = Dim.Fill(), Height = 3 };
-    private readonly OwnerConsoleSelectedGoalSummary _summary;
-    private OwnerConsoleSelectedGoalPreview _selectedPreview = new(null, null);
-    private readonly OwnerConsoleLastGood<string, (OwnerConsoleSelectedGoalPreview Preview, OwnerConsoleBoardRow? Row)> _previewLastGood = new();
-    private OwnerConsoleBoardRow? _previewRow;
-    private string? _previewStatus;
-    internal string PreviewText => _preview.Text;
-    internal Task PreviewLoad => _summary.LastLoad;
+    private readonly OwnerConsoleFullScreenLayout _layout;
+    private readonly OwnerConsolePreviewPane _previewPane;
+    internal string PreviewText => _previewPane.Body.Text;
+    internal Task PreviewLoad => _previewPane.LastLoad;
     private readonly ListView _activity;
-    private readonly FrameView _decisionsFrame;
-    private readonly FrameView _boardFrame;
-    private readonly FrameView _previewFrame;
-    private readonly FrameView _activityFrame;
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
     private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
@@ -86,7 +75,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
                 _selectedBoardIndex >= model.Board.Length || model.Board[_selectedBoardIndex].IsDiagnostic) return null;
             var row = model.Board[_selectedBoardIndex];
             var snapshot = row.Fields();
-            return _previewRow?.Project == row.Project && _selectedPreview.GoalId == row.GoalId && _selectedPreview.Summary is { } summary
+            return _previewPane.Row?.Project == row.Project && _previewPane.Preview.GoalId == row.GoalId && _previewPane.Preview.Summary is { } summary
                 ? snapshot with { Fields = [.. snapshot.Fields, .. summary.Fields().Select(item => item with { Key = "preview/" + item.Key })] }
                 : snapshot;
         }
@@ -138,121 +127,29 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         NoticeStrip = new(_clock);
         _refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
         if (_refreshInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(options), "Refresh interval must be positive.");
+        _noticeExpiry = new(_clock, Invoke, RenderNotices, _token);
         _operation = new(_clock,
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
-        _summary = new(controller.LoadGoalSummaryAsync, Invoke, preview =>
-        {
-            _previewStatus = null;
-            _previewRow = _controller.Model?.Board.FirstOrDefault(row =>
-                row.Project == SelectedProject && row.GoalId == preview.GoalId);
-            if (preview.GoalId is { } id)
-            {
-                if (preview.Unavailable is null && preview.Summary?.Preview is not null)
-                    _previewLastGood.Remember(id, (preview, _previewRow));
-                else if (_previewLastGood.TryGet(id, out var prior))
-                {
-                    _previewStatus = preview.Unavailable is { } error ? "refresh failed: " + error :
-                        preview.Summary is not null ? "refresh failed: could not load the goal" : "refreshing";
-                    preview = prior.Preview;
-                    _previewRow = prior.Row;
-                }
-            }
-            _selectedPreview = preview;
-            RenderPreview();
-        }, _token);
-        _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 2, Width = Dim.Fill(), Height = Dim.Percent(20) };
-        _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(33) };
-        _previewFrame = new FrameView { Title = "SELECTED", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = 5 };
-        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_previewFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
-        _decisionsFrame.Add(_decisions, _decisionsPane.EmptyLabel);
-        _boardFrame.Add(_board, _boardFooter);
-        _boardFooter.DrawingContent += (_, _) => OwnerConsoleBoardPane.DrawSegments(_boardFooter, 0, _boardFooterSegments);
-        _previewFrame.Add(_preview);
-        Window.Add(new Label { Y = 1, Width = Dim.Fill(), Height = 1, Text = OwnerConsoleBindings.FieldsHint });
-        _activityFrame.Add(_activity);
+        _layout = new(_decisions, _decisionsPane.EmptyLabel, _board, _activity);
+        _previewPane = new(_layout.PreviewFrame, _clock, controller.LoadGoalSummaryAsync, Invoke,
+            () => SelectedBoardRow, id => _controller.Model?.Board.FirstOrDefault(row =>
+                row.Project == SelectedProject && row.GoalId == id), _token);
         _board.Table = new DataTableSource(BoardTable);
-        _board.Style.AlwaysShowHeaders = true;
-        _board.Style.ShowHeaders = true;
-        _board.FullRowSelect = false;
         _epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, _decisionsFrame, _boardFrame, _previewFrame, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
-        _preview.ViewportChanged += (_, _) => RenderPreview();
-        RenderPreview();
-        _notice.ViewportChanged += (_, _) => RenderNotices();
-        _status.ViewportChanged += (_, _) => RenderStatus();
-        _decisions.ValueChanged += (_, _) =>
-        {
-            if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
-            if (!_rendering) RenderHints();
-            _diagnostics?.Mark("decision-selection", TraceState);
-        };
-        _board.ValueChanged += (_, args) =>
-        {
-            if (!_rendering && args.NewValue?.SelectedCell is { } cell)
-            {
-                _copySelectionValid = true;
-                _selectedFieldKey = OwnerConsoleBoardRenderer.FieldKeys.ElementAtOrDefault(cell.X);
-                SelectBoard(cell.Y);
-            }
-            _diagnostics?.Mark("board-selection", TraceState);
-        };
-        _board.MouseEvent += (_, mouse) =>
-        {
-            // Re-selecting the same numerical cell after its old row disappeared may
-            // not raise ValueChanged. A click is still an explicit choice of the new item.
-            if (_rendering || !mouse.Flags.HasFlag(MouseFlags.LeftButtonClicked) || mouse.Position is not { } position ||
-                _board.ScreenToCell(position.X, position.Y) is not { } cell) return;
-            _selectedFieldKey = OwnerConsoleBoardRenderer.FieldKeys.ElementAtOrDefault(cell.X);
-            _copySelectionValid = true;
-            SelectBoard(cell.Y);
-        };
-        _activity.ValueChanged += (_, _) =>
-        {
-            if (!_rendering && ActivityRow() is { } row) { _activityPane.Inspect(row); RenderHints(); RenderOverflow(); }
-            _diagnostics?.Mark("activity-selection", TraceState);
-        };
-        _activity.ViewportChanged += (_, args) =>
-        {
-            var viewport = _activity.Viewport; // NewViewport is empty before Terminal.Gui initialization.
-            if (!_rendering && args.OldViewport.Size == viewport.Size && args.OldViewport.X == viewport.X && args.OldViewport.Y != viewport.Y && ActivityRow() is { } row)
-            { _activityPane.Scrolled(row); RenderHints(); RenderOverflow(); }
-        };
-        _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
-        _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
-        _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
-        _command.HasFocusChanged += (_, _) => RenderHints();
-        _command.TextChanged += (_, _) =>
-        {
-            if (_completionHint is null) return;
-            _completionHint = null;
-            RenderHints();
-        };
-        _activity.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("activity-viewport", TraceState);
-            Fit(_activity.Viewport.Width, _boardTitleWidth);
-            RenderOverflow();
-        };
-        _board.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("board-viewport", TraceState);
-            Fit(_activityWidth, 0);
-            RenderOverflow();
-        };
-        _decisions.ViewportChanged += (_, _) =>
-        {
-            using var trace = _diagnostics?.Begin("decisions-viewport", TraceState);
-            if (_rendering) return;
-            _rendering = true;
-            try { RenderDecisions(); }
-            finally { _rendering = false; }
-            RenderOverflow();
-        };
+        _layout.Compose(Window, _status, _notice, _hints, _epicHint, _command, EpicView, GateView);
+        new OwnerConsoleFullScreenWiring(
+            _previewPane.Body, _notice, _status, _decisions, _board, _activity, _command, _activityPane,
+            _controller, _diagnostics, TraceState,
+            () => _rendering, value => _rendering = value, value => _copySelectionValid = value,
+            value => _selectedFieldKey = value, () => _completionHint, value => _completionHint = value,
+            () => _activityWidth, () => _boardTitleWidth,
+            RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, RenderDecisions,
+            index => SelectBoard(index), PaneFocusChanged, Fit, ActivityRow).Attach();
         RenderHints();
         _router = new(this, _controller, _operation, _clipboard, _collapse, _token);
         _bindingRunner = new(this, _controller, _operation, _boardSource is null ? null : _boardSource.HandleScope, _refresh, _token);
@@ -315,14 +212,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     {
         using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
-        _boardFooterSegments = OwnerConsoleBoardSection.Footer(model);
-        var footerVisible = _boardFooterSegments.Count > 0;
-        if (_boardFooter.Visible != footerVisible)
+        _layout.BoardFooterSegments = OwnerConsoleBoardSection.Footer(model);
+        var footerVisible = _layout.BoardFooterSegments.Count > 0;
+        if (_layout.BoardFooter.Visible != footerVisible)
         {
-            _boardFooter.Visible = footerVisible;
+            _layout.BoardFooter.Visible = footerVisible;
             _board.Height = Dim.Fill(footerVisible ? 1 : 0);
         }
-        _boardFooter.SetNeedsDraw();
+        _layout.BoardFooter.SetNeedsDraw();
         OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth,
             model.BoardScope is { Sections: not null });
         var fieldColumn = OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "");
@@ -347,15 +244,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public void RenderOverflow()
     {
         var model = _controller.Model;
-        SetTitle(_decisionsFrame, "DECISIONS" + (_decisionsPane.TitleStatus is { } status ? $" ({status})" : ""), OwnerConsoleOverflow.Of(
+        SetTitle(_layout.DecisionsFrame, "DECISIONS" + (_decisionsPane.TitleStatus is { } status ? $" ({status})" : ""), OwnerConsoleOverflow.Of(
             _decisions.Source?.Count ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
-        SetTitle(_boardFrame, "BOARD", OwnerConsoleOverflow.Of(
+        SetTitle(_layout.BoardFrame, "BOARD", OwnerConsoleOverflow.Of(
             BoardTable.Rows.Count, _board.RowOffset, BoardBodyRows()));
         var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
             ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
-            _activityPane.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome,
+            _activityPane.Following, _layout.ActivityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome,
             _activityPane.Filter, _activityPane.TitleStatus);
-        if (_activityFrame.Title != activityTitle) _activityFrame.Title = activityTitle;
+        if (_layout.ActivityFrame.Title != activityTitle) _layout.ActivityFrame.Title = activityTitle;
 
         static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
         {
@@ -366,9 +263,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     internal string PaneTitle(OwnerConsolePane pane) => pane switch
     {
-        OwnerConsolePane.Decisions => _decisionsFrame.Title,
-        OwnerConsolePane.Board => _boardFrame.Title,
-        OwnerConsolePane.Activity => _activityFrame.Title,
+        OwnerConsolePane.Decisions => _layout.DecisionsFrame.Title,
+        OwnerConsolePane.Board => _layout.BoardFrame.Title,
+        OwnerConsolePane.Activity => _layout.ActivityFrame.Title,
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
     };
 
@@ -392,21 +289,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         // An uninitialized real application has no UI dispatcher. Injected clocks let
         // headless callers drive callbacks themselves rather than mutating UI on a timer thread.
         if (!_app.Initialized && ReferenceEquals(_clock, TimeProvider.System)) return;
-        var remaining = NoticeStrip.UntilNextSuccessExpiry;
-        if (remaining is null)
-        {
-            _noticeExpiryTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            return;
-        }
-        // Create only when a success needs expiry; rendering failures or waiting for
-        // owner input must not introduce a timer.
-        _noticeExpiryTimer ??= _clock.CreateTimer(_ =>
-        {
-            if (!_token.IsCancellationRequested)
-                Invoke(() => { if (!_token.IsCancellationRequested) RenderNotices(); });
-        }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        // Recheck the clock at each callback: an early timer must rearm for the remainder.
-        _noticeExpiryTimer.Change(remaining.Value, Timeout.InfiniteTimeSpan);
+        _noticeExpiry.Rearm(NoticeStrip.UntilNextSuccessExpiry);
     }
 
     private void RenderStatus()
@@ -544,7 +427,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         if (_controller.Model is not { Board.Length: > 0 } model)
         {
             _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null;
-            if (!_summary.Select(null)) RenderPreview();
+            if (!_previewPane.Select(null)) RenderPreview();
             return;
         }
         var selectable = allowHeader && index >= 0 && index < BoardTable.Rows.Count && model.Board[index].IsDiagnostic
@@ -553,7 +436,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         var row = model.Board[_selectedBoardIndex];
         SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
         SelectedProject = selectable < 0 ? null : row.Project;
-        if (!_summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh))
+        if (!_previewPane.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh))
             RenderPreview();
         if (selectable < 0 || BoardTable.Rows.Count == 0) return;
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
@@ -562,24 +445,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         RenderOverflow();
     }
 
-    private void RenderPreview()
-    {
-        if (SelectedBoardRow is { } selected && (selected.IsForeign || selected.IsDiagnostic))
-        {
-            var foreignTitle = OwnerConsoleSelectedPreview.Title(selected.IsDiagnostic ? null : selected.GoalId);
-            if (_previewFrame.Title != foreignTitle) _previewFrame.Title = foreignTitle;
-            var foreignText = selected.IsDiagnostic ? selected.Title : OwnerConsoleBoardSource.ForeignRowMessage(selected);
-            if (_preview.Text != foreignText) _preview.Text = foreignText;
-            return;
-        }
-        var title = OwnerConsoleSelectedPreview.Title(_selectedPreview.GoalId) +
-            (_previewStatus is null ? "" : $" ({_previewStatus})");
-        if (_previewFrame.Title != title) _previewFrame.Title = title;
-        var row = _previewRow;
-        var text = string.Join('\n', OwnerConsoleSelectedPreview.Lines(_selectedPreview, row?.Stage,
-            _clock.LocalTimeZone, _preview.Viewport.Width, row));
-        if (_preview.Text != text) _preview.Text = text;
-    }
+    private void RenderPreview() => _previewPane.Render();
 
     public bool RefuseSelectedBoardRow()
     {
@@ -619,8 +485,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public void Dispose()
     {
         _lifetime.Cancel();
-        _summary.Dispose();
-        _noticeExpiryTimer?.Dispose();
+        _previewPane.Dispose();
+        _noticeExpiry.Dispose();
         _controller.Dispose();
         if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;
         if (_diagnostics is not null) _app.LayoutAndDrawComplete -= OnLayoutAndDrawComplete;

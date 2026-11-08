@@ -25,7 +25,7 @@ internal sealed partial class ConductorBatchLoop
         if (_operatorIntents is null) return [];
         try
         {
-            return [.. _operatorIntents.ExecuteWorkspacePending(kernel)];
+            return [.. ExecutorSlotControllerTick.Service(_operatorIntents, kernel, line => EmitProgress(line))];
         }
         catch (Exception ex)
         {

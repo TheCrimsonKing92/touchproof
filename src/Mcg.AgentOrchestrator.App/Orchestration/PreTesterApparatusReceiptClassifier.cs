@@ -67,12 +67,28 @@ internal static class PreTesterApparatusReceiptClassifier
         if (!candidate.Passed) return new("candidate-arm-not-passed", []);
         if (candidate.Disposition != FindingEvidenceArmDisposition.Green) return new("candidate-arm-not-green", []);
         if (candidate.ExecutedTestCount is not > 0) return new("executed-count-missing", []);
-        var failure = ContentBoundGreenTrxEvidenceCheck.FirstFailure(
-            candidate.TestResultPaths, candidate.ReceiptArtifacts, candidate.ExecutedTestCount.Value,
+        return ContentBoundFailure(candidate,
             selections.Select(selection => selection.TestClass)
                 .Except((evidence.Coverage?.DroppedSelections ?? []).Select(drop => drop.Selection), StringComparer.OrdinalIgnoreCase)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase),
-            allowShortNamePrefixCoverage: true);
+            (evidence.Arms ?? []).Where(arm => arm.Arm == FindingEvidenceArm.Candidate &&
+                string.Equals(arm.Sha, candidate.Sha, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(arm => arm.Checks).Select(check => check.Name).ToArray());
+    }
+
+    internal static PreTesterUnusableReason? ContentBoundFailure(FindingEvidenceArmReceipt candidate,
+        IReadOnlyCollection<string> requiredSelections, IReadOnlyList<string>? checkNames = null)
+    {
+        var failure = candidate.TestResultPaths is { Count: > 0 } ||
+                      candidate.NormalizedTestResultPaths is not { Count: > 0 }
+            ? ContentBoundGreenTrxEvidenceCheck.FirstFailure(
+                candidate.TestResultPaths, candidate.ReceiptArtifacts, candidate.ExecutedTestCount ?? 0,
+                requiredSelections, allowShortNamePrefixCoverage: true)
+            : ContentBoundGreenNormalizedEvidenceCheck.FirstFailure(
+                candidate.NormalizedTestResultPaths, candidate.ReceiptArtifacts, candidate.ExecutedTestCount ?? 0,
+                requiredSelections, checkNames is { Count: > 0 } && checkNames.All(CrosswalkFocusedEvidence.IsEvidenceCheckName)
+                    ? (selection, ids) => CrosswalkSelectorResolution.Resolve([selection], ids).Selected
+                    : null);
         return failure is null ? null : new(failure.Check, failure.MissingClasses);
     }
 
