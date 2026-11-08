@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -41,12 +39,8 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
     internal bool HasEta => EtaAvailable ?? ScheduleKnown;
     internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
         lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
-    private const string AttemptPattern = @"[0-9a-f]{8}-gate-[0-9]{17}-[0-9a-f]{32}";
-    private static readonly Regex AttemptId = new("^" + AttemptPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    internal const string AttemptPattern = @"[0-9a-f]{8}-gate-[0-9]{17}-[0-9a-f]{32}";
     private static readonly Regex HeartbeatAttempt = new("^" + AttemptPattern + @"(?=\.|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex Fields = new(
-        """(?:^|\s)(?<key>[\w]+)=(?<value>"(?:\\.|[^"\\])*"|[^\s"]+)""",
-        RegexOptions.CultureInvariant);
     internal static OwnerConsoleGateProgress Idle(TimeSpan? age = null) =>
         new(false, "idle", [], null, TimeSpan.Zero, [], 0, 0, 0, 0, age);
 
@@ -67,226 +61,14 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
         Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null,
         OwnerConsoleGateLaneResolver? lanes = null, int? capacity = null,
         IReadOnlyList<OwnerConsoleGateExecutorSlots>? executors = null,
-        OwnerConsoleGateLanePlanReader? planReader = null)
-    {
-        var parsed = events.OrderBy(item => item.Timestamp).Select((item, order) => new Observation(item, Tokens(item.Detail), order)).ToArray();
-        var breakdownConcurrency = BreakdownConcurrency(parsed) ?? Math.Max(1, capacity ?? 1);
-        var executorSlots = executors?.Where(executor => executor.Enabled).Sum(executor => Math.Max(0, executor.Slots)) ?? 0;
-        var gates = Reconstruct(parsed, out var ejections, out var lastEnd);
-        var history = durations.Where(item => double.IsFinite(item.DurationSeconds) && item.DurationSeconds > 0).ToArray();
-        lanes ??= new OwnerConsoleGateLaneResolver(manifest);
-        var snapshots = gates.Values.Select(Snapshot).ToArray();
-        var live = snapshots.Where(gate => gate.Live).OrderBy(gate => gate.StartedAt).ToArray();
-        var views = MemberProjections(snapshots, ejections, now);
-        var primary = live.FirstOrDefault() ?? Idle(lastEnd is null ? null : Nonnegative(now - lastEnd.Value));
-        return primary with { OtherLiveGates = live.Skip(1).ToArray(), MemberViews = views, Executions = snapshots };
+        OwnerConsoleGateLanePlanReader? planReader = null) =>
+        OwnerConsoleGateProgressReader.Build(now, events, manifest, durations, title, quietSeconds, lanes, capacity, executors, planReader);
 
-        OwnerConsoleGateProgress Snapshot(Gate gate)
-        {
-            var currentAttempt = gate.ExecutionId ?? "";
-            var planEvent = gate.Events.LastOrDefault(item => item.Get("phase") == "lane-plan" &&
-                ExecutionOf(item).Equals(currentAttempt, StringComparison.OrdinalIgnoreCase));
-            var planPath = planEvent is not null ? planEvent.Get("heartbeat") : gate.Events
-                .Select(item => item.Get("heartbeat"))
-                // Conductor attempts use a slot index, while standalone attempts use
-                // "gate". The recorded execution owns the artifact; do not reparse it.
-                .Where(path => currentAttempt.Length > 0 && path.Split(['/', '\\']).Last()
-                    .StartsWith(currentAttempt + ".", StringComparison.OrdinalIgnoreCase))
-                .Select(path => OwnerConsoleGateLanePlanReader.ArtifactPath(path, currentAttempt))
-                .LastOrDefault(path => path is not null);
-            var plan = planPath is null ? null : planReader?.Read(planPath, currentAttempt);
-            var skipped = plan?.Skipped.ToDictionary(row => row.Name, row => row.Reason, StringComparer.Ordinal);
-            // Identified executions accept only their own remote receipts. Legacy
-            // records without identity cannot fill gaps in an identified attempt.
-            var remote = parsed.Where(item => item.Event.EventKind == "remote-lane" &&
-                (currentAttempt.Length > 0 ? item.Get("attempt").Equals(currentAttempt, StringComparison.OrdinalIgnoreCase) :
-                    !AttemptId.IsMatch(item.Get("attempt")) && item.Event.Timestamp >= gate.Start &&
-                    gate.Members.Any(id => Prefix(id) == Prefix(item.Event.GoalId ?? "")))).ToArray();
-            var attribution = AttributionObservations(parsed, gate).ToArray();
-            var lastObserved = remote.Concat(attribution).Select(item => item.Event.Timestamp).Append(gate.Last).Max();
-            var resolver = plan is null ? lanes : new OwnerConsoleGateLaneResolver(
-                plan.Scheduled.Concat(plan.Skipped.Select(row => row.Name))
-                    .Select(name => new OwnerConsoleGateManifestLane(name, 0)).ToArray());
-            string Resolve(string target) => resolver.Resolve(target);
-            var samplesByLane = history.GroupBy(item => Resolve(item.LaneName), StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.RecordedAt)
-                    .Take(10).Select(item => item.DurationSeconds).Order().ToArray(), StringComparer.Ordinal);
-            var laneEvents = gate.Events.Where(item => IsLanePhase(item.Get("phase")))
-                .Select(item => (Item: item, Target: Resolve(item.Get("target")))).ToArray();
-            var remoteEvents = remote.Select(item => (Item: item, Target: Resolve(item.Get("lane")))).ToArray();
-            var observationsByLane = laneEvents.ToLookup(item => item.Target, item => item.Item, StringComparer.Ordinal);
-            var remoteByLane = remoteEvents.ToLookup(item => item.Target, item => item.Item, StringComparer.Ordinal);
-            var names = plan?.Scheduled.Concat(plan.Skipped.Select(row => row.Name)).ToList() ?? [];
-            foreach (var item in laneEvents)
-            {
-                var target = item.Target;
-                if (target.Length > 0 && !names.Contains(target)) names.Add(target);
-            }
-            foreach (var item in remoteEvents)
-            {
-                if (item.Item.Get("decision") != "offer" && item.Item.Get("outcome") is not ("accepted" or "completed" or "offer-skipped-no-executor")) continue;
-                var target = item.Target;
-                if (target.Length > 0 && !names.Contains(target)) names.Add(target);
-            }
-            var rows = names.Select(name =>
-            {
-                var lane = manifest.FirstOrDefault(lane => lane.Name == name);
-                var samples = samplesByLane.GetValueOrDefault(name) ?? [];
-                double? median = samples.Length == 0 ? lane?.EstimatedSerialSeconds :
-                    (samples[(samples.Length - 1) / 2] + samples[samples.Length / 2]) / 2;
-                if (skipped?.TryGetValue(name, out var reason) == true)
-                    return new OwnerConsoleGateLane(name, OwnerConsoleGateLaneState.Skipped, "skipped", "",
-                        TimeSpan.Zero, median, samples.Length == 0, IsManifestLane: lane is not null, SkipReason: reason, IsScheduled: false);
-                var observations = observationsByLane[name].ToArray();
-                var remoteLane = remoteByLane[name].ToArray();
-                var offer = remoteLane.LastOrDefault(item => item.Get("decision") == "offer");
-                var latest = observations.Concat(remoteLane.Where(item =>
-                        item.Get("decision") == "offer" || item.Get("outcome") is "accepted" or "completed"))
-                    .OrderBy(item => item.Order).LastOrDefault();
-                var noSlot = remoteLane.LastOrDefault();
-                var waiting = noSlot?.Event.Detail.StartsWith("REMOTE_LANE ", StringComparison.Ordinal) == true &&
-                    noSlot.Get("outcome") == "offer-skipped-no-executor" &&
-                    (latest is null || noSlot.Order > latest.Order);
-                var state = latest?.Get("phase") switch
-                {
-                    "verification-check" or "remote-shard-started" => OwnerConsoleGateLaneState.Running,
-                    "shard-complete" or "remote-shard-complete" or "check-complete" => OwnerConsoleGateLaneState.Done,
-                    "cache-hit" or "reuse" => OwnerConsoleGateLaneState.Cached,
-                    _ => offer is null ? latest is null ? OwnerConsoleGateLaneState.Planned : OwnerConsoleGateLaneState.Queued : OwnerConsoleGateLaneState.Running
-                };
-                if (latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") is "accepted" or "completed") state = OwnerConsoleGateLaneState.Done;
-                if (waiting) state = OwnerConsoleGateLaneState.Queued;
-                var elapsed = TimeSpan.FromMilliseconds(latest?.Number("elapsed_ms") ?? 0);
-                if (state == OwnerConsoleGateLaneState.Running)
-                    elapsed += Nonnegative(now - (latest?.Event.Timestamp ?? offer!.Event.Timestamp));
-                var executor = latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete"
-                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0 && item.Get("outcome") != "offer-skipped-no-executor")?.Get("executor") ??
-                        observations.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") : null;
-                if (latest?.Event.EventKind == "remote-lane" && latest.Get("executor").Length > 0) executor = latest.Get("executor");
-                var slot = Regex.Match(latest?.Get("heartbeat") ?? "", @"activity-(\d+)");
-                var location = waiting ? "no executor slot" : latest is null ? "" : executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
-                    latest?.Get("decision") == "offer" || latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete" ? "remote" : "local");
-                double? quiet = null;
-                if (state == OwnerConsoleGateLaneState.Running && latest?.Get("phase") == "verification-check")
-                {
-                    if (quietSeconds?.TryGetValue(name, out var supplied) == true ||
-                        quietSeconds?.TryGetValue(latest.Get("target"), out supplied) == true) quiet = supplied;
-                    else quiet = SecondsSinceOutput(now, observations);
-                }
-                return new OwnerConsoleGateLane(name, state, latest?.Event.EventKind == "remote-lane" && latest.Get("outcome") == "accepted" ? "passed" : latest?.Get("outcome") is "passed" or "failed" ?
-                    latest.Get("outcome") : "unknown", location, elapsed, median, samples.Length == 0, quiet, lane is not null,
-                    latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
-                    IsAttributionTarget(latest?.Get("target") ?? name),
-                    TreeRevision: latest?.Get("tree"), EvidenceKind: latest?.Get("evidence_kind"),
-                    ReproductionMemberId: latest?.Get("reproduction_member"),
-                    IsScheduled: plan?.Scheduled.Contains(name, StringComparer.Ordinal) == true);
-            }).Concat(AttributionRows(attribution, gate)).ToArray();
-            var counted = rows.Where(row => row.IsScheduled == true).ToArray();
-            var total = counted.Sum(row => row.MedianSeconds ?? 0);
-            var done = counted.Where(IsDone).ToArray();
-            var unfinished = counted.Where(row => !IsDone(row)).ToArray();
-            var concurrency = Math.Max(breakdownConcurrency + executorSlots,
-                rows.Count(row => row.IsScheduled == true && row.State == OwnerConsoleGateLaneState.Running));
-            var etaAvailable = plan is not null && unfinished.All(row => row.MedianSeconds is > 0);
-            var remaining = etaAvailable ? OwnerConsoleGateRemainingEstimate.Makespan(unfinished, concurrency) : 0;
-            var gateElapsed = Nonnegative(now - gate.Start);
-            var denominator = gateElapsed.TotalSeconds + remaining;
-            // Display estimate only: gate wall time includes time before lanes start. Keep
-            // the model's fractional remaining time and never imply unfinished work is done.
-            var fraction = total > 0
-                ? denominator > 0 ? gateElapsed.TotalSeconds / denominator : unfinished.Length == 0 ? 1 : 0
-                : plan is not null && unfinished.Length == 0 ? 1 : 0;
-            fraction = double.IsFinite(fraction) ? Math.Clamp(fraction, 0, 1) : 0;
-            if (unfinished.Length > 0) fraction = Math.Min(fraction, 0.99);
-            if (!etaAvailable) fraction = 0;
-            var kind = gate.TrainIdentity is not null || gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
-                gate.Members.Length > 1 ? "cohort" : "solo";
-            return new(gate.Live && now - lastObserved <= TimeSpan.FromMinutes(15), kind, gate.Members.Select(id => new OwnerConsoleGateMember(id, title?.Invoke(id) ?? "")).ToArray(),
-                gate.Start, gateElapsed, rows, fraction,
-                (int)remaining, done.Length, counted.Length,
-                LanePlanAvailable: plan is not null, ExecutionId: gate.ExecutionId, OuterAttemptId: gate.OuterAttemptId,
-                TrainIdentity: gate.TrainIdentity, Participation: gate.Participation, EtaAvailable: etaAvailable,
-                AdmittedAt: gate.AdmittedAt, FinalOutcome: gate.FinalOutcome, FinishedAt: gate.FinishedAt,
-                FinishedAge: gate.FinishedAt is { } finished ? Nonnegative(now - finished) : null);
-        }
-    }
+    internal static OwnerConductEvent? ParseEvent(string line) => OwnerConsoleGateProgressReader.ParseEvent(line);
 
-    internal static OwnerConductEvent? ParseEvent(string line)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(line);
-            var root = document.RootElement;
-            return new(root.GetProperty("timestamp").GetDateTimeOffset(), root.GetProperty("eventKind").GetString() ?? "",
-                root.TryGetProperty("goalId", out var goal) ? goal.GetString() : null, root.GetProperty("detail").GetString() ?? "");
-        }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
-    }
-
-    private static double? SecondsSinceOutput(DateTimeOffset now, Observation[] observations)
-    {
-        var samples = observations.Where(item => item.Get("phase") == "verification-check" &&
-            item.Get("output_bytes").Length > 0 && item.Get("child_pid") is not ("" or "unknown")).ToArray();
-        if (samples.Length == 0) return null;
-        var newest = samples[^1];
-        var start = newest.Event.Timestamp;
-        foreach (var item in samples.Reverse())
-        {
-            if (item.Get("child_pid") != newest.Get("child_pid") || item.Get("output_bytes") != newest.Get("output_bytes")) break;
-            start = item.Event.Timestamp;
-        }
-        return Math.Max(0, (now - start).TotalSeconds);
-    }
-
-    private static bool IsLanePhase(string phase) => phase is "verification-check" or "shard-complete" or "remote-shard-complete" or "check-complete" or "remote-shard-started" or "cache-hit" or "reuse";
-    private static string AttemptFromHeartbeat(string path) => HeartbeatAttempt.Match(path.Split(['/', '\\']).Last()).Value;
-    private static bool IsAttributionTarget(string target) =>
-        target.StartsWith("reviewer focused evidence: ", StringComparison.Ordinal) ||
-        target.StartsWith("reviewer mapped project evidence: ", StringComparison.Ordinal);
-    private static bool IsDone(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached;
-    private static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
-    private static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];
+    internal static string AttemptFromHeartbeat(string path) => HeartbeatAttempt.Match(path.Split(['/', '\\']).Last()).Value;
+    internal static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
+    internal static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];
     private static bool MemberMatches(string left, string right) => left.Length > 8 && right.Length > 8
         ? left == right : Prefix(left) == Prefix(right);
-    private static int? BreakdownConcurrency(Observation[] parsed)
-    {
-        var newest = parsed.LastOrDefault(item => item.Event.Detail.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal) &&
-            item.Get("phase") == "gate-phase-breakdown");
-        foreach (var field in (newest?.Get("target") ?? "").Split(';'))
-        {
-            var separator = field.IndexOf('=');
-            if (separator < 0 || !field[..separator].Equals("shard_concurrency_effective", StringComparison.Ordinal)) continue;
-            return int.TryParse(field[(separator + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) &&
-                value >= 1 ? value : null;
-        }
-        return null;
-    }
-
-    private static Dictionary<string, string> Tokens(string detail) => Fields.Matches(detail).Cast<Match>()
-        .GroupBy(match => match.Groups["key"].Value).ToDictionary(group => group.Key, group =>
-        {
-            var value = group.Last().Groups["value"].Value;
-            return value.StartsWith('"') ? value[1..^1].Replace("\\\"", "\"", StringComparison.Ordinal) : value;
-        }, StringComparer.Ordinal);
-    private sealed record Observation(OwnerConductEvent Event, Dictionary<string, string> Fields, int Order)
-    {
-        internal string Get(string key) => Fields.GetValueOrDefault(key, "");
-        internal double Number(string key) => double.TryParse(Get(key), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
-            double.IsFinite(value) && value >= 0 ? value : 0;
-    }
-    private sealed class Gate(string[] members, DateTimeOffset start)
-    {
-        internal string[] Members { get; set; } = members;
-        internal string? ExecutionId { get; init; }
-        internal string? OuterAttemptId { get; init; }
-        internal string? TrainIdentity { get; set; }
-        internal string? Participation { get; set; }
-        internal DateTimeOffset? AdmittedAt { get; set; }
-        internal string? FinalOutcome { get; set; }
-        internal DateTimeOffset? FinishedAt { get; set; }
-        internal DateTimeOffset Start { get; } = start;
-        internal DateTimeOffset Last { get; set; } = start;
-        internal bool Live { get; set; } = true;
-        internal List<Observation> Events { get; } = [];
-    }
 }
