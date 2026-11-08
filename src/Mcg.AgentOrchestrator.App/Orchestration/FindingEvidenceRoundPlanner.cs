@@ -160,6 +160,7 @@ internal static class FindingEvidenceRoundPlanner
         FindingEvidenceRequest left,
         FindingEvidenceRequest right)
     {
+        if (!string.Equals(left.Repository, right.Repository, StringComparison.Ordinal)) return "different-repository";
         if (left.NegativeControl != right.NegativeControl) return "different-negative-control";
         if (!FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths)) return "different-revert-paths";
         if (!FindingEvidenceMutation.Same(left.Mutation, right.Mutation)) return "different-mutation";

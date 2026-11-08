@@ -688,49 +688,17 @@ internal sealed partial class ConductorDriver
                 verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
         };
 
-        FocusedEvidenceRunResult RunFocusedEvidence(
-            Goal goal,
-            string request,
-            DotnetBuildEnvironmentLease? stableSlotLease,
-            bool runBaselineArm, CancellationToken cancellationToken,
-            FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null,
-            SourceRevertedEvidenceContinuation? continuation = null)
-        {
-            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
-            if (worktreePath is null)
-            {
-                return new FocusedEvidenceRunResult(
-                    request,
-                    Accepted: false,
-                    Passed: false,
-                    Summary: "goal worktree not found for focused evidence request",
-                    Checks: []);
-            }
-
-            GoalOperationJournal.Begin(dir, goal, "conductor:finding-evidence", $"Running focused finding evidence: {request}");
-            var result = AcceptanceExecutionRunner.RunFocusedVerification(
-                acceptanceVerifier, worktreePath, goal.Id, request,
-                stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
-                runBaselineArm, cancellationToken, workspace.IntegrationBranch, negativeControl, revertPaths, mutation,
-                NegativeControlRevertSetResolver.Resolve(goal), workspace.ProjectHomeDirectoryOrNull, continuation: continuation);
-            if (result.Passed)
-            {
-                GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
-            }
-            else
-            {
-                GoalOperationJournal.Failed(dir, goal, "conductor:finding-evidence", result.Summary);
-            }
-
-            return result;
-        }
-
+        var findingEvidenceExecutor = new FocusedFindingEvidenceExecutor(workspace, acceptanceVerifier);
         _runFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
-            RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
+            findingEvidenceExecutor.Run(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
         _runDualArmFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
-            RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
+            findingEvidenceExecutor.Run(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
         _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode, paths, mutation, continuation) =>
-            RunFocusedEvidence(goal, request, lease, baseline, token, mode, paths, mutation, continuation);
+            findingEvidenceExecutor.Run(goal, request, lease, baseline, token, mode, paths, mutation, continuation);
+        RunKeyedFocusedEvidence = (goal, target, request, lease, baseline, token, mode, paths, mutation, continuation) =>
+            findingEvidenceExecutor.Run(goal, request, lease, baseline, token, mode, paths, mutation, continuation, target);
+        ResolveKeyedEvidenceTarget = (goal, key) =>
+            KeyedRepositoryEvidenceTarget.TryResolve(goal, key, OrchestratorProjectRegistry.CreateDefault());
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
@@ -1415,7 +1383,7 @@ internal sealed partial class ConductorDriver
                 candidate,
                 policy,
                 request,
-                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths, requestContext?.Mutation),
+                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths, requestContext?.Mutation, requestContext?.RepositoryTarget),
                 requestContext);
         }
         catch (AcceptanceArtifactWriterLeaseBusyException ex)

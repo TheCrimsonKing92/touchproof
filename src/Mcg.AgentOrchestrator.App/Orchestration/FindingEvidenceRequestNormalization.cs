@@ -6,7 +6,70 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class FindingEvidenceRequestNormalization
 {
+    private static readonly GoalRepositorySet HomeRepository = new(["default"]);
+    internal static bool IsHomeRepository(string? key) => key is null || HomeRepository.Contains(key);
+
     internal static bool TryNormalize(
+        FindingEvidenceRequest request,
+        AcceptanceGateEngineSettings engineSettings,
+        Func<string, string, IReadOnlyList<string>> resolveSiblingClasses,
+        out FindingEvidenceRequest normalized,
+        out string executorRequest,
+        out FindingEvidenceNotHonouredReason refusalReason,
+        out string refusalDetail)
+    {
+        if (!IsHomeRepository(request.Repository))
+        {
+            normalized = new FindingEvidenceRequest([]);
+            executorRequest = string.Empty;
+            refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
+            refusalDetail = "Repository-keyed evidence resolves only through the goal-aware finding-evidence path.";
+            return false;
+        }
+        return TryNormalizeCore(request, engineSettings, resolveSiblingClasses,
+            out normalized, out executorRequest, out refusalReason, out refusalDetail);
+    }
+
+    internal static bool TryNormalizeForGoal(
+        FindingEvidenceRequest request,
+        Goal goal,
+        AcceptanceGateEngineSettings homeSettings,
+        Func<Goal, string, (KeyedRepositoryEvidenceTarget? Target, string Failure)> resolveTarget,
+        Func<string, string, IReadOnlyList<string>> resolveSiblingClasses,
+        out FindingEvidenceRequest normalized,
+        out string executorRequest,
+        out KeyedRepositoryEvidenceTarget? target,
+        out FindingEvidenceNotHonouredReason refusalReason,
+        out string refusalDetail)
+    {
+        target = null;
+        if (IsHomeRepository(request.Repository))
+            return TryNormalizeCore(request, homeSettings, resolveSiblingClasses,
+                out normalized, out executorRequest, out refusalReason, out refusalDetail);
+
+        normalized = new FindingEvidenceRequest([]);
+        executorRequest = string.Empty;
+        if (goal.Repositories?.Repositories.Contains(request.Repository) != true)
+        {
+            refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
+            var keys = goal.Repositories is null ? "none (no keys are declared)" : string.Join(", ", goal.Repositories.Keys);
+            refusalDetail = $"Repository '{request.Repository}' is not declared on the goal. Declared keys: {keys}.";
+            return false;
+        }
+
+        var resolution = resolveTarget(goal, request.Repository!);
+        target = resolution.Target;
+        if (target is null)
+        {
+            refusalReason = FindingEvidenceNotHonouredReason.ExecutorUnavailable;
+            refusalDetail = $"Repository '{request.Repository}' evidence target is unavailable: {resolution.Failure}; home resources are never substituted.";
+            return false;
+        }
+        return TryNormalizeCore(request, target.EngineSettings, (_, _) => [],
+            out normalized, out executorRequest, out refusalReason, out refusalDetail);
+    }
+
+    private static bool TryNormalizeCore(
         FindingEvidenceRequest request,
         AcceptanceGateEngineSettings engineSettings,
         Func<string, string, IReadOnlyList<string>> resolveSiblingClasses,
