@@ -95,7 +95,10 @@ internal static class CrosswalkFocusedEvidence
 
     internal static bool IsEvidenceCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase) &&
-        check.Name.StartsWith(FocusedPrefix, StringComparison.Ordinal);
+        IsEvidenceCheckName(check.Name);
+
+    internal static bool IsEvidenceCheckName(string name) =>
+        name.StartsWith(FocusedPrefix, StringComparison.Ordinal);
 
     internal static string[] SplitTarget(AcceptanceManifestCheck check, string target)
     {

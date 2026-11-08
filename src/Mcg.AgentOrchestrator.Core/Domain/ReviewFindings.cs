@@ -376,7 +376,8 @@ public sealed record FindingEvidenceArmReceipt(
     IReadOnlyList<AcceptanceCohortEvidenceArtifact>? ReceiptArtifacts = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null,
-    IReadOnlyList<FindingEvidenceSelection>? NotRunSelections = null)
+    IReadOnlyList<FindingEvidenceSelection>? NotRunSelections = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? NormalizedTestResultPaths = null)
 {
     public IReadOnlyList<FindingEvidenceSelection> NotRunSelections { get; init; } = NotRunSelections ?? [];
 }
