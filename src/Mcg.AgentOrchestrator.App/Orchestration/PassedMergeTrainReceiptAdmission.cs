@@ -185,6 +185,17 @@ internal static class PassedMergeTrainReceiptAdmission
             recordProgress(
                 $"ADMISSION tick={tick} result=held {reason} goal={goal.Id.Value[..8]}", changedGoalLines);
         }
+        foreach (var decision in PendingLandingAdmissionHold.Evaluate(
+                     eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
+                     candidates, heldMembers.Values))
+        {
+            var goal = eligible.Single(goal => goal.Id == decision.GoalId);
+            results[goal.Id.Value] = new ParallelLandingOutcome(
+                heldResult(goal, decision.Reason), SlotIndex: null);
+            recordProgress(
+                $"ADMISSION tick={tick} result=held reason=PendingLanding train={decision.Receipt.Identity.Value} " +
+                $"receipt={decision.Receipt.ReceiptId} goal={goal.Id.Value[..8]}", changedGoalLines);
+        }
         return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
             candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
     }
