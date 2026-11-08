@@ -127,7 +127,7 @@ public sealed class GoalRepositoryWorkerPreparationTests
 
         public void Apply(IReadOnlyList<GoalRepositoryWorkerPreparation.Target> targets, bool writable)
         {
-            var info = new ProcessStartInfo { WorkingDirectory = Home, UseShellExecute = false };
+            var info = new ProcessStartInfo { WorkingDirectory = Home, UseShellExecute = false, CreateNoWindow = true };
             info.Environment.Clear();
             info.Environment["PATH"] = string.Empty;
             info.ArgumentList.Add("Write-Output ok");
