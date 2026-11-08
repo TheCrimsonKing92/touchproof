@@ -45,7 +45,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
             File.WriteAllText(configuration, "{\"executors\":[]}");
             TestOverrides.RemoteLaneExecutorConfigurationPathForTests = configuration;
             TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, timeout, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, timeout, _) =>
             {
                 if (IsVstestExecution(args))
                 {

@@ -22,7 +22,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) && args.Contains(remainderLaneFilter))
@@ -87,7 +87,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -133,7 +133,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -216,7 +216,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
@@ -318,7 +318,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.Length > 1 && args[0] == "git" && args[1] == "diff")
@@ -366,20 +366,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     : new GoalAcceptanceVerifier.CommandResult(0, ""));
             }
 
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, Runner);
 
             Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-a-main-a")).Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-a", "commit-b");
-            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, Runner);
             Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-a")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 2,
                 CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-c");
-            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, Runner);
             Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-b")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 3,
@@ -403,7 +403,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(IsVstestCall(args)
@@ -444,7 +444,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(IsVstestCall(args)
@@ -488,7 +488,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (failFirstPartitionOnForcedRerun &&
@@ -605,7 +605,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         };
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -689,7 +689,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -796,7 +796,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -897,7 +897,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||

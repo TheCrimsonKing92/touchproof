@@ -14,6 +14,10 @@ public sealed class AcceptancePartitionVerdictCacheWithinAttemptRerunTests : IDi
 
     [Theory]
     [InlineData(AcceptanceShardCompletionPredicates.MissingTrx, true, 351, false, true)]
+    [InlineData(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, true, 351, false, true)]
+    [InlineData(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, false, 351, false, false)]
+    [InlineData(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, true, 0, false, false)]
+    [InlineData(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, true, 351, true, false)]
     [InlineData(AcceptanceShardCompletionPredicates.MalformedTrx, true, 351, false, true)]
     [InlineData(AcceptanceShardCompletionPredicates.MissingTrx, false, 351, false, false)]
     [InlineData(AcceptanceShardCompletionPredicates.MissingTrx, true, 0, false, false)]
@@ -32,6 +36,8 @@ public sealed class AcceptancePartitionVerdictCacheWithinAttemptRerunTests : IDi
             _partition.Name, false, 0, "first run crashed",
             FailureClassification: predicate,
             CompletionDecision: new AcceptanceShardCompletionDecision(false, predicate, false, 0, 351, 0, "missing"));
+        if (predicate == AcceptanceShardCompletionPredicates.IncompleteVstestOutput)
+            Assert.False(cache.ShouldRerunWithinAttempt(_partition, first.CompletionDecision));
         cache.RecordWithinAttemptRetry(
             _partition, first, "attempt:partition:0", "attempt:partition:1",
             new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
@@ -47,6 +53,11 @@ public sealed class AcceptancePartitionVerdictCacheWithinAttemptRerunTests : IDi
         var verdict = cache.SelectPartitionVerdict(_partition, first, probe);
 
         Assert.False(verdict.Passed);
+        if (predicate == AcceptanceShardCompletionPredicates.IncompleteVstestOutput)
+        {
+            Assert.NotNull(cache.SharedApparatusInvalidation);
+            Assert.Equal(AcceptanceFailureClassifications.SharedGateApparatusInvalidated, verdict.FailureClassification);
+        }
         Assert.Equal(expected, verdict.WithinAttemptRerun is not null);
         if (expected)
         {

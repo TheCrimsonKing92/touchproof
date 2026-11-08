@@ -418,8 +418,33 @@ internal sealed partial class AcceptancePartitionVerdictCache
         AcceptanceCheckResult result)
     {
         if (result.Passed ||
-            !TryBuildCacheKey(check, out var partitionId, out _, out _) ||
-            result.ChildProcessId is not > 0 ||
+            !TryBuildCacheKey(check, out var partitionId, out _, out _))
+        {
+            return result;
+        }
+
+        // The preflight probe proves apparatus loss without launching a child to retry.
+        if (result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.IncompleteVstestOutput)
+        {
+            lock (_gate)
+            {
+                _sharedApparatusInvalidation ??= new AcceptanceSharedApparatusInvalidation(
+                    new TempRootApparatusLossReceiptV1(
+                        1,
+                        AttemptId,
+                        $"apparatus-predicate:{AcceptanceShardCompletionPredicates.IncompleteVstestOutput}",
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow),
+                    []);
+                return DecorateSharedApparatusFailure(
+                    result with { FailureClassification = AcceptanceFailureClassifications.SharedGateApparatusInvalidated },
+                    _sharedApparatusInvalidation,
+                    partitionId);
+            }
+        }
+
+        if (result.ChildProcessId is not > 0 ||
             result.ChildProcessStartedAt is null)
         {
             return result;
@@ -793,6 +818,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         AcceptanceShardCompletionDecision decision,
         AcceptanceCheckResult probe) =>
         (decision.FailedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.IncompleteVstestOutput or
             AcceptanceShardCompletionPredicates.MalformedTrx) &&
         firstRun.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) != true &&
         probe.Passed &&
@@ -803,6 +829,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     private static bool IsApparatusInvalidatingPredicate(string failedPredicate) =>
         failedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.IncompleteVstestOutput or
             AcceptanceShardCompletionPredicates.MalformedTrx ||
         AcceptanceFailureClassifications.IsEnvironmentalApparatus(failedPredicate);
 
