@@ -9,7 +9,6 @@ internal static class OwnerConsoleSizeBaseline
     {
         ["OwnerConsoleBoardSource.cs"] = 289,
         ["OwnerConsoleEpicDialog.cs"] = 309,
-        ["OwnerConsoleFullScreenView.cs"] = 294,
         ["OwnerConsoleGateExecutionProjection.cs"] = 298,
         ["OwnerConsoleGateProgress.cs"] = 355,
         ["OwnerConsoleLoop.cs"] = 278,
