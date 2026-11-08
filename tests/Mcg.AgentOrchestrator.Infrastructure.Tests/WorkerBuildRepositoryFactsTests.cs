@@ -19,6 +19,7 @@ public sealed class WorkerBuildRepositoryFactsTests
     [Xunit.InlineData("removed")]
     [Xunit.InlineData("rename")]
     [Xunit.InlineData("spaces-and-unicode")]
+    [Xunit.InlineData("show-stash")]
     public void ChangedPaths_EqualLegacyFourCommandUnion(string state)
     {
         using var fixture = new Fixture();
@@ -47,6 +48,15 @@ public sealed class WorkerBuildRepositoryFactsTests
                 fixture.Write("Core/caf\u00e9.cs", "changed");
                 fixture.Git("add", "Core");
                 fixture.Write("Core/new \u65e5\u672c.cs", "untracked");
+                break;
+            case "show-stash":
+                fixture.Git("config", "--local", "status.showStash", "true");
+                fixture.Change("Core");
+                fixture.Git("-c", "user.name=Scope Fixture", "-c", "user.email=scope@example.invalid",
+                    "stash", "push", "--message", "fixture-local stash");
+                fixture.Change("App");
+                Assert.Contains("# stash 1", fixture.Git("status", "--porcelain=v2", "-z",
+                    "--no-renames", "--untracked-files=all"), StringComparison.Ordinal);
                 break;
             default: throw new ArgumentOutOfRangeException(nameof(state));
         }

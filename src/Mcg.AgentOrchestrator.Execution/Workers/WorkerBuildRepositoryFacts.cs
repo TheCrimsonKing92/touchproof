@@ -30,11 +30,14 @@ internal static class WorkerBuildRepositoryFacts
         var worktree = new List<string>();
         var index = new List<string>();
         var untracked = new List<string>();
-        var status = Git(root, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all");
+        var status = Git(root, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all", "--no-show-stash");
         foreach (var record in status.Split('\0', StringSplitOptions.RemoveEmptyEntries))
         {
             switch (record[0])
             {
+                case '#':
+                    // Porcelain v2 headers can be enabled by repository configuration.
+                    break;
                 case '1':
                 case 'u':
                     // Split only the fixed metadata prefix. The path may itself contain spaces or newlines.
@@ -54,7 +57,7 @@ internal static class WorkerBuildRepositoryFacts
                     untracked.Add(record[2..]);
                     break;
                 default:
-                    // --no-renames suppresses type 2; no headers or ignored records were requested.
+                    // --no-renames suppresses type 2; ignored records were not requested.
                     throw MalformedStatus();
             }
         }
