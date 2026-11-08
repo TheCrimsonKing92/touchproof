@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -12,7 +13,7 @@ internal static class RepositoryLandingCompensator
             throw new InvalidOperationException("Landed tip is no longer reachable; manual repair required.");
         var commits = RepositoryIntegrationLanding.Git(step.Root, "rev-list", "--first-parent", step.PreTip + ".." + step.LandedTip)
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        var temporary = Path.Combine(Path.GetTempPath(), "mcg-tuple-revert-" + Guid.NewGuid().ToString("N"));
+        var temporary = Path.Combine(OrchestratorTempRoot.GetParent(), "mcg-tuple-revert-" + Guid.NewGuid().ToString("N"));
         var compensating = new List<string>();
         try
         {

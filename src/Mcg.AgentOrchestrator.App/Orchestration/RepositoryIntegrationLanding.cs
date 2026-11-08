@@ -8,7 +8,7 @@ internal static class RepositoryIntegrationLanding
 {
     internal static string Execute(Goal goal, RepositoryLandingTarget target, string goalBranch)
     {
-        var temporary = Path.Combine(Path.GetTempPath(), "mcg-tuple-land-" + Guid.NewGuid().ToString("N"));
+        var temporary = Path.Combine(OrchestratorTempRoot.GetParent(), "mcg-tuple-land-" + Guid.NewGuid().ToString("N"));
         try
         {
             if (!LandingExecutor.TryPrepareCandidateFromBoundMain(goal, target.Root, temporary, target.Tip,
