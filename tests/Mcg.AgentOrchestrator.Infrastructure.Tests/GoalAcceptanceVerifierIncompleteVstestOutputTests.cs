@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -34,19 +33,16 @@ public sealed class GoalAcceptanceVerifierIncompleteVstestOutputTests : GoalAcce
                     }
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
                 };
-            // Keep the real runner's strict TRX contract while controlling only process results.
-            var constructor = typeof(GoalAcceptanceVerifier).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
-                .Single(candidate => candidate.GetParameters().Any(parameter => parameter.Name == "requiresTestTelemetryReceipt"));
-            var verifier = (GoalAcceptanceVerifier)constructor.Invoke(
-                [TestOverrides.CrosswalkExecutableForTests, runner, runner, TimeProvider.System, null, true, TestOverrides, TestOverrides.BuildStorageRootForTests]);
+            // The injected-runner constructor keeps every process invocation inside this fixture.
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, runner);
 
             var result = await verifier.RunAsync(root, new GoalId("12345678123456781234567812345678"), stableSlotIndex: 0);
 
             Assert.NotNull(output);
             var check = Assert.Single(result.Checks!, item => item.Name == "example tests");
-            Assert.False(check.Passed);
             if (removed is not null)
             {
+                Assert.False(check.Passed);
                 Assert.DoesNotContain(calls, args => args.Length > 1 && args[1] == "test");
                 Assert.Equal(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, check.CompletionDecision!.FailedPredicate);
                 Assert.Equal(AcceptanceShardCompletionPredicates.IncompleteVstestOutput, check.FailureClassification);
@@ -57,8 +53,35 @@ public sealed class GoalAcceptanceVerifierIncompleteVstestOutputTests : GoalAcce
             else
             {
                 Assert.Contains(calls, args => args.Length > 1 && args[1] == "test" && args.Contains("--no-build"));
-                Assert.Equal(AcceptanceShardCompletionPredicates.MissingTrx, check.CompletionDecision!.FailedPredicate);
+                Assert.True(check.Passed);
+                Assert.Equal(AcceptanceShardCompletionSignals.MissingTrxInjectedRunnerCompatibility,
+                    check.CompletionDecision!.PolicySignal);
             }
+        }
+        finally { DeleteDirectoryWithRetry(root); }
+    }
+
+    [Fact]
+    public void CompleteOutput_WithoutTrx_PreservesStrictMissingTrxVerdict()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "vstest-strict-completion", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var output = VstestCompleteOutputFixture.Create(root, "Example.Tests");
+            var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+            {
+                Name = "example tests", Type = "dotnet-test", Runner = "vstest", Project = "tests/Example.Tests.csproj"
+            };
+            var build = new AcceptanceCheckResult("build", true, 0, null, root);
+
+            Assert.Null(VstestOutputCompletenessProbe.BeforeNoBuildRun(check,
+                ["dotnet", "test", check.Project, "--no-build"], null, build, false));
+            Assert.True(File.Exists(Path.Combine(output, "testhost.dll")));
+            var decision = AcceptanceShardCompletionAdjudicator.DecideTestShard(false, 0,
+                AcceptanceShardCompletionAdjudicator.InspectTrxCompletion([]), requireTrxEvidence: true);
+
+            Assert.False(decision.Passed);
+            Assert.Equal(AcceptanceShardCompletionPredicates.MissingTrx, decision.FailedPredicate);
         }
         finally { DeleteDirectoryWithRetry(root); }
     }
