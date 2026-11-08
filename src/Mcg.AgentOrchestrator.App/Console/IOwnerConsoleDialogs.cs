@@ -17,6 +17,11 @@ internal interface IOwnerConsoleDialogs
         return null;
     }
     Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => ShowTextAsync("Decision", detail.State.Text);
+    async Task ShowFleetAsync(OwnerFleetViewKeys keys, OwnerFleetViewModel model, int width)
+    {
+        var rendered = keys.Render(model, width);
+        await ShowStructuredAsync("Fleet", rendered.Text, rendered.Fields);
+    }
     async Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null)
     { await ShowTextAsync(title, text); return null; }
     async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)

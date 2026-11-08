@@ -8,7 +8,7 @@ internal static class OwnerConsoleSizeBaseline
     internal static IReadOnlyDictionary<string, int> Files { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
     {
         ["OwnerConsoleLoop.cs"] = 278,
-        ["OwnerConsoleScreenController.cs"] = 288,
+        ["OwnerConsoleScreenController.cs"] = 283,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
         // Relocated section builders preserve existing text and ordering; individual methods stay below 60 lines.
         ["OwnerGoalSummarySectionReader.cs"] = 277
@@ -32,7 +32,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleLoop.cs::OwnerConsoleLoop.RunAsync.RunStepAsync",
         "OwnerConsolePaneKeys.cs::OwnerConsolePaneKeys.HandleAsync",
         "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync",
-        "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync.ExecuteAsync",
         "OwnerConsoleStageDescriber.cs::OwnerConsoleStageDescriber.Describe",
         "OwnerConsoleViewModelBuilder.cs::OwnerConsoleViewModelBuilder.BuildBoardAsync",
         "OwnerExperimentDecisionFlow.cs::OwnerExperimentDecisionFlow.RunAsync",
