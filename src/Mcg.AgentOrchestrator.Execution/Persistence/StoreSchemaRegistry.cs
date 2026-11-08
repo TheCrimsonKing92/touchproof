@@ -57,6 +57,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry FollowerGateAcceptance { get; } =
         new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStoreSetup.cs", "follower-gate-acceptance.db", "cohort", 1);
 
+    public static StoreSchemaEntry MultiRepositoryLandings { get; } =
+        new("multi-repository-landings", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MultiRepositoryLandingRecordStore.cs", "multi-repository-landings.db", "landing", null);
+
     public static StoreSchemaEntry DogfoodLog { get; } =
         new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
 
@@ -99,6 +102,7 @@ public static class StoreSchemaRegistry
         CohortSoloInheritedReceipts,
         MergeTrainAcceptance,
         FollowerGateAcceptance,
+        MultiRepositoryLandings,
         CollaborationItems,
         RunEvents,
         DogfoodLog,
