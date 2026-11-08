@@ -26,8 +26,6 @@ public sealed class LauncherAdoptedBuildTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("different-commit")]
-    [Xunit.InlineData("dirty-source")]
     [Xunit.InlineData("missing-dll")]
     [Xunit.InlineData("escape-hatch")]
     [Xunit.InlineData("missing-pointer")]
@@ -38,8 +36,6 @@ public sealed class LauncherAdoptedBuildTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new LauncherFixture();
-        if (scenario == "different-commit") fixture.WritePointer(new string('f', 40), fixture.AdoptedDll);
-        if (scenario == "dirty-source") File.AppendAllText(fixture.SourceFile, "// local change\n");
         if (scenario == "missing-dll") File.Delete(fixture.AdoptedDll);
         if (scenario == "missing-pointer") File.Delete(fixture.Pointer);
         if (scenario == "one-line-pointer") File.WriteAllText(fixture.Pointer, fixture.Head + "\r\n");
@@ -60,21 +56,32 @@ public sealed class LauncherAdoptedBuildTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("different-commit")]
+    [Xunit.InlineData("dirty-source")]
     [Xunit.InlineData("Directory.Build.props")]
     [Xunit.InlineData("Directory.Build.rsp")]
     [Xunit.InlineData("global.json")]
-    public async Task DirtyBuildInput_UsesExistingBuildPath(string input)
+    [Xunit.InlineData("no-git")]
+    public async Task EligiblePointer_RunsAdoptedDll_WhateverCheckoutState(string scenario)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new LauncherFixture();
-        File.AppendAllText(Path.Combine(fixture.Root, input), "\n");
+        if (scenario == "different-commit") fixture.WritePointer(new string('f', 40), fixture.AdoptedDll);
+        else if (scenario == "dirty-source") File.AppendAllText(fixture.SourceFile, "// local change\n");
+        else if (scenario == "no-git") SharedTestSupport.RemoveTempDirectory(Path.Combine(fixture.Root, ".git"));
+        else File.AppendAllText(Path.Combine(fixture.Root, scenario), "\n");
 
-        var result = await fixture.Run();
+        var result = await fixture.Run(exitCode: 7, trapPowerShell: true);
 
         Assert.False(result.TimedOut, $"Launcher did not exit: {result.Output}");
-        Assert.True(result.ExitCode == 0, result.Output);
-        Assert.StartsWith("build ", File.ReadAllLines(fixture.DotnetLog)[0]);
-        Assert.DoesNotContain("ADOPTED-STUB-MARKER", result.Output);
+        Assert.Equal(7, result.ExitCode);
+        Assert.Contains("ADOPTED-STUB-MARKER", result.Output);
+        Assert.Equal(new[] { fixture.AdoptedDll, "goals", "--name", "two words", "--limit", "5" },
+            File.ReadAllLines(fixture.ArgumentsLog));
+        var call = Assert.Single(File.ReadAllLines(fixture.DotnetLog));
+        Assert.DoesNotContain("build ", call);
+        Assert.False(File.Exists(fixture.PowerShellLog));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".build-lock")));
     }
 
     private sealed class LauncherFixture : IDisposable
