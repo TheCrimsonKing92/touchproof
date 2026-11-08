@@ -30,6 +30,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly OwnerConsoleBoardPane _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly OwnerConsoleFullScreenLayout _layout;
     private readonly OwnerConsoleRenderCoordinator _renderCoordinator;
+    private readonly OwnerConsoleRenderState _state = new();
+    private readonly OwnerConsolePaneRenderer _paneRenderer;
     private readonly OwnerConsolePreviewPane _previewPane;
     internal string PreviewText => _previewPane.Body.Text;
     internal Task PreviewLoad => _previewPane.LastLoad;
@@ -44,16 +46,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly OwnerConsoleScreenOperation _operation;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _refreshInterval;
-    private DateTimeOffset? _refreshedAt;
-    private bool _rendering;
     private bool _editingCommand;
     private string? _completionHint;
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
     private readonly OwnerConsoleBoardCollapse _collapse = new();
-    private OwnerConsoleViewModel? _arrangedBoard;
-    private int _activityWidth;
-    private int _boardTitleWidth;
     internal bool ActivityFollowing => _activityPane.Following;
     internal string? ActivityFilter => _activityPane.Filter;
     private View? _commandReturnFocus;
@@ -67,7 +64,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public TextField CommandLine => _command;
     public TableView BoardPane => _board;
     private readonly OwnerConsoleClipboard _clipboard;
-    private string? _selectedFieldKey = "goal";
     public OwnerConsoleFieldSnapshot? SelectedBoardFields => _selection.Fields;
     public ListView DecisionsPane => _decisions;
     public ListView ActivityPane => _activity;
@@ -85,13 +81,13 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public View? CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
     int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
     int IOwnerConsoleKeySurface.SelectedBoardIndex => _selection.Index;
-    string? IOwnerConsoleKeySurface.SelectedFieldKey { get => _selectedFieldKey; set => _selectedFieldKey = value; }
+    string? IOwnerConsoleKeySurface.SelectedFieldKey { get => _state.SelectedFieldKey; set => _state.SelectedFieldKey = value; }
     bool IOwnerConsoleKeySurface.CopySelectionValid { set => _selection.CopyValid = value; }
-    OwnerConsoleViewModel? IOwnerConsoleKeySurface.ArrangedBoard => _arrangedBoard;
-    public bool Rendering { set => _rendering = value; }
+    OwnerConsoleViewModel? IOwnerConsoleKeySurface.ArrangedBoard => _state.ArrangedBoard;
+    public bool Rendering { set => _state.Rendering = value; }
     public OwnerConsoleActivityPane ActivityModel => _activityPane;
     OwnerConsoleFieldSnapshot? IOwnerConsoleKeySurface.DecisionFields => _decisionsPane.SelectedFields;
-    int IOwnerConsoleBindingSurface.ActivityWidth => _activityWidth;
+    int IOwnerConsoleBindingSurface.ActivityWidth => _state.ActivityWidth;
     IDisposable? IOwnerConsoleBindingSurface.BeginActivitySourceReplacement() => _trace.BeginActivitySourceReplacement();
     void IOwnerConsoleBindingSurface.RequestStop() => _app.RequestStop(Window);
 
@@ -122,12 +118,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
         _layout = new(_decisions, _decisionsPane.EmptyLabel, _board, _activity);
         _renderCoordinator = new(_layout, _decisionsPane, _board, _activityPane, BoardTable, _controller, NoticeStrip,
-            _notice, _status, _statusPresenter, _clock, _refreshInterval, app, _noticeExpiry, _token, () => _refreshedAt, () => _working.Values);
+            _notice, _status, _statusPresenter, _clock, _refreshInterval, app, _noticeExpiry, _token, () => _state.RefreshedAt, () => _working.Values);
         _previewPane = new(_layout.PreviewFrame, _clock, controller.LoadGoalSummaryAsync, Invoke,
             () => SelectedBoardRow, id => _controller.Model?.Board.FirstOrDefault(row =>
                 row.Project == SelectedProject && row.GoalId == id), _token);
         _trace = new(this, app, Window, controller, diagnostics);
-        _selection = new(this, controller, _previewPane, _board, BoardTable, diagnostics, _trace.State, () => _selectedFieldKey);
+        _selection = new(this, controller, _previewPane, _board, BoardTable, diagnostics, _trace.State, () => _state.SelectedFieldKey);
+        _paneRenderer = new(_state, _controller, _diagnostics, _trace, _collapse, _clock, _renderCoordinator,
+            _selection, _layout, _board, _decisionsPane, _activityPane, _previewPane, RenderHints,
+            GateView, Window, BoardTable, NoticeStrip);
         _board.Table = new DataTableSource(BoardTable);
         _epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
@@ -137,10 +136,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         new OwnerConsoleFullScreenWiring(
             _previewPane.Body, _notice, _status, _decisions, _board, _activity, _command, _activityPane,
             _controller, _diagnostics, _trace.State,
-            () => _rendering, value => _rendering = value, value => _selection.CopyValid = value,
-            value => _selectedFieldKey = value, () => _completionHint, value => _completionHint = value,
-            () => _activityWidth, () => _boardTitleWidth,
-            RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, RenderDecisions,
+            _state, value => _selection.CopyValid = value,
+            () => _completionHint, value => _completionHint = value,
+            RenderPreview, RenderNotices, RenderStatus, RenderHints, RenderOverflow, _paneRenderer.RenderDecisions,
             index => SelectBoard(index), PaneFocusChanged, Fit, ActivityRow).Attach();
         RenderHints();
         _keys = new(this, app, Window, new(this, _controller, _operation, _clipboard, _collapse, _token),
@@ -158,77 +156,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         return table;
     }
 
-    internal void Render(OwnerConsoleViewModel model)
-    {
-        GateView.Render(model.Gate);
-        using var trace = _diagnostics?.Begin("render", _trace.State);
-        _rendering = true;
-        try
-        {
-            _arrangedBoard = OwnerConsoleBoardSection.Arrange(model);
-            model = _collapse.Apply(_arrangedBoard);
-            _controller.Apply(model);
-            if (model.BoardScope is { } scope) Window.Title = $"Owner console - {OwnerConsoleProjectLabel.ForScope(scope)}";
-            _refreshedAt = _clock.GetUtcNow();
-            RenderStatus();
-            RenderDecisions();
-            RenderBoard();
-            var selectedHeader = OwnerConsoleBoardCollapse.Enabled(model) && SelectedGoalId is null && SelectedProject is not null;
-            var index = Array.FindIndex(model.Board.ToArray(), row =>
-                (selectedHeader ? row.IsDiagnostic : row.GoalId == SelectedGoalId) &&
-                string.Equals(row.Project, SelectedProject, StringComparison.OrdinalIgnoreCase));
-            if (SelectedGoalId is not null && index < 0) _selection.CopyValid = false;
-            SelectBoard(index < 0 ? _selection.Index : index, refresh: true,
-                allowHeader: selectedHeader && index >= 0);
-            RenderActivity();
-            RenderHints();
-            NoticeStrip.RefreshSucceeded();
-            RenderNotices();
-            RenderOverflow();
-        }
-        finally { _rendering = false; }
-    }
+    internal void Render(OwnerConsoleViewModel model) => _paneRenderer.Render(model);
 
-    internal void Fit(int activityWidth, int boardTitleWidth)
-    {
-        using var trace = _diagnostics?.Begin("fit", _trace.State);
-        if (_rendering) { if (trace is not null) trace.Outcome = "skipped-rendering"; return; }
-        _activityWidth = activityWidth;
-        _boardTitleWidth = boardTitleWidth;
-        _rendering = true;
-        try { RenderActivity(); RenderBoard(); }
-        finally { _rendering = false; }
-        RenderOverflow();
-    }
+    internal void Fit(int activityWidth, int boardTitleWidth) => _paneRenderer.Fit(activityWidth, boardTitleWidth);
 
-    public void RenderBoard()
-    {
-        using var trace = _diagnostics?.Begin("board-source-replacement", _trace.State);
-        if (_controller.Model is not { } model) return;
-        _layout.BoardFooterSegments = OwnerConsoleBoardSection.Footer(model);
-        var footerVisible = _layout.BoardFooterSegments.Count > 0;
-        if (_layout.BoardFooter.Visible != footerVisible)
-        {
-            _layout.BoardFooter.Visible = footerVisible;
-            _board.Height = Dim.Fill(footerVisible ? 1 : 0);
-        }
-        _layout.BoardFooter.SetNeedsDraw();
-        OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth,
-            model.BoardScope is { Sections: not null });
-        var fieldColumn = OwnerConsoleBoardRenderer.FieldKeys.ToList().IndexOf(_selectedFieldKey ?? "");
-        if (fieldColumn < 0 || !_board.Style.GetOrCreateColumnStyle(fieldColumn).Visible) _selectedFieldKey = null;
-        if (fieldColumn >= 0 && _selection.Index >= 0 && _selection.Index < BoardTable.Rows.Count)
-            _board.SetSelection(fieldColumn, _selection.Index, false);
-        RenderPreview();
-    }
-
-    private void RenderDecisions()
-    {
-        using var trace = _diagnostics?.Begin("decisions-source-replacement", _trace.State);
-        if (_controller.Model is not { } model) return;
-        _decisionsPane.Render(model, _controller.SelectedIndex, _decisions.Viewport.Width);
-        RenderOverflow();
-    }
+    public void RenderBoard() => _paneRenderer.RenderBoard();
 
     public int BoardBodyRows() => _renderCoordinator.BoardBodyRows();
     public void RenderOverflow() => _renderCoordinator.RenderOverflow();
@@ -254,21 +186,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
     internal void RefreshStatus() => _renderCoordinator.RefreshStatus();
 
-    private void RenderActivity()
-    {
-        using var trace = _diagnostics?.Begin("activity-source-replacement", _trace.State);
-        _activityPane.Render(_controller.Model, _activityWidth);
-    }
     private int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
     public void FollowLatest()
     {
-        _rendering = true;
+        _state.Rendering = true;
         try
         {
             using var trace = _diagnostics?.Begin("activity-source-replacement", _trace.State);
-            _activityPane.FollowLatest(_controller.Model, _activityWidth);
+            _activityPane.FollowLatest(_controller.Model, _state.ActivityWidth);
         }
-        finally { _rendering = false; }
+        finally { _state.Rendering = false; }
         RenderHints();
         RenderOverflow();
     }
