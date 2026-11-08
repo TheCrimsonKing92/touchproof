@@ -114,8 +114,15 @@ internal static class OwnerConsoleFullScreenHost
                 }, token)
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
                 app.Init();
-                var notifications = OwnerConsoleNotificationSettings.Load(
-                    Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json"));
+                var settingsPath = Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json");
+                var settings = new OwnerConsoleNotificationSettingsProvider(OwnerConsoleNotificationSettings.Load(settingsPath));
+                var soundOutput = new WindowsOwnerConsoleSoundOutput();
+                var notifier = new SystemOwnerConsoleNotifier(soundOutput, settings.Current, File.Exists,
+                    Directory.Exists, path => Directory.EnumerateFiles(path, "*.wav", SearchOption.TopDirectoryOnly),
+                    Random.Shared.Next, current: () => settings.Current);
+                var sound = new OwnerConsoleSoundCommand(settingsPath, settings, notifier, soundOutput,
+                    OwnerConsoleSoundCommand.DefaultLibraryRoot(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)),
+                    Directory.Exists, path => Directory.EnumerateFiles(path, "*", SearchOption.TopDirectoryOnly));
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                     new TerminalGuiOwnerConsoleDialogs(app, token), new OwnerGoalDetailQuery(state,
                         new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory), summary: OwnerGoalChangeSummaryQuery.ForWorkspace(workspace),
@@ -124,11 +131,10 @@ internal static class OwnerConsoleFullScreenHost
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
-                    notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists,
-                        Directory.Exists, path => Directory.EnumerateFiles(path, "*.wav", SearchOption.TopDirectoryOnly), Random.Shared.Next),
-                    notifications: notifications,
+                    notifier: notifier,
+                    notifications: settings.Current,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
-                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
+                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument), sound: sound);
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);

@@ -8,7 +8,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
+    OwnerConsoleSoundCommand? sound = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerFleetViewKeys _fleetKeys = new();
@@ -22,13 +23,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerDecisionWorkflow? _decisionWorkflow;
     private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
     public void Dispose() => _answerTracking.Dispose();
-
     internal event Action? ModelApplied;
-
     internal Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
         string? detailId, CancellationToken cancellationToken) =>
         _epicDetail.LoadAsync(window, detailId, cancellationToken);
-
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get { lock (_notificationGate) return _bellTiers != OwnerConsoleBellTiers.None; } }
@@ -68,7 +66,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     }
     internal int SelectedIndex => Model is null ? -1 :
         Array.FindIndex(Model.Decisions.ToArray(), item => item.Id == SelectedDecisionId);
-
     internal void Apply(OwnerConsoleViewModel model)
     {
         IReadOnlyList<OwnerConsoleNotificationTier> tiers;
@@ -88,7 +85,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         }
         ModelApplied?.Invoke();
     }
-
     internal void SelectIndex(int index)
     {
         if (Model is { Decisions.Length: > 0 })
@@ -224,6 +220,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
                     else if (landings is null) output.WriteLine("landings view unavailable in this session");
                     else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
+                    break;
+                case "sound":
+                    if (sound is null) output.WriteLine("sound unavailable in this session");
+                    else sound.Run(line, output);
                     break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();

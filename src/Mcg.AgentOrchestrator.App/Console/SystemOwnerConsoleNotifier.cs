@@ -3,18 +3,19 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class SystemOwnerConsoleNotifier(IOwnerConsoleSoundOutput output,
     OwnerConsoleNotificationSettings settings, Func<string, bool> fileExists,
     Func<string, bool>? folderExists = null, Func<string, IEnumerable<string>>? listFiles = null,
-    Func<int, int>? choose = null) : IOwnerConsoleNotifier
+    Func<int, int>? choose = null, Func<OwnerConsoleNotificationSettings>? current = null) : IOwnerConsoleNotifier
 {
     private readonly object _playbackLock = new();
     private readonly Dictionary<OwnerConsoleNotificationTier, string?> _lastPlayed = [];
 
     public void Notify(OwnerConsoleNotificationTier tier)
     {
+        var snapshot = current?.Invoke() ?? settings;
         var path = tier switch
         {
-            OwnerConsoleNotificationTier.Calm => settings.CalmSoundFile,
-            OwnerConsoleNotificationTier.Attention => settings.AttentionSoundFile,
-            OwnerConsoleNotificationTier.Alarm => settings.AlarmSoundFile,
+            OwnerConsoleNotificationTier.Calm => snapshot.CalmSoundFile,
+            OwnerConsoleNotificationTier.Attention => snapshot.AttentionSoundFile,
+            OwnerConsoleNotificationTier.Alarm => snapshot.AlarmSoundFile,
             _ => null
         };
         lock (_playbackLock)

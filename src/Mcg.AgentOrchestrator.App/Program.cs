@@ -319,6 +319,11 @@ if (CliObligationRebindCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliObligationRebindCommand.Run(startupArgs, workspace));
 }
 
+if (CliMultiRepositoryLandingRepairCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliMultiRepositoryLandingRepairCommand.Run(startupArgs, workspace));
+}
+
 if (CliEscapeCommands.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliEscapeCommands.Run(startupArgs, workspace));
