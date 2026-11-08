@@ -84,4 +84,19 @@ public sealed class GoalRepositorySetTests
 
     private static RepositoryCandidateTuple Tuple(params string[] keys) =>
         new(keys.Select(key => new KeyValuePair<string, CandidateIdentity>(key, new("patch", "base", key))));
+
+    [Fact]
+    public void Declaration_JsonRoundTrip_PreservesDeclaredOrderSeparatelyFromKeys()
+    {
+        var order = new List<string> { "default", "zeta", "alpha" };
+        var roots = order.ToDictionary(key => key, _ => Path.GetTempPath());
+        var declaration = new GoalRepositoryDeclaration(order, roots);
+        order.Clear();
+        var restored = System.Text.Json.JsonSerializer.Deserialize<GoalRepositoryDeclaration>(
+            System.Text.Json.JsonSerializer.Serialize(declaration))!;
+        Assert.Equal(new[] { "default", "zeta", "alpha" }, restored.DeclaredOrder);
+        Assert.Equal(new[] { "alpha", "default", "zeta" }, restored.Keys);
+        Assert.Throws<ArgumentException>(() => new GoalRepositoryDeclaration(restored.Keys, roots,
+            ["default", "alpha", "alpha"]));
+    }
 }

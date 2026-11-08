@@ -193,6 +193,13 @@ internal static partial class LandingExecutor
 
         var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
         var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
+        if (MultiRepositoryGoal.Applies(goal))
+        {
+            var tupleReceipt = new MultiRepositoryAcceptanceReceiptStore(workspace.OrchestratorDirectory).TryRead(goal.Id);
+            if (tupleReceipt is not { Passed: true } || !tupleReceipt.IntegrationBases.TryGetValue("default", out var acceptedBase)
+                || acceptedBase != boundMainRevision)
+                return BuildMutationBlockedResult(goal, goalPrefix, "multi-repository integration base changed");
+        }
         var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordFromPassedCandidateAndDescribeOutstanding(
             goal,
             evidenceCandidateSha,
@@ -997,7 +1004,7 @@ internal static partial class LandingExecutor
             coverage);
     }
 
-    private static bool TryPrepareCandidateFromBoundMain(
+    internal static bool TryPrepareCandidateFromBoundMain(
         Goal goal,
         string executionDirectory,
         string tempPath,

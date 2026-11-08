@@ -19,6 +19,7 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
     internal Action<string>? OnCheck { get; set; }
     internal List<string> RetryMessages { get; } = [];
     internal int LandingCalls { get; private set; }
+    internal Func<LandingResult>? HomeLanding { get; set; }
     internal IGoalAcceptanceVerifier Verifier { get; }
     internal MultiRepositoryAcceptanceGate Gate { get; }
 
@@ -44,6 +45,8 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
         Assert.True(GoalRepositoryDispatchProvisioning.TryProvision(Goal, Goal.Tasks.Single(), out var failure), failure);
         SecondaryWorktree = Repositories.Crosswalk.WorktreePath(Goal.Id, "crosswalk");
         Assert.False(File.Exists(Path.Combine(SecondaryWorktree, "config", "acceptance-manifest.json")));
+        GoalRepositoryWorktreeProvisionerFixture.CommitChange(HomeWorktree, "fixture home change\n");
+        GoalRepositoryWorktreeProvisionerFixture.CommitChange(SecondaryWorktree, "fixture secondary change\n");
         ConductorDriverTests.PassVerification(Repositories.Kernel, Goal, Goal.Tasks.Single());
         Verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
         {
@@ -65,16 +68,24 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
     internal ConductorDriver Driver()
     {
         var kernel = Repositories.Kernel;
-        var driver = new ConductorDriver(_ => GoalLifecycleFacts.None, () => 0, _ => HomeWorktree,
+        var driver = new ConductorDriver(goal =>
+        {
+            var journal = GoalOperationJournal.Read(Repositories.Home.CheckoutPath, goal.Id);
+            return new GoalLifecycleFacts(Directory.Exists(HomeWorktree), IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
+                IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal), IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+        }, () => 0, _ => HomeWorktree,
             _ => DispatchStartOutcome.Started(), null, null, _ => RunHome(), null,
             (goal, task, message) => { RetryMessages.Add(message); return kernel.RetryTaskAutomatically(goal, task, message, RetryCause.CriterionEvidenceOwnerMismatch); },
             null, kernel.RecordCriterionRetryFeedback, null,
             _ => throw new InvalidOperationException("Multi-repository acceptance must not rebase a single branch."),
-            (_, _) => { LandingCalls++; throw new InvalidOperationException("Multi-repository goals must not land."); },
-            null, _ => { }, _ => throw new InvalidOperationException("Multi-repository goals must not clean up."),
+            (goal, policy) => { LandingCalls++; return HomeLanding?.Invoke()
+                ?? LandingExecutor.Execute(kernel, goal, Repositories.Workspace, policy); },
+            null, goal => GoalOperationJournal.Completed(Repositories.Home.CheckoutPath, goal, "conductor:record"),
+            goal => GoalWorktrees.Remove(Repositories.Home.CheckoutPath, goal.Id),
             (_, _, _) => { }, _ => null,
             recordAcceptanceFailure: (goal, checks, branch, main) => kernel.RecordAcceptanceFailure(goal.Id, checks, branch, main),
             clearAcceptanceFailure: goal => kernel.ClearAcceptanceFailure(goal.Id),
+            completeGoal: goal => kernel.CompleteGoal(goal.Id, "Fixture tuple completed."),
             parallelAcceptanceAttemptCoordinator: new(Path.Combine(Repositories.Home.Root, "attempts"), "main", runInline: true));
         ConductorGateAttention.Configure(driver, Repositories.Workspace, Verifier, _ => null, Repositories.Registry);
         return driver;
@@ -97,6 +108,9 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
             CancellationToken.None, new AcceptanceRunExecutionOptions(IntegrationBranch: "main",
                 ProjectHomeDirectory: Repositories.Workspace.ProjectHomeDirectoryOrNull));
         var failed = result.Checks?.Where(check => !check.Passed).ToArray() ?? [];
+        if (result.Passed)
+            GoalOperationJournal.AcceptancePassed(Repositories.Home.CheckoutPath, Goal, "fixture:acceptance",
+                GoalRepositoryWorktreeProvisionerFixture.Run(HomeWorktree, "rev-parse", "HEAD"), Repositories.Home.Git("rev-parse", "main"));
         return AcceptanceVerificationSummary.FromVerification(result, failed, failed.Select(check => check.Name).ToArray(),
             null, null, result.TestResultPaths, null, null);
     }

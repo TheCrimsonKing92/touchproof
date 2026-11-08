@@ -18,8 +18,8 @@ public sealed class MultiRepositoryGateHoldTests
         if (command == "land") fixture.Gate.Run(goal, GoalLifecycleState.Verified, fixture.RunHome);
         Assert.True(CliCommandHandlers.Execute([command, goal.Id.Value], fixture.Context()));
         Assert.Equal(GoalStatus.Verified, goal.Status);
-        Assert.Contains(MultiRepositoryLandingHold.Kind, goal.LandingBlocker!.Kind);
-        Assert.Equal("operator", goal.LandingBlocker.NextActor);
+        Assert.Contains(MultiRepositoryGoal.Route, goal.LandingBlocker!.Kind);
+        Assert.Equal("conductor", goal.LandingBlocker.NextActor);
         Assert.Equal(2, fixture.Calls.Count);
         Assert.True(fixture.Gate.Store.TryRead(goal.Id)!.Passed);
     }
@@ -38,7 +38,7 @@ public sealed class MultiRepositoryGateHoldTests
             "--no-record", "--autonomy", AutonomyPolicy.SupervisedAuto.Name], fixture.Context()));
 
         Assert.Equal(GoalStatus.Verified, goal.Status);
-        Assert.DoesNotContain(MultiRepositoryLandingHold.Kind, goal.LandingBlocker?.Kind ?? "");
+        Assert.DoesNotContain(MultiRepositoryGoal.Route, goal.LandingBlocker?.Kind ?? "");
         Assert.Null(new MultiRepositoryAcceptanceReceiptStore(fixture.Workspace.OrchestratorDirectory).TryRead(goal.Id));
         Assert.Equal(main, fixture.Home.Git("rev-parse", "HEAD"));
         Assert.Equal(candidate, GoalRepositoryWorktreeProvisionerFixture.Run(worktree, "rev-parse", "HEAD"));
@@ -67,8 +67,8 @@ public sealed class MultiRepositoryGateHoldTests
             item.Disposition);
         if (!declared) return;
 
-        Assert.Equal(MultiRepositoryLandingHold.Kind, item.Reason);
-        Assert.Equal(MultiRepositoryLandingHold.NextAction, item.SuggestedCommand);
+        Assert.Equal(MultiRepositoryGoal.Route, item.Reason);
+        Assert.Equal(MultiRepositoryGoal.NextAction, item.SuggestedCommand);
         CliCommandHandlers.Execute(["acceptance-queue", "--apply", "--confirm-acceptance-queue",
             "--autonomy", AutonomyPolicy.SupervisedAuto.Name], fixture.Context());
         Assert.Equal(GoalStatus.Verified, goal.Status);
@@ -99,13 +99,14 @@ public sealed class MultiRepositoryGateHoldTests
     }
 
     [Fact]
-    public async Task AdvanceOnce_CurrentReceipt_HoldsAcrossReloadWithoutRegatingOrLanding()
+    public async Task AdvanceOnce_FailedLanding_HoldsAcrossReloadWithoutRetrying()
     {
         using var acceptance = new MultiRepositoryAcceptanceGateFixture();
         var fixture = acceptance.Repositories;
         var goal = acceptance.Goal;
         Assert.Equal(GoalStatus.Verified, goal.Status);
         var driver = acceptance.Driver();
+        acceptance.HomeLanding = () => throw new IOException("fixture landing failure");
         var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
 
         for (var round = 0; round < 2; round++)
@@ -114,38 +115,40 @@ public sealed class MultiRepositoryGateHoldTests
             var current = kernel.GetGoal(goal.Id);
             var result = driver.AdvanceOnce(current, ConductorAutonomyPolicy.Conservative);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-            Assert.Equal(MultiRepositoryLandingHold.Kind, held.Decision!.DiscriminatingEvidence);
+            Assert.Equal(MultiRepositoryLandingFailedHold.Kind, held.Decision!.DiscriminatingEvidence);
             Assert.Equal(GoalLifecycleState.Verified, held.State);
+            ConductorLandingBlockerRecorder.Observe(kernel, current, held,
+                DateTimeOffset.Parse("2026-11-07T15:00:00Z"), []);
             Assert.Null(driver.TryBuildParallelAcceptanceCandidate(current,
                 ConductorAutonomyPolicy.Conservative, 0, out var reason));
-            Assert.Equal(MultiRepositoryLandingHold.Kind, reason);
-            Assert.Equal(MultiRepositoryLandingHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
+            Assert.Equal(MultiRepositoryLandingFailedHold.Kind, reason);
+            Assert.Equal(MultiRepositoryLandingFailedHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
                 driver.ProjectGateReadyCandidate(current, ConductorAutonomyPolicy.Conservative)).HoldReason);
-            Assert.Equal(MultiRepositoryLandingHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
+            Assert.Equal(MultiRepositoryLandingFailedHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
                 driver.ProjectCachedGateReadyCandidate(current, ConductorAutonomyPolicy.Conservative)).HoldReason);
-            Assert.Equal(MultiRepositoryLandingHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
+            Assert.Equal(MultiRepositoryLandingFailedHold.Kind, Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
                 driver.ProjectInReviewCohortPartner(current, ConductorAutonomyPolicy.Conservative)).HoldReason);
             ConductorLandingBlockerRecorder.Observe(kernel, current, held,
                 DateTimeOffset.Parse("2026-11-07T15:00:00Z"), []);
             Assert.Equal("operator", current.LandingBlocker!.NextActor);
-            Assert.Equal("wait-for-the-landing-slice", current.LandingBlocker.NextVerb);
+            Assert.Equal(MultiRepositoryLandingFailedHold.NextAction, current.LandingBlocker.NextVerb);
             ConductorGateAttention.ReconcileOutcome(kernel, driver, current, held);
             await repository.SaveAsync(kernel);
         }
 
         Assert.Equal(2, acceptance.Calls.Count);
-        Assert.Equal(0, acceptance.LandingCalls);
+        Assert.Equal(1, acceptance.LandingCalls);
         var persisted = (await repository.LoadAsync()).GetGoal(goal.Id);
         var attention = await CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory).GetAttentionQueueAsync();
         var item = Assert.Single(attention, item => item.CorrelationKey == MultiRepositoryLandingHoldAttention.Prefix + goal.Id.Value);
         Assert.Contains("operator", item.Body);
-        Assert.Contains(MultiRepositoryLandingHold.NextAction, item.Body);
+        Assert.Contains("fixture landing failure", item.Body);
         using var output = new StringWriter();
         CliConductorStatusReader.Print(new(null, new("unavailable", null, null), null,
             new("no-build", null, null), null,
             new(true, [new(goal.Id.Value, "Verified", "none", persisted.LandingBlocker)], 0, 0),
             null, null, new("unavailable", null, [])), output);
-        Assert.Contains(MultiRepositoryLandingHold.Kind, output.ToString());
+        Assert.Contains(MultiRepositoryLandingFailedHold.Kind, output.ToString());
         Assert.Contains("next=operator", output.ToString());
     }
 }

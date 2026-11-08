@@ -7,7 +7,8 @@ public sealed record MultiRepositoryAcceptanceReceipt
 {
     [JsonConstructor]
     public MultiRepositoryAcceptanceReceipt(GoalId goalId, string tupleCanonical,
-        IReadOnlyList<RepositoryAcceptanceOutcome> outcomes, DateTimeOffset recordedAt)
+        IReadOnlyList<RepositoryAcceptanceOutcome> outcomes, DateTimeOffset recordedAt,
+        IReadOnlyDictionary<string, string>? integrationBases = null)
     {
         ArgumentNullException.ThrowIfNull(goalId);
         ArgumentNullException.ThrowIfNull(outcomes);
@@ -22,12 +23,19 @@ public sealed record MultiRepositoryAcceptanceReceipt
         TupleCanonical = tupleCanonical;
         Outcomes = Array.AsReadOnly(snapshot);
         RecordedAt = recordedAt;
+        var bases = integrationBases ?? new Dictionary<string, string>();
+        if (bases.Any(pair => !tuple.Entries.Any(entry => entry.Key == pair.Key)
+            || pair.Value is null || pair.Value.Length != 40 || !pair.Value.All(Uri.IsHexDigit)))
+            throw new ArgumentException("Integration bases must be repository-keyed commit identities.", nameof(integrationBases));
+        IntegrationBases = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+            bases.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
     }
 
     public GoalId GoalId { get; }
     public string TupleCanonical { get; }
     public IReadOnlyList<RepositoryAcceptanceOutcome> Outcomes { get; }
     public DateTimeOffset RecordedAt { get; }
+    public IReadOnlyDictionary<string, string> IntegrationBases { get; }
     [JsonIgnore] public bool Passed => Outcomes.All(outcome => outcome.Passed);
     [JsonIgnore] public IReadOnlyList<string> FailedKeys => Outcomes.Where(outcome => !outcome.Passed).Select(outcome => outcome.Key).ToArray();
 

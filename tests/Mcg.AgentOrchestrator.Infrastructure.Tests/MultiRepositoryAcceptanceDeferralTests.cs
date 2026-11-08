@@ -35,8 +35,7 @@ public sealed class MultiRepositoryAcceptanceDeferralTests
         fixture.OnCheck = null;
         fixture.Calls.Clear();
         var retry = fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
-        Assert.Equal(MultiRepositoryLandingHold.Kind,
-            Assert.IsType<ConductorAdvanceOutcome.Held>(retry.Outcome).Decision!.DiscriminatingEvidence);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(retry.Outcome);
         Assert.True(fixture.Gate.Store.TryRead(fixture.Goal.Id)!.Passed);
         Assert.Equal(new[] { "default", "crosswalk" }, fixture.Calls.Select(call => call.Key));
         Assert.Empty(fixture.RetryMessages);
@@ -58,7 +57,7 @@ public sealed class MultiRepositoryAcceptanceDeferralTests
 
         AssertDeferred(fixture, key);
         Assert.Contains("multi-repository-acceptance-pending", fixture.Goal.LandingBlocker!.Detail);
-        Assert.DoesNotContain(MultiRepositoryLandingHold.Kind, fixture.Goal.LandingBlocker.Kind);
+        Assert.DoesNotContain(MultiRepositoryGoal.Route, fixture.Goal.LandingBlocker.Kind);
     }
 
     private static void AssertDeferred(MultiRepositoryAcceptanceGateFixture fixture, string key)

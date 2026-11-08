@@ -22,7 +22,7 @@ internal sealed partial class ConductorDriver
 
     internal GateReadyCandidateProjectionResult ProjectCachedGateReadyCandidate(Goal goal, ConductorAutonomyPolicy policy)
     {
-        if (MultiRepositoryLandingHold.Exclusion(goal) is { } repositoryHold) return repositoryHold;
+        if (MultiRepositoryGoal.Exclusion(goal) is { } repositoryHold) return repositoryHold;
         if (HasActiveOwnerReviewHold(goal, out _, out _)) return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
         if (HasActiveApparatusHold(goal, out _)) return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
         return AdmissionFacts.Project(goal, policy, ProjectionCache, GetFacts, _isVerificationGateSatisfied,
@@ -33,7 +33,7 @@ internal sealed partial class ConductorDriver
     // This projection judges pair compatibility only. It never makes the in-review goal gate-ready.
     internal GateReadyCandidateProjectionResult ProjectInReviewCohortPartner(Goal goal, ConductorAutonomyPolicy policy)
     {
-        if (MultiRepositoryLandingHold.Exclusion(goal) is { } repositoryHold) return repositoryHold;
+        if (MultiRepositoryGoal.Exclusion(goal) is { } repositoryHold) return repositoryHold;
         if (HasActiveOwnerReviewHold(goal, out _, out _))
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
 
