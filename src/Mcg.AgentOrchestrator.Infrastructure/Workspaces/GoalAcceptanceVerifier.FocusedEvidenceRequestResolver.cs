@@ -22,19 +22,19 @@ internal static partial class FocusedEvidenceRequestResolver
         out FocusedEvidenceRejection rejection,
         IClassDurationHistory? durationHistory = null)
     {
+        checks = [];
+        coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
+        rejection = new(FocusedEvidenceRejectionCode.EmptyRequest, request, "empty evidence request");
         if (GoPackageFocusedEvidence.Applies(engineSettings))
             return GoPackageFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
                 out checks, out coverage, out rejection);
         if (CrosswalkFocusedEvidence.Applies(engineSettings))
             return CrosswalkFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
                 out checks, out coverage, out rejection);
-        checks = [];
-        coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
-        rejection = new FocusedEvidenceRejection(FocusedEvidenceRejectionCode.EmptyRequest, request, "empty evidence request");
-        var items = request
-            .Split(';')
-            .Where(item => !string.IsNullOrWhiteSpace(item))
-            .ToArray();
+        if (RustNextestFocusedEvidence.Applies(engineSettings))
+            return RustNextestFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
+                out checks, out coverage, out rejection);
+        var items = request.Split(';').Where(item => !string.IsNullOrWhiteSpace(item)).ToArray();
         if (items.Length == 0)
         {
             return false;

@@ -10,6 +10,7 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
     internal const string ApparatusStoppedAfterFailure = "apparatus-stopped-after-failure";
     internal const string NoResultRecorded = "no-result-recorded";
     internal const string ExecutionNotDemonstrated = "execution-not-demonstrated";
+    internal const string NoMatchingTest = "no-matching-test";
     internal sealed record NotRunCheck(string CheckName, string Reason, IReadOnlyList<FindingEvidenceSelection> Selections,
         IReadOnlyList<FindingEvidenceSelection>? UndemonstratedSelections = null);
 
@@ -27,6 +28,14 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
         foreach (var check in planned)
         {
             var recorded = results.Where(result => result.Name == check.Name).ToArray();
+            if (RustNextestFocusedEvidence.IsEvidenceCheck(check))
+            {
+                var rustReason = recorded.Length > 0 ? ExecutionNotDemonstrated
+                    : stoppedAfterFailure ? ApparatusStoppedAfterFailure : NoResultRecorded;
+                missing.AddRange(RustNextestFocusedEvidence.NotRunChecks(check, recorded, coverage, rustReason));
+                stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
+                continue;
+            }
             var crosswalk = CrosswalkFocusedEvidence.IsEvidenceCheck(check);
             if (!crosswalk && recorded.Length > 0 && recorded.All(result => result.ExecutedTestCount is > 0))
             {

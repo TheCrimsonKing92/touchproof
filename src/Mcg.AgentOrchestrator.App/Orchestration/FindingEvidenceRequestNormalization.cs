@@ -25,6 +25,7 @@ internal static class FindingEvidenceRequestNormalization
         }
 
         var crosswalk = CrosswalkFocusedEvidence.Applies(engineSettings);
+        var nextest = RustNextestFocusedEvidence.Applies(engineSettings);
         var selections = new List<FindingEvidenceSelection>();
         foreach (var selection in request.Selections)
         {
@@ -34,13 +35,14 @@ internal static class FindingEvidenceRequestNormalization
                 return false;
             }
             var project = selection.TestProject?.Trim();
-            var originalTestClass = crosswalk ? selection.TestClass ?? string.Empty
+            var originalTestClass = crosswalk || nextest ? selection.TestClass ?? string.Empty
                 : FindingEvidenceNameSelector.ToFullyQualified(selection.TestClass ?? string.Empty);
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
                 originalTestClass.Length > FindingEvidenceFilterSyntax.MaximumLength ||
                 !(crosswalk ? CrosswalkFocusedEvidence.IsSupportedSelector(testClass)
+                    : nextest ? RustNextestFocusedEvidence.IsSupportedSelector(originalTestClass)
                     : FindingEvidenceFilterSyntax.IsSupported(testClass) || GoPackageFocusedEvidence.Applies(engineSettings)))
             {
                 refusalDetail =
@@ -68,7 +70,7 @@ internal static class FindingEvidenceRequestNormalization
             foreach (var classFilter in classFilters)
             {
                 selections.Add(new FindingEvidenceSelection(canonicalProject, classFilter));
-                if (crosswalk || !FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
+                if (crosswalk || nextest || !FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
                 foreach (var siblingClass in resolveSiblingClasses(resolvedProject, requestedClass))
                 {
                     if (string.IsNullOrWhiteSpace(siblingClass) ||

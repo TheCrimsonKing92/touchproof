@@ -21,6 +21,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
+            // Rust evidence planning is reached through the focused request resolver.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RustNextestFocusedEvidence",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Missing-tool signatures are reached through the independently owned failure-cause adjudicator.
