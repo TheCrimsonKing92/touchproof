@@ -16,6 +16,7 @@ internal static class CliGateStatsQueryCommand
         if (args.Count < 2) throw Usage();
         var form = args[1].ToLowerInvariant();
         if (form == "replay") { CliGateStatsReplayCommand.Execute(args, Console.Out); return; }
+        if (form == "launches") { CliGateStatsLaunchesCommand.Execute(args, workspace.OrchestratorDirectory, Console.Out); return; }
         if (form is not ("lanes" or "classes" or "compare" or "flakes" or "waits" or "failures" or "failure")) throw Usage();
         var flags = new Dictionary<string, string>(StringComparer.Ordinal);
         var json = false;
