@@ -10,7 +10,7 @@ public sealed class OwnerConsoleFieldProducerTests
     {
         var activity = new OwnerConsoleActivityItem(DateTimeOffset.UnixEpoch, "event", "tag", "12345678", "detail");
         Assert.Null(activity.Fields().Fields.Single(field => field.Key == "goal").Value);
-        var gate = OwnerConsoleGateProgress.MemberFields(new("12345678", "Title"));
+        var gate = OwnerConsoleGateFieldProjection.MemberFields(new("12345678", "Title"));
         Assert.Null(gate.Fields.Single(field => field.Key == "goal").Value);
         Assert.Equal("12345678", gate.Fields.Single(field => field.Key == "prefix").Value);
         var writes = 0;

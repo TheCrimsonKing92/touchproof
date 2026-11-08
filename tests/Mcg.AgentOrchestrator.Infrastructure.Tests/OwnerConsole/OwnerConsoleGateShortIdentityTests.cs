@@ -73,7 +73,7 @@ public sealed class OwnerConsoleGateShortIdentityTests
         var solo = Model();
 
         Assert.Contains("Execution: " + Execution, OwnerConsoleGateLayout.Lines(solo, 240, false));
-        Assert.Equal(Execution, Assert.Single(solo.FieldSnapshot().Fields, field => field.Key == "execution").Value);
+        Assert.Equal(Execution, Assert.Single(new OwnerConsoleGateFieldProjection(solo).FieldSnapshot().Fields, field => field.Key == "execution").Value);
 
         var gate = solo with { ConcurrentRuns = [solo, solo with { ExecutionId = OtherExecution }] };
         var fields = new Dictionary<int, OwnerConsoleFieldSnapshot>();

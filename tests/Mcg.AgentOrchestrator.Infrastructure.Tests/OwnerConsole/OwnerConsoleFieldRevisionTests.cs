@@ -95,15 +95,15 @@ public sealed class OwnerConsoleFieldRevisionTests
                 IsAttribution = true, QuietSeconds = 345.678, ReproductionMemberId = "12345678901234567890123456789012" } };
         var gate = new OwnerConsoleGateProgress(true, "acceptance", [new("goal/full/canonical", "Member title")], At,
             TimeSpan.FromMinutes(1), lanes, 0.125, 30, 4, 8, Capacity: new([], 4));
-        var fields = gate.FieldSnapshot();
+        var fields = new OwnerConsoleGateFieldProjection(gate).FieldSnapshot();
         foreach (var key in new[] { "failed", "passed", "cached", "queued", "unknown", "skipped" }) Assert.Equal("1", Copy(fields, key));
         Assert.Equal("2", Copy(fields, "running"));
         Assert.Equal("0.125", Copy(fields, "progress"));
         Assert.Contains(fields.Fields, field => field.Value == "goal/full/canonical");
-        Assert.Equal("2", Copy(gate.CapacityFields(), "local/running"));
-        Assert.Equal("345.678", Copy(OwnerConsoleGateProgress.LaneFields(lanes[^1]), "quiet"));
-        Assert.Equal(lanes[^1].ReproductionMemberId, Copy(OwnerConsoleGateProgress.LaneFields(lanes[^1]), "reproduction-member"));
-        Assert.Equal(TimeSpan.FromMinutes(7).ToString("c"), Copy(OwnerConsoleGateProgress.Idle(TimeSpan.FromMinutes(7)).FieldSnapshot(), "idle-age"));
+        Assert.Equal("2", Copy(new OwnerConsoleGateFieldProjection(gate).CapacityFields(), "local/running"));
+        Assert.Equal("345.678", Copy(OwnerConsoleGateFieldProjection.LaneFields(lanes[^1]), "quiet"));
+        Assert.Equal(lanes[^1].ReproductionMemberId, Copy(OwnerConsoleGateFieldProjection.LaneFields(lanes[^1]), "reproduction-member"));
+        Assert.Equal(TimeSpan.FromMinutes(7).ToString("c"), Copy(new OwnerConsoleGateFieldProjection(OwnerConsoleGateProgress.Idle(TimeSpan.FromMinutes(7))).FieldSnapshot(), "idle-age"));
     }
 
     [Fact]

@@ -34,7 +34,7 @@ public sealed class OwnerConsoleGateStatusSegmentTests
             Assert.DoesNotContain(Execution.Substring(start, 9), segment);
         Assert.Contains(OwnerConsoleGateLayout.Lines(gate, 180, false),
             line => line.Contains(Execution, StringComparison.Ordinal));
-        Assert.Equal(Execution, Assert.Single(gate.FieldSnapshot().Fields, field => field.Key == "execution").Value);
+        Assert.Equal(Execution, Assert.Single(new OwnerConsoleGateFieldProjection(gate).FieldSnapshot().Fields, field => field.Key == "execution").Value);
     }
 
     [Fact]
