@@ -14,7 +14,9 @@ internal static class OwnerConsoleSizeBaseline
         ["OwnerConsoleLoop.cs"] = 278,
         ["OwnerConsoleScreenController.cs"] = 288,
         ["OwnerConsoleSession.cs"] = 320,
-        ["OwnerGoalChangeSummaryQuery.cs"] = 476
+        ["OwnerGoalChangeSummaryQuery.cs"] = 152,
+        // Relocated section builders preserve existing text and ordering; individual methods stay below 60 lines.
+        ["OwnerGoalSummarySectionReader.cs"] = 277
     }.AsReadOnly();
 
     // Syntax-node inclusive line spans at HEAD, including constructors and local functions.
@@ -45,8 +47,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleViewModelBuilder.cs::OwnerConsoleViewModelBuilder.BuildBoardAsync",
         "OwnerExperimentDecisionFlow.cs::OwnerExperimentDecisionFlow.RunAsync",
         "OwnerFleetDiagram.cs::OwnerFleetDiagram.Render",
-        "OwnerGoalChangeSummaryQuery.cs::OwnerGoalChangeSummaryQuery.PlannedAsync",
-        "OwnerGoalChangeSummaryQuery.cs::OwnerGoalChangeSummaryQuery.VerifiedAsync",
         "OwnerQuestionReadModel.cs::OwnerQuestionReadModel.ReadAsync",
         "OwnerQuestionResolutionReader.cs::OwnerQuestionResolutionReader.ListForGoalAsync"
     }.ToFrozenSet(StringComparer.Ordinal);
