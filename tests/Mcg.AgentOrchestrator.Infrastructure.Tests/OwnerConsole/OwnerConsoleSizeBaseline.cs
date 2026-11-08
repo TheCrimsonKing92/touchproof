@@ -7,7 +7,6 @@ internal static class OwnerConsoleSizeBaseline
     // Raising a ceiling requires a one-line justification comment immediately above its row.
     internal static IReadOnlyDictionary<string, int> Files { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
     {
-        ["OwnerConsoleBoardSource.cs"] = 289,
         ["OwnerConsoleLoop.cs"] = 278,
         ["OwnerConsoleScreenController.cs"] = 283,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
@@ -24,7 +23,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerActivityDiagnosticParser.cs::OwnerActivityDiagnosticParser.Parse",
         "OwnerActivityNarrator.cs::OwnerActivityNarrator.Narrate",
         "OwnerConsoleBindingRunner.cs::OwnerConsoleBindingRunner.RunAsync",
-        "OwnerConsoleBoardSource.cs::OwnerConsoleBoardSource.ComposeAsync",
         "OwnerConsoleFullScreenHost.cs::OwnerConsoleFullScreenHost.RunCoreAsync",
         "OwnerConsoleGateLayout.cs::OwnerConsoleGateLayout.Lines",
         "OwnerConsoleJsonlTail.cs::OwnerConsoleJsonlTail.Select",
