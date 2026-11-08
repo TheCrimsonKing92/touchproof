@@ -8,7 +8,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
+    OwnerConsoleSoundCommand? sound = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
@@ -229,6 +230,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
                     else if (landings is null) output.WriteLine("landings view unavailable in this session");
                     else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
+                    break;
+                case "sound":
+                    if (sound is null) output.WriteLine("sound unavailable in this session");
+                    else sound.Run(line, output);
                     break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();

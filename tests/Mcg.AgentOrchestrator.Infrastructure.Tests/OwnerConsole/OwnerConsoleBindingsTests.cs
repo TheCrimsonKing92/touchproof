@@ -95,7 +95,7 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
@@ -158,6 +158,9 @@ public sealed class OwnerConsoleBindingsTests
             ":metrics: Show conductor metrics.",
             ":bell on: Enable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.",
             ":bell off: Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.",
+            ":sound list: List selected sounds and numbered library clips for each tier.",
+            ":sound play <tier> [<n|name>]: Preview the selected sound or a library clip once.",
+            ":sound set <tier> <n|name|system>: Save a tier's sound selection and apply it to the next alert.",
             ":goal <id-prefix>: Open live goal detail, landing status and actions.",
             ":fleet: Show the fleet diagram: host and executor boxes.",
             ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
