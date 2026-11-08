@@ -53,7 +53,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
@@ -91,7 +91,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
@@ -143,7 +143,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
@@ -215,7 +215,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests"))
@@ -371,7 +371,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 Path.Combine(root, "TestResults", "mtp-fixture"));
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
@@ -428,7 +428,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 Path.Combine(root, "TestResults", writeGreenTrx ? "green-trx" : "missing-trx"));
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
@@ -483,7 +483,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             var staleTrxPath = $"{attemptPrefix}.infrastructure-tests-cli.trx";
             Directory.CreateDirectory(Path.GetDirectoryName(staleTrxPath)!);
             File.Copy(MtpFailureFixturePath(), staleTrxPath);
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
@@ -531,7 +531,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
                 Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
                     ? new GoalAcceptanceVerifier.CommandResult(1, failureOutput)
                     : new GoalAcceptanceVerifier.CommandResult(0, "")));
@@ -562,7 +562,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
@@ -610,7 +610,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         try
         {
             var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root);
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
@@ -676,7 +676,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
@@ -720,7 +720,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "should not run tests"));
@@ -761,7 +761,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         var goalId = new GoalId("cccccccccccccccccccccccccccccccc");
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier((args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
