@@ -71,6 +71,8 @@ internal static class OwnerConsoleFullScreenHost
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
+            var evidence = new OwnerActivityEvidenceLoader(item => item.EventKind == "acceptance-cohort"
+                ? jointEvidence.Read(item, cohortEvidence.Read(item)) : gateEvidence.Read(item) ?? jointEvidence.Read(item));
             var conductTail = new OwnerConsoleJsonlTail(workspace.ConductEventsLogPath);
             var durationPath = AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory);
             var durationTail = new OwnerConsoleJsonlTail(durationPath);
@@ -84,8 +86,7 @@ internal static class OwnerConsoleFullScreenHost
             var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
-                item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
-                    gateEvidence.Read(item) ?? jointEvidence.Read(item), id => timings.Time("gate-motion", () => gateMotion.Describe(id)),
+                null, id => timings.Time("gate-motion", () => gateMotion.Describe(id)),
                 latestTick: () => timings.Time("latest-tick", latestTick.Read),
                 gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots,
                 candidateGate: goal =>
@@ -98,7 +99,7 @@ internal static class OwnerConsoleFullScreenHost
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
                 activityLoader.ReadNew, () => OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock),
-                timingsFile.Write, action => app.Invoke(action), Post, () => view!);
+                timingsFile.Write, action => app.Invoke(action), Post, () => view!, evidence);
             coalescer = new((items, scope) => refresh.RefreshAsync(items, scope: scope));
 
             refresh.HoldForStartup();
@@ -130,7 +131,8 @@ internal static class OwnerConsoleFullScreenHost
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);
-                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock);
+                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock,
+                    evidence: evidence);
                 fill = startup.FillAsync(board, model => view.Render(model), refresh.StartupInputs(), refresh.Seed,
                     token, ownBoardGoalIds: refresh.BoardIds);
             }
