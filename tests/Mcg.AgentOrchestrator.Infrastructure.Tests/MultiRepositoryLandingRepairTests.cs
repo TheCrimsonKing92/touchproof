@@ -54,6 +54,8 @@ public sealed class MultiRepositoryLandingRepairTests
     public void Run_MandatoryRefusal_LeavesRefsWorktreesAndRecordsUnchanged(bool manual, string reason)
     {
         using var f = new MultiRepositoryAcceptanceGateFixture();
+        f.Gate.Run(f.Goal, GoalLifecycleState.Verified, f.RunHome);
+        Assert.NotNull(f.Gate.Store.TryRead(f.Goal.Id));
         var store = Store(f);
         var tuple = f.Tuple().Canonical;
         store.Write(new MultiRepositoryLandingAttempt(f.Goal.Id, tuple, []));
@@ -121,6 +123,124 @@ public sealed class MultiRepositoryLandingRepairTests
         f.Repositories.Crosswalk.Git("revert", "--no-edit", "HEAD");
         var retried = Repair(f).Run(f.Goal);
         Assert.True(retried.Repaired, retried.Detail);
+    }
+
+    [Fact]
+    public void Run_RevertConflict_ResolvedCandidateCanRetry()
+    {
+        using var f = FailedTuple();
+        var crosswalk = f.Repositories.Crosswalk;
+        GoalRepositoryWorktreeProvisionerFixture.CommitChange(crosswalk.CheckoutPath, "unrelated edit\n");
+        var integration = crosswalk.Git("rev-parse", "main");
+        var startingTip = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
+        var conflicted = Repair(f).Run(f.Goal);
+        Assert.Equal("repair-conflict", conflicted.Reason);
+        Assert.Equal(startingTip, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
+        Assert.Null(Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!["crosswalk"].RebuiltTip);
+
+        // Resolve on the candidate: retain integration history but restore the compensation's
+        // tree so its reversal can apply. The integration branch needs no operator edit.
+        Git(f.SecondaryWorktree, "merge", "--no-edit", integration);
+        var resolved = GoalRepositoryWorktreeProvisionerFixture.CommitChange(f.SecondaryWorktree, "seed\n");
+        Assert.NotEqual(startingTip, resolved);
+
+        var retried = Repair(f).Run(f.Goal);
+
+        Assert.True(retried.Repaired, retried.Detail);
+        Git(f.SecondaryWorktree, "merge-base", "--is-ancestor", resolved, "HEAD");
+        Assert.Equal(integration, crosswalk.Git("rev-parse", "main"));
+        Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
+        Assert.Null(Store(f).ReadFailure(f.Goal.Id));
+        Assert.Null(Store(f).ReadAttempt(f.Goal.Id));
+    }
+
+    [Fact]
+    public void Run_CandidateMovesBeforePublication_RestartsWithItsNewWork()
+    {
+        using var f = FailedTuple();
+        var integration = f.Repositories.Crosswalk.Git("rev-parse", "main");
+        var branch = Git(f.SecondaryWorktree, "symbolic-ref", "--short", "HEAD");
+        var interrupted = 0;
+        using (LandingExecutor.UseGitRunner((root, args) =>
+        {
+            if (args.SequenceEqual(new[] { "rev-parse", "refs/heads/" + branch }))
+            {
+                interrupted++;
+                File.WriteAllText(Path.Combine(f.SecondaryWorktree, "later.txt"), "preserve this candidate work\n");
+                Git(f.SecondaryWorktree, "add", "later.txt");
+                Git(f.SecondaryWorktree, "commit", "-m", "Later candidate work");
+            }
+            return GitCli.Run(root, args);
+        }))
+        {
+            var result = Repair(f).Run(f.Goal);
+            Assert.Equal("repair-conflict", result.Reason);
+            Assert.Contains("candidate changed before publication", result.Detail);
+        }
+        Assert.Equal(1, interrupted);
+        var progress = Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!["crosswalk"];
+        Assert.NotNull(progress.RebuiltTip);
+        Assert.True(Directory.Exists(progress.WorktreePath));
+        var movedTip = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
+        Assert.NotEqual(progress.StartingTip, movedTip);
+        Assert.Equal(1, GitCli.Run(f.SecondaryWorktree,
+            ["merge-base", "--is-ancestor", progress.RebuiltTip!, movedTip]).ExitCode);
+
+        var retried = Repair(f).Run(f.Goal);
+
+        Assert.True(retried.Repaired, retried.Detail);
+        Assert.False(Directory.Exists(progress.WorktreePath));
+        Git(f.SecondaryWorktree, "merge-base", "--is-ancestor", movedTip, "HEAD");
+        Assert.Equal("preserve this candidate work", Git(f.SecondaryWorktree, "show", "HEAD:later.txt"));
+        Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
+        Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
+        Assert.Null(Store(f).ReadFailure(f.Goal.Id));
+        Assert.Null(Store(f).ReadAttempt(f.Goal.Id));
+    }
+
+    [Fact]
+    public void Run_ConflictCleanupFails_RetainsNamedReasonAndCanRetry()
+    {
+        using var f = FailedTuple();
+        var candidate = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
+        var integration = f.Repositories.Crosswalk.Git("rev-parse", "main");
+        var reverts = 0;
+        var removals = 0;
+        using (LandingExecutor.UseGitRunner((root, args) =>
+        {
+            if (args[0] == "revert" && args.Contains("--no-edit"))
+            {
+                reverts++;
+                return new GitCli.GitResult(1, "", "fixture revert failed");
+            }
+            if (args[0] == "worktree" && args[1] == "remove")
+            {
+                removals++;
+                return new GitCli.GitResult(1, "", "fixture cleanup failed");
+            }
+            return GitCli.Run(root, args);
+        }))
+        {
+            var result = Repair(f).Run(f.Goal);
+            Assert.Equal("repair-conflict", result.Reason);
+            Assert.Contains("fixture revert failed", result.Detail);
+            Assert.Contains("fixture cleanup failed", result.Detail);
+        }
+        Assert.Equal(1, reverts);
+        Assert.Equal(1, removals);
+        var progress = Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!["crosswalk"];
+        Assert.Null(progress.RebuiltTip);
+        Assert.True(Directory.Exists(progress.WorktreePath));
+        Assert.NotNull(Store(f).ReadFailure(f.Goal.Id));
+        Assert.Equal(candidate, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
+        Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
+
+        var retried = Repair(f).Run(f.Goal);
+
+        Assert.True(retried.Repaired, retried.Detail);
+        Assert.False(Directory.Exists(progress.WorktreePath));
+        Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
+        Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
     }
 
     [Theory]

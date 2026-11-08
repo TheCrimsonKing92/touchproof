@@ -962,7 +962,6 @@ internal static class CliCommandHelp
         Console.WriteLine("mcg-orchestrator.cmd still works as an alias.");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  repair-multi-repository-landing Repair a compensated tuple landing.");
         Console.WriteLine("  goal              Create a goal.");
         Console.WriteLine("  author-draft      Draft a checked goal brief from a backlog item.");
         Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
@@ -983,6 +982,8 @@ internal static class CliCommandHelp
         Console.WriteLine("  epic-bar          Set or clear the epic's completion bar.");
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
+        Console.WriteLine("  repair-multi-repository-landing");
+        Console.WriteLine("                    Repair a compensated tuple landing.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
         Console.WriteLine("  conductor         Start, report or stop the conductor.");
         Console.WriteLine("  host-exclusions   Report or explicitly apply host scan exclusions.");

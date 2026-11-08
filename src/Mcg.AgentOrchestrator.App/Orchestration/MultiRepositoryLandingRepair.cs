@@ -50,9 +50,6 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                 var checkout = FindCheckout(root, branch);
                 if (checkout is not null && !Clean(checkout)) return Refuse("workspace-dirty", key);
                 var progress = attempt?.RepairProgress?.GetValueOrDefault(key);
-                if (progress is not null && !(progress.RebuiltTip is { } rebuilt && Ancestor(root, rebuilt, tip)) &&
-                    progress.StartingTip != tip)
-                    return Refuse("repository-unavailable", key + ": candidate moved during interrupted repair.");
                 repositories.Add(new(key, root, branch, tip,
                     failure.CompensatingCommits[key], progress));
             }
@@ -71,7 +68,9 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                     continue;
                 }
                 var progress = repository.Progress;
-                if (progress?.RebuiltTip is null)
+                // Unpublished work is disposable. If the candidate advanced after a conflict
+                // or before publication, rebuild from its current tip, preserving that work.
+                if (progress?.RebuiltTip is null || progress.StartingTip != repository.Tip)
                 {
                     if (progress is not null) Cleanup(repository.Root, progress.WorktreePath, goal.Id, repository.Key);
                     var path = Path.Combine(OrchestratorTempRoot.GetParent(), WorktreePrefix(goal.Id, repository.Key) + Guid.NewGuid().ToString("N"));
@@ -121,11 +120,16 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
             }
             catch (Exception ex)
             {
-                var saved = store.ReadAttempt(goal.Id)?.RepairProgress?.GetValueOrDefault(repository.Key);
-                if (saved is { RebuiltTip: null })
-                    Cleanup(repository.Root, saved.WorktreePath, goal.Id, repository.Key);
+                var detail = repository.Key + ": " + ex.Message;
+                try
+                {
+                    var saved = store.ReadAttempt(goal.Id)?.RepairProgress?.GetValueOrDefault(repository.Key);
+                    if (saved is { RebuiltTip: null })
+                        Cleanup(repository.Root, saved.WorktreePath, goal.Id, repository.Key);
+                }
+                catch (Exception cleanupError) { detail += " Cleanup failed: " + cleanupError.Message; }
                 // Retain write-ahead state and all previously published candidates for retry.
-                return Refuse("repair-conflict", repository.Key + ": " + ex.Message);
+                return Refuse("repair-conflict", detail);
             }
         }
         receipts.MarkStale(goal.Id);
