@@ -7,9 +7,8 @@ internal static class OwnerConsoleSizeBaseline
     // Raising a ceiling requires a one-line justification comment immediately above its row.
     internal static IReadOnlyDictionary<string, int> Files { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
     {
-        ["OwnerConsoleBoardSource.cs"] = 289,
         ["OwnerConsoleLoop.cs"] = 278,
-        ["OwnerConsoleScreenController.cs"] = 288,
+        ["OwnerConsoleScreenController.cs"] = 283,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
         // Relocated section builders preserve existing text and ordering; individual methods stay below 60 lines.
         ["OwnerGoalSummarySectionReader.cs"] = 277
@@ -24,7 +23,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerActivityDiagnosticParser.cs::OwnerActivityDiagnosticParser.Parse",
         "OwnerActivityNarrator.cs::OwnerActivityNarrator.Narrate",
         "OwnerConsoleBindingRunner.cs::OwnerConsoleBindingRunner.RunAsync",
-        "OwnerConsoleBoardSource.cs::OwnerConsoleBoardSource.ComposeAsync",
         "OwnerConsoleFullScreenHost.cs::OwnerConsoleFullScreenHost.RunCoreAsync",
         "OwnerConsoleGateLayout.cs::OwnerConsoleGateLayout.Lines",
         "OwnerConsoleJsonlTail.cs::OwnerConsoleJsonlTail.Select",
@@ -34,7 +32,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleLoop.cs::OwnerConsoleLoop.RunAsync.RunStepAsync",
         "OwnerConsolePaneKeys.cs::OwnerConsolePaneKeys.HandleAsync",
         "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync",
-        "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync.ExecuteAsync",
         "OwnerConsoleStageDescriber.cs::OwnerConsoleStageDescriber.Describe",
         "OwnerConsoleViewModelBuilder.cs::OwnerConsoleViewModelBuilder.BuildBoardAsync",
         "OwnerExperimentDecisionFlow.cs::OwnerExperimentDecisionFlow.RunAsync",

@@ -75,18 +75,15 @@ public sealed class OwnerFleetFullScreenWidthScenarioTests
             Assert.Contains("executors: 2", text);
             Assert.Contains("shadow skipped, no free slot: 1", text);
             Assert.DoesNotContain(rows, row => row.Trim('│', '║', ' ') == "Executor");
-            var first = Array.FindIndex(rows, row => row.Contains("infrastructure", StringComparison.Ordinal));
-            Assert.True(first >= 0);
-            var laneRows = rows.Skip(first).TakeWhile(row => !row.StartsWith("│   solo", StringComparison.Ordinal)).ToArray();
-            Assert.NotEmpty(laneRows);
-            Assert.DoesNotContain('…', string.Join('\n', laneRows));
-            var laneText = string.Join(" ", laneRows.Select(row => row[2..^2].Trim()));
-            Assert.Equal(Lane + " median 47.3s n=1", laneText);
+            var laneRow = Assert.Single(rows.Where(row => row.Contains("infrastructure", StringComparison.Ordinal)));
+            Assert.Matches(@" +1 +- +- +-$", laneRow[2..^2].Trim());
+            Assert.DoesNotContain("median", text);
             if (width >= 100)
             {
-                Assert.Contains(Lane, rows[first]);
+                Assert.Contains(Lane, laneRow);
                 Assert.DoesNotContain('…', text);
             }
+            else Assert.Contains('…', laneRow);
         }
 
         public void Dispose() => Directory.Delete(_root, true);

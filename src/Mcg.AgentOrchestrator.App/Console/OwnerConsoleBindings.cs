@@ -15,6 +15,9 @@ internal static class OwnerConsoleBindings
         Row("metrics", "Show conductor metrics."),
         Row("bell on", "Enable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.", effect: OwnerConsoleEffect.ConsoleLocal),
         Row("bell off", "Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.", effect: OwnerConsoleEffect.ConsoleLocal),
+        Row("sound list", "List selected sounds and numbered library clips for each tier.", effect: OwnerConsoleEffect.ConsoleLocal),
+        Row("sound play <tier> [<n|name>]", "Preview the selected sound or a library clip once.", effect: OwnerConsoleEffect.ConsoleLocal),
+        Row("sound set <tier> <n|name|system>", "Save a tier's sound selection and apply it to the next alert.", effect: OwnerConsoleEffect.ConsoleLocal),
         Row("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
@@ -126,7 +129,8 @@ internal static class OwnerConsoleBindings
         .Concat(Commands.Where(row => row.Key.HasValue).SelectMany(row =>
             new[] { row.KeyHelp!, $":{row.Usage}: {Description(row)}" }.Concat(ExtraHelp(row))))
         .Concat(OwnerActivityNarrator.JumpKeyHelp)
-        .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}")));
+        .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}"))
+        .Append(OwnerConsoleDialogBindings.FleetExpand.KeyHelp!));
 
     private static readonly string[] NavigationHelp =
     [

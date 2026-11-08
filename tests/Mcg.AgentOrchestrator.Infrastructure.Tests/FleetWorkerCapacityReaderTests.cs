@@ -300,7 +300,7 @@ public sealed class FleetWorkerCapacityReaderTests
             Registry.CreateProject(name, Repository);
             return OrchestratorWorkspace.ForProject(name, Repository, dataRootDirectory: Data);
         }
-        internal AttentionWorkspaceCatalog Catalog() => OwnerConsoleBoardSource.ReadWorkspaceCatalog(Repository, null, Registry);
+        internal AttentionWorkspaceCatalog Catalog() => OwnerConsoleWorkspaceCatalog.ReadWorkspaceCatalog(Repository, null, Registry);
         internal void Seed(OrchestratorWorkspace workspace, string? json = null, int? cap = null)
         {
             StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);

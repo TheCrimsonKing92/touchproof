@@ -36,7 +36,7 @@ public sealed class OwnerConsoleFleetCommandTests
             Assert.Contains("Executor alpha", harness.Output.Text);
             Assert.Contains("Executor beta", harness.Output.Text);
             Assert.Contains("UNREACHABLE", harness.Output.Text);
-            Assert.Contains("lane median 12.3s", harness.Output.Text);
+            Assert.Matches(@"lane +1 +12\.3 +- +-", harness.Output.Text);
             Assert.StartsWith("┌", harness.Output.Text);
             Assert.Equal(files, Directory.GetFiles(root, "*", SearchOption.AllDirectories).Order().ToArray());
             Assert.Equal(directories, Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Order().ToArray());

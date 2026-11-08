@@ -16,6 +16,27 @@ public sealed class MultiRepositoryLandingRecordStore(string orchestratorDirecto
     public void Write(MultiRepositoryLandingFailure failure) => Write(failure.GoalId, "failed", failure);
     public void Write(MultiRepositoryLandingAttempt attempt) => Write(attempt.GoalId, "attempt", attempt);
 
+    public void RecordRepairProgress(GoalId id, string tupleCanonical, string key, RepositoryLandingRepairProgress progress)
+    {
+        var attempt = ReadAttempt(id) ?? new MultiRepositoryLandingAttempt(id, tupleCanonical, []);
+        if (attempt.TupleCanonical != tupleCanonical)
+            throw new InvalidDataException("Repair attempt tuple differs from failure tuple.");
+        var entries = attempt.RepairProgress?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
+            ?? new Dictionary<string, RepositoryLandingRepairProgress>(StringComparer.Ordinal);
+        entries[key] = progress;
+        Write(attempt with { RepairProgress = entries });
+    }
+
+    public void ClearFailureAndAttempt(GoalId id)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        // One statement atomically clears recovery state; completed landing evidence is retained.
+        command.CommandText = "DELETE FROM landings WHERE goal=$goal AND kind IN ('failed','attempt')";
+        command.Parameters.AddWithValue("$goal", id.Value);
+        command.ExecuteNonQuery();
+    }
+
     private SqliteConnection Open()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);

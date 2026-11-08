@@ -10,6 +10,7 @@ public sealed class OwnerConsoleDialogBindingsTests
         Assert.Equal(new[] { "d", "f", "e", "g", "q" }, Keys(OwnerConsoleScope.GoalDetail));
         Assert.Equal(new[] { "w", "Ctrl+R", "q" }, Keys(OwnerConsoleScope.EpicView));
         Assert.Equal(new[] { "q" }, Keys(OwnerConsoleScope.GateView));
+        Assert.Equal(new[] { "x" }, Keys(OwnerConsoleScope.FleetView));
         Assert.Single(OwnerConsoleBindings.All.Where(row => row.Scope == OwnerConsoleScope.GateView && row.Key is null));
         Assert.All(OwnerConsoleDialogBindings.All, row => Assert.False(string.IsNullOrWhiteSpace(row.KeyHelp)));
     }
@@ -47,10 +48,10 @@ public sealed class OwnerConsoleDialogBindingsTests
     [Fact]
     public void TypedSurfaces_DialogRowsExcluded_PreserveTopLevelCommands()
     {
-        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | sound list | sound play <tier> [<n|name>] | sound set <tier> <n|name|system> | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(prompt, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(prompt.Split(" | "), OwnerConsoleBindings.PromptEntries);
-        Assert.Equal(19, OwnerConsoleKeyHints.Commands.Count);
+        Assert.Equal(22, OwnerConsoleKeyHints.Commands.Count);
         Assert.Null(OwnerConsoleBindings.ForLine("d"));
         Assert.Null(OwnerConsoleBindings.ForLine("w"));
         foreach (var row in OwnerConsoleDialogBindings.All.Where(row => row.Command is "question" or "failure" or "window" or "reload"))
@@ -80,6 +81,7 @@ public sealed class OwnerConsoleDialogBindingsTests
             "Goal detail e: Open the goal's epic.", "Goal detail g: Open the GATE view on this goal's gate (same as :gate <goal-id-prefix>).",
             "Goal detail q: Back out of goal detail." }, lines.Skip(gate + 1).Take(5));
         Assert.Contains("Epic view Ctrl+R (list and detail): Reload the epic view.", lines);
+        Assert.Contains(OwnerConsoleDialogBindings.FleetExpand.KeyHelp!, lines);
         Assert.DoesNotContain(lines, line => line.StartsWith("Epic view r", StringComparison.Ordinal));
     }
 
