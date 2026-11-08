@@ -18,8 +18,10 @@ public sealed class ExecutorSlotDecisionAuditTests
         using var conduct = JsonDocument.Parse(Assert.Single(fixture.DecisionEvents));
         var payload = conduct.RootElement.GetProperty("detail").GetString();
         Assert.Equal(ledgerText, payload);
-        Assert.Equal(ledger.RootElement.GetProperty("evaluation_id").GetString(),
-            conduct.RootElement.GetProperty("event_id").GetString());
+        Assert.True(Guid.TryParse(ledger.RootElement.GetProperty("evaluation_id").GetString(), out _));
+        // Correlation lives in the shared payload; event_id would trigger a full-log dedup scan.
+        Assert.False(conduct.RootElement.TryGetProperty("event_id", out _));
+        Assert.False(conduct.RootElement.TryGetProperty("eventId", out _));
         var decision = ledger.RootElement.GetProperty("decision");
         Assert.Equal(action, decision.GetProperty("action").GetString());
         Assert.Equal(fixture.Samples.Count, decision.GetProperty("total_samples").GetInt32());
@@ -82,7 +84,7 @@ public sealed class ExecutorSlotDecisionAuditTests
         // A failed event never turns a preaudit proposal into an applied trial on restart.
         fixture.Samples = [];
         fixture.Controller().Evaluate();
-        Assert.Null(fixture.Latest.BeforeState.Trial);
+        Assert.Null(ExecutorSlotDecisionLedger.Restore(fixture.Latest, fixture.Slots)?.Trial);
     }
 
     [Fact]
@@ -95,7 +97,7 @@ public sealed class ExecutorSlotDecisionAuditTests
         fixture.Now = fixture.Now.AddMinutes(2);
         fixture.Controller().Evaluate();
         Assert.Equal("keep", fixture.Latest.Decision.Action);
-        Assert.Null(fixture.Latest.BeforeState.Trial);
+        Assert.Null(fixture.Latest.ControllerState.Trial);
         Assert.Equal(2, fixture.Slots);
         Assert.Equal(2, fixture.DecisionEvents.Length);
     }
@@ -106,9 +108,9 @@ public sealed class ExecutorSlotDecisionAuditTests
         using var fixture = new ExecutorSlotControllerFixture();
         fixture.Settings = fixture.Settings with { StableWindows = 3 };
         fixture.Controller().Evaluate();
-        Assert.Equal(1, fixture.Latest.BeforeState.StableWindows);
+        Assert.Equal(1, fixture.Latest.ControllerState.StableWindows);
         fixture.Controller().Evaluate();
-        Assert.Equal(1, fixture.Latest.BeforeState.StableWindows);
+        Assert.Equal(1, fixture.Latest.ControllerState.StableWindows);
         Assert.Equal("hold", fixture.Latest.Decision.Action);
     }
 }

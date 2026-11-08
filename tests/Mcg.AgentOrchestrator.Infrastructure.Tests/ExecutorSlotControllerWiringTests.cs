@@ -38,7 +38,7 @@ public sealed class ExecutorSlotControllerWiringTests
             fixture.Controller().Evaluate();
             Assert.Equal("deferred-busy", fixture.Latest.ApplicationStatus);
             Assert.Equal(before, File.ReadAllBytes(fixture.ConfigurationPath));
-            Assert.Null(fixture.Latest.BeforeState.Trial);
+            Assert.Null(fixture.Latest.ControllerState.Trial);
         }
         fixture.Controller().Evaluate();
         Assert.Equal(2, fixture.Slots);

@@ -19,16 +19,27 @@ internal static class ExecutorSlotDecisionLedger
         var latest = new Dictionary<string, ExecutorSlotDecisionRecord>(StringComparer.Ordinal);
         foreach (var line in SharedJsonlFile.ReadLines(path))
         {
-            try
+            var row = JsonSerializer.Deserialize<ExecutorSlotDecisionRecord>(line, JsonOptions);
+            if (row is null || row.Version is not (1 or 2) || string.IsNullOrWhiteSpace(row.ExecutorId) ||
+                row.Decision is null)
+                throw new InvalidOperationException("invalid-executor-slot-decision-ledger-row");
+            var state = row.ControllerState;
+            if (row.Version == 1)
             {
-                var row = JsonSerializer.Deserialize<ExecutorSlotDecisionRecord>(line, JsonOptions);
-                if (row is not { Version: 1 } || string.IsNullOrWhiteSpace(row.ExecutorId) ||
-                    row.Decision?.NextState?.Settings is null || row.BeforeState?.Settings is null) continue;
-                row.Decision.NextState.Settings.Validate();
-                row.BeforeState.Settings.Validate();
-                latest[row.ExecutorId] = row;
+                // V1 stored both states and a lookback-sized id set. Migrate once on restart.
+                using var document = JsonDocument.Parse(line);
+                var element = row.ApplicationStatus == "pending-handler"
+                    ? document.RootElement.GetProperty("decision").GetProperty("next_state")
+                    : document.RootElement.GetProperty("before_state");
+                state = element.Deserialize<ExecutorSlotControllerState>(JsonOptions)
+                    ?? throw new InvalidOperationException("invalid-executor-slot-legacy-state");
+                state = state with { CompletedThrough = new(row.ObservedAt, "\uffff") };
             }
-            catch (Exception error) when (error is JsonException or InvalidOperationException) { }
+            if (state?.Settings is null)
+                throw new InvalidOperationException("invalid-executor-slot-controller-state");
+            state.Settings.Validate();
+            row = row with { ControllerState = state, Decision = row.Decision with { NextState = state } };
+            latest[row.ExecutorId] = row;
         }
         return latest;
     }
@@ -37,8 +48,8 @@ internal static class ExecutorSlotDecisionLedger
     {
         if (row is null) return null;
         // Pending is an audit authorization, never a claim that the handler completed. Reconcile the actual setting.
-        if (row.ApplicationStatus == "pending-handler" && observedSlots == row.Decision.ProposedSlots)
-            return row.Decision.NextState;
-        return row.BeforeState;
+        if (row.ApplicationStatus == "pending-handler" && observedSlots != row.Decision.ProposedSlots)
+            return null;
+        return row.ControllerState;
     }
 }

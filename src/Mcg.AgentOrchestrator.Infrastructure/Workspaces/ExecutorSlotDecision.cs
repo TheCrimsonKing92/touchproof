@@ -13,8 +13,10 @@ internal static class ExecutorSlotDecision
         var recent = samples.Where(s => s.ObservedAt >= now.AddHours(-settings.LookbackHours) && s.ObservedAt <= now)
             .OrderBy(s => s.ObservedAt).ThenBy(s => s.AttemptId, StringComparer.Ordinal).ToArray();
         var estimates = Enumerable.Range(1, 4).Select(k => Estimate(recent, recent, k, settings)).ToArray();
+        var watermark = recent.Length == 0 ? initial.CompletedThrough :
+            new ExecutorSlotWatermark(recent[^1].ObservedAt, recent[^1].AttemptId);
         if (reset && state is not null)
-            initial = initial with { CompletedAttemptIds = recent.Select(s => s.AttemptId).ToArray() };
+            initial = initial with { CompletedThrough = watermark };
         var next = initial;
         ExecutorSlotWindow? window = null;
         ExecutorSlotEstimate? baseline = null, candidate = null;
@@ -45,13 +47,12 @@ internal static class ExecutorSlotDecision
             var target = keep ? currentSlots : trial.PriorSlots;
             next = initial with { ObservedSlots = target, Trial = null, StableWindows = 0,
                 PreviousWindow = keep ? window : null,
-                CompletedAttemptIds = recent.Select(s => s.AttemptId).ToArray() };
+                CompletedThrough = watermark };
             return Result(keep ? "keep" : "revert", target,
                 keep ? "throughput-improved-without-failure-rate-rise" : "throughput-or-failure-rate-regressed");
         }
 
-        var seen = (initial.CompletedAttemptIds ?? []).ToHashSet(StringComparer.Ordinal);
-        var uncounted = recent.Where(s => !seen.Contains(s.AttemptId)).ToArray();
+        var uncounted = recent.Where(s => initial.CompletedThrough?.Precedes(s) ?? true).ToArray();
         if (uncounted.Length < settings.JobsPerWindow) return Result("hold", currentSlots, "insufficient-new-jobs");
         var selectedWindow = uncounted.TakeLast(settings.JobsPerWindow).ToArray();
         var estimate = Estimate(selectedWindow, recent, currentSlots, settings);
@@ -69,7 +70,7 @@ internal static class ExecutorSlotDecision
             }
         }
         next = initial with { StableWindows = stable, PreviousWindow = window,
-            CompletedAttemptIds = recent.Select(s => s.AttemptId).ToArray() };
+            CompletedThrough = watermark };
         if (estimate.Throughput is null) return Result("hold", currentSlots, "insufficient-duration-evidence");
         if (stable < settings.StableWindows) return Result("hold", currentSlots, "accumulating-stable-windows");
 

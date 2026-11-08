@@ -14,6 +14,8 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
     Func<ExecutorSlotDecisionRecord, bool>? appendEvent = null)
 {
     private readonly object _gate = new();
+    private Dictionary<string, ExecutorSlotDecisionRecord>? _previous;
+    private readonly ExecutorSlotSampleReader _samples = new();
     internal string LedgerPath => Path.Combine(Path.GetDirectoryName(executorsPath)!, ExecutorSlotDecisionLedger.FileName);
 
     internal IReadOnlyList<string> Evaluate()
@@ -24,10 +26,10 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
             var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
             var settings = (readSettings ?? (() => new ExecutorSlotControllerSettings()))();
             settings.Validate();
-            var previous = ExecutorSlotDecisionLedger.ReadLatest(LedgerPath);
+            _previous ??= new(ExecutorSlotDecisionLedger.ReadLatest(LedgerPath), StringComparer.Ordinal);
             foreach (var executor in RemoteLaneExecutorConfiguration.LoadExecutors(executorsPath).Where(e => e.AdmissionEnabled))
             {
-                try { lines.Add(EvaluateExecutor(executor, previous.GetValueOrDefault(executor.Id), settings, now)); }
+                try { lines.Add(EvaluateExecutor(executor, _previous.GetValueOrDefault(executor.Id), settings, now)); }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
                 { lines.Add($"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} result=failed reason={JsonSerializer.Serialize(error.Message)}"); }
             }
@@ -39,7 +41,7 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
         ExecutorSlotControllerSettings settings, DateTimeOffset now)
     {
         var state = ExecutorSlotDecisionLedger.Restore(previous, executor.Slots);
-        var samples = readSamples is null ? ExecutorSlotSampleReader.Read(
+        var samples = readSamples is null ? _samples.ReadRecent(
             RemoteExecutorHealthLedger.ResolveStorePath(hostRoot), executor.Id, now.AddHours(-settings.LookbackHours), now)
             : readSamples(executor.Id, now.AddHours(-settings.LookbackHours), now);
         var decision = ExecutorSlotDecision.Decide(samples, settings, state, executor.Slots,
@@ -71,19 +73,24 @@ internal sealed class ExecutorSlotController(string hostRoot, string executorsPa
                     }
                 }
             }
-            var before = state ?? new ExecutorSlotControllerState(executor.Slots, settings);
+            var persistedState = state ?? new ExecutorSlotControllerState(executor.Slots, settings);
             // Holds/keep progress without a setting write. Busy/pinned transitions never begin a trial.
-            if (!transition && !decision.Pinned) before = decision.NextState;
+            // An authorized transition stores its proposal once; restore reconciles it with the actual setting.
+            if ((!transition || application == "pending-handler") && !decision.Pinned) persistedState = decision.NextState;
             var row = new ExecutorSlotDecisionRecord(Guid.NewGuid().ToString("n"), now, executor.Id,
-                settings, decision, before, application);
+                settings, decision, persistedState, application);
             Exception? ledgerFailure = null;
-            try { (appendDecision ?? ExecutorSlotDecisionLedger.Append)(LedgerPath, row); }
+            try
+            {
+                (appendDecision ?? ExecutorSlotDecisionLedger.Append)(LedgerPath, row);
+                _previous![executor.Id] = row;
+            }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
             { ledgerFailure = error; }
             // Independent attempts: an unavailable ledger must not suppress the required event.
             var eventRow = ledgerFailure is null ? row : row with { AuditStatus = "failed-ledger" };
             var eventWritten = appendEvent?.Invoke(eventRow) ?? events.AppendRequired("executor-slot-decision", null,
-                JsonSerializer.Serialize(eventRow, ExecutorSlotDecisionLedger.JsonOptions), now, row.EvaluationId);
+                JsonSerializer.Serialize(eventRow, ExecutorSlotDecisionLedger.JsonOptions), now);
             if (ledgerFailure is not null || !eventWritten)
                 return $"EXECUTOR_SLOT_CONTROLLER executor={executor.Id} evaluation={row.EvaluationId} result=audit-failed ledger={(ledgerFailure is null ? "written" : "failed")} event={(eventWritten ? "written" : "failed")}";
             if (application == "pending-handler")
