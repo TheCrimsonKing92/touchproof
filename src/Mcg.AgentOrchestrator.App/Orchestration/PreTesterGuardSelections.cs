@@ -76,27 +76,51 @@ internal sealed class PreTesterGuardSelections
     {
         var selected = declaration.Selections.ToList();
         var notRun = declaration.NotRun.ToList();
+        var started = prior?.Outcome == "started";
         var normalizedGuards = DeveloperDeferredTestSelectionNormalization.Normalize(new(_guardSelections, NotRun), settings);
         notRun.AddRange(normalizedGuards.NotRun.Where(name => prior?.Outcome != "started" ||
             prior.NotRun.Contains(name, StringComparer.Ordinal)));
         selected.AddRange(normalizedGuards.Selections);
         var normalizedCli = DeveloperDeferredTestSelectionNormalization.Normalize(new(_cliSelections, []), settings);
-        selected.AddRange(normalizedCli.Selections);
+        // CLI discovery belongs to creation; restore its recorded block before coupled selections.
+        selected.AddRange(started ? PreTesterCliSurfaceSelections.RecordedSelections(prior!.Selections) : normalizedCli.Selections);
         // Retain project identity for rejected CLI obligations, so resume need not rediscover their origin.
-        notRun.AddRange(normalizedCli.NotRun.Select(name => format(
-            new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(PreTesterCliSurfaceSelections.Project), name))));
+        notRun.AddRange(started ? PreTesterCliSurfaceSelections.RecordedSelections(prior!.NotRun).Select(format) :
+            normalizedCli.NotRun.Select(name => format(new FindingEvidenceSelection(
+                GoalAcceptanceVerifier.ProjectLabel(PreTesterCliSurfaceSelections.Project), name))));
         var normalizedCoupled = DeveloperDeferredTestSelectionNormalization.Normalize(new(_coupledSelections, []), settings);
         selected.AddRange(normalizedCoupled.Selections);
         notRun.AddRange(normalizedCoupled.NotRun.Where(name => prior?.Outcome != "started" ||
             prior.NotRun.Contains(name, StringComparer.Ordinal)));
-        if (prior?.Outcome == "started")
-        {
-            // CLI discovery belongs to attempt creation. Recorded obligations survive later inventory edits.
-            selected.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.Selections));
-            notRun.AddRange(PreTesterCliSurfaceSelections.RecordedSelections(prior.NotRun).Select(format));
-        }
         return new(RetainStartedSelections(selected,
             prior?.Outcome == "started" ? prior.Selections : null, format), notRun);
+    }
+
+    internal static DeveloperDeferredTestSelection ReconcileStarted(PreTesterEvidenceEntry prior,
+        IReadOnlyList<FindingEvidenceSelection> recomputed, IReadOnlyList<string> notRun,
+        Func<FindingEvidenceSelection, string> format, Action<string> progress)
+    {
+        var names = recomputed.Select(format).ToArray();
+        var missing = prior.Selections.Except(names, StringComparer.OrdinalIgnoreCase).ToArray();
+        var added = names.Except(prior.Selections, StringComparer.OrdinalIgnoreCase).ToArray();
+        var notRunMissing = prior.NotRun.Except(notRun, StringComparer.Ordinal).ToArray();
+        var notRunAdded = notRun.Except(prior.NotRun, StringComparer.Ordinal).ToArray();
+        if (missing.Length + added.Length + notRunMissing.Length + notRunAdded.Length != 0)
+        {
+            static string List(string[] items) => items.Length == 0 ? "<none>" : string.Join(",", items);
+            var detail = $"missing={List(missing)} added={List(added)} " +
+                $"not_run_missing={List(notRunMissing)} not_run_added={List(notRunAdded)}";
+            progress($"PRE_TESTER_STARTED_SELECTION_DRIFT receipt={prior.ReceiptId} {detail}");
+            throw new InvalidDataException("Started pre-Tester evidence selection changed before reconciliation. " + detail);
+        }
+
+        // Equality ignores order, casing and duplicates; request identity retains the exact recording.
+        var recorded = prior.Selections.Select(name =>
+        {
+            var separator = name.IndexOf(':');
+            return new FindingEvidenceSelection(name[..separator], name[(separator + 1)..]);
+        }).ToArray();
+        return new(recorded, prior.NotRun);
     }
 
     internal FindingEvidenceSelection[] RetainStartedSelections(

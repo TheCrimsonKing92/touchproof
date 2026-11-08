@@ -113,14 +113,13 @@ internal sealed partial class ConductorDriver
             PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), settings: settings,
             priorSelections: prior?.Outcome == "started" ? prior.Selections : null);
         var augmented = guards.Augment(new(selected, notRun), settings, prior, FormatFindingEvidenceSelection);
+        if (prior?.Outcome == "started")
+            augmented = PreTesterGuardSelections.ReconcileStarted(prior, augmented.Selections, augmented.NotRun,
+                FormatFindingEvidenceSelection, Console.WriteLine);
         var distinct = augmented.Selections.ToArray();
         notRun = augmented.NotRun.ToList();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
-        if (prior?.Outcome == "started" &&
-            (!prior.Selections.SequenceEqual(selectionNames, StringComparer.OrdinalIgnoreCase) ||
-             !prior.NotRun.SequenceEqual(notRun, StringComparer.Ordinal)))
-            throw new InvalidDataException("Started pre-Tester evidence selection changed before reconciliation.");
         var identity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(new FindingEvidenceRequest(distinct));
         var refresh = PreTesterEvidenceRefreshRule.LatestForCandidate(goal, tester.Id, candidateSha!);
         var refreshId = CreateFindingEvidenceReceiptId(candidateSha!, "pre-tester-deferred-refresh", identity);
