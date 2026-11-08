@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[LiveTreeStructural]
 public sealed class SourceClassSizeRatchetTests
 {
     [Fact]

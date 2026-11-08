@@ -51,7 +51,7 @@ internal sealed partial class ConductorBatchLoop
             TrackGoalHold(
                 kernel, goal,
                 held.State.ToString(),
-                TrainEjectionReport.DescribeWaitingHold(driver, goal.Id, held.Reason),
+                TrainEjectionReport.DescribeWaitingHold(driver, goal.Id, held, held.Reason),
                 observedAt,
                 held.Owner is ConductorHoldOwner.PullRequestReview ? TimeSpan.MaxValue : stallThreshold,
                 changedGoalIds,

@@ -76,6 +76,61 @@ public sealed class WorktreeSetupTemplate : IDisposable
         }
     }
 
+    internal void CopyPushedOrigin(string repository, string origin)
+    {
+        var git = Path.Combine(repository, ".git");
+        var configPath = Path.Combine(git, "config");
+        var config = File.ReadAllText(configPath);
+        // Only the fresh remote setup used by the drift fixture is shareable. Keep Git
+        // authoritative for pre-existing tracking state or an unreadable main ref.
+        var main = string.Empty;
+        var eligible = !File.Exists(Path.Combine(git, "packed-refs")) &&
+            !Directory.Exists(Path.Combine(git, "refs", "remotes")) &&
+            !Directory.Exists(Path.Combine(git, "logs", "refs", "remotes")) &&
+            FixtureRefFileReader.TryRead(repository, "refs/heads/main", out main);
+        var key = "pushed-origin:" + main + ":" +
+            Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(config)));
+        lock (sync)
+        {
+            if (eligible && recipes.TryGetValue(key, out var source))
+            {
+                CopyFiles(Path.Combine(source, "origin"), origin);
+                File.WriteAllText(configPath, config + RemoteSection(origin));
+                CopyFiles(Path.Combine(source, "refs"), Path.Combine(git, "refs", "remotes"));
+                var logs = Path.Combine(source, "logs");
+                if (Directory.Exists(logs)) CopyFiles(logs, Path.Combine(git, "logs", "refs", "remotes"));
+                return;
+            }
+
+            CopyBareOrigin(origin);
+            LandingExecutorTests.ReadGit(repository, "remote", "add", "origin", origin);
+            LandingExecutorTests.ReadGit(repository, "push", "origin", "main");
+            var tracking = Path.Combine(git, "refs", "remotes", "origin", "main");
+            // Cache only the bytes actually produced by a real push, and only when the
+            // config transformation round-trips exactly (including Git's URL escaping).
+            if (!eligible || File.ReadAllText(configPath) != config + RemoteSection(origin) ||
+                !File.Exists(tracking) || File.ReadAllText(tracking).Trim() != main ||
+                !FixtureRefFileReader.TryRead(origin, "refs/heads/main", out var remoteMain) || remoteMain != main) return;
+
+            source = Path.Combine(root, Guid.NewGuid().ToString("n"));
+            CopyFiles(origin, Path.Combine(source, "origin"));
+            CopyFiles(Path.Combine(git, "refs", "remotes"), Path.Combine(source, "refs"));
+            var remoteLogs = Path.Combine(git, "logs", "refs", "remotes");
+            if (Directory.Exists(remoteLogs)) CopyFiles(remoteLogs, Path.Combine(source, "logs"));
+            recipes.Add(key, source);
+        }
+    }
+
+    private static string RemoteSection(string origin)
+    {
+        var escaped = origin.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal).Replace("\b", "\\b", StringComparison.Ordinal);
+        if (origin.Contains('#') || origin.Contains(';') || char.IsWhiteSpace(origin[0]) || char.IsWhiteSpace(origin[^1]))
+            escaped = "\"" + escaped + "\"";
+        return "[remote \"origin\"]\n\turl = " + escaped + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n";
+    }
+
     internal void AddLandingCandidate(string repository, GoalId goal)
     {
         var git = Path.Combine(repository, ".git");

@@ -3,7 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: fixtures own their temp worktrees; live-tree checks only read verified source.
-public sealed class PreTesterTestSourceGuardClassesTests
+[LiveTreeStructural]
+public sealed class PreTesterTestSourceGuardClassesTests(ITestOutputHelper output)
 {
     private const string ChangedPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/NewFeatureTests.cs";
     private const string ProjectName = "Example.Tests";
@@ -79,8 +80,10 @@ public sealed class PreTesterTestSourceGuardClassesTests
     public void LiveTreeSelectsEveryGuardStemAndSharedClassWithinCountBound()
     {
         var root = VerifiedRepositoryRoot.Find();
-        var guardNames = EnumerateTestSources(root)
+        var guardPaths = EnumerateTestSources(root)
             .Where(path => path.EndsWith("GuardTests.cs", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal).ToArray();
+        var guardNames = guardPaths
             .Select(Path.GetFileNameWithoutExtension).OrderBy(name => name, StringComparer.Ordinal).ToArray();
         Assert.NotEmpty(guardNames);
 
@@ -90,8 +93,21 @@ public sealed class PreTesterTestSourceGuardClassesTests
             .Select(selection => selection.TestClass).OrderBy(name => name, StringComparer.Ordinal));
         Assert.All(SharedNames, name => Assert.Single(selected, selection => selection.TestClass == name));
         Assert.Equal(guardNames.Length + SharedNames.Length, selected.Count);
-        // Limit pre-Tester guard cost; raised on 2026-11-07 when real source guards reached the old cap.
-        Assert.InRange(selected.Count, 1, 50);
+        try
+        {
+            // Limit pre-Tester guard cost; raised on 2026-11-07 when real source guards reached the old cap.
+            Assert.InRange(selected.Count, 1, 50);
+        }
+        catch
+        {
+            // Preserve the assertion and capture the paths a count alone cannot identify.
+            output.WriteLine("Repository root: " + root);
+            output.WriteLine("Guard source paths:" + Environment.NewLine + string.Join(Environment.NewLine,
+                guardPaths.Select(path => Path.GetRelativePath(root, path))));
+            output.WriteLine("Selected guard classes:" + Environment.NewLine + string.Join(Environment.NewLine,
+                selected.Select(selection => selection.TestProject + ":" + selection.TestClass)));
+            throw;
+        }
     }
 
     [Fact]

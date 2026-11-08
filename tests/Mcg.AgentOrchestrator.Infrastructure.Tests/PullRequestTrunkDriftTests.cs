@@ -366,9 +366,7 @@ public sealed class PullRequestTrunkDriftTests(WorktreeSetupTemplate setupTempla
         internal Fixture(WorktreeSetupTemplate setupTemplate, bool denyReceiptWriter = false)
         {
             _delivery = new(setupTemplate);
-            setupTemplate.CopyBareOrigin(_origin);
-            Git("remote", "add", "origin", _origin);
-            Git("push", "origin", "main");
+            setupTemplate.CopyPushedOrigin(Root, _origin);
             new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
             Deliver();
             Assert.Single(Publisher.Requests);
@@ -398,15 +396,18 @@ public sealed class PullRequestTrunkDriftTests(WorktreeSetupTemplate setupTempla
                 acceptanceAttempts: Coordinator);
         internal IReadOnlySet<GoalId> Tick() => _tracker.Service([Goal]);
         internal LandingResult Deliver() => LandingExecutor.Execute(Kernel, Goal, Workspace, pullRequestPublisher: Publisher);
-        internal string Git(params string[] args) => ReadGit(Root, args);
-        internal string RemoteGoal() => ReadGit(_origin, "rev-parse", "refs/heads/" + GoalWorktreeLayout.BranchName(Goal.Id));
+        internal string Git(params string[] args) => args is ["rev-parse", var revision]
+            ? FixtureRefFileReader.Read(Root, revision) : ReadGit(Root, args);
+        internal string RemoteGoal() => FixtureRefFileReader.Read(_origin, "refs/heads/" + GoalWorktreeLayout.BranchName(Goal.Id));
         internal string[] Decisions(string prefix) => Goal.Timeline.Where(item => item.Kind == ProgressKind.GoalPolicyDecision &&
             item.Message.StartsWith(prefix, StringComparison.Ordinal)).Select(item => item.Message).ToArray();
         internal string AdvanceOrigin(string? path = null)
         {
             Git("checkout", "-b", "remote-change-" + ++_advances, "refs/remotes/origin/main");
             AppendCommit(Root, path ?? "trunk-" + _advances + ".txt", "unrelated trunk work");
-            var trunk = Git("rev-parse", "HEAD");
+            // Setup only needs the commit just created; retain Git for unsupported metadata.
+            var trunk = InfrastructureTestSupport.TryReadGitHeadInProcess(Root, out var head) && head is not null
+                ? head : Git("rev-parse", "HEAD");
             Git("push", "origin", "HEAD:main");
             Git("checkout", "main");
             return trunk;

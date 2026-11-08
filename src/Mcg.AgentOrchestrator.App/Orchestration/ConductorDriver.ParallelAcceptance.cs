@@ -68,7 +68,7 @@ internal sealed partial class ConductorDriver
         int slotIndex,
         out string? reason)
     {
-        if (MultiRepositoryGateHold.Applies(goal)) { reason = MultiRepositoryGateHold.Kind; return null; }
+        if (MultiRepositoryLandingHold.Applies(goal)) { reason = MultiRepositoryLandingHold.Kind; return null; }
         if (goal.Status == GoalStatus.Parked)
         {
             reason = CandidateDeclineHoldActive;
@@ -135,7 +135,7 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
-        if (MultiRepositoryGateHold.Exclusion(goal) is { } repositoryHold) return repositoryHold;
+        if (MultiRepositoryLandingHold.Exclusion(goal) is { } repositoryHold) return repositoryHold;
 
         if (HasActiveOwnerReviewHold(goal, out _, out _))
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);

@@ -104,6 +104,41 @@ public sealed class TrainEjectionReportingTests
     }
 
     [Theory]
+    [InlineData(GoalLifecycleState.Failed)]
+    [InlineData(GoalLifecycleState.Verified)]
+    public void StalledBuildHold_AfterEjection_QuotesLiveReason(GoalLifecycleState state)
+    {
+        using var fixture = new Fixture();
+        fixture.EjectNewest();
+        // Prove the retained receipt is eligible before replacing the live train wait.
+        Assert.Contains("ejected from train", fixture.RefreshWaitingHold().Reason);
+        var held = fixture.CompletionBuildHold(state);
+        var result = new ConductorAdvanceResult(fixture.Goals[2].Id.Value, "42c77c56", "test", held);
+        Assert.Same(result, TrainEjectionReport.DescribeWaitingResult(fixture.Driver, fixture.Goals[2].Id, result));
+
+        var blocker = fixture.AssertStalledBlocker(held);
+
+        Assert.Equal(held.Decision!.Reason, held.Reason);
+        Assert.Equal(held.Reason, blocker);
+        Assert.DoesNotContain("ejected from train", blocker);
+        Assert.DoesNotContain("RedNewestMember", blocker);
+    }
+
+    [Fact]
+    public void StalledTrainWait_AfterEjection_QuotesEjection()
+    {
+        using var fixture = new Fixture();
+        fixture.EjectNewest();
+        var held = new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified,
+            Fixture.WaitingReason, "capacity");
+
+        var blocker = fixture.AssertStalledBlocker(held);
+
+        Assert.Equal($"ejected from train {fixture.Original.Value} reason=RedNewestMember " +
+            "surviving-receipt=pending", blocker);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void ReAdmission_AfterSweep_DoesNotRestorePreviousEjection(bool grouped)
@@ -248,6 +283,58 @@ public sealed class TrainEjectionReportingTests
 
         internal void EjectNewest() => Store.RecordEjections(AttemptId,
             [new(Goals[2].Id, MergeTrainEjectionReason.RedNewestMember, [], "Dropped after RED receipt original-receipt.")]);
+
+        internal ConductorAdvanceOutcome.Held CompletionBuildHold(GoalLifecycleState state)
+        {
+            var goal = Goals[2];
+            var task = _kernel.AddTask(goal.Id, AgentRole.Developer, "Retained candidate edits");
+            _kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            _kernel.RecordTaskDispatch(goal.Id, task.Id,
+                new TaskDispatchRecord("test-worker", "test.exe", _worktree, Started));
+            _kernel.RecordTaskVerification(goal.Id, task.Id,
+                new TaskVerificationRecord("test.exe", _worktree, 1, "", "build evidence unavailable", Started,
+                    OrchestratorFailureReason: "completion-build-coordinator-unavailable"));
+            _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Build evidence required");
+            _kernel.EscalateTaskFailure(goal.Id, task.Id, "Completion build coordinator unavailable");
+            return Assert.IsType<ConductorAdvanceOutcome.Held>(WorkerBuildEvidenceRecoveryHold.Decide(
+                goal, state, new FailedGoalRecoveryIdentity(goal.Id, task.Id, null, "fixture")));
+        }
+
+        internal string AssertStalledBlocker(ConductorAdvanceOutcome.Held held)
+        {
+            Assert.NotNull(Driver.ExecutionDirectory);
+            var goal = Goals[2];
+            var timeline = new GoalLifecycleEventWriter(Path.Combine(Root, "timeline"));
+            Driver.HoldEscalationEventWriter = timeline;
+            var conduct = new ConductEventLogWriter(Path.Combine(Root, "conduct.log"), utcNow: () => Started);
+            var changed = new HashSet<GoalId>();
+            var lines = new List<string>();
+            foreach (var minutes in new[] { 5, 16, 27 })
+                ConductorBatchLoop.TrackGoalOutcome(_kernel, Driver, goal, held, Started.AddMinutes(minutes),
+                    TimeSpan.FromMinutes(10), changed, lines, conduct);
+
+            Assert.NotNull(goal.CurrentHold?.StalledAt);
+            Assert.Single(lines, line => line.StartsWith("GOAL_STALLED ", StringComparison.Ordinal));
+            var escalation = ReadEscalation(timeline.EventFilePath(goal.Id), "eventType", "GoalEscalated", "reason");
+            Assert.Equal(escalation, ReadEscalation(conduct.CurrentPath, "eventKind", "goal-escalation", "detail"));
+            Assert.StartsWith("ownerless-hold-stalled ", escalation);
+            Assert.Contains("blocker=", escalation);
+            var blocker = escalation[(escalation.IndexOf("blocker=", StringComparison.Ordinal) + "blocker=".Length)..];
+            Assert.Equal(goal.CurrentHold!.Blocker, blocker);
+            return blocker;
+        }
+
+        private static string ReadEscalation(string path, string key, string value, string textKey)
+        {
+            var entries = new List<string>();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                using var document = JsonDocument.Parse(line);
+                if (document.RootElement.GetProperty(key).GetString() == value)
+                    entries.Add(document.RootElement.GetProperty(textKey).GetString()!);
+            }
+            return Assert.Single(entries);
+        }
 
         internal MergeTrainReceipt CompleteRetry(MergeTrainGateOutcome outcome = MergeTrainGateOutcome.Passed,
             string attemptId = AttemptId) => Save(new("surviving-receipt",

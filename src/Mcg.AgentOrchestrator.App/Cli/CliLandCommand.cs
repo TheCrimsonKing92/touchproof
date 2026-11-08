@@ -10,7 +10,7 @@ internal static class CliLandCommand
     {
         CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
         context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-        if (CliMultiRepositoryGateHold.Apply(context, context.CurrentGoal)) return true;
+        if (CliMultiRepositoryAcceptance.Apply(context, context.CurrentGoal, runGate: false)) return true;
         var landEngineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
         var landEngineDecision = AcceptanceEngineAcceptanceGate.Decide(
             landEngineHealth.Health,

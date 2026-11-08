@@ -150,7 +150,7 @@ public sealed class CohortCandidateTemplate : IDisposable
     {
         internal static string ProcessRoot => SeedRepositoryProcessRootPath;
         internal static string CreateRepository() => CreateReducedAcceptanceCohortRepository();
-        internal static string Revision(string repo, string revision) => RunGitOutput(repo, "rev-parse", revision).Trim();
+        internal static string Revision(string repo, string revision) => FixtureRefFileReader.Read(repo, revision);
         internal static void Remove(string repo) => DeleteDirectory(repo);
     }
 }

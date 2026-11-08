@@ -105,7 +105,8 @@ public sealed class MergeTrainDeferralFixtureEquivalenceTests(
     [Fact]
     public void Reset_AfterMeasuredFixtureBuild_LaunchesNoGitProbes()
     {
-        Assert.True(fixture.BuildGitProbeLaunchCount >= 11);
+        // Build-time probes vary with test order: the static MainSeedRepositoryTemplate Lazy
+        // in GoalWorktreeTestBase runs git only for its first caller; later callers copy it.
         output.WriteLine($"Fixture-build Git-probe launch count: {fixture.BuildGitProbeLaunchCount}; " +
             "before: once per case (5 builds); after: once per class (1 build). " +
             "This is a probe count, not a timing or a census of production GitCli launches.");
@@ -113,6 +114,16 @@ public sealed class MergeTrainDeferralFixtureEquivalenceTests(
         fixture.Reset();
         Assert.Equal(0, launches.Count);
         Assert.Equal(1, fixture.BuildCount);
+    }
+
+    [Fact]
+    public void CountGitProbeLaunches_FixtureRepositoryProbe_ObservesLaunch()
+    {
+        var repository = fixture.Repository;
+        using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        var result = InfrastructureTestSupport.RunGitProbe(repository, ["rev-parse", "--verify", "HEAD"]);
+        Assert.True(result.Succeeded, result.ToString());
+        Assert.True(launches.Count >= 1);
     }
 
     private (GoalStatus Status, int Tasks, int Verifications)[] GoalState() => fixture.Goals

@@ -142,13 +142,14 @@ public sealed class ProcessEnvironmentProbeRunnerTests
                 {
                     try
                     {
-                        if (!process.HasExited && TestOwnedProcessStop.StopTreeIfSame(identity))
-                            await process.WaitForExitAsync().WaitAsync(TestHangGuard.Bound);
+                        if (!process.HasExited && !TestOwnedProcessStop.StopTreeIfSame(identity))
+                            throw new InvalidOperationException("Could not stop the identity-bound probe fixture process.");
+                        await process.WaitForExitAsync().WaitAsync(TestHangGuard.Bound);
                     }
                     finally { process.Dispose(); }
                 }
                 _abort.Dispose();
-                _directory.Delete(recursive: true);
+                SharedTestSupport.RemoveTempDirectory(_directory.FullName);
             }
         }
     }
