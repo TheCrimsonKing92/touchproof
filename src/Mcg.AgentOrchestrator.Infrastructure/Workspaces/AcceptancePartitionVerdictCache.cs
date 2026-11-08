@@ -546,6 +546,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         failedPredicate is AcceptanceShardCompletionPredicates.TimedOut or
             AcceptanceShardCompletionPredicates.NonzeroExit or
             AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.IncompleteVstestOutput or
             AcceptanceShardCompletionPredicates.MalformedTrx or
             AcceptanceShardCompletionPredicates.ZeroTests or
             AcceptanceShardCompletionPredicates.IncompleteExecution ||
@@ -793,6 +794,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         AcceptanceShardCompletionDecision decision,
         AcceptanceCheckResult probe) =>
         (decision.FailedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.IncompleteVstestOutput or
             AcceptanceShardCompletionPredicates.MalformedTrx) &&
         firstRun.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) != true &&
         probe.Passed &&
@@ -803,6 +805,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     private static bool IsApparatusInvalidatingPredicate(string failedPredicate) =>
         failedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.IncompleteVstestOutput or
             AcceptanceShardCompletionPredicates.MalformedTrx ||
         AcceptanceFailureClassifications.IsEnvironmentalApparatus(failedPredicate);
 

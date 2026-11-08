@@ -440,7 +440,7 @@ public sealed class CacheIdentityStageTimingTests : IDisposable
         Path.Combine(root, kind, Path.GetFileNameWithoutExtension(project), "debug_net10.0", "cache.txt");
     private static string CommandShape(string[] args) => string.Join(" ", args.Select(arg =>
         arg.StartsWith("-preprocess:", StringComparison.Ordinal) ? "-preprocess:<invocation-temp>" : arg));
-    private static Dictionary<string, string> Fields(string summary) => summary.Split(' ').Where(token => token.Contains('='))
+    private static Dictionary<string, string> Fields(string summary) => summary.Split("; ")[0].Split(' ').Where(token => token.Contains('='))
         .Select(token => token.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
     private static void AssertStage(Dictionary<string, string> fields, string name, string ms, string count, string status)
     {

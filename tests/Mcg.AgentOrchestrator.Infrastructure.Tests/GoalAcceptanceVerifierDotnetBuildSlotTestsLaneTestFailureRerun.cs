@@ -82,7 +82,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTestFailureRer
             AcceptanceVerificationResult? result = null;
             var console = await AsyncLocalConsoleRouter.Out.CaptureLocalAsync(async () =>
             {
-                var verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+                var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, Runner);
                 using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                     TimeSpan.FromSeconds(60));
                 result = await verifier.RunOwnedAsync(root, new GoalId(goal), changedFiles: null,

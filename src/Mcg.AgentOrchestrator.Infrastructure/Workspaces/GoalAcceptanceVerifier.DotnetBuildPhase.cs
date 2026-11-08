@@ -195,11 +195,16 @@ internal sealed class AcceptanceDotnetBuildPhase
             return new DotnetTestBuildPhaseResult(cachedRun, ContributesToCheck: true);
         }
 
-        phase.Run = await hooks.RunManagedCheckAsync(
+        var run = await hooks.RunManagedCheckAsync(
             phase.BuildArguments,
             $"{attemptName}-build",
             null,
             phase.BuildEnvironment).ConfigureAwait(false);
+        phase.Run = (run.Result with
+        {
+            ResultSummary = AppendBuildCommands(run.Result.ResultSummary,
+                [RecordBuildCommand(phase.BuildArguments, phase.BuildEnvironment)])
+        }, run.Retried);
         return new DotnetTestBuildPhaseResult(phase.Run.Value, ContributesToCheck: true);
     }
 
@@ -250,6 +255,7 @@ internal sealed class AcceptanceDotnetBuildPhase
         var retried = false;
         var lockRemediationApplied = false;
         (AcceptanceCheckResult Result, bool Retried)? lastRun = null;
+        var buildCommands = new List<string>();
         IReadOnlyList<string> builtProjects = plan.BuildProjects;
         DotnetBaseBuildCachePublishResult? publish = null;
 
@@ -291,6 +297,7 @@ internal sealed class AcceptanceDotnetBuildPhase
                             }
                             restoredIntoPreparedSlot = true;
                         }, environment).ConfigureAwait(false);
+                    buildCommands.Add(RecordBuildCommand(arguments, environment));
                     retried |= projectRun.Retried;
                     lockRemediationApplied |= projectRun.Result.LockRemediationApplied;
                     lastRun = projectRun;
@@ -304,6 +311,7 @@ internal sealed class AcceptanceDotnetBuildPhase
             {
                 // Probe is provisional; no focused build may run on a partial restore.
                 lastRun = null;
+                buildCommands.Clear();
                 focused = false;
             }
         }
@@ -316,6 +324,7 @@ internal sealed class AcceptanceDotnetBuildPhase
                 $"{attemptName}-build",
                 null,
                 environment).ConfigureAwait(false);
+            buildCommands.Add(RecordBuildCommand(phase.BuildArguments, environment));
             retried |= lastRun.Value.Retried;
             lockRemediationApplied |= lastRun.Value.Result.LockRemediationApplied;
         }
@@ -359,7 +368,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         {
             DurationMilliseconds = wall.ElapsedMilliseconds,
             LockRemediationApplied = lockRemediationApplied,
-            ResultSummary = PrefixResultSummary(receiptSummary, lastRun.Value.Result.ResultSummary)
+            ResultSummary = AppendBuildCommands(
+                PrefixResultSummary(receiptSummary, lastRun.Value.Result.ResultSummary), buildCommands)
         }, retried);
 
         string StageReceipts() => $"{initialStages.Format("identity_initial_")} {revalidationStages.Format("identity_revalidation_")}";
@@ -372,6 +382,24 @@ internal sealed class AcceptanceDotnetBuildPhase
             finally { phase.IdentityDiagnostics = previous; }
         }
     }
+
+    private static string RecordBuildCommand(string[] arguments, DotnetBuildEnvironment environment)
+    {
+        var command = string.Join(' ', WithBuildEnvironmentArguments(arguments, environment).Select(QuoteBuildArgument));
+        Console.WriteLine($"build_command={command}");
+        Console.Out.Flush();
+        return command;
+    }
+
+    private static string QuoteBuildArgument(string value) =>
+        value.Length > 0 && !value.Any(character => char.IsWhiteSpace(character) || character == '"') ? value
+            : "\"" + System.Text.RegularExpressions.Regex.Replace(value, @"(\\*)(""|$)",
+                match => new string('\\', match.Groups[1].Length * 2) +
+                    (match.Groups[2].Length == 0 ? "" : "\\\"")) + "\"";
+
+    private static string AppendBuildCommands(string? summary, IEnumerable<string> commands) =>
+        string.Join("; ", new[] { summary }.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Concat(commands.Select(command => $"build_command={command}")));
 
     private sealed class BaseBuildCacheRestoreMissException : Exception;
 

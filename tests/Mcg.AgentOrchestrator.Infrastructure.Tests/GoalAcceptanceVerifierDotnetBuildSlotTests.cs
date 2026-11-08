@@ -24,7 +24,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         var root = CreateTwoLaneShardManifestWorkspace(maxConcurrentShards);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, runner);
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, runner);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             return await verifier.RunAsync(
