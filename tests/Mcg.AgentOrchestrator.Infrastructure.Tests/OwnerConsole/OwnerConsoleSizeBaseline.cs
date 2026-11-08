@@ -10,7 +10,7 @@ internal static class OwnerConsoleSizeBaseline
         ["OwnerConsoleBoardSource.cs"] = 289,
         ["OwnerConsoleEpicDialog.cs"] = 309,
         ["OwnerConsoleLoop.cs"] = 278,
-        ["OwnerConsoleScreenController.cs"] = 288,
+        ["OwnerConsoleScreenController.cs"] = 283,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
         // Relocated section builders preserve existing text and ordering; individual methods stay below 60 lines.
         ["OwnerGoalSummarySectionReader.cs"] = 277
