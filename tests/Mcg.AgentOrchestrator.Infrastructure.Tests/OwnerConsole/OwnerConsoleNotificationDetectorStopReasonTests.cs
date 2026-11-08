@@ -29,9 +29,10 @@ public sealed class OwnerConsoleNotificationDetectorStopReasonTests
         var running = Model(true);
         var stopped = Model(false, planned?.Reason, planned?.At);
         Assert.Empty(detector.Detect(null, running, Now, OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
         Assert.Equal([OwnerConsoleNotificationTier.Alarm],
-            detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
-        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(1), OwnerConsoleBellTiers.All));
+            detector.Detect(stopped, stopped, Now.AddMinutes(1), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
     }
 
     [Fact]
