@@ -62,7 +62,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         var selected = _body.SelectedItem ?? 0;
         var fields = new Dictionary<int, OwnerConsoleFieldSnapshot>();
         Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded, fields);
-        _fields = new(gate?.FieldSnapshot(), fields);
+        _fields = new(gate is null ? null : new OwnerConsoleGateFieldProjection(gate).FieldSnapshot(), fields);
         if (SourceRenderer.Apply(_body, Lines))
             _body.SelectedItem = Math.Clamp(selected, 0, Math.Max(0, Lines.Count - 1));
         RenderTitle();

@@ -104,7 +104,7 @@ public sealed class OwnerStatusLineWidthTests
         Assert.Contains('…', line);
         Assert.Contains("active: 12", line);
         Assert.Contains("decisions: 0", line);
-        Assert.Equal(new string('x', 100), Assert.Single(gate.FieldSnapshot().Fields, field => field.Key == "participation").Value);
+        Assert.Equal(new string('x', 100), Assert.Single(new OwnerConsoleGateFieldProjection(gate).FieldSnapshot().Fields, field => field.Key == "participation").Value);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public sealed class OwnerStatusLineWidthTests
         }
         Assert.Contains("working: refresh after conductor event", scene.View.StatusText);
         Assert.Equal(gate.ExecutionId, scene.Controller.Model!.Gate!.ExecutionId);
-        Assert.Equal(gate.ExecutionId, Assert.Single(scene.Controller.Model.Gate.FieldSnapshot().Fields,
+        Assert.Equal(gate.ExecutionId, Assert.Single(new OwnerConsoleGateFieldProjection(scene.Controller.Model.Gate).FieldSnapshot().Fields,
             field => field.Key == "execution").Value);
     }
 
