@@ -54,6 +54,6 @@ public sealed class OwnerFleetDiagramWidthTests
 
     private static OwnerFleetViewModel Model(string lane) => OwnerFleetViewModelBuilder.Build(
         new([new("executor", 0, new Dictionary<string, int>(), null, null, [], null, null, 0, 0,
-            [new(lane, 12, 47.3, 47.3, null, null), new("abcdefghijklmnopqrst", 1, 2, 2, null, null)])], 0, 0),
+            [new(lane, 12, 47.3, 47.3, SoloMedianSeconds: 47.3, ConcurrentMedianSeconds: null), new("abcdefghijklmnopqrst", 1, 2, 2, null, null)])], 0, 0),
         true, TimeZoneInfo.Utc);
 }

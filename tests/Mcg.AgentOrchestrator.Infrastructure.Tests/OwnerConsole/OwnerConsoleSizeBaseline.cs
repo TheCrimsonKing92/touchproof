@@ -36,7 +36,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleLoop.cs::OwnerConsoleLoop.RunAsync.RunStepAsync",
         "OwnerConsolePaneKeys.cs::OwnerConsolePaneKeys.HandleAsync",
         "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync",
-        "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync.ExecuteAsync",
         "OwnerConsoleStageDescriber.cs::OwnerConsoleStageDescriber.Describe",
         "OwnerConsoleViewModelBuilder.cs::OwnerConsoleViewModelBuilder.BuildBoardAsync",
         "OwnerExperimentDecisionFlow.cs::OwnerExperimentDecisionFlow.RunAsync",
