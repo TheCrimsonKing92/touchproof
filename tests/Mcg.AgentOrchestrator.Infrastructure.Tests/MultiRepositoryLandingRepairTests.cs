@@ -255,48 +255,68 @@ public sealed class MultiRepositoryLandingRepairTests
     public void Run_PublicationInterrupted_ResumesWithoutDoubleRevert(bool published, bool legacyPath)
     {
         using var f = FailedTuple();
-        var candidate = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
-        var integration = f.Repositories.Crosswalk.Git("rev-parse", "main");
-        var intercepted = 0;
-        using (LandingExecutor.UseGitRunner((root, args) =>
+        var ownedWorktrees = new List<string>();
+        var originalWorktrees = WorktreePaths();
+        try
         {
-            if (Path.GetFullPath(root) == Path.GetFullPath(f.SecondaryWorktree) &&
-                args[0] == "merge" && args.Contains("--ff-only"))
+            var candidate = Git(f.SecondaryWorktree, "rev-parse", "HEAD");
+            var integration = f.Repositories.Crosswalk.Git("rev-parse", "main");
+            var intercepted = 0;
+            using (LandingExecutor.UseGitRunner((root, args) =>
             {
-                intercepted++;
-                if (published) Assert.True(GitCli.Run(root, args).Succeeded);
-                throw new IOException("fixture interrupted publication");
+                if (args[0] == "worktree" && args[1] == "add")
+                    ownedWorktrees.Add(args[3]);
+                if (Path.GetFullPath(root) == Path.GetFullPath(f.SecondaryWorktree) &&
+                    args[0] == "merge" && args.Contains("--ff-only"))
+                {
+                    intercepted++;
+                    if (published) Assert.True(GitCli.Run(root, args).Succeeded);
+                    throw new IOException("fixture interrupted publication");
+                }
+                return GitCli.Run(root, args);
+            }))
+            {
+                Assert.Equal("repair-conflict", Repair(f).Run(f.Goal).Reason);
             }
-            return GitCli.Run(root, args);
-        }))
-        {
-            Assert.Equal("repair-conflict", Repair(f).Run(f.Goal).Reason);
+            Assert.Equal(1, intercepted);
+            var progress = Assert.Single(Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!).Value;
+            Assert.NotNull(progress.RebuiltTip);
+            Assert.NotNull(Store(f).ReadFailure(f.Goal.Id));
+            Assert.Equal(published ? progress.RebuiltTip : candidate, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
+            if (legacyPath)
+            {
+                // Persist an older flat-layout path to exercise recovery across the layout change.
+                var container = Path.GetDirectoryName(progress.WorktreePath)!;
+                var previousPath = Path.Combine(OrchestratorTempRoot.GetParent(), Path.GetFileName(container));
+                var legacyWorktree = previousPath + "-legacy";
+                ownedWorktrees.Add(legacyWorktree);
+                Git(f.Repositories.Crosswalk.CheckoutPath, "worktree", "move", progress.WorktreePath, legacyWorktree);
+                Directory.Delete(container); // Empty, case-owned container only.
+                progress = progress with { WorktreePath = legacyWorktree };
+                Store(f).RecordRepairProgress(f.Goal.Id, f.Tuple().Canonical, "crosswalk", progress);
+            }
+
+            var result = Repair(f).Run(f.Goal);
+
+            Assert.True(result.Repaired, result.Detail);
+            Assert.False(Directory.Exists(progress.WorktreePath));
+            Assert.Equal(progress.RebuiltTip, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
+            Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
+            Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
+            Assert.Null(Store(f).ReadAttempt(f.Goal.Id));
+            Assert.Equal(originalWorktrees, WorktreePaths());
         }
-        Assert.Equal(1, intercepted);
-        var progress = Assert.Single(Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!).Value;
-        Assert.NotNull(progress.RebuiltTip);
-        Assert.NotNull(Store(f).ReadFailure(f.Goal.Id));
-        Assert.Equal(published ? progress.RebuiltTip : candidate, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
-        if (legacyPath)
+        finally
         {
-            // Persist an older flat-layout path to exercise recovery across the layout change.
-            var container = Path.GetDirectoryName(progress.WorktreePath)!;
-            var previousPath = Path.Combine(OrchestratorTempRoot.GetParent(), Path.GetFileName(container));
-            var legacyWorktree = previousPath + "-legacy";
-            Git(f.Repositories.Crosswalk.CheckoutPath, "worktree", "move", progress.WorktreePath, legacyWorktree);
-            Directory.Delete(container); // Empty, case-owned container only.
-            progress = progress with { WorktreePath = legacyWorktree };
-            Store(f).RecordRepairProgress(f.Goal.Id, f.Tuple().Canonical, "crosswalk", progress);
+            // Repair deliberately retains prepared work after interruption. The fixture only
+            // owns worktrees under its root, so remove this case's external paths before it
+            // disposes, even if arrangement or an assertion fails. Success is asserted above.
+            foreach (var path in ownedWorktrees.Where(Directory.Exists))
+                Git(f.Repositories.Crosswalk.CheckoutPath, "worktree", "remove", "--force", path);
         }
 
-        var result = Repair(f).Run(f.Goal);
-
-        Assert.True(result.Repaired, result.Detail);
-        Assert.False(Directory.Exists(progress.WorktreePath));
-        Assert.Equal(progress.RebuiltTip, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
-        Assert.Equal(integration, f.Repositories.Crosswalk.Git("rev-parse", "main"));
-        Assert.Equal("fixture secondary change", Git(f.SecondaryWorktree, "show", "HEAD:example.txt"));
-        Assert.Null(Store(f).ReadAttempt(f.Goal.Id));
+        string[] WorktreePaths() => f.Repositories.Crosswalk.Git("worktree", "list", "--porcelain", "-z")
+            .Split('\0').Where(field => field.StartsWith("worktree ", StringComparison.Ordinal)).ToArray();
     }
 
     [Fact]
