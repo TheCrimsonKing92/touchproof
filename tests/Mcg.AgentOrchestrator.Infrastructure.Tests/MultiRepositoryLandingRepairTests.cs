@@ -279,7 +279,8 @@ public sealed class MultiRepositoryLandingRepairTests
                 Assert.Equal("repair-conflict", Repair(f).Run(f.Goal).Reason);
             }
             Assert.Equal(1, intercepted);
-            var progress = Assert.Single(Store(f).ReadAttempt(f.Goal.Id)!.RepairProgress!).Value;
+            var attempt = Store(f).ReadAttempt(f.Goal.Id)!;
+            var progress = Assert.Single(attempt.RepairProgress!).Value;
             Assert.NotNull(progress.RebuiltTip);
             Assert.NotNull(Store(f).ReadFailure(f.Goal.Id));
             Assert.Equal(published ? progress.RebuiltTip : candidate, Git(f.SecondaryWorktree, "rev-parse", "HEAD"));
@@ -293,7 +294,8 @@ public sealed class MultiRepositoryLandingRepairTests
                 Git(f.Repositories.Crosswalk.CheckoutPath, "worktree", "move", progress.WorktreePath, legacyWorktree);
                 Directory.Delete(container); // Empty, case-owned container only.
                 progress = progress with { WorktreePath = legacyWorktree };
-                Store(f).RecordRepairProgress(f.Goal.Id, f.Tuple().Canonical, "crosswalk", progress);
+                // Recovery progress belongs to the failed attempt, even after candidate refs move.
+                Store(f).RecordRepairProgress(f.Goal.Id, attempt.TupleCanonical, "crosswalk", progress);
             }
 
             var result = Repair(f).Run(f.Goal);
