@@ -42,9 +42,12 @@ internal static class SoloAcceptanceFailureReceiptReader
                 !SameNames(proof.BaselineChecks.Select(item => item.Check.Name), proof.Baseline.Checks.Select(check => check.Name)))
                 return Refuse("solo-check-mismatch");
             var feedback = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var checks = proof.Checks.Select(item => item.Check).ToArray();
             foreach (var item in proof.Checks)
             {
                 var check = item.Check;
+                // Direct covered checks have identities and undergo this loop's full validation; their refusals return unchanged.
+                if (SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null) continue;
                 if (!Usable(check))
                     return NotIntroduced("unusable-check", check,
                         $"passed={check.Passed}; exitCode={check.ExitCode}; executed={check.ExecutedTestCount}; " +
