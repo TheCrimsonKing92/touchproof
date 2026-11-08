@@ -32,7 +32,7 @@ internal static class CliFleetCapacityQueryCommand
         var json = Parse(args);
         cancellationToken.ThrowIfCancellationRequested();
         var observedAt = (time ?? TimeProvider.System).GetUtcNow();
-        var catalog = OwnerConsoleBoardSource.ReadWorkspaceCatalog(repositoryRoot, tenant, registry,
+        var catalog = OwnerConsoleWorkspaceCatalog.ReadWorkspaceCatalog(repositoryRoot, tenant, registry,
             launchWorkspace, cancellationToken);
         var result = await FleetWorkerCapacityReader.ReadAsync(catalog, observedAt, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
