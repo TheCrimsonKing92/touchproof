@@ -8,7 +8,6 @@ internal static class OwnerConsoleSizeBaseline
     internal static IReadOnlyDictionary<string, int> Files { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
     {
         ["OwnerConsoleBoardSource.cs"] = 289,
-        ["OwnerConsoleEpicDialog.cs"] = 309,
         ["OwnerConsoleLoop.cs"] = 278,
         ["OwnerConsoleScreenController.cs"] = 288,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
@@ -26,7 +25,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerActivityNarrator.cs::OwnerActivityNarrator.Narrate",
         "OwnerConsoleBindingRunner.cs::OwnerConsoleBindingRunner.RunAsync",
         "OwnerConsoleBoardSource.cs::OwnerConsoleBoardSource.ComposeAsync",
-        "OwnerConsoleEpicDialog.cs::OwnerConsoleEpicDialog.HandleKeyAsync",
         "OwnerConsoleFullScreenHost.cs::OwnerConsoleFullScreenHost.RunCoreAsync",
         "OwnerConsoleGateLayout.cs::OwnerConsoleGateLayout.Lines",
         "OwnerConsoleJsonlTail.cs::OwnerConsoleJsonlTail.Select",
