@@ -17,7 +17,7 @@ internal sealed record OwnerConsoleGateManifestLane(string Name, double Estimate
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
 // A snapshot of observation, never an authority for scheduling or acceptance.
-internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
+internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyList<OwnerConsoleGateMember> Members, DateTimeOffset? StartedAt, TimeSpan Elapsed,
     IReadOnlyList<OwnerConsoleGateLane> Lanes, double Fraction, int RemainingSeconds,
     int DoneCount, int TotalCount, TimeSpan? IdleAge = null,
@@ -69,6 +69,6 @@ internal sealed partial record OwnerConsoleGateProgress(bool Live, string Kind,
     internal static string AttemptFromHeartbeat(string path) => HeartbeatAttempt.Match(path.Split(['/', '\\']).Last()).Value;
     internal static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
     internal static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];
-    private static bool MemberMatches(string left, string right) => left.Length > 8 && right.Length > 8
+    internal static bool MemberMatches(string left, string right) => left.Length > 8 && right.Length > 8
         ? left == right : Prefix(left) == Prefix(right);
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateExecutionProjection;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 

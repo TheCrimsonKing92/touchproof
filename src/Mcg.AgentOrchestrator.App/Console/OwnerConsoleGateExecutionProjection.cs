@@ -1,6 +1,8 @@
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress;
+
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial record OwnerConsoleGateProgress
+internal static class OwnerConsoleGateExecutionProjection
 {
     // Identity is a recorded relationship, never a comparison of member sets.
     internal sealed record Ejection(string? Outer, string Goal, string? Execution, DateTimeOffset At, string? Train);
@@ -16,9 +18,7 @@ internal sealed partial record OwnerConsoleGateProgress
     internal static Dictionary<string, Gate> Reconstruct(Observation[] parsed,
         out List<Ejection> ejections, out DateTimeOffset? lastEnd)
     {
-        var gates = new Dictionary<string, Gate>(StringComparer.OrdinalIgnoreCase);
-        var owners = new Dictionary<string, Observation>(StringComparer.Ordinal);
-        var completedOwners = new HashSet<string>(StringComparer.Ordinal);
+        var state = new OwnerConsoleGateReconstruction();
         // Keep legacy membership-only replay, but never turn cohort ownership/
         // admission diagnostics into an independent execution when the stream
         // carries execution identities. Members are not an identity link.
@@ -26,192 +26,121 @@ internal sealed partial record OwnerConsoleGateProgress
             (item.Event.EventKind == "gate-progress" || item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal) ||
              item.Event.Detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal)) &&
             item.Get("scope") != "attribution" && item.Get("phase") != "gate-phase-breakdown" && ExecutionOf(item).Length > 0);
-        ejections = [];
-        lastEnd = null;
-        foreach (var item in parsed)
-        {
-            var detail = item.Event.Detail;
-            var cohort = detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal);
-            var solo = detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal);
-            if (!cohort && !solo && item.Event.EventKind != "gate-progress") continue;
-            // Partition run IDs describe auxiliary reproduction, never admission
-            // to a new gate. Only an explicit parent link can attach their activity.
-            if (item.Get("scope") == "attribution") continue;
-            var execution = ExecutionOf(item);
-            var outer = item.Get("outer_attempt");
-            if (cohort && outer.Length == 0) outer = item.Get("attempt");
-            var train = item.Get("train_identity");
-            var phase = item.Get("phase");
-            if (phase == "gate-phase-breakdown") continue;
-            var members = (item.Get("participant_ids") is { Length: > 0 } full ? full : item.Get("members"))
-                .Split([',', '+'], StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.Ordinal).ToArray();
-            var goal = item.Get("goal");
-            if (goal.Length == 0) goal = item.Event.GoalId ?? "";
-            var legacyEjection = System.Text.RegularExpressions.Regex.Match(detail, @"ejected from train (?<train>[^\s"";]+)");
-            if (phase == "member-ejected" || legacyEjection.Success)
-            {
-                if (goal.Length == 0) continue;
-                if (train.Length == 0 && legacyEjection.Success) train = legacyEjection.Groups["train"].Value;
-                // Older goal-specific receipts identify an ejection even when the
-                // parent relationship was not recorded. Retain it as unresolved.
-                var original = gates.Values.LastOrDefault(gate => outer.Length > 0 && gate.OuterAttemptId == outer &&
-                    (execution.Length > 0 ? gate.ExecutionId == execution : gate.TrainIdentity == train));
-                ejections.Add(new(outer.Length == 0 ? null : outer, goal, original?.ExecutionId, item.Event.Timestamp, train));
-                if (original is not null)
-                {
-                    original.Live = false;
-                    original.Participation = "historical execution";
-                }
-                if (original is null)
-                    gates["ejected:" + outer + ":" + goal + ":" + train] = new([goal], item.Event.Timestamp)
-                    {
-                        ExecutionId = execution.Length == 0 ? null : execution, OuterAttemptId = outer.Length == 0 ? null : outer,
-                        TrainIdentity = train.Length == 0 ? null : train, Live = false, Participation = "ejected / awaiting survivor",
-                        FinalOutcome = "ejected", FinishedAt = item.Event.Timestamp
-                    };
-                continue;
-            }
-            var outcome = item.Get("outcome");
-            var terminal = cohort && (detail.StartsWith("ACCEPTANCE_COHORT_CHILD_COMPLETED", StringComparison.Ordinal) ||
-                detail.StartsWith("ACCEPTANCE_COHORT_RECONCILED_DEAD", StringComparison.Ordinal) ||
-                detail.StartsWith("ACCEPTANCE_COHORT_ADOPTION_REFUSED", StringComparison.Ordinal) || detail.Contains("ABANDON", StringComparison.Ordinal) ||
-                (detail.StartsWith("ACCEPTANCE_COHORT_EXIT ", StringComparison.Ordinal) || detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal)) &&
-                outcome is not ("" or "inflight" or "gathering" or "unpaired")) || solo && item.Get("result") is not ("" or "started" or "running");
-            if (cohort && outer.Length > 0)
-            {
-                if (!completedOwners.Contains(outer)) owners[outer] = item;
-                if (terminal)
-                {
-                    completedOwners.Add(outer);
-                    lastEnd = item.Event.Timestamp;
-                    foreach (var child in gates.Values.Where(gate => gate.OuterAttemptId == outer))
-                    {
-                        child.Live = false;
-                        child.Participation = "outer attempt completed";
-                        if (child.FinishedAt is null)
-                        {
-                            child.FinalOutcome = FinalOutcomeOf(item);
-                            child.FinishedAt = item.Event.Timestamp;
-                        }
-                    }
-                }
-                continue; // Outer ownership never asserts execution participation.
-            }
-            if (cohort && (members.Length == 0 || execution.Length == 0 && hasExecutionEvidence)) continue;
-            if (members.Length == 0 && goal.Length > 0 && goal != "unknown") members = [goal];
-            if (members.Length == 0) continue;
-            var key = execution.Length > 0 ? "execution:" + execution : "unresolved:" +
-                string.Join('+', members.Select(Prefix).Order(StringComparer.Ordinal));
-            var starts = phase == "execution-admitted" ||
-                detail.StartsWith("ACCEPTANCE_COHORT_ENTRY ", StringComparison.Ordinal) || solo && item.Get("result") == "started";
-            if (!gates.TryGetValue(key, out var gate) || starts && gate.ExecutionId is null)
-            {
-                gate = new(members, item.Event.Timestamp)
-                {
-                    ExecutionId = execution.Length == 0 ? null : execution,
-                    OuterAttemptId = outer.Length == 0 ? null : outer,
-                    TrainIdentity = train.Length == 0 ? null : train,
-                    Participation = execution.Length == 0 ? "execution unresolved" : null
-                };
-                if (phase == "execution-admitted" && execution.Length == 0)
-                {
-                    gate.Live = false;
-                    gate.Participation = "admission execution unresolved";
-                }
-                if (execution.Length > 0 && phase != "execution-admitted" && ejections.Any(ejection =>
-                    (ejection.Outer is null || ejection.Outer == outer) && members.Any(id => MemberMatches(id, ejection.Goal))))
-                {
-                    gate.Live = false;
-                    gate.Participation = "participation unresolved after ejection";
-                }
-                gates[key] = gate;
-                if (outer.Length > 0 && execution.Length > 0 && !completedOwners.Contains(outer))
-                    foreach (var previous in gates.Values.Where(previous => previous != gate && previous.OuterAttemptId == outer))
-                    {
-                        previous.Live = false;
-                        previous.Participation = phase == "execution-admitted" ? "historical execution" : "current execution unresolved";
-                        if (phase != "execution-admitted" && gate.Participation is null)
-                        {
-                            gate.Live = false;
-                            gate.Participation = "current execution unresolved";
-                        }
-                    }
-            }
-            // A retained outer completion also governs children first seen later
-            // in a truncated tail. Neither progress nor admission reopens that owner.
-            if (completedOwners.Contains(outer))
-            {
-                gate.Live = false;
-                gate.Participation = "outer attempt completed";
-                if (gate.FinishedAt is null)
-                {
-                    gate.FinalOutcome = FinalOutcomeOf(owners[outer]);
-                    gate.FinishedAt = owners[outer].Event.Timestamp;
-                }
-            }
-            if (terminal)
-            {
-                gate.Live = false;
-                gate.FinalOutcome = FinalOutcomeOf(item);
-                gate.FinishedAt = item.Event.Timestamp;
-                lastEnd = item.Event.Timestamp;
-                continue;
-            }
-            if (!gate.Live && (gate.Participation is "participation unresolved after ejection" or "current execution unresolved") && phase == "execution-admitted")
-            {
-                gate.Live = true;
-                gate.Participation = null;
-                foreach (var previous in gates.Values.Where(previous => previous != gate &&
-                    gate.OuterAttemptId is not null && previous.OuterAttemptId == gate.OuterAttemptId))
-                {
-                    previous.Live = false;
-                    previous.Participation = "historical execution";
-                }
-            }
-            if (!gate.Live)
-            {
-                // Retain observations for explicit historical execution selection,
-                // without asserting which unresolved child is current.
-                if (gate.Participation is "participation unresolved after ejection" or "current execution unresolved" or "outer attempt completed")
-                {
-                    gate.Events.Add(item);
-                    gate.Last = item.Event.Timestamp;
-                }
-                continue; // Late progress cannot resurrect a completed execution.
-            }
-            if (execution.Length > 0 &&
-                (gate.OuterAttemptId != (outer.Length == 0 ? null : outer) ||
-                 gate.Members.Length != members.Length || !gate.Members.All(id => members.Any(other => MemberMatches(id, other))) ||
-                 AttemptFromHeartbeat(item.Get("heartbeat")) is { Length: > 0 } heartbeatAttempt &&
-                    !heartbeatAttempt.Equals(execution, StringComparison.OrdinalIgnoreCase)))
-            {
-                gate.Live = false;
-                gate.Participation = "conflicting execution identity or membership";
-                continue;
-            }
-            if (phase == "execution-admitted" && execution.Length > 0) gate.AdmittedAt ??= item.Event.Timestamp;
-            gate.Events.Add(item);
-            gate.Last = item.Event.Timestamp;
-        }
-        // A truncated tail may contain ownership without any child evidence. Keep
-        // that uncertainty visible instead of manufacturing a live train.
-        foreach (var (outer, owner) in owners)
-        {
-            if (gates.Values.Any(gate => gate.OuterAttemptId == outer)) continue;
-            var members = owner.Get("members").Split([',', '+'], StringSplitOptions.RemoveEmptyEntries);
-            if (members.Length == 0) continue;
-            gates["owner:" + outer] = new(members, owner.Event.Timestamp)
-            {
-                OuterAttemptId = outer, Live = false,
-                Participation = completedOwners.Contains(outer) ? "outer attempt completed" : "awaiting execution evidence",
-                FinalOutcome = completedOwners.Contains(outer) ? FinalOutcomeOf(owner) : null,
-                FinishedAt = completedOwners.Contains(outer) ? owner.Event.Timestamp : null
-            };
-        }
-        return gates;
+        foreach (var item in parsed) ApplyObservation(state, item, hasExecutionEvidence);
+        AddOwnerOnlyGates(state);
+        ejections = state.Ejections;
+        lastEnd = state.LastEnd;
+        return state.Gates;
     }
 
-    private static string? FinalOutcomeOf(Observation item)
+    private static void ApplyObservation(OwnerConsoleGateReconstruction state, Observation item, bool hasExecutionEvidence)
+    {
+        var detail = item.Event.Detail;
+        var cohort = detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal);
+        var solo = detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal);
+        if (!cohort && !solo && item.Event.EventKind != "gate-progress") return;
+        // Partition run IDs describe auxiliary reproduction, never admission
+        // to a new gate. Only an explicit parent link can attach their activity.
+        if (item.Get("scope") == "attribution") return;
+        var execution = ExecutionOf(item);
+        var outer = item.Get("outer_attempt");
+        if (cohort && outer.Length == 0) outer = item.Get("attempt");
+        var train = item.Get("train_identity");
+        var phase = item.Get("phase");
+        if (phase == "gate-phase-breakdown") return;
+        var members = (item.Get("participant_ids") is { Length: > 0 } full ? full : item.Get("members"))
+            .Split([',', '+'], StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.Ordinal).ToArray();
+        var goal = item.Get("goal");
+        if (goal.Length == 0) goal = item.Event.GoalId ?? "";
+        var legacyEjection = System.Text.RegularExpressions.Regex.Match(detail, @"ejected from train (?<train>[^\s"";]+)");
+        if (phase == "member-ejected" || legacyEjection.Success)
+        {
+            ApplyEjection(state, item, goal, outer, execution, train, legacyEjection);
+            return;
+        }
+        var outcome = item.Get("outcome");
+        var terminal = cohort && (detail.StartsWith("ACCEPTANCE_COHORT_CHILD_COMPLETED", StringComparison.Ordinal) ||
+            detail.StartsWith("ACCEPTANCE_COHORT_RECONCILED_DEAD", StringComparison.Ordinal) ||
+            detail.StartsWith("ACCEPTANCE_COHORT_ADOPTION_REFUSED", StringComparison.Ordinal) || detail.Contains("ABANDON", StringComparison.Ordinal) ||
+            (detail.StartsWith("ACCEPTANCE_COHORT_EXIT ", StringComparison.Ordinal) || detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal)) &&
+            outcome is not ("" or "inflight" or "gathering" or "unpaired")) || solo && item.Get("result") is not ("" or "started" or "running");
+        if (cohort && outer.Length > 0)
+        {
+            ApplyOuterOwnership(state, item, outer, terminal);
+            return; // Outer ownership never asserts execution participation.
+        }
+        if (cohort && (members.Length == 0 || execution.Length == 0 && hasExecutionEvidence)) return;
+        if (members.Length == 0 && goal.Length > 0 && goal != "unknown") members = [goal];
+        if (members.Length == 0) return;
+        var gate = state.Admit(item, members, execution, outer, train, phase, detail, solo);
+        if (state.ApplyCompletion(gate, item, outer, terminal)) return;
+        state.Track(gate, item, execution, outer, phase, members);
+    }
+
+    private static void ApplyEjection(OwnerConsoleGateReconstruction state, Observation item, string goal,
+        string outer, string execution, string train, System.Text.RegularExpressions.Match legacyEjection)
+    {
+        if (goal.Length == 0) return;
+        if (train.Length == 0 && legacyEjection.Success) train = legacyEjection.Groups["train"].Value;
+        // Older goal-specific receipts identify an ejection even when the
+        // parent relationship was not recorded. Retain it as unresolved.
+        var original = state.Gates.Values.LastOrDefault(gate => outer.Length > 0 && gate.OuterAttemptId == outer &&
+            (execution.Length > 0 ? gate.ExecutionId == execution : gate.TrainIdentity == train));
+        state.Ejections.Add(new(outer.Length == 0 ? null : outer, goal, original?.ExecutionId, item.Event.Timestamp, train));
+        if (original is not null)
+        {
+            original.Live = false;
+            original.Participation = "historical execution";
+        }
+        if (original is null)
+            state.Gates["ejected:" + outer + ":" + goal + ":" + train] = new([goal], item.Event.Timestamp)
+            {
+                ExecutionId = execution.Length == 0 ? null : execution, OuterAttemptId = outer.Length == 0 ? null : outer,
+                TrainIdentity = train.Length == 0 ? null : train, Live = false, Participation = "ejected / awaiting survivor",
+                FinalOutcome = "ejected", FinishedAt = item.Event.Timestamp
+            };
+    }
+
+    private static void ApplyOuterOwnership(OwnerConsoleGateReconstruction state, Observation item, string outer, bool terminal)
+    {
+        if (!state.CompletedOwners.Contains(outer)) state.Owners[outer] = item;
+        if (terminal)
+        {
+            state.CompletedOwners.Add(outer);
+            state.LastEnd = item.Event.Timestamp;
+            foreach (var child in state.Gates.Values.Where(gate => gate.OuterAttemptId == outer))
+            {
+                child.Live = false;
+                child.Participation = "outer attempt completed";
+                if (child.FinishedAt is null)
+                {
+                    child.FinalOutcome = FinalOutcomeOf(item);
+                    child.FinishedAt = item.Event.Timestamp;
+                }
+            }
+        }
+    }
+
+    private static void AddOwnerOnlyGates(OwnerConsoleGateReconstruction state)
+    {
+        // A truncated tail may contain ownership without any child evidence. Keep
+        // that uncertainty visible instead of manufacturing a live train.
+        foreach (var (outer, owner) in state.Owners)
+        {
+            if (state.Gates.Values.Any(gate => gate.OuterAttemptId == outer)) continue;
+            var members = owner.Get("members").Split([',', '+'], StringSplitOptions.RemoveEmptyEntries);
+            if (members.Length == 0) continue;
+            state.Gates["owner:" + outer] = new(members, owner.Event.Timestamp)
+            {
+                OuterAttemptId = outer, Live = false,
+                Participation = state.CompletedOwners.Contains(outer) ? "outer attempt completed" : "awaiting execution evidence",
+                FinalOutcome = state.CompletedOwners.Contains(outer) ? FinalOutcomeOf(owner) : null,
+                FinishedAt = state.CompletedOwners.Contains(outer) ? owner.Event.Timestamp : null
+            };
+        }
+    }
+
+    internal static string? FinalOutcomeOf(Observation item)
     {
         if (item.Event.Detail.Contains("ABANDON", StringComparison.Ordinal)) return "cancelled";
         var outcome = item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal) ? item.Get("result") :
