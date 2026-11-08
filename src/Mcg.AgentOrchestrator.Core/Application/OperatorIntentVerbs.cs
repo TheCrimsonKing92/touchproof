@@ -9,6 +9,7 @@ public static class OperatorIntentVerbs
     public const string ClaudeUsageBackfill = "claude-usage-backfill";
     public const string GateCancel = "gate-cancel";
     public const string ObligationRebind = "obligation-rebind";
+    public const string MultiRepositoryLandingRepair = "repair-multi-repository-landing";
     public const string GoalIsolation = "goal-isolation";
     public const string Progress = "progress";
     public const string Retry = "retry";

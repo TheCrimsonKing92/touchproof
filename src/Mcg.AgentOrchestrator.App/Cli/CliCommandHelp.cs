@@ -103,7 +103,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds] [--relaunch]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string StorageHealthUsage = "Usage: storage-health [--json]";
-    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...]";
+    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...] | gate-stats launches [--last <n>] [--top <k>]";
     public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
@@ -723,6 +723,10 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ObligationRebind = new(
         ObligationRebindUsage, "Queue an operator class rebind for a pending gate test obligation at the current brief on the next tick.",
         ["--selector", "--to", "--drop", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+    public const string MultiRepositoryLandingRepairUsage = "Usage: repair-multi-repository-landing <goal-prefix> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    private static readonly CommandHelpEntry MultiRepositoryLandingRepair = new(
+        MultiRepositoryLandingRepairUsage, "Queue repair of a compensated tuple landing on the next conductor tick; re-gating is required.",
+        ["--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry GateCancel = new(
         GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
         ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
@@ -978,6 +982,8 @@ internal static class CliCommandHelp
         Console.WriteLine("  epic-bar          Set or clear the epic's completion bar.");
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
+        Console.WriteLine("  repair-multi-repository-landing");
+        Console.WriteLine("                    Repair a compensated tuple landing.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
         Console.WriteLine("  conductor         Start, report or stop the conductor.");
         Console.WriteLine("  host-exclusions   Report or explicitly apply host scan exclusions.");
@@ -1380,6 +1386,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("obligation-rebind", StringComparison.OrdinalIgnoreCase))
         {
             entry = ObligationRebind;
+            return true;
+        }
+        if (args[0].Equals("repair-multi-repository-landing", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = MultiRepositoryLandingRepair;
             return true;
         }
         if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
