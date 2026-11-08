@@ -75,6 +75,47 @@ public sealed class PreTesterCliSurfaceWiringTests
         Assert.Equal([AgentRole.Tester], scenario.Roles);
     }
 
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void StartedCliAndStructuralAttemptReconcilesInCreationOrder()
+    {
+        using var scenario = new Scenario();
+        const string structural = "Infrastructure.Tests:WiringTreeReaderTests";
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(scenario.CliDirectory)!, "WiringTreeReaderTests.cs"),
+            "[LiveTreeStructural] public class WiringTreeReaderTests { [Fact] public void Reads() {} }");
+        var launches = 0;
+        var driver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run"),
+            scenario.Background(() => launches++));
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        var original = scenario.Latest();
+        Assert.Equal("started", original.Outcome);
+        Assert.Equal([CoreSelection, Cli(Golden), Cli(Writer), structural], original.Selections);
+        Assert.Equal(1, launches);
+        Assert.Empty(scenario.Requests);
+        var guards = PreTesterGuardSelections.Create(new(), scenario.Worktree, scenario.Paths,
+            "fixture-main-revision", settings: scenario.Settings, priorSelections: original.Selections);
+        var augmented = guards.Augment(new([new("Core.Tests", "DeclaredCoreTests")], []),
+            scenario.Settings, original, ConductorDriver.FormatFindingEvidenceSelection);
+        Assert.Equal(original.Selections, augmented.Selections.Select(ConductorDriver.FormatFindingEvidenceSelection));
+        var inline = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "inline-attempts"), TrunkBranchName.Default,
+            runInline: true, acquireStableSlotLease: (_, _) => null);
+        var resumedDriver = scenario.Driver(scenario.Green, inline);
+
+        var exception = Record.Exception(() => resumedDriver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Null(exception);
+        Assert.Equal(original.Selections, Selections(Assert.Single(scenario.Requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
+        Assert.Equal(original.Selections, scenario.Latest().Selections);
+        Assert.Equal(original.NotRun, scenario.Latest().NotRun);
+        Assert.Equal(original.ReceiptId, scenario.Latest().ReceiptId);
+        Assert.Equal([AgentRole.Tester], scenario.Roles);
+        Assert.Equal(0, scenario.GateRuns);
+    }
+
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false, false)]
@@ -179,7 +220,10 @@ public sealed class PreTesterCliSurfaceWiringTests
         var exception = Assert.Throws<InvalidDataException>(() =>
             driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.Equal("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        Assert.Contains(unresolvedDeclaration
+            ? "not_run_missing=<none> not_run_added=MissingDeclaredTests"
+            : "not_run_missing=UnexpectedTests not_run_added=<none>", exception.Message, StringComparison.Ordinal);
         Assert.Equal("started", scenario.Latest().Outcome);
         Assert.Equal(original.Selections, scenario.Latest().Selections);
         Assert.Equal(original.NotRun, scenario.Latest().NotRun);

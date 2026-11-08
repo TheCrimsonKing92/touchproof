@@ -173,9 +173,55 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         Assert.Equal([AgentRole.Tester], roles);
     }
 
+    [Fact]
+    public void StartedReceiptAcceptsReorderedRecordedSelections()
+    {
+        using var scenario = new Scenario();
+        var recorded = new[] { GuardSelections[0], CoreSelection };
+        scenario.RecordStarted(recorded);
+        var requests = new List<string>();
+        var roles = new List<AgentRole>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return scenario.Green(request);
+        }, roles.Add);
+
+        var exception = Record.Exception(() => driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Null(exception);
+        Assert.Equal(recorded, Selections(Assert.Single(requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
+        Assert.Equal(recorded, scenario.Latest().Selections);
+        Assert.Equal([AgentRole.Tester], roles);
+    }
+
+    [Fact]
+    public void StartedReceiptMissingRecordedClassThrowsNamingIt()
+    {
+        using var scenario = new Scenario();
+        const string missing = "Core.Tests:RemovedCoreTests";
+        var recorded = new[] { CoreSelection, missing };
+        scenario.RecordStarted(recorded);
+        var runs = 0;
+        var driver = scenario.Driver(request =>
+        {
+            runs++;
+            return scenario.Green(request);
+        }, _ => { });
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        Assert.Contains("missing=" + missing + " added=<none>", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, runs);
+        Assert.Equal("started", scenario.Latest().Outcome);
+        Assert.Equal(recorded, scenario.Latest().Selections);
+    }
+
     [Theory]
     [InlineData("selection")]
-    [InlineData("order")]
     [InlineData("not-run")]
     public void StartedReceiptStillRejectsUnrelatedDrift(string drift)
     {
@@ -183,7 +229,6 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         var selections = drift switch
         {
             "selection" => new[] { "Core.Tests:OtherCoreTests" },
-            "order" => new[] { GuardSelections[0], CoreSelection },
             _ => new[] { CoreSelection }
         };
         scenario.RecordStarted(selections, drift == "not-run" ? ["MissingTests"] : []);
@@ -197,7 +242,9 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         var exception = Assert.Throws<InvalidDataException>(() =>
             driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.Equal("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
+        if (drift == "not-run")
+            Assert.Contains("not_run_missing=MissingTests not_run_added=<none>", exception.Message, StringComparison.Ordinal);
         Assert.Equal(0, runs);
         Assert.Equal("started", scenario.Latest().Outcome);
     }

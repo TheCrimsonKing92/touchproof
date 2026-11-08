@@ -17,9 +17,11 @@ public sealed class ExecutorSlotDecisionAuditTests
         using var ledger = JsonDocument.Parse(ledgerText);
         using var conduct = JsonDocument.Parse(Assert.Single(fixture.DecisionEvents));
         var payload = conduct.RootElement.GetProperty("detail").GetString();
-        Assert.Equal(ledgerText, payload);
+        using var summary = JsonDocument.Parse(payload!);
+        Assert.Equal(ledger.RootElement.GetProperty("evaluation_id").GetString(),
+            summary.RootElement.GetProperty("evaluation_id").GetString());
         Assert.True(Guid.TryParse(ledger.RootElement.GetProperty("evaluation_id").GetString(), out _));
-        // Correlation lives in the shared payload; event_id would trigger a full-log dedup scan.
+        // The compact summary references the row; event_id would trigger a full-log dedup scan.
         Assert.False(conduct.RootElement.TryGetProperty("event_id", out _));
         Assert.False(conduct.RootElement.TryGetProperty("eventId", out _));
         var decision = ledger.RootElement.GetProperty("decision");
@@ -43,18 +45,18 @@ public sealed class ExecutorSlotDecisionAuditTests
     }
 
     [Fact]
-    public void RepeatedHolds_EachTick_ProducesSeparateCorrelatedAudit()
+    public void RepeatedHolds_SameEvidence_RecordOnce()
     {
         using var fixture = new ExecutorSlotControllerFixture();
         fixture.Samples = [];
         var controller = fixture.Controller();
         controller.Evaluate();
+        fixture.Now = fixture.Now.AddSeconds(60);
         controller.Evaluate();
-        Assert.Equal(2, File.ReadAllLines(fixture.LedgerPath).Length);
-        Assert.Equal(2, fixture.DecisionEvents.Length);
-        var ids = File.ReadAllLines(fixture.LedgerPath).Select(line =>
-            JsonSerializer.Deserialize<ExecutorSlotDecisionRecord>(line, ExecutorSlotDecisionLedger.JsonOptions)!.EvaluationId).ToArray();
-        Assert.Equal(2, ids.Distinct().Count());
+        Assert.Single(File.ReadAllLines(fixture.LedgerPath));
+        using var conduct = JsonDocument.Parse(Assert.Single(fixture.DecisionEvents));
+        using var summary = JsonDocument.Parse(conduct.RootElement.GetProperty("detail").GetString()!);
+        Assert.Equal(fixture.Latest.EvaluationId, summary.RootElement.GetProperty("evaluation_id").GetString());
     }
 
     [Fact]
