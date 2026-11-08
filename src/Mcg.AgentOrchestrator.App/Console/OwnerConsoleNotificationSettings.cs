@@ -10,6 +10,7 @@ internal sealed record OwnerConsoleNotificationSettings
     internal string? CalmSoundFile { get; init; }
     internal string? AttentionSoundFile { get; init; }
     internal string? AlarmSoundFile { get; init; }
+    internal string? SoundLibrary { get; init; }
 
     internal static OwnerConsoleNotificationSettings Load(string path)
     {
@@ -27,7 +28,8 @@ internal sealed record OwnerConsoleNotificationSettings
                 CalmCoalesce = Duration("calmCoalesceSeconds", 1, defaults.CalmCoalesce),
                 CalmSoundFile = Sound("calmSoundFile"),
                 AttentionSoundFile = Sound("attentionSoundFile"),
-                AlarmSoundFile = Sound("alarmSoundFile")
+                AlarmSoundFile = Sound("alarmSoundFile"),
+                SoundLibrary = Sound("soundLibrary")
             };
 
             TimeSpan Duration(string key, double secondsPerUnit, TimeSpan fallback)
@@ -43,4 +45,12 @@ internal sealed record OwnerConsoleNotificationSettings
         }
         catch { return defaults; }
     }
+}
+
+// A console session publishes immutable snapshots only after persistence succeeds.
+internal sealed class OwnerConsoleNotificationSettingsProvider(OwnerConsoleNotificationSettings initial)
+{
+    private OwnerConsoleNotificationSettings _current = initial;
+    internal OwnerConsoleNotificationSettings Current => Volatile.Read(ref _current);
+    internal void Publish(OwnerConsoleNotificationSettings settings) => Volatile.Write(ref _current, settings);
 }

@@ -21,6 +21,7 @@ internal sealed partial class OperatorIntentCoordinator
     private readonly IOperatorIntentStore _store;
     private readonly string? _orchestratorDirectory;
     internal OperatorGateCancellation? GateCancellation { get; init; }
+    internal MultiRepositoryLandingRepair? LandingRepair { get; init; }
     internal CohortMemberReopenedGateAbandonment? ReopenedMemberGateAbandonment { get; init; }
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
@@ -133,6 +134,7 @@ internal sealed partial class OperatorIntentCoordinator
             })
         {
             GateCancellation = new(solo, grouped, events),
+            LandingRepair = new(workspace, OrchestratorProjectRegistry.CreateDefault()),
             ReopenedMemberGateAbandonment = new(grouped, events),
             CancelLatestProcess = (kernel, goalId, taskId) =>
                 OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
@@ -510,6 +512,10 @@ internal sealed partial class OperatorIntentCoordinator
                 ObligationRebindIntentHandler.Apply(kernel, goal, intent,
                     _orchestratorDirectory ?? throw new InvalidOperationException("obligation-rebind-unavailable"),
                     _goalHeadResolver?.Invoke(goal.Id));
+                return;
+            case OperatorIntentVerbs.MultiRepositoryLandingRepair:
+                MultiRepositoryLandingRepairIntentHandler.Apply(goal,
+                    LandingRepair ?? throw new InvalidOperationException("landing-repair-unavailable"));
                 return;
             case OperatorIntentVerbs.ProviderReset:
                 ProviderResetIntentHandler.Apply(kernel, goal, intent, _utcNow());
