@@ -8,6 +8,92 @@ using static AttributedFailureDeveloperRouteTests;
 public sealed class SoloCandidateNotIntroducedPredicateTests
 {
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CoveringChecks_IntroducedLane_ValidateOnlyLaneIdentities(bool prepend)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        fixture.Complete(AddCoveringChecks(fixture, prepend));
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+        Assert.Equal("solo-evidence-validated", read.Reason);
+        var failure = Assert.IsType<AttributedFailure>(read.Failure);
+        Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long }, failure.FailingTests);
+        Assert.DoesNotContain(AcceptanceLaneEarlyStop.ReceiptName, failure.ReproductionDetail);
+        Assert.DoesNotContain("infrastructure tests", failure.ReproductionDetail);
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData("missing-lane", "unusable-check", "infrastructure lane early stop")]
+    [InlineData("transitive", "unusable-check", "infrastructure lane early stop")]
+    [InlineData("identity-free", "unusable-check", "infrastructure lane early stop")]
+    [InlineData("empty-coverage", "unusable-check", "infrastructure lane early stop")]
+    [InlineData("inherited", "non-introduced-origin", "solo tests")]
+    [InlineData("unconfirmed", "non-introduced-origin", "solo tests")]
+    public async Task CoveringChecks_InvalidEvidence_PreserveRefusal(string fault, string predicate, string check)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        string? laneReason = null;
+        if (fault is "inherited" or "unconfirmed")
+        {
+            Mutate(fixture, fault);
+            fixture.Record(fixture.Summary);
+            laneReason = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context).Reason;
+        }
+        var summary = AddCoveringChecks(fixture, prepend: true, fault);
+        // Reader refusals are independent of the earlier landing-disposition gates.
+        fixture.Record(summary);
+
+        var read = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+        Assert.Null(read.Failure);
+        Assert.StartsWith($"solo-candidate-not-introduced: predicate={predicate}; check={check};", read.Reason);
+        if (laneReason is not null) Assert.Equal(laneReason, read.Reason);
+
+        var driver = fixture.Driver();
+        driver.BeginTick(fixture.Kernel, 2);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(
+            driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.Equal(read.Reason, Assert.IsType<PolicyDecisionRecord>(held.Decision).DiscriminatingEvidence);
+        Assert.Contains(read.Reason, held.Reason);
+        Assert.Empty(fixture.Starts);
+        Assert.Empty(MarkerRetries(fixture.Goal));
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+    }
+
+    private static AcceptanceVerificationSummary AddCoveringChecks(
+        SoloAttributedFailureRouteFixture fixture, bool prepend, string? fault = null)
+    {
+        var earlyStop = new AcceptanceLaneEarlyStop("solo tests", ["not run"], [], []).ToReceiptCheck();
+        var aggregate = new AcceptanceCheckResult("infrastructure tests", false, 1, "failed lane", CoveredBy: ["solo tests"]);
+        earlyStop = earlyStop with { CoveredBy = fault switch
+        {
+            "missing-lane" => ["missing lane"],
+            "transitive" or "identity-free" => [aggregate.Name],
+            "empty-coverage" => [],
+            _ => earlyStop.CoveredBy
+        } };
+        if (fault == "identity-free") aggregate = aggregate with { CoveredBy = null };
+        AcceptanceCheckResult[] covering = [earlyStop, aggregate];
+        fixture.ReplaceProof(proof => proof with
+        {
+            Checks = prepend
+                ? covering.Select(check => new SoloAcceptanceCheckEvidence(check, [], new Dictionary<string, SoloAcceptanceArtifact>()))
+                    .Concat(proof.Checks).ToArray()
+                : proof.Checks.Concat(covering.Select(check =>
+                    new SoloAcceptanceCheckEvidence(check, [], new Dictionary<string, SoloAcceptanceArtifact>()))).ToArray()
+        });
+        return fixture.Summary with
+        {
+            FailedChecks = fixture.Summary.FailedChecks!.Concat(covering.Select(check => check.Name)).ToArray(),
+            UnmetCriteria = fixture.Summary.UnmetCriteria.Concat(covering).ToArray(),
+            CheckAttributions = fixture.Summary.CheckAttributions!.Concat(covering.Select(check =>
+                new AcceptanceCheckAttribution(check.Name, AcceptanceFailureOrigin.Unattributed, "no own identities"))).ToArray()
+        };
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("apparatus", "unusable-check")]
     [InlineData("passed", "passed-check")]
     [InlineData("advisory", "advisory-check")]
