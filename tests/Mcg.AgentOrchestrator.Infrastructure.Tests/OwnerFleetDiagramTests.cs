@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
+using Terminal.Gui.Text;
 
 // Pure report fixtures; no shared state or terminal initialization.
 public sealed class OwnerFleetDiagramTests
@@ -19,14 +20,15 @@ public sealed class OwnerFleetDiagramTests
         Assert.Contains("conductor: running", text);
         Assert.Contains("reachability: reachable", alpha);
         Assert.Equal(2, CountCells(alpha));
-        Assert.Contains("lane median 20.0s n=3", alpha);
-        Assert.Contains("solo 30.0s conc 15.0s", alpha);
+        Assert.Matches(@"lane +3 +30\.0 +15\.0 +0\.5x", alpha);
+        Assert.Contains("slowdown 0.5x decision none", alpha);
         Assert.Contains("last: accepted 2026-10-16 12:01 +00:00", alpha);
         Assert.Contains("Executor beta", beta);
         Assert.Contains("reachability: UNREACHABLE", beta);
         Assert.Contains("ssh-timeout", beta);
         Assert.Contains("last: none", beta);
-        Assert.Contains("lanes: no accepted remote runs", beta);
+        Assert.Contains("slowdown - decision none", beta);
+        Assert.Matches(@"lane +n +solo +conc +ratio", beta);
         Assert.Equal(1, CountCells(beta));
         Assert.DoesNotContain('\t', text);
         Assert.All(text.Split('\n'), line => Assert.True(line.Length <= width, line));
@@ -116,6 +118,41 @@ public sealed class OwnerFleetDiagramTests
     }
 
     private static int CountCells(string text) => text.Split("[ ]", StringSplitOptions.None).Length - 1;
+
+    [Fact]
+    public void CollapsedTableShowsFiveLanesInCostOrder()
+    {
+        var text = OwnerFleetDiagram.Render(EightLanes());
+        var rows = text.Split('\n');
+        Assert.Single(rows.Where(row => System.Text.RegularExpressions.Regex.IsMatch(row, @"lane +n +solo +conc +ratio")));
+        Assert.Equal(new[] { "lane-c", "lane-b", "lane-a", "lane-h", "lane-g" }, LaneNames(rows));
+        Assert.Single(rows.Where(row => row[2..^2].Trim() == "+3 more lanes"));
+        Assert.DoesNotMatch(@"median \d+\.\ds n=\d+", text);
+        Assert.DoesNotMatch(@"solo (\d+\.\ds|-) conc (\d+\.\ds|-)", text);
+    }
+
+    [Theory]
+    [InlineData(OwnerFleetDiagram.MinimumWidth)]
+    [InlineData(OwnerFleetDiagram.DefaultWidth)]
+    public void ExpandedTableShowsAllEightLanesWithinWidth(int width)
+    {
+        var text = OwnerFleetDiagram.Render(EightLanes(), width, expanded: true);
+        Assert.Equal(new[] { "lane-c", "lane-b", "lane-a", "lane-h", "lane-g", "lane-f", "lane-e", "lane-d" }, LaneNames(text.Split('\n')));
+        Assert.DoesNotContain("more lanes", text);
+        Assert.All(text.Split('\n'), row => Assert.Equal(width, row.GetColumns()));
+    }
+
+    private static string[] LaneNames(string[] rows) => rows.Where(row => row.StartsWith("│ lane-", StringComparison.Ordinal))
+        .Select(row => row[2..].Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]).ToArray();
+
+    internal static OwnerFleetViewModel EightLanes()
+    {
+        RemoteExecutorLaneSeconds[] lanes = [new("lane-a", 1, 100, 100, 10, 20),
+            new("lane-b", 50, 3, 3, 10, 15), new("lane-c", 2, 100, 100, 10, 20),
+            new("lane-d", 1, 1, 1, 1, 1), new("lane-e", 1, 2, 2, 1, 1),
+            new("lane-f", 1, 3, 3, 1, 1), new("lane-g", 1, 4, 4, 1, 1), new("lane-h", 1, 5, 5, 1, 1)];
+        return new(new(true, 1, 0, 0), [new("alpha", OwnerFleetReachability.Unknown, [], null, 2, 0, null, null, null, lanes)]);
+    }
 
     private static RemoteExecutorReport Fixture()
     {

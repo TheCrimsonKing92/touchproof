@@ -10,7 +10,7 @@ internal static class OwnerFleetDiagram
 
     // Slots describe configured capacity, not live occupancy; peak is historical.
     internal static string Render(OwnerFleetViewModel model, int width = DefaultWidth,
-        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null)
+        IDictionary<int, OwnerConsoleFieldSnapshot>? fields = null, bool expanded = false)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, MinimumWidth);
         var lines = new List<string>();
@@ -79,18 +79,13 @@ internal static class OwnerFleetDiagram
             content.Add($"peak concurrent attempts: {executor.PeakConcurrentAttempts}");
             content.Add(executor.LastOutcome is null ? "last: none" : $"last: {executor.LastOutcome} {Stamp(executor.LastOutcomeAt)}");
             content.Add("accepted: " + (executor.AcceptedShare is { } share ? share.ToString("P0", CultureInfo.InvariantCulture) : "n/a"));
-            if (executor.Lanes.Count == 0) content.Add("lanes: no accepted remote runs");
-            var laneStart = content.Count;
-            foreach (var lane in executor.Lanes)
-            {
-                content.Add($"{lane.Lane} median {Seconds(lane.MedianSeconds)} n={lane.Samples}");
-                content.Add($"  solo {Seconds(lane.SoloMedianSeconds)} conc {Seconds(lane.ConcurrentMedianSeconds)}");
-            }
-            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable, laneStart);
+            content.Add(OwnerFleetLaneTable.Summary(executor.Lanes, executor.LatestDecision, width - 4));
+            content.AddRange(OwnerFleetLaneTable.Rows(executor.Lanes, width - 4, expanded));
+            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable);
         }
         return string.Join("\n", lines);
 
-        void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue, int wrapRow = -1)
+        void Box(IReadOnlyList<string> rows, bool unreachable, int wrapRow = -1)
         {
             var start = lines.Count;
             var edge = unreachable ? '═' : '─';
@@ -100,7 +95,7 @@ internal static class OwnerFleetDiagram
             {
                 // Ledger text must not inject terminal controls or extra diagram rows.
                 var clean = new string(rows[index].Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
-                var fittedRows = index >= laneStart || index == wrapRow ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
+                var fittedRows = index == wrapRow ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
                     [OwnerConsoleLineFitter.Cut(clean, width - 4)];
                 foreach (var fitted in fittedRows)
                     lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
@@ -111,5 +106,4 @@ internal static class OwnerFleetDiagram
     }
 
     private static string Stamp(DateTimeOffset? at) => at?.ToString("yyyy-MM-dd HH:mm zzz", CultureInfo.InvariantCulture) ?? "-";
-    private static string Seconds(double? seconds) => seconds?.ToString("0.0", CultureInfo.InvariantCulture) + (seconds.HasValue ? "s" : "-");
 }

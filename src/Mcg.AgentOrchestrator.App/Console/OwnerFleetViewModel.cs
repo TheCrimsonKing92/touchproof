@@ -22,7 +22,7 @@ internal sealed record OwnerFleetExecutorNode(string Id, OwnerFleetReachability 
     IReadOnlyList<string> ProbeReasons, DateTimeOffset? ProbeAt, int? ConfiguredSlots,
     int PeakConcurrentAttempts, string? LastOutcome, DateTimeOffset? LastOutcomeAt,
     double? AcceptedShare, IReadOnlyList<RemoteExecutorLaneSeconds> Lanes, RemoteExecutorSlotsSyncRow? SlotsFile = null,
-    bool? AdmissionEnabled = null, string? Owner = null)
+    bool? AdmissionEnabled = null, string? Owner = null, ExecutorSlotDecisionRecord? LatestDecision = null)
 {
     internal OwnerConsoleFieldSnapshot Fields()
     {
@@ -72,7 +72,8 @@ internal static class OwnerFleetViewModelBuilder
 {
     internal static OwnerFleetViewModel Build(RemoteExecutorReport report, bool conductorRunning, TimeZoneInfo zone,
         IReadOnlyDictionary<string, RemoteExecutorSlotsSyncRow>? slotsSync = null,
-        IReadOnlyList<ProviderUsageHoldRow>? providerHolds = null, OwnerConsoleHostRowOwner? owners = null) =>
+        IReadOnlyList<ProviderUsageHoldRow>? providerHolds = null, OwnerConsoleHostRowOwner? owners = null,
+        IReadOnlyDictionary<string, ExecutorSlotDecisionRecord>? decisions = null) =>
         new(new(conductorRunning, report.Executors.Count, report.UnreadableOutcomeLines, report.UnreadableProbeLines,
                 report.NoExecutorFreeCount, report.NoExecutorFreeLastAt is { } at ? TimeZoneInfo.ConvertTime(at, zone) : null),
             report.Executors.Select(row =>
@@ -86,7 +87,8 @@ internal static class OwnerFleetViewModelBuilder
                     last is null ? null : TimeZoneInfo.ConvertTime(last.ObservedAt, zone), row.AcceptedShare, row.Lanes.ToArray(),
                     slotsSync?.GetValueOrDefault(row.ExecutorId) is { } sync ?
                         sync with { ObservedAt = TimeZoneInfo.ConvertTime(sync.ObservedAt, zone) } : null, row.AdmissionEnabled,
-                    owners?.ForAttempts(row.RecentAttempts.Select(attempt => attempt.GateAttemptId)));
+                    owners?.ForAttempts(row.RecentAttempts.Select(attempt => attempt.GateAttemptId)),
+                    decisions?.GetValueOrDefault(row.ExecutorId));
             }).ToArray(), (providerHolds ?? []).Select(row => new OwnerFleetProviderHoldNode(
                 row.Hold.BindingKey, OwnerProviderHoldNarration.DisplayName(row.Hold.BindingKey),
                 $"{row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}",
@@ -104,5 +106,19 @@ internal static class OwnerFleetViewModelBuilder
             liveness.IsRunning(), TimeZoneInfo.Local, RemoteExecutorSlotsSyncLedger.ReadLatestByExecutor(
                 Path.Combine(Path.GetDirectoryName(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory))!,
                     RemoteExecutorSlotsSyncLedger.FileName)),
-            ProviderUsageHoldReader.ReadWorkspace(workspace, (clock ?? TimeProvider.System).GetUtcNow()), owners);
+            ProviderUsageHoldReader.ReadWorkspace(workspace, (clock ?? TimeProvider.System).GetUtcNow()), owners,
+            ReadDecisions(workspace));
+
+    private static IReadOnlyDictionary<string, ExecutorSlotDecisionRecord>? ReadDecisions(OrchestratorWorkspace workspace)
+    {
+        try
+        {
+            return ExecutorSlotDecisionLedger.ReadLatest(Path.Combine(
+                Path.GetDirectoryName(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory))!,
+                ExecutorSlotDecisionLedger.FileName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or
+            InvalidOperationException or KeyNotFoundException or NotSupportedException or ArgumentException)
+        { return null; }
+    }
 }
