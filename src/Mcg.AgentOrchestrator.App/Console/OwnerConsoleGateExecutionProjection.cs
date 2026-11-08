@@ -3,9 +3,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed partial record OwnerConsoleGateProgress
 {
     // Identity is a recorded relationship, never a comparison of member sets.
-    private sealed record Ejection(string? Outer, string Goal, string? Execution, DateTimeOffset At, string? Train);
+    internal sealed record Ejection(string? Outer, string Goal, string? Execution, DateTimeOffset At, string? Train);
 
-    private static string ExecutionOf(Observation item)
+    internal static string ExecutionOf(Observation item)
     {
         var execution = item.Get("execution");
         if (execution.Length == 0 && item.Event.Detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal))
@@ -13,7 +13,7 @@ internal sealed partial record OwnerConsoleGateProgress
         return execution.Length > 0 ? execution : AttemptFromHeartbeat(item.Get("heartbeat"));
     }
 
-    private static Dictionary<string, Gate> Reconstruct(Observation[] parsed,
+    internal static Dictionary<string, Gate> Reconstruct(Observation[] parsed,
         out List<Ejection> ejections, out DateTimeOffset? lastEnd)
     {
         var gates = new Dictionary<string, Gate>(StringComparer.OrdinalIgnoreCase);
@@ -228,7 +228,7 @@ internal sealed partial record OwnerConsoleGateProgress
         };
     }
 
-    private static IReadOnlyDictionary<string, OwnerConsoleGateProgress> MemberProjections(
+    internal static IReadOnlyDictionary<string, OwnerConsoleGateProgress> MemberProjections(
         OwnerConsoleGateProgress[] snapshots, List<Ejection> ejections, DateTimeOffset now)
     {
         var views = new Dictionary<string, OwnerConsoleGateProgress>(StringComparer.Ordinal);
@@ -274,14 +274,14 @@ internal sealed partial record OwnerConsoleGateProgress
         return views;
     }
 
-    private static IEnumerable<Observation> AttributionObservations(Observation[] parsed, Gate gate) =>
+    internal static IEnumerable<Observation> AttributionObservations(Observation[] parsed, Gate gate) =>
         parsed.Where(item => gate.ExecutionId is not null && item.Get("scope") == "attribution" &&
                 item.Get("parent_execution") == gate.ExecutionId &&
                 item.Get("outer_attempt") == (gate.OuterAttemptId ?? "") &&
                 ExecutionOf(item).Length > 0 &&
                 gate.Members.Any(member => MemberMatches(member, item.Get("goal"))));
 
-    private static IEnumerable<OwnerConsoleGateLane> AttributionRows(Observation[] observations, Gate gate) =>
+    internal static IEnumerable<OwnerConsoleGateLane> AttributionRows(Observation[] observations, Gate gate) =>
         observations.GroupBy(item => ExecutionOf(item), StringComparer.Ordinal)
             .Select(group =>
             {
