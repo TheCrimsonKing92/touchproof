@@ -27,9 +27,10 @@ public static class WorkerBuildProjectScope
         Action<string>? diagnostic = null)
     {
         root = Canonical(root);
-        var branch = Git(root, "symbolic-ref", "--short", "HEAD").Trim();
-        var head = Git(root, "rev-parse", "HEAD").Trim();
-        var common = Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim());
+        var repository = WorkerBuildRepositoryFacts.ReadIdentity(root);
+        var branch = repository.RequireBranch();
+        var head = repository.Head;
+        var common = Canonical(repository.CommonDirectory);
         var path = MetadataPath(root);
         ValidatePath(root, path, mustExist: false);
         Metadata? previous = File.Exists(path) ? ReadMetadata(root) : null;
@@ -84,9 +85,9 @@ public static class WorkerBuildProjectScope
         var metadata = JsonSerializer.Deserialize<Metadata>(bytes) ?? throw new IOException("Empty worker build scope metadata.");
         if (expectedDispatchBase is not null && metadata.DispatchBase != expectedDispatchBase)
             throw new IOException("Worker build scope dispatch base changed before worker start.");
-        ValidateMetadata(Canonical(root), Git(root, "symbolic-ref", "--short", "HEAD").Trim(),
-            Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim()),
-            Git(root, "rev-parse", "HEAD").Trim(), metadata);
+        var repository = WorkerBuildRepositoryFacts.ReadIdentity(root);
+        ValidateMetadata(Canonical(root), repository.RequireBranch(),
+            Canonical(repository.CommonDirectory), repository.Head, metadata);
         return new(metadata.GoalBaseline, Hash(bytes), Convert.ToBase64String(bytes));
     }
 
@@ -154,10 +155,11 @@ public static class WorkerBuildProjectScope
         IEnumerable<string>? additionalPaths, string? expectedMetadataDigest, byte[]? retainedBytes)
     {
         root = Canonical(root);
-        if (!SamePath(Canonical(Git(root, "rev-parse", "--show-toplevel").Trim()), root))
+        var repository = WorkerBuildRepositoryFacts.ReadIdentity(root, includeTopLevel: true);
+        if (!SamePath(Canonical(repository.TopLevel!), root))
             throw new IOException("Worker build root is not the repository root.");
-        var branch = Git(root, "symbolic-ref", "--short", "HEAD").Trim();
-        var head = Git(root, "rev-parse", "HEAD").Trim();
+        var branch = repository.RequireBranch();
+        var head = repository.Head;
         var metadataPath = MetadataPath(root);
         var metadataDigest = "none";
         var stableMetadataDigest = "none";
@@ -168,7 +170,7 @@ public static class WorkerBuildProjectScope
             var bytes = retainedBytes ?? File.ReadAllBytes(metadataPath);
             metadataDigest = Hash(bytes);
             var metadata = JsonSerializer.Deserialize<Metadata>(bytes) ?? throw new IOException("Empty worker build scope metadata.");
-            var common = Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim());
+            var common = Canonical(repository.CommonDirectory);
             ValidateMetadata(root, branch, common, head, metadata);
             stableMetadataDigest = WorkerBuildScopeStableDigest.Compute(metadata);
             baseline = metadata.GoalBaseline;
@@ -180,17 +182,7 @@ public static class WorkerBuildProjectScope
         if (expectedMetadataDigest is not null && metadataDigest != expectedMetadataDigest)
             throw new IOException("Worker build scope differs from conductor-captured dispatch identity.");
 
-        // No rename heuristics or quoted porcelain paths: no-renames includes both sides as add/delete.
-        var paths = Git(root, "diff", "--name-only", "-z", "--no-renames", baseline, "--")
-            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            // Completion also requires dirty/staged owners, even when they restore the goal baseline.
-            // Keep index and worktree changes separate: they can cancel each other against HEAD too.
-            .Concat(Git(root, "diff", "--name-only", "-z", "--no-renames", "--")
-                .Split('\0', StringSplitOptions.RemoveEmptyEntries))
-            .Concat(Git(root, "diff", "--cached", "--name-only", "-z", "--no-renames", "--")
-                .Split('\0', StringSplitOptions.RemoveEmptyEntries))
-            .Concat(Git(root, "ls-files", "--others", "--exclude-standard", "-z")
-                .Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        var paths = WorkerBuildRepositoryFacts.ReadChangedPaths(root, baseline)
             .Concat(additionalPaths ?? []);
         var required = WorkerBuildEvidenceRequirement.ResolveRequiredProjects(root, paths);
         if (required.Errors.Count != 0) throw new IOException(string.Join("; ", required.Errors));
@@ -236,22 +228,24 @@ public static class WorkerBuildProjectScope
             (branch.StartsWith("goal/", StringComparison.OrdinalIgnoreCase) &&
                 !metadata.GoalId.StartsWith(branch[5..], StringComparison.OrdinalIgnoreCase)))
             throw new IOException("Foreign or malformed worker build scope metadata.");
+        var ancestry = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var revision in new[] { metadata.GoalBaseline, metadata.DispatchBase })
         {
             if (revision is null || revision.Length is not (40 or 64) || !revision.All(Uri.IsHexDigit))
                 throw new IOException("Worker build scope requires immutable commit identities.");
-            Git(root, "merge-base", "--is-ancestor", revision, head);
+            CheckAncestry(revision, head);
         }
-        Git(root, "merge-base", "--is-ancestor", metadata.GoalBaseline, metadata.DispatchBase);
+        CheckAncestry(metadata.GoalBaseline, metadata.DispatchBase);
+
+        void CheckAncestry(string ancestor, string descendant)
+        {
+            if (ancestry.Add(ancestor + ":" + descendant))
+                Git(root, "merge-base", "--is-ancestor", ancestor, descendant);
+        }
     }
 
     private static string Git(string root, params string[] arguments)
-    {
-        var result = GitCli.RunForRepository(root, arguments);
-        if (!result.Succeeded || result.DrainTimedOut)
-            throw new IOException($"Worker build scope Git {arguments[0]} failed (exit={result.ExitCode}): {result.Error.Trim()}");
-        return result.Output;
-    }
+        => WorkerBuildRepositoryFacts.Git(root, arguments);
     private static string Canonical(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     private static bool SamePath(string left, string right) => string.Equals(left, right,
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
