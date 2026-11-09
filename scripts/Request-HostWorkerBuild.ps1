@@ -31,6 +31,12 @@ try {
         [System.IO.Path]::GetFullPath($env:MCG_ORCHESTRATOR_APP_OUTPUT)
     }
     $appDll = Join-Path $appOutput 'Mcg.AgentOrchestrator.App.dll'
+    if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_APP_OUTPUT) -and
+        -not (Test-Path -LiteralPath $appDll -PathType Leaf) -and
+        -not [string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_HOME)) {
+        $homeOutput = Join-Path ([System.IO.Path]::GetFullPath($env:MCG_ORCHESTRATOR_HOME.Trim())) 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0'
+        $appDll = Join-Path $homeOutput 'Mcg.AgentOrchestrator.App.dll'
+    }
     if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) { throw 'App assembly missing' }
     $arguments = @($appDll, 'worker-build-request') + @($Projects) + @('--configuration', $Configuration, '--request-key', $RequestKey, '--busy-timeout-seconds', $BusyTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture))
     $start = [System.Diagnostics.ProcessStartInfo]::new()
