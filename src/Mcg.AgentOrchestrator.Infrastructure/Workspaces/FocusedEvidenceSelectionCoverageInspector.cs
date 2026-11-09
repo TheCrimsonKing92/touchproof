@@ -1,5 +1,4 @@
 using FocusedEvidenceSelectionCoverage = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceSelectionCoverage;
-using FocusedEvidenceIdentityExtraction = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceIdentityExtraction;
 using FocusedEvidenceFilterToken = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceFilterToken;
 using FocusedEvidenceTokenKind = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceTokenKind;
 
@@ -14,15 +13,18 @@ internal static class FocusedEvidenceSelectionCoverageInspector
         if (selections.Count == 0)
             return FocusedEvidenceSelectionCoverage.Empty;
 
-        var extraction = GoalAcceptanceVerifierTestTelemetry.ExtractTrxExecutedTestIdentities(trxPaths);
-        var uncovered = selections
+        var paths = trxPaths?.ToArray();
+        var extraction = GoalAcceptanceVerifierTestTelemetry.ExtractTrxExecutedTestIdentities(paths);
+        var uncoveredTokens = selections
             .SelectMany(selection => selection.Where(token =>
                 token.Kind is FocusedEvidenceTokenKind.Class or FocusedEvidenceTokenKind.Method))
             .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
             .Where(token => !extraction.Identities.Any(identity =>
                 GoalAcceptanceVerifierTestTelemetry.IsFocusedEvidenceIdentityMatch(identity, token.Value)))
-            .Select(token => token.CanonicalToken)
             .ToArray();
-        return new FocusedEvidenceSelectionCoverage(uncovered, extraction.UnreadableReceiptPaths);
+        return new FocusedEvidenceSelectionCoverage(
+            uncoveredTokens.Select(token => token.CanonicalToken).ToArray(),
+            extraction.UnreadableReceiptPaths,
+            FocusedEvidenceAllSkippedSelectionClassifier.Classify(uncoveredTokens, paths));
     }
 }

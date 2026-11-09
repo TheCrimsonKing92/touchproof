@@ -46,7 +46,8 @@ public sealed partial record AcceptanceCheckResult(
     DateTimeOffset? ChildProcessStartedAt = null,
     IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null,
-    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null);
+    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<FocusedEvidenceAllSkippedSelection>? AllSkippedSelections = null);
 
 public sealed record AcceptanceBaselineSourceAbsence(string BaselineSha, string Selector);
 
@@ -2576,15 +2577,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectionCoverage = check.IsFocusedEvidenceSelection && executedTestCount != 0
             ? GoalAcceptanceVerifierTestTelemetry.InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
             : FocusedEvidenceSelectionCoverage.Empty;
-        var uncoveredSelections = selectionCoverage.UncoveredSelections;
         var unreadableReceipts = selectionCoverage.UnreadableReceiptPaths;
-        var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection &&
-            (executedTestCount == 0 || uncoveredSelections.Count > 0 || unreadableReceipts.Count > 0);
-        var policyFailure = zeroTestApparatusFailure
-            ? unreadableReceipts.Count > 0
-                ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
-                : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
-            : null;
+        var selectionDecision = FocusedEvidenceAllSkippedSelectionDecision.Decide(
+            check.Name, check.IsFocusedEvidenceSelection, executedTestCount, selectionCoverage);
+        var policyFailure = selectionDecision.PolicyFailure;
+        var zeroTestApparatusFailure = policyFailure is not null;
         var completionDecision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
             result,
             trxEvidence,
@@ -2598,13 +2595,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             telemetry.Paths,
             _executionContext?.ResultsPrefix);
         AcceptanceLaunchLockSummary.Preserve(result.Output, result.Stderr, telemetry.Paths[0], AcceptanceAttemptResultsPrefix);
-        var apparatusDetail = unreadableReceipts.Count > 0
-            ? $"'{check.Name}' could not read test receipt(s): {string.Join(", ", unreadableReceipts)}."
-            : executedTestCount == 0
-            ? $"'{check.Name}' executed 0 tests."
-            : $"'{check.Name}' had selection(s) matching 0 tests: {string.Join(", ", uncoveredSelections)}.";
         var outputTail = zeroTestApparatusFailure
-            ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
+            ? $"Focused evidence selection apparatus failure: {selectionDecision.ApparatusDetail}"
             : passed
                 ? null
                 : AcceptanceMtpFailureOutput.BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
@@ -2639,7 +2631,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 _invocationContext?.Ordinal ?? 0),
             ChildProcessId: result.ChildProcessId,
-            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), false);
+            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling,
+            AllSkippedSelections: selectionCoverage.AllSkippedSelections is { Count: > 0 }
+                ? selectionCoverage.AllSkippedSelections : null)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -3909,7 +3903,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal sealed record FocusedEvidenceSelectionCoverage(
         IReadOnlyList<string> UncoveredSelections,
-        IReadOnlyList<string> UnreadableReceiptPaths)
+        IReadOnlyList<string> UnreadableReceiptPaths,
+        IReadOnlyList<FocusedEvidenceAllSkippedSelection>? AllSkippedSelections = null)
     {
         public static FocusedEvidenceSelectionCoverage Empty { get; } = new([], []);
     }

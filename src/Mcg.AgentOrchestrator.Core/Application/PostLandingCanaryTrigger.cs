@@ -21,6 +21,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/VstestOutputCompletenessProbe",
             // Selection coverage is reached through the verifier's telemetry collaborator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
+            // Observed skipped-selection coverage is reached through the verifier and its inspector.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceAllSkipped",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
             // Rust evidence planning is reached through the focused request resolver.
