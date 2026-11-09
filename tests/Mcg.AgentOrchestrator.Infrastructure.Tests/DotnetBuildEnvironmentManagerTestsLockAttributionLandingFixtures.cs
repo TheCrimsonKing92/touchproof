@@ -588,8 +588,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(lockedPath);
-        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot);
+        DotnetBuildLandingFixtureLocks.RegisterCurrentLandingTestFixtureRoot(lockedPath);
+        DotnetBuildLandingFixtureLocks.WriteLandingTestFixtureMarkerForTests(fixtureRoot);
         using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
@@ -625,7 +625,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildLandingFixtureLocks.ClearCurrentLandingTestFixtureRootsForTests();
 
             LockAttribution.AttributeForTests = null;
         }
@@ -641,7 +641,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var releasePath = Path.Combine(fixtureRoot, "holder-release.txt");
         using var holder = StartFileHolder(lockedPath, readyPath, releasePath);
         Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
-        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
+        DotnetBuildLandingFixtureLocks.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
         var fakeTimeProvider = new RecordingTimeProvider();
         var prepareAttempts = 0;
         using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
@@ -703,7 +703,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var releasePath = Path.Combine(fixtureRoot, "holder-release.txt");
         using var holder = StartFileHolder(lockedPath, readyPath, releasePath);
         Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
-        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
+        DotnetBuildLandingFixtureLocks.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
         var prepareAttempts = 0;
         using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
@@ -748,7 +748,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
-        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
+        DotnetBuildLandingFixtureLocks.WriteLandingTestFixtureMarkerForTests(
             fixtureRoot,
             987654320,
             DateTimeOffset.UtcNow.AddHours(-3));
@@ -788,7 +788,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
-        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
+        DotnetBuildLandingFixtureLocks.WriteLandingTestFixtureMarkerForTests(
             fixtureRoot,
             987654320,
             DateTimeOffset.UtcNow.AddHours(-3));
@@ -859,7 +859,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildLandingFixtureLocks.ClearCurrentLandingTestFixtureRootsForTests();
 
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
@@ -907,7 +907,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         finally
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
-            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildLandingFixtureLocks.ClearCurrentLandingTestFixtureRootsForTests();
 
             LockAttribution.AttributeForTests = null;
         }
@@ -942,7 +942,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildLandingFixtureLocks.ClearCurrentLandingTestFixtureRootsForTests();
 
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(fixtureRoot);
@@ -958,7 +958,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         Directory.CreateDirectory(Path.GetDirectoryName(currentLockedPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(otherFixtureRoot, DateTime.UtcNow.AddDays(-1));
-        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(currentLockedPath);
+        DotnetBuildLandingFixtureLocks.RegisterCurrentLandingTestFixtureRoot(currentLockedPath);
         using var prepareArtifactsDirectoryScope = DotnetBuildEnvironmentManager.UsePrepareArtifactsDirectory(current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
@@ -981,7 +981,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildLandingFixtureLocks.ClearCurrentLandingTestFixtureRootsForTests();
 
             LockAttribution.AttributeForTests = null;
             TryDeleteDirectory(currentFixtureRoot);

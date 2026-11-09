@@ -28,7 +28,7 @@ internal static class DotnetBuildLockAttribution
             return ArtifactPrepLockRemediation.Blocked;
         }
 
-        if (DotnetBuildEnvironmentManager.TryCreateCurrentLandingFixtureAttribution(lockedPath, out attribution))
+        if (DotnetBuildLandingFixtureLocks.TryCreateCurrentLandingFixtureAttribution(lockedPath, out attribution))
         {
             LockAttribution.EmitReceipt(attribution);
             return attribution.Source is "landing-fixture-marker"

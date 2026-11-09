@@ -24,7 +24,7 @@ public sealed class HostScanExclusionRootsTests
             Path.Combine(inputs.TempPath, AcceptanceTempRootNames.HermeticProfileRootDirectoryName),
             Path.Combine(inputs.TempPath, AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName),
             Path.Combine(inputs.TempPath, AcceptanceTempRootNames.OwnerResultsRootDirectoryName),
-            Path.Combine(inputs.TempPath, DotnetBuildEnvironmentManager.LandingTestsRootDirectoryName),
+            Path.Combine(inputs.TempPath, DotnetBuildLandingFixtureLocks.LandingTestsRootDirectoryName),
             AcceptanceTempRootNames.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile)
         }.Select(HostScanExclusionRoots.NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 

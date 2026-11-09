@@ -1759,7 +1759,7 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(root);
+        DotnetBuildLandingFixtureLocks.RegisterCurrentLandingTestFixtureRoot(root);
         CopyDirectory(GitRepositoryTemplate.Value, root);
         _ = CreateMigratedStateRepository(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
