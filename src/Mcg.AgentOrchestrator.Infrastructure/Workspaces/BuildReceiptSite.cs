@@ -27,7 +27,7 @@ internal sealed record BuildReceiptSite(string WorktreePath, string? GoalId, str
                 new(DateTimeOffset.UtcNow, site.GoalId, site.Origin, site.TreeDigest,
                     meter.Projects.ToArray(), _wall.Elapsed.TotalMilliseconds,
                     meter.UnavailableReason is null ? meter.CpuMs : null, meter.UnavailableReason,
-                    phase.CachePlan is null ? "none" : "miss"));
+                    BuildReceiptSiteCacheStatus.Resolve(phase)));
         }
     }
 }

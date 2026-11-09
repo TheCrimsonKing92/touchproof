@@ -54,7 +54,9 @@ function Write-BuildReceipt {
             $matches = @([IO.Directory]::GetDirectories($context, "$GoalPrefix*"))
             if ($matches.Count -eq 1) { $goal = [IO.Path]::GetFileName($matches[0]) }
         }
-        $digest = if ([string]::IsNullOrWhiteSpace($Tree)) { 'unresolved' } else { "wbc1:git-tree:$Tree" }
+        $digest = if ([string]::IsNullOrWhiteSpace($Tree)) { 'unresolved' }
+            elseif ($Tree.StartsWith('wbc1:git-tree:', [StringComparison]::Ordinal)) { $Tree }
+            else { "wbc1:git-tree:$Tree" }
         $row = [ordered]@{
             version = 1; recorded_at = [DateTimeOffset]::UtcNow.ToString('o'); goal_id = $goal
             origin = 'worker-check'; tree_digest = $digest; projects = @($Projects)

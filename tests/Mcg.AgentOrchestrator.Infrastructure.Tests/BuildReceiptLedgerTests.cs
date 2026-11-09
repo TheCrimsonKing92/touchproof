@@ -95,6 +95,33 @@ public sealed class BuildReceiptLedgerTests : IDisposable
         Assert.Equal("no-resource-receipt", meter.UnavailableReason);
     }
 
+    [Theory]
+    [InlineData("base-build-cache projects=Core=hit,Execution=hit built_projects=App", "hit")]
+    [InlineData("base-build-cache projects=Core=miss,Execution=miss built_projects=App", "miss")]
+    [InlineData("base-build-cache projects=Core=hit,Execution=miss,published built_projects=App", "miss")]
+    [InlineData("base-build-cache projects=Core=hit,Execution=changed built_projects=App", "miss")]
+    [InlineData("base-build-cache status=miss reason=unresolved-build-inputs", "miss")]
+    [InlineData("base-build-cache projects= built_projects=Core=hit", "miss")]
+    public async Task CacheSummary_RecordsHitOnlyWhenEveryProjectHit(string summary, string expected)
+    {
+        var phase = new DotnetTestBuildPhase(["dotnet", "build", "app.csproj"],
+            new("main", ["Core.csproj"], ["app.csproj"], ["Core.csproj", "app.csproj"]));
+        var site = new BuildReceiptSite(_root, "goal", "gate", "wbc1:git-tree:a",
+            new BuildReceiptLedger(error: _errors));
+        using (site.Observe(phase, out var meter))
+        {
+            var hooks = meter.Wrap(Hooks(EnvironmentFor(),
+                summary + "; RESOURCE phase=gate cpu_ms=42 accounting_source=job"));
+            phase.Run = await hooks.RunManagedCheckAsync(phase.BuildArguments, "build", null, EnvironmentFor());
+        }
+
+        var line = Assert.Single(File.ReadAllLines(BuildReceiptLedger.ResolveStorePath(_root)));
+        Assert.True(BuildReceipt.TryParse(line, out var receipt));
+        Assert.Equal(expected, receipt!.Cache);
+        Assert.Equal(42, receipt.CpuMs);
+        Assert.Equal("", _errors.ToString());
+    }
+
     [Fact]
     public void ManagedRebuild_UsesLaneAccountingAndSkipsExplicitReuse()
     {
