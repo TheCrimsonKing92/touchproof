@@ -85,28 +85,24 @@ public sealed class MultiRepositoryTupleLandingPinnedTupleTests
     }
 
     [Fact]
-    public void HomeLandingAdmissibility_OutsideTupleLanding_UsesFreshTupleAfterCrosswalkAdvances()
+    public void PendingHumanInput_OutsideTupleLanding_UsesFreshTupleAfterCrosswalkAdvances()
     {
         using var fixture = new MultiRepositoryAcceptanceGateFixture();
         var (kernel, goal, receipt) = Prepare(fixture);
-        // Outside a tuple landing, admissibility resolves the default registry rather than the
-        // explicit fixture registry used by Prepare and the tuple landing's preflight.
-        var candidate = GoalRepositoryCandidateIdentity.Compute(goal, fixture.Repositories.Workspace);
-        Assert.NotNull(candidate.Identity);
-        Assert.NotNull(candidate.Identity.RepositoryTupleCanonical);
-        receipt = new MultiRepositoryAcceptanceReceipt(receipt.GoalId, candidate.Identity.RepositoryTupleCanonical,
-            receipt.Outcomes, receipt.RecordedAt, receipt.IntegrationBases);
-        fixture.Gate.Store.Write(receipt, goal.Repositories!.Repositories);
-        Assert.Null(HomeLandingAdmissibility.Evaluate(kernel, goal, fixture.Repositories.Workspace));
+        // Exercise the pending-input evaluator with the same registry that owns the fixture's
+        // receipt, so tuple computation never reads machine-owned project configuration.
+        var revision = GoalRepositoryWorktreeProvisionerFixture.Run(fixture.HomeWorktree, "rev-parse", "HEAD");
+        string? Evaluate() => LandingExecutor.EvaluatePendingHumanInput(kernel, goal,
+            fixture.Repositories.Workspace, revision, fixture.Repositories.Registry).HoldDescription;
+        Assert.Equal(receipt.TupleCanonical, fixture.Tuple().Canonical);
+        Assert.Null(MultiRepositoryLandingTuplePin.For(goal.Id));
+        Assert.Null(Evaluate());
 
         fixture.Repositories.Crosswalk.Git("merge", "--ff-only", GoalRepositoryWorktreeLayout.BranchName(goal.Id, "crosswalk"));
 
-        var advancedCandidate = GoalRepositoryCandidateIdentity.Compute(goal, fixture.Repositories.Workspace);
-        Assert.NotNull(advancedCandidate.Identity);
-        Assert.NotNull(advancedCandidate.Identity.RepositoryTupleCanonical);
-        Assert.NotEqual(receipt.TupleCanonical, advancedCandidate.Identity.RepositoryTupleCanonical);
+        Assert.NotEqual(receipt.TupleCanonical, fixture.Tuple().Canonical);
         Assert.Null(MultiRepositoryLandingTuplePin.For(goal.Id));
-        var refusal = HomeLandingAdmissibility.Evaluate(kernel, goal, fixture.Repositories.Workspace);
+        var refusal = Evaluate();
         Assert.NotNull(refusal);
         Assert.Contains("repository crosswalk: no gate result for the current candidate tuple", refusal);
     }

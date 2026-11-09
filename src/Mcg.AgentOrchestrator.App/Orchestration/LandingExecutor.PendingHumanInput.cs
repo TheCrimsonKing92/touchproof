@@ -9,7 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static partial class LandingExecutor
 {
     internal static (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines) EvaluatePendingHumanInput(
-        AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace, string? candidateRevision)
+        AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace, string? candidateRevision,
+        OrchestratorProjectRegistry? repositoryRegistry = null)
     {
         var orchestratorDirectory = workspace.OrchestratorDirectory;
         // Resolve candidate-bound gate and role reports before projecting pending input.
@@ -29,7 +30,7 @@ internal static partial class LandingExecutor
             journalDirectory: workspace.ExecutionDirectory,
             currentRepositoryTuple: () => MultiRepositoryGoal.Applies(goal)
                 ? MultiRepositoryLandingTuplePin.For(goal.Id)
-                    ?? GoalRepositoryCandidateIdentity.Compute(goal, workspace).Identity?.RepositoryTupleCanonical : null);
+                    ?? GoalRepositoryCandidateIdentity.Compute(goal, workspace, repositoryRegistry).Identity?.RepositoryTupleCanonical : null);
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.RenameProvenance.Length > 0))
             Console.WriteLine(result.RenameProvenance);
