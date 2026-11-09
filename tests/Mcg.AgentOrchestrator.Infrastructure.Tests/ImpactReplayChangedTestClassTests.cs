@@ -56,7 +56,7 @@ public sealed class ImpactReplayChangedTestClassTests
 
         var attempt = Assert.Single(report.Attempts);
         Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("ChangedTestClassUnresolved", attempt.DegradationKind);
+        Assert.Equal("ChangedTestSupportUnresolved", attempt.DegradationKind);
         Assert.Empty(attempt.SkippedLanes);
         Assert.Equal(attempt.RanLanes, attempt.WouldRunLanes);
         Assert.Contains(attempt.EvidenceWarnings, warning => warning.Contains("Helpers.cs", StringComparison.Ordinal));

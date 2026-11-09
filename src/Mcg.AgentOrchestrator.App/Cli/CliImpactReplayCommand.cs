@@ -18,12 +18,13 @@ internal static class CliImpactReplayCommand
     {
         DateTimeOffset? since = null;
         var limit = 100;
+        int? maxChangedSourceFiles = null;
         string? destination = null;
         var floor = new List<string>();
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] is "--help" or "-h") { output.WriteLine(CliCommandHelp.ImpactReplayUsage); return 0; }
-            if (args[i] is not ("--since" or "--limit" or "--out" or "--floor") || i + 1 == args.Count)
+            if (args[i] is not ("--since" or "--limit" or "--out" or "--floor" or "--max-changed-source-files") || i + 1 == args.Count)
                 return Usage();
             var flag = args[i++];
             var value = args[i];
@@ -39,6 +40,11 @@ internal static class CliImpactReplayCommand
                     if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out limit) || limit < 1) return Usage();
                     break;
                 case "--out": destination = value; break;
+                case "--max-changed-source-files":
+                    if (maxChangedSourceFiles is not null ||
+                        !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var maximum) || maximum < 1) return Usage();
+                    maxChangedSourceFiles = maximum;
+                    break;
                 case "--floor": floor.Add(value); break;
             }
         }
@@ -46,7 +52,7 @@ internal static class CliImpactReplayCommand
         try
         {
             var report = ImpactReplay.Read(executionDirectory, orchestratorDirectory, since, limit,
-                floor.Count == 0 ? null : floor, tempCheckoutParent);
+                floor.Count == 0 ? null : floor, tempCheckoutParent, maxChangedSourceFiles);
             ImpactReplayReportWriter.Write(destination, report);
             output.WriteLine($"Impact replay: {report.Attempts.Count} attempts; reports: {Path.GetFullPath(destination)}");
             foreach (var cleanupError in report.CleanupErrors) error.WriteLine(cleanupError);

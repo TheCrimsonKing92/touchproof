@@ -6,22 +6,27 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ImpactReplayTrxEvidence
 {
     internal static (IReadOnlyList<ImpactReplayLaneOutcome> LaneOutcomes,
-        IReadOnlyList<ImpactReplayFailingClass> Failures, IReadOnlyList<string> Warnings) Read(
+        IReadOnlyList<ImpactReplayFailingClass> Failures, IReadOnlyList<string> Warnings,
+        IReadOnlyList<ImpactReplayLaneOutcome> BalancedLaneOutcomes,
+        IReadOnlyList<ImpactReplayUnresolvedFailure> UnresolvedFailures) Read(
         ImpactReplayStoredAttempt attempt, IReadOnlyList<AcceptanceTestLane> lanes,
-        IReadOnlyList<string> checkNames, IReadOnlyList<AcceptanceTestClassDescriptor> classes)
+        IReadOnlyList<string> checkNames, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
+        IReadOnlyList<string>? poolLaneNames = null)
     {
-        var pathsByLane = lanes.ToDictionary(lane => lane.Name, _ => new List<string>(), StringComparer.Ordinal);
+        var laneNames = lanes.Select(lane => lane.Name).Concat(poolLaneNames ?? []).ToArray();
+        var pathsByLane = laneNames.ToDictionary(name => name, _ => new List<string>(), StringComparer.Ordinal);
         var failures = new List<ImpactReplayFailingClass>();
+        var unresolved = new List<ImpactReplayUnresolvedFailure>();
         var warnings = new List<string>();
         var outcomes = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var rawPath in attempt.TestResultPaths)
+        foreach (var rawPath in attempt.TestResultPaths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var path = Path.GetFullPath(rawPath.Replace('\\', Path.DirectorySeparatorChar), attempt.GoalDirectory);
             var stem = Path.GetFileNameWithoutExtension(path);
-            var matching = lanes.Where(lane => checkNames.Any(check => Regex.IsMatch(stem,
-                    @"(?:^|\.)" + Regex.Escape(AcceptanceArtifactFileNames.Slug(check + ": " + lane.Name)) + @"(?:-run-\d+)?$",
+            var matching = laneNames.Where(name => checkNames.Any(check => Regex.IsMatch(stem,
+                    @"(?:^|\.)" + Regex.Escape(AcceptanceArtifactFileNames.Slug(check + ": " + name)) + @"(?:-run-\d+)?$",
                     RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)))
-                .Select(lane => lane.Name).ToArray();
+                .ToArray();
             foreach (var lane in matching) pathsByLane[lane].Add(path);
             var read = AcceptanceTrxFailureReader.Read(path);
             if (read.Status != AcceptanceTrxReadStatus.Readable)
@@ -43,6 +48,7 @@ internal static class ImpactReplayTrxEvidence
                 {
                     warnings.Add($"Failing test class could not be resolved: {path}: {failure.TestName ?? "unknown test"}");
                     failures.Add(new(failure.TestName ?? "unknown test", null, null));
+                    unresolved.Add(new(failure.TestName ?? "unknown test", path, "Class identity unresolved"));
                     continue;
                 }
                 // The TRX's lane identifies where the failure actually happened, including overlapping filters.
@@ -51,20 +57,23 @@ internal static class ImpactReplayTrxEvidence
                 {
                     warnings.Add($"Failing class has no unambiguous lane receipt: {className}: {path}");
                     failures.Add(new(className, null, null));
+                    unresolved.Add(new(className, path, "No unambiguous lane receipt"));
                 }
             }
         }
-        foreach (var lane in lanes)
+        foreach (var name in laneNames)
         {
-            if (!checkNames.Any(check => attempt.FailedChecks.Contains(check + ": " + lane.Name, StringComparer.Ordinal))) continue;
-            outcomes[lane.Name] = "Failed";
-            if (pathsByLane[lane.Name].Count == 0) warnings.Add($"Failed lane has no TRX: {lane.Name}");
+            if (!checkNames.Any(check => attempt.FailedChecks.Contains(check + ": " + name, StringComparer.Ordinal))) continue;
+            outcomes[name] = "Failed";
+            if (pathsByLane[name].Count == 0) warnings.Add($"Failed lane has no TRX: {name}");
         }
-        var ran = lanes.Where(lane => pathsByLane[lane.Name].Count > 0 || outcomes.ContainsKey(lane.Name))
-            .Select(lane => new ImpactReplayLaneOutcome(lane.Name, outcomes.GetValueOrDefault(lane.Name, "Incomplete"),
-                pathsByLane[lane.Name])).ToArray();
+        var ran = laneNames.Where(name => pathsByLane[name].Count > 0 || outcomes.ContainsKey(name))
+            .Select(name => new ImpactReplayLaneOutcome(name, outcomes.GetValueOrDefault(name, "Incomplete"),
+                pathsByLane[name])).ToArray();
         if (ran.Length > 0 && ran.All(lane => lane.TrxPaths.Count == 0)) warnings.Add("No lane TRX evidence was available.");
-        return (ran, failures.Distinct().ToArray(), warnings);
+        return (ran.Where(lane => !(poolLaneNames ?? []).Contains(lane.Lane, StringComparer.Ordinal)).ToArray(),
+            failures.Distinct().ToArray(), warnings,
+            ran.Where(lane => (poolLaneNames ?? []).Contains(lane.Lane, StringComparer.Ordinal)).ToArray(), unresolved);
     }
 
     internal static string? ResolveClass(string? identity, IReadOnlyList<AcceptanceTestClassDescriptor> classes)
