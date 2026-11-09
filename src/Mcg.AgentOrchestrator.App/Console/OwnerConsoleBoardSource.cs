@@ -17,6 +17,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
 {
     private readonly object _sync = new();
     private OwnerConsoleProjectScope _scope = initialScope;
+    internal OrchestratorProjectRegistry? Registry { get; private init; }
 
     internal static OwnerConsoleBoardSource FromRegistry(OrchestratorWorkspace workspace,
         string repositoryRoot, OrchestratorProjectRegistry registry, TimeProvider clock) =>
@@ -31,7 +32,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                 : new OwnerConsoleBoardProject(entry.Name, "", "", entry.Error!.Message)).ToArray();
         }, clock, new(OwnerConsoleProjectLabel.ForWorkspace(workspace), workspace.SqliteStatePath,
             workspace.PortfolioStorePath, OrchestratorDirectory: workspace.OrchestratorDirectory,
-            ConductEventsLogPath: workspace.ConductEventsLogPath));
+            ConductEventsLogPath: workspace.ConductEventsLogPath)) { Registry = registry };
 
     internal IReadOnlyList<OwnerConsoleBoardProject> InScopeProjects()
     {

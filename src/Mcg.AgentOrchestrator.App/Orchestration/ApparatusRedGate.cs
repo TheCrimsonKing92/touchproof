@@ -203,6 +203,7 @@ internal sealed class ApparatusRedGate
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .ToArray();
         var failingTests = new List<ApparatusRedFailingTest>();
+        var sourceReadingGuards = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         var declaredChangedTypes = new Lazy<IReadOnlySet<string>>(() =>
             CandidateChangedTypeReferenceReader.ReadDeclaredTypeNames(sourceRoot, normalizedChangedPaths, sourceRequest));
         var uniqueChecks = acceptance.RequiredUnmetCriteria.GroupBy(check => check.Name, StringComparer.Ordinal)
@@ -286,6 +287,13 @@ internal sealed class ApparatusRedGate
                 var message = failure is null ? check.OutputTail : failure.Message;
                 var messageFingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint(message);
                 var sourcePaths = sourceRequest.ResolveSourcePaths(check.TestProjectPath, identity);
+                var sourcePathsKey = string.Join("\0", sourcePaths);
+                if (!sourceReadingGuards.TryGetValue(sourcePathsKey, out var readsRepositorySources))
+                {
+                    readsRepositorySources = SourceReadingGuardTestDetector.ReadsRepositorySources(
+                        sourceRoot, sourcePaths, sourceRequest);
+                    sourceReadingGuards.Add(sourcePathsKey, readsRepositorySources);
+                }
                 var rerunPassed = check.FailingTestAttributions?.Any(attribution =>
                     attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
                     attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
@@ -326,7 +334,8 @@ internal sealed class ApparatusRedGate
                     CandidateRerunNotExecuted: notExecutedReruns.Length > 0,
                     CandidateRerunInfrastructureSignature: rerunInfrastructureSignature,
                     ConfirmedLaneFailure: confirmedLaneFailure,
-                    BaselineAttribution: baselineAttributions.Length == 1 ? baselineAttributions[0] : null));
+                    BaselineAttribution: baselineAttributions.Length == 1 ? baselineAttributions[0] : null,
+                    ReadsRepositorySources: readsRepositorySources));
             }
         }
 
