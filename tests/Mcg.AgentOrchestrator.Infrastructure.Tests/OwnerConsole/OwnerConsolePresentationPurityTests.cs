@@ -49,6 +49,7 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerQuestionReadModelFactory.cs",
         ConsolePath + "OwnerQuestionResolutionReader.cs",
         ConsolePath + "PortfolioGoalEpicLookup.cs",
+        ConsolePath + "PortfolioGoalEpicTitleReader.cs",
         ConsolePath + "ProjectOnboardingCompletion.cs",
         ConsolePath + "ProjectOnboardingStateReader.cs",
         ConsolePath + "WorkspaceEpicProgressSource.cs"

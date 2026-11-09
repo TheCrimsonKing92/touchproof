@@ -3587,6 +3587,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string? ResolveGitScalar(string worktreePath, params string[] arguments)
     {
+        if (arguments is ["rev-parse", var revision] && !revision.StartsWith('-'))
+        {
+            var resolved = GitRefFileResolver.TryResolve(worktreePath, revision, out var id);
+            GitAncestryMemo.RecordResolverResult(resolved);
+            if (resolved) return id;
+        }
         try
         {
             var startInfo = new ProcessStartInfo
@@ -3599,25 +3605,19 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 CreateNoWindow = true
             };
             foreach (var argument in arguments)
-            {
                 startInfo.ArgumentList.Add(argument);
-            }
-
             using var process = GitExecutable.Prepare(startInfo)
                 ? HandleListProcessLauncher.StartSuppressed(startInfo)
                 : HandleListProcessLauncher.Start(startInfo);
-
             if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return null;
             }
-
             if (process.ExitCode != 0)
             {
                 return null;
             }
-
             var sha = process.StandardOutput.ReadToEnd().Trim();
             return sha.Length >= 7 && sha.All(Uri.IsHexDigit) ? sha : null;
         }
