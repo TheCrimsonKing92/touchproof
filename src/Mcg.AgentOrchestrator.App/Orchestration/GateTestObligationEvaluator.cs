@@ -18,7 +18,8 @@ internal static class GateTestObligationEvaluator
         CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
         IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
         IReadOnlyList<string>? ClosestIdentities = null,
-        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null)
+        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null,
+        string? PendingDetail = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -47,7 +48,8 @@ internal static class GateTestObligationEvaluator
 
     internal static IReadOnlyList<Result> Evaluate(
         Goal goal, string orchestratorDirectory, string? candidateSha, RenameScope? renameScope = null,
-        IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null)
+        IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null,
+        Func<string?>? currentRepositoryTuple = null)
     {
         var obligations = goal.GateTestObligations
             .Where(obligation => obligation.BriefVersion == goal.AuthoritativeBrief.Version).ToArray();
@@ -72,6 +74,12 @@ internal static class GateTestObligationEvaluator
                 return new Result(obligation, Outcome.Waived, obligation.Selectors, null, waiver.WaiverReason);
             var effective = answeredRequests is null ? obligation :
                 AnsweredSelectorRebinding.ApplySelectorEdits(goal, obligation, answeredRequests);
+            if (!GateTestObligationRepositoryKey.IsHome(obligation.RepositoryKey))
+            {
+                var keyed = RepositoryGateTestObligationSources.Read(goal,
+                    GateTestObligationRepositoryKey.Resolve(obligation.RepositoryKey), orchestratorDirectory, currentRepositoryTuple);
+                return EvaluateObligation(effective, keyed.Sources, orchestratorDirectory) with { PendingDetail = keyed.PendingDetail };
+            }
             var original = EvaluateObligation(effective, sources, orchestratorDirectory);
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
