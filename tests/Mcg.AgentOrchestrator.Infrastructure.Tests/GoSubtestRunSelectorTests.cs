@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -10,6 +11,9 @@ public sealed class GoSubtestRunSelectorTests
     [InlineData("TestA/value.+([/leaf", @"^TestA$/^value\.\+\(\[$/^leaf$")]
     [InlineData(@"TestA/\.+*?()[]{}^$#", @"^TestA$/^\\\.\+\*\?\(\)\[\]\{\}\^\$#$")]
     [InlineData("TestA/日本語_入力", "^TestA$/^日本語_入力$")]
+    [InlineData("TestA/left|TestB", @"^TestA$/^left\|TestB$")]
+    [InlineData("TestA/left|TestB/right|TestC", @"^TestA$/^left\|TestB$/^right\|TestC$")]
+    [InlineData("TestA/|left||", @"^TestA$/^\|left\|\|$")]
     public void EvidenceSelectorsAnchorAndEscapeEverySegment(string name, string expected)
     {
         using var fixture = new Fixture();
@@ -44,17 +48,51 @@ public sealed class GoSubtestRunSelectorTests
     }
 
     [Fact]
+    public void LiteralPipeDoesNotSelectEitherAlternative()
+    {
+        using var fixture = new Fixture();
+        var check = Assert.Single(fixture.Build("internal/drift:TestA/left|TestB", out _));
+        var pattern = check.Arguments[4].Split('/')[1];
+
+        Assert.Matches(pattern, "left|TestB");
+        Assert.DoesNotMatch(pattern, "left");
+        Assert.DoesNotMatch(pattern, "TestB");
+    }
+
+    [Fact]
+    public void TypedRequestsKeepLiteralPipesAndSeparateSubtestSelections()
+    {
+        using var fixture = new Fixture();
+        var request = new FindingEvidenceRequest([
+            new("internal/drift", "TestA/left|TestB"),
+            new("internal/drift", "TestB/right|TestC")]);
+        Assert.True(FindingEvidenceRequestNormalization.TryNormalize(request,
+            AcceptanceGateEngineSettings.Parse(GoPackageFocusedEvidenceTests.Manifest), (_, _) => [],
+            out var normalized, out var executorRequest, out _, out var detail), detail);
+        Assert.Equal(request.Selections, normalized.Selections);
+        Assert.Equal("internal/drift:TestA/left|TestB; internal/drift:TestB/right|TestC", executorRequest);
+
+        var checks = fixture.Build(executorRequest, out var coverage);
+        Assert.Equal(2, checks.Count);
+        Assert.Equal(@"^TestA$/^left\|TestB$", checks[0].Arguments[4]);
+        Assert.Equal(@"^TestB$/^right\|TestC$", checks[1].Arguments[4]);
+        Assert.Equal([checks[0].Name], coverage.TargetToChecks[0].CheckNames);
+        Assert.Equal([checks[1].Name], coverage.TargetToChecks[1].CheckNames);
+    }
+
+    [Fact]
     public void SeparateSubtestsPreserveTheirParentPairsAndDeduplicateChecks()
     {
         using var fixture = new Fixture();
-        const string request = "internal/drift:TestB/right|TestA/left|TestB/right; internal/drift:TestA/left";
+        const string request = "internal/drift:TestA/left; internal/drift:TestB/right; internal/drift:TestA/left";
         var checks = fixture.Build(request, out var coverage);
 
         Assert.Equal(2, checks.Count);
         Assert.Equal(["test", "-count=1", "-v", "-run", "^TestA$/^left$", "./internal/drift"], checks[0].Arguments);
         Assert.Equal(["test", "-count=1", "-v", "-run", "^TestB$/^right$", "./internal/drift"], checks[1].Arguments);
-        Assert.Equal([checks[0].Name, checks[1].Name], coverage.TargetToChecks[0].CheckNames);
-        Assert.Equal([checks[0].Name], coverage.TargetToChecks[1].CheckNames);
+        Assert.Equal([checks[0].Name], coverage.TargetToChecks[0].CheckNames);
+        Assert.Equal([checks[1].Name], coverage.TargetToChecks[1].CheckNames);
+        Assert.Equal([checks[0].Name], coverage.TargetToChecks[2].CheckNames);
         Assert.Equal("focused", coverage.ExecutionMode);
     }
 
@@ -64,14 +102,14 @@ public sealed class GoSubtestRunSelectorTests
         using var fixture = new Fixture();
         const string topLevel = "internal/drift:TestMissingColumn|TestExtraColumn";
         var original = Assert.Single(fixture.Build(topLevel, out _));
-        var checks = fixture.Build(topLevel + "|TestMissingColumn/empty_input", out var coverage);
+        var checks = fixture.Build(topLevel + "|TestMissingColumn/empty_input|TestOther", out var coverage);
 
         Assert.Equal(["test", "-count=1", "-v", "-run", "^(TestExtraColumn|TestMissingColumn)$", "./internal/drift"],
             original.Arguments);
         Assert.Equal(2, checks.Count);
         Assert.Equal(original.Name, checks[0].Name);
         Assert.Equal(original.Arguments, checks[0].Arguments);
-        Assert.Equal(["test", "-count=1", "-v", "-run", "^TestMissingColumn$/^empty_input$", "./internal/drift"],
+        Assert.Equal(["test", "-count=1", "-v", "-run", @"^TestMissingColumn$/^empty_input\|TestOther$", "./internal/drift"],
             checks[1].Arguments);
         Assert.Equal(checks.Select(check => check.Name), Assert.Single(coverage.TargetToChecks).CheckNames);
     }

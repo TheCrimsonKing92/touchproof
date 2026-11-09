@@ -11,6 +11,15 @@ internal static class GoSubtestRunSelector
 
     internal static bool IsSubtestName(string name) => SubtestNamePattern.IsMatch(name);
 
+    internal static string[] SplitNames(string names)
+    {
+        // Pipes delimit top-level unions only before the first slash. After it they are
+        // literal subtest text; separate subtest selections use package:name; package:name.
+        var slash = names.IndexOf('/');
+        return slash < 0 ? names.Split('|')
+            : names.Split('|', names[..slash].Count(character => character == '|') + 1);
+    }
+
     internal static string BuildRunPattern(string name)
     {
         var pattern = new StringBuilder();

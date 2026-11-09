@@ -17,6 +17,8 @@ public sealed class GoDeveloperSubtestIdentityTests
     [InlineData("pkg:TestA/sub")]
     [InlineData("pkg.TestA/value.+([\\]{}^$?*#")]
     [InlineData("pkg.TestA/日本語_入力")]
+    [InlineData("pkg.TestA/left|TestB")]
+    [InlineData("pkg:TestA/left|TestB/right|TestC")]
     public void SubtestSegmentsKeepTheirFullIdentity(string identity)
     {
         Assert.Equal([identity, "pkg.TestNext"], GoDeveloperNoChangeCompletion.ParseTestIdentities(

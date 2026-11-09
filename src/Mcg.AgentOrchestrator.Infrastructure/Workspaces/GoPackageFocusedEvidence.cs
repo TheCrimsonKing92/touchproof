@@ -90,7 +90,7 @@ internal static class GoPackageFocusedEvidence
         {
             var separator = item.IndexOf(':');
             var package = NormalizePackage(separator < 0 ? item : item[..separator]);
-            var names = separator < 0 ? [] : item[(separator + 1)..].Split('|')
+            var names = separator < 0 ? [] : GoSubtestRunSelector.SplitNames(item[(separator + 1)..])
                 .Select(name => name.Trim())
                 .Select(name => name.StartsWith("FullyQualifiedName~", StringComparison.Ordinal)
                     ? name["FullyQualifiedName~".Length..] : name)
