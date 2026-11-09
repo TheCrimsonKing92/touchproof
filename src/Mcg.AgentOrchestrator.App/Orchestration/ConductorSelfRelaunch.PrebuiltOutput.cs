@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -44,14 +42,8 @@ internal static partial class ConductorSelfRelaunch
             isolatedArtifactsRoot);
     }
 
-    private static string AppBuildArtifactsRoot(string appProjectPath)
-    {
-        var projectPath = Path.GetFullPath(appProjectPath);
-        if (OperatingSystem.IsWindows()) projectPath = projectPath.ToUpperInvariant();
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(projectPath)))[..16];
-        // Mutable build cache belongs to the source tree, independently of successor/store retention.
-        return Path.Combine(OrchestratorTempRoot.GetRoot(), "tmp", "relaunch-build", key);
-    }
+    private static string AppBuildArtifactsRoot(string appProjectPath) =>
+        Path.Combine(RelaunchBuildCacheIdentity.Parent, RelaunchBuildCacheIdentity.ProjectKey(appProjectPath));
 
     private static CapturedProcessResult RunCachedAppBuild(
         string dotnetPath, string appProjectPath, string outputDirectory,
@@ -72,9 +64,13 @@ internal static partial class ConductorSelfRelaunch
                 return new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true);
             try
             {
-                cacheLock = File.Open(Path.Combine(cacheRoot, "build.lock"),
+                cacheLock = File.Open(Path.Combine(cacheRoot, RelaunchBuildCacheIdentity.LockFileName),
                     FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 break;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                Directory.CreateDirectory(cacheRoot);
             }
             catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33 or 11)
             {

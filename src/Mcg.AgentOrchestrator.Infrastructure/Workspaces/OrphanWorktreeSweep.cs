@@ -37,6 +37,7 @@ internal static class OrphanWorktreeSweep
             }
 
             var referenceTime = hooks.CleanupUtcNow();
+            var prefixedReclaim = new PrefixedWorktreeReclaim(executionDirectory, hooks);
             var removed = 0;
             var leftovers = new List<string>();
             foreach (var directory in directories)
@@ -44,8 +45,15 @@ internal static class OrphanWorktreeSweep
                 var reason = "removal-failed";
                 try
                 {
-                    reason = eligibility.Classify(directory, listing.Paths, referenceTime);
-                    if (reason == "eligible")
+                    reason = eligibility.Classify(directory, listing.Paths, referenceTime,
+                        listing.Records, hooks.FindLockHoldersForCleanup);
+                    if (reason == PrefixedWorktreeReclaim.EligibleReason)
+                    {
+                        reason = prefixedReclaim.Remove(directory);
+                        if (reason == "removed") removed++;
+                        else if (Directory.Exists(directory)) leftovers.Add(directory);
+                    }
+                    else if (reason == "eligible")
                     {
                         reason = "removal-failed";
                         reason = remove(directory);
@@ -60,6 +68,7 @@ internal static class OrphanWorktreeSweep
                 }
                 finally { Emit(directory, reason); }
             }
+            prefixedReclaim.WriteSummary();
             return new(removed, leftovers);
 
             void Emit(string directory, string reason)
