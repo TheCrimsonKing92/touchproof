@@ -18,7 +18,8 @@ internal sealed record ApparatusRedFailingTest(
     bool CandidateRerunNotExecuted = false,
     string? CandidateRerunInfrastructureSignature = null,
     AcceptanceConfirmedLaneFailure? ConfirmedLaneFailure = null,
-    AcceptanceTestFailureAttribution? BaselineAttribution = null);
+    AcceptanceTestFailureAttribution? BaselineAttribution = null,
+    bool ReadsRepositorySources = false);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -162,6 +163,14 @@ internal static class ApparatusRedClassifier
                         "a candidate rerun that did not execute does not exclude a candidate-introduced failure");
                 }
 
+                if (failingTest.ReadsRepositorySources)
+                {
+                    return new ApparatusRedDisposition.Genuine(
+                        $"failing test {failingTest.TestIdentity} is a source-reading guard test and cannot be separated " +
+                        "from the candidate without a baseline that executed; candidate rerun did not execute: " +
+                        failingTest.CandidateRerunInfrastructureSignature);
+                }
+
                 evidenceKinds.Add(CandidateRerunNotExecutedEvidenceKind);
                 continue;
             }
@@ -174,6 +183,14 @@ internal static class ApparatusRedClassifier
                     return new ApparatusRedDisposition.Genuine(
                         $"failing test {failingTest.TestIdentity} references candidate-changed type {string.Join(", ", types)}; " +
                         "a baseline arm that did not execute does not exclude a candidate-introduced failure");
+                }
+
+                if (failingTest.ReadsRepositorySources)
+                {
+                    return new ApparatusRedDisposition.Genuine(
+                        $"failing test {failingTest.TestIdentity} is a source-reading guard test and cannot be separated " +
+                        "from the candidate without a baseline that executed; baseline evidence: " +
+                        baselineAttribution.Evidence);
                 }
 
                 evidenceKinds.Add(BaselineNotExecutedEvidenceKind);
