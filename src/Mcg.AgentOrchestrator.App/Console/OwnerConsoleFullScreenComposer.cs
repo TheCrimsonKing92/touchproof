@@ -54,6 +54,8 @@ internal static class OwnerConsoleFullScreenComposer
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
         var settingsTabs = new List<IOwnerConsoleSettingsTab>();
         if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
+        if (controller.Workspace is { } workspace)
+            settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
         if (boardSource?.Registry is { } registry)
             settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);

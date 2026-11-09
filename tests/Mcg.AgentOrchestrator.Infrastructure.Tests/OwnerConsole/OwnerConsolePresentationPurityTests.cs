@@ -11,6 +11,8 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "ChangeStreamFileReader.cs",
         ConsolePath + "ConductEventFileSource.cs",
         ConsolePath + "ExperimentDecideIntentSubmitter.cs",
+        // Enqueues operator intents; presentation never writes executor configuration.
+        ConsolePath + "ExecutorSettingIntentSubmitter.cs",
         ConsolePath + "OwnerActivityEvidenceReader.cs",
         ConsolePath + "OwnerAnswerIntentSubmitter.cs",
         ConsolePath + "OwnerConsoleAdapters.cs",
