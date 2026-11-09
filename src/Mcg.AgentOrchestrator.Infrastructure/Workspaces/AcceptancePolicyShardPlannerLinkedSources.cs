@@ -16,6 +16,7 @@ internal static class AcceptancePolicyShardPlannerLinkedSources
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailureClusterFixtureData.cs"] = [AcceptancePolicyShardPlanner.CliTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailureClusterTestData.cs"] = [AcceptancePolicyShardPlanner.CliTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FixtureProbeLocator.cs"] = [AcceptancePolicyShardPlanner.CliTestsProject],
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GitProbeRefFileFastPath.cs"] = [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InfrastructureTestSupport.cs"] = [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InfrastructureTestSupportGitCommit.cs"] = [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InfrastructureTestSupportGitProbeSeam.cs"] = [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
