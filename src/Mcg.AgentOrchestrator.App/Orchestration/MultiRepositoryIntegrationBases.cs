@@ -9,7 +9,8 @@ internal sealed class MultiRepositoryIntegrationBases(OrchestratorWorkspace work
         var project = key == "default" ? null : registry.GetRequiredProject(key);
         var root = project?.RootDirectory ?? workspace.ExecutionDirectory;
         var branch = project?.IntegrationBranch ?? workspace.IntegrationBranch;
-        return new(key, root, branch, RepositoryIntegrationLanding.Git(root, "rev-parse", "refs/heads/" + branch));
+        return new(key, root, branch, MultiRepositoryBranchTipReader.Read(root, branch,
+            () => RepositoryIntegrationLanding.Git(root, "rev-parse", "refs/heads/" + branch)));
     }
 
     internal IReadOnlyDictionary<string, string> Capture(Goal goal) =>

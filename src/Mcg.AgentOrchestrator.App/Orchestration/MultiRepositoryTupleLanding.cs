@@ -38,7 +38,8 @@ internal sealed class MultiRepositoryTupleLanding(OrchestratorWorkspace workspac
                 var target = Bases.Resolve(key);
                 if (!receipt.IntegrationBases.TryGetValue(key, out var recorded) || recorded != target.Tip)
                     return Stale(goal, state, key, recorded, target.Tip);
-                candidateTips[key] = RepositoryIntegrationLanding.Git(SourceRoot(goal, key), "rev-parse", "refs/heads/" + Branch(goal, key));
+                candidateTips[key] = MultiRepositoryBranchTipReader.Read(SourceRoot(goal, key), Branch(goal, key),
+                    () => RepositoryIntegrationLanding.Git(SourceRoot(goal, key), "rev-parse", "refs/heads/" + Branch(goal, key)));
             }
             catch (Exception ex) { return Stale(goal, state, key, null, ex.Message); }
         }
@@ -74,7 +75,8 @@ internal sealed class MultiRepositoryTupleLanding(OrchestratorWorkspace workspac
                 if (!RepositoryCandidateTuple.TryParse(candidate.Identity?.RepositoryTupleCanonical, out var currentTuple)
                     || currentTuple!.Entries.Single(entry => entry.Key == key).Value.Canonical
                         != acceptedTuple!.Entries.Single(entry => entry.Key == key).Value.Canonical
-                    || RepositoryIntegrationLanding.Git(SourceRoot(goal, key), "rev-parse", "refs/heads/" + branch) != candidateTips[key])
+                    || MultiRepositoryBranchTipReader.Read(SourceRoot(goal, key), branch,
+                        () => RepositoryIntegrationLanding.Git(SourceRoot(goal, key), "rev-parse", "refs/heads/" + branch)) != candidateTips[key])
                 {
                     if (attempt.Steps.Count == 0) return Stale(goal, state, key, receipt.TupleCanonical, "candidate changed");
                     return Fail(state, attempt, key, "candidate changed during tuple landing");
