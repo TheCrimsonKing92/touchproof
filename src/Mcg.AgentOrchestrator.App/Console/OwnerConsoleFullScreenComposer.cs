@@ -51,8 +51,10 @@ internal static class OwnerConsoleFullScreenComposer
         epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
-        var settingsView = new OwnerConsoleSettingsView(controller.Sound is { } sound
-            ? [new OwnerConsoleAlertsSettingsTab(sound)] : []);
+        var settingsView = new OwnerConsoleSettingsView([
+            .. controller.Sound is { } sound ? new IOwnerConsoleSettingsTab[] { new OwnerConsoleAlertsSettingsTab(sound) } : [],
+            .. controller.Workspace is { } workspace
+                ? new IOwnerConsoleSettingsTab[] { new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)) } : []]);
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }
 
