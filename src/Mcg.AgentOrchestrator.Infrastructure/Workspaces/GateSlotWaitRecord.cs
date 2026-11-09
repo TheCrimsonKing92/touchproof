@@ -27,6 +27,6 @@ internal sealed record GateSlotWaitRecord(
     {
         Console.WriteLine($"{EventName} gate={GateIdentity} outcome={Outcome} {FormatDetails()} pid={Environment.ProcessId}");
         if (storageRoot is not null)
-            DotnetBuildEnvironmentManager.TryAppendGateSlotWaitJournal(storageRoot, this);
+            DotnetBuildLeaseJournal.TryAppendGateSlotWaitJournal(storageRoot, this);
     }
 }

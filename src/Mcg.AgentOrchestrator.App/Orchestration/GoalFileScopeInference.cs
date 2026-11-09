@@ -10,8 +10,10 @@ public enum FileScopeProvenance
     Inferred
 }
 
-public sealed record DeclaredFileScope(string Path, FileScopeProvenance Provenance)
+public sealed record DeclaredFileScope(string Path, FileScopeProvenance Provenance, string RepositoryKey = "default")
 {
+    public string RepositoryKey { get; init; } = string.IsNullOrWhiteSpace(RepositoryKey) ? "default" : RepositoryKey;
+
     public bool IsTrusted => Provenance is FileScopeProvenance.Explicit or FileScopeProvenance.Derived;
 }
 
@@ -162,16 +164,22 @@ internal static class GoalFileScopeInference
             !normalizedBody.Contains(path, StringComparison.OrdinalIgnoreCase));
     }
 
-    public static IReadOnlyList<DeclaredFileScope> FromText(string text)
+    public static IReadOnlyList<DeclaredFileScope> FromText(string text) => FromText(text, null);
+
+    internal static IReadOnlyList<DeclaredFileScope> FromText(
+        string text, GoalRepositorySet? repositories, ICollection<string>? warnings = null)
     {
-        var scopes = new Dictionary<string, FileScopeProvenance>(StringComparer.OrdinalIgnoreCase);
+        var scopes = new Dictionary<(string RepositoryKey, string Path), FileScopeProvenance>(RepositoryScopeIdentityComparer.Instance);
         var inGeneratedScopeBlock = false;
         var inExclusions = false;
         var generatedProvenance = FileScopeProvenance.Inferred;
         var lines = NormalizeNewlines(text).Split('\n');
         var scopeRegion = BriefScopeSectionSelector.FindScopeRegion(lines);
+        var repositoryKeys = RepositoryScopeLabels.Map(lines, repositories, warnings);
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            if (repositoryKeys[lineIndex] is not { } repositoryKey)
+                continue;
             var line = lines[lineIndex];
             var trimmed = line.Trim();
             if (trimmed.Equals(BacklogIntakePlanner.TargetScopeHeadingLine, StringComparison.Ordinal))
@@ -267,10 +275,10 @@ internal static class GoalFileScopeInference
                     continue;
                 }
 
-                if (!scopes.TryGetValue(path, out var existing) ||
+                if (!scopes.TryGetValue((repositoryKey, path), out var existing) ||
                     TrustRank(provenance) > TrustRank(existing))
                 {
-                    scopes[path] = provenance;
+                    scopes[(repositoryKey, path)] = provenance;
                 }
             }
 
@@ -286,17 +294,17 @@ internal static class GoalFileScopeInference
                 foreach (var candidate in candidates)
                 {
                     var path = NormalizePath(candidate);
-                    if (!scopes.TryGetValue(path, out var existing) ||
+                    if (!scopes.TryGetValue((repositoryKey, path), out var existing) ||
                         TrustRank(provenance) > TrustRank(existing))
                     {
-                        scopes[path] = provenance;
+                        scopes[(repositoryKey, path)] = provenance;
                     }
                 }
             }
         }
 
         return PruneRedundantAncestors(
-            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
+            scopes.Select(pair => new DeclaredFileScope(pair.Key.Path, pair.Value, pair.Key.RepositoryKey)));
     }
 
     public static IReadOnlyList<DeclaredFileScope> FromGoal(
@@ -308,7 +316,7 @@ internal static class GoalFileScopeInference
             string.IsNullOrWhiteSpace(task.VerificationPlan)
                 ? new[] { task.Description }
                 : new[] { task.Description, task.VerificationPlan! });
-        var taskScopes = FromTextParts(taskParts, maximumCharacters, out var taskTruncated);
+        var taskScopes = FromTextParts(taskParts, maximumCharacters, out var taskTruncated, goal.Repositories?.Repositories);
         var trustedTaskScopes = taskScopes.Where(scope => scope.IsTrusted).ToArray();
         if (trustedTaskScopes.Length > 0)
         {
@@ -322,7 +330,7 @@ internal static class GoalFileScopeInference
             return [];
         }
 
-        var objectiveScopes = FromTextParts([goal.Objective], maximumCharacters, out var objectiveTruncated);
+        var objectiveScopes = FromTextParts([goal.Objective], maximumCharacters, out var objectiveTruncated, goal.Repositories?.Repositories);
         var derivedObjectiveScopes = objectiveScopes
             .Where(scope => scope.Provenance == FileScopeProvenance.Derived)
             .ToArray();
@@ -342,7 +350,9 @@ internal static class GoalFileScopeInference
     internal static IReadOnlyList<DeclaredFileScope> FromTextParts(
         IEnumerable<string> parts,
         int maximumCharacters,
-        out bool truncated)
+        out bool truncated,
+        GoalRepositorySet? repositories = null,
+        ICollection<string>? warnings = null)
     {
         var remaining = maximumCharacters;
         var selected = new List<IReadOnlyList<DeclaredFileScope>>();
@@ -362,7 +372,7 @@ internal static class GoalFileScopeInference
             var scanText = part.Length <= remaining ? part : part[..remaining];
             truncated |= scanText.Length != part.Length;
             remaining -= scanText.Length;
-            selected.Add(FromText(scanText));
+            selected.Add(FromText(scanText, repositories, warnings));
         }
 
         return Merge(selected);
@@ -617,18 +627,18 @@ internal static class GoalFileScopeInference
 
     private static IReadOnlyList<DeclaredFileScope> Merge(IEnumerable<IReadOnlyList<DeclaredFileScope>> groups)
     {
-        var scopes = new Dictionary<string, FileScopeProvenance>(StringComparer.OrdinalIgnoreCase);
+        var scopes = new Dictionary<(string RepositoryKey, string Path), FileScopeProvenance>(RepositoryScopeIdentityComparer.Instance);
         foreach (var scope in groups.SelectMany(group => group))
         {
-            if (!scopes.TryGetValue(scope.Path, out var existing) ||
+            if (!scopes.TryGetValue((scope.RepositoryKey, scope.Path), out var existing) ||
                 TrustRank(scope.Provenance) > TrustRank(existing))
             {
-                scopes[scope.Path] = scope.Provenance;
+                scopes[(scope.RepositoryKey, scope.Path)] = scope.Provenance;
             }
         }
 
         return PruneRedundantAncestors(
-            scopes.Select(pair => new DeclaredFileScope(pair.Key, pair.Value)));
+            scopes.Select(pair => new DeclaredFileScope(pair.Key.Path, pair.Value, pair.Key.RepositoryKey)));
     }
 
     private static IReadOnlyList<DeclaredFileScope> PruneRedundantAncestors(
@@ -639,6 +649,7 @@ internal static class GoalFileScopeInference
             .ToArray();
         return ordered
             .Where(candidate => !ordered.Any(other =>
+                other.RepositoryKey.Equals(candidate.RepositoryKey, StringComparison.Ordinal) &&
                 other.Path.Length > candidate.Path.Length &&
                 TrustRank(other.Provenance) >= TrustRank(candidate.Provenance) &&
                 RepositoryPathOverlap.Classify(candidate.Path, other.Path) == PathOverlapKind.DirectoryPrefix))

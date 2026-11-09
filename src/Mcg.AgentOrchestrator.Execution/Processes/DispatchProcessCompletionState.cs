@@ -5,7 +5,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class DispatchProcessCompletionState
 {
     public static bool HasAlreadyBeenApplied(TaskSpec task, TaskProcessRecord process) =>
-        (task.Status == WorkTaskStatus.Completed &&
+        !(task.CompletionBuildEvidence is { RecoversOperationId: not null, Applied: false } recovery &&
+          CompletionBuildDispatchReconciliationPolicy.HasCurrentWorker(task) &&
+          process.ProcessId == recovery.WorkerProcess.ProcessId && process.StartedAt == recovery.WorkerProcess.StartedAt) &&
+        ((task.Status == WorkTaskStatus.Completed &&
          task.LastVerification is not null &&
          process.CompletedAt is not null &&
          process.ExitCode is not null) ||
@@ -15,7 +18,7 @@ public static class DispatchProcessCompletionState
              verification.ExitCode == process.ExitCode &&
              verification.Command.Equals(process.Command, StringComparison.Ordinal) &&
              verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
-             verification.CompletedAt == process.CompletedAt));
+             verification.CompletedAt == process.CompletedAt)));
 
     public static bool IsExitedWithoutAppliedCompletion(TaskSpec task, TaskProcessRecord process) =>
         process is { CompletedAt: not null, ExitCode: not null } &&

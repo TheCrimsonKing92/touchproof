@@ -31,13 +31,14 @@ public sealed record CompletionBuildEvidenceOperation(
     int? BuildExitCode = null,
     string Diagnostic = "",
     bool Applied = false,
-    bool CustodyReleased = false)
+    bool CustodyReleased = false,
+    string? RecoversOperationId = null)
 {
     public bool IsPending => Phase is CompletionBuildEvidencePhase.Launching or CompletionBuildEvidencePhase.Pending or CompletionBuildEvidencePhase.WaitingForLease;
 
     // Stable authority for the original dispatch, independent of its current-task applicability.
     public bool HasSameOrigin(CompletionBuildEvidenceOperation other) =>
-        Id == other.Id && GoalId == other.GoalId && TaskId == other.TaskId &&
+        Id == other.Id && RecoversOperationId == other.RecoversOperationId && GoalId == other.GoalId && TaskId == other.TaskId &&
         DispatchAt == other.DispatchAt && DispatchId == other.DispatchId &&
         WorktreeRoot == other.WorktreeRoot && TreeDigest == other.TreeDigest &&
         StatePath == other.StatePath && ExecutionDirectory == other.ExecutionDirectory &&

@@ -139,26 +139,6 @@ public sealed partial class TaskSpec
         WorkerBuildInvocations = WorkerBuildInvocations.Where(i => i.Id != invocation.Id).Append(invocation).ToArray();
     }
 
-    internal void RecordCompletionBuildEvidence(CompletionBuildEvidenceOperation operation)
-    {
-        var previous = CompletionBuildEvidence;
-        var attachedOrigin = previous is not null && previous.HasSameOrigin(operation) &&
-            DispatchHistory.Any(dispatch => dispatch.DispatchedAt == operation.DispatchAt);
-        if (operation.TaskId != Id.Value ||
-            (operation.DispatchAt != LastDispatch?.DispatchedAt && !attachedOrigin))
-            throw new InvalidOperationException("Completion build evidence does not belong to the current dispatch.");
-        if (previous is not null && (!previous.HasSameOrigin(operation) ||
-            (previous.ChildPid is not null && !CompletionBuildEvidenceTarget.From(previous).Matches(operation))))
-            throw new InvalidOperationException("Completion build evidence cannot replace attached operation identity.");
-        if (previous is not null &&
-            (!previous.IsPending && operation.IsPending || previous.Applied && !operation.Applied ||
-             previous.CustodyReleased && !operation.CustodyReleased ||
-             !previous.IsPending && previous.Phase != operation.Phase &&
-             !(previous.Phase == CompletionBuildEvidencePhase.Success && operation.Phase == CompletionBuildEvidencePhase.StaleCandidate)))
-            throw new InvalidOperationException("Completion build evidence cannot move backwards.");
-        CompletionBuildEvidence = operation;
-    }
-
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
     public InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint { get; private set; }
