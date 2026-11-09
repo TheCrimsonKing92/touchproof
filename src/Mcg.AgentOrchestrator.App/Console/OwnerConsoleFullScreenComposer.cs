@@ -25,7 +25,8 @@ internal static class OwnerConsoleFullScreenComposer
         OwnerConsoleLoopOptions? options, OwnerConsoleInputDiagnostics? diagnostics,
         OwnerConsoleDecisionsPane decisionsPane, OwnerConsoleActivityPane activityPane, OwnerConsoleBoardPane board,
         Label notice, Label status, Label hints, Label epicHint, OwnerStatusPresenter statusPresenter,
-        OwnerConsoleRenderState state, Dictionary<string, string> working, OwnerConsoleBoardCollapse collapse)
+        OwnerConsoleRenderState state, Dictionary<string, string> working, OwnerConsoleBoardCollapse collapse,
+        OwnerConsoleBoardSource? boardSource = null)
     {
         var noticeStrip = new OwnerConsoleNoticeStrip(clock);
         var refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
@@ -55,7 +56,10 @@ internal static class OwnerConsoleFullScreenComposer
         if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
         if (controller.AgentsSettings is { } agents) settingsTabs.Add(agents);
         if (controller.ConductorPolicyPath is { } policyPath) settingsTabs.Add(new OwnerConsolePolicySettingsTab(policyPath));
-        if (controller.Workspace is { } workspace) settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
+        if (controller.Workspace is { } workspace)
+            settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
+        if (boardSource?.Registry is { } registry)
+            settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }

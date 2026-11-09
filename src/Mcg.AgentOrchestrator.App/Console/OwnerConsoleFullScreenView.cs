@@ -104,7 +104,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _token = _lifetime.Token;
         (NoticeStrip, _noticeExpiry, _operation, _layout, _renderCoordinator, _previewPane, _trace, _selection, _paneRenderer, EpicView, SettingsView) =
             OwnerConsoleFullScreenComposer.Build(this, app, controller, token, _token, clock ?? TimeProvider.System, options, diagnostics,
-                _decisionsPane, _activityPane, _board, _notice, _status, _hints, _epicHint, _statusPresenter, _state, _working, _collapse);
+                _decisionsPane, _activityPane, _board, _notice, _status, _hints, _epicHint, _statusPresenter, _state, _working, _collapse, boardSource);
         (_keys, _bindingRunner, _keyboard) = OwnerConsoleFullScreenComposer.Attach(this, app, controller, refresh, _token,
             diagnostics, boardSource, clipboard, _layout, _previewPane, _trace, _selection, _paneRenderer, _operation,
             _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
