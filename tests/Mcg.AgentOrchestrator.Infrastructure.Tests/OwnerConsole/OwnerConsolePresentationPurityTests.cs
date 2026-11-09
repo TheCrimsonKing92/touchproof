@@ -29,6 +29,8 @@ public sealed class OwnerConsolePresentationPurityTests
         // Reads lifecycle event files to reconcile the landed-today scan with stream deliveries.
         ConsolePath + "OwnerConsoleLandingBaseline.cs",
         ConsolePath + "OwnerConsoleNotificationSettings.cs",
+        // owns conductor-policy reads and atomic saves, not presentation
+        ConsolePath + "OwnerConsolePolicySettingsStore.cs",
         ConsolePath + "OwnerConsoleRefreshTimingsFile.cs",
         // The sound command owns library access and atomic settings persistence, not presentation.
         ConsolePath + "OwnerConsoleSoundCommand.cs",
