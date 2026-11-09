@@ -12,6 +12,12 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureSeedTests
     public void Constructor_WarmTemplate_CopiesIndependentSeedWithoutGit(string branch)
     {
         using var warm = new Fixture();
+        var seed = RealGit(warm.CheckoutPath, "rev-parse", "HEAD");
+        Assert.NotEqual(seed, Fixture.CommitChange(warm.CheckoutPath));
+        var linkedPath = Path.Combine(warm.Root, "fixture-only");
+        warm.Git("worktree", "add", "-b", "fixture-only", linkedPath);
+        Assert.True(File.Exists(Path.Combine(linkedPath, ".git")));
+
         var launches = new GitLaunches();
         var probes = InfrastructureTestSupport.CountGitProbeLaunches();
         Fixture measured;
@@ -41,10 +47,9 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureSeedTests
             Assert.Equal("seed", RealGit(path, "show", "HEAD:example.txt"));
             Assert.Equal("", RealGit(path, "status", "--porcelain"));
 
-            var seed = RealGit(path, "rev-parse", "HEAD");
-            Assert.Equal(seed, RealGit(warm.CheckoutPath, "rev-parse", "HEAD"));
-            Assert.NotEqual(seed, Fixture.CommitChange(warm.CheckoutPath));
+            // Copying after mutations also proves that the shared template stayed pristine.
             Assert.Equal(seed, RealGit(path, "rev-parse", "HEAD"));
+            Assert.DoesNotContain("fixture-only", measured.Worktrees());
             Assert.Equal("seed\n", File.ReadAllText(Path.Combine(path, "example.txt")));
         }
     }

@@ -6,7 +6,7 @@ using static GoalRepositoryWorktreeProvisionerFixtureSeedTests;
 public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
 {
     [Fact]
-    public void Run_PlainRefs_ReturnsRealGitIdsWithoutLaunching()
+    public void Run_PlainRefs_LaunchesRealGitForEachRead()
     {
         using var fixture = new Fixture();
         var path = fixture.CheckoutPath;
@@ -14,14 +14,12 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
         var branch = RealGit(path, "rev-parse", "refs/heads/main");
         using var launches = new GitLaunches();
         using var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers();
-        using var probes = InfrastructureTestSupport.CountGitProbeLaunches();
 
         Assert.Equal(head, Fixture.Run(path, "rev-parse", "HEAD"));
         Assert.Equal(branch, Fixture.Run(path, "rev-parse", "refs/heads/main"));
 
-        Assert.Equal(2, answers.Count);
-        Assert.Empty(launches.Commands);
-        Assert.Equal(0, probes.Count);
+        Assert.Equal(new[] { "rev-parse", "rev-parse" }, launches.Commands);
+        Assert.Equal(0, answers.Count);
     }
 
     [Theory]
@@ -44,10 +42,10 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
     }
 
     [Fact]
-    public void Run_ResolverDeclinesQuotedConfig_DelegatesToRealGit()
+    public void Run_QuotedConfig_DelegatesToRealGit()
     {
         using var fixture = new Fixture();
-        fixture.Git("config", "branch.main.description", "quoted section forces fallback");
+        fixture.Git("config", "branch.main.description", "quoted section");
         var expected = RealGit(fixture.CheckoutPath, "rev-parse", "HEAD");
         using var launches = new GitLaunches();
         using var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers();
@@ -59,7 +57,7 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
     }
 
     [Fact]
-    public void CommitChange_LinkedWorktree_LaunchesOnlyAddAndCommit()
+    public void CommitChange_LinkedWorktree_LaunchesAddCommitAndHeadRead()
     {
         using var fixture = new Fixture();
         var path = Path.Combine(fixture.Root, "linked");
@@ -71,8 +69,8 @@ public sealed class GoalRepositoryWorktreeProvisionerFixtureRefReadTests
         using (var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers())
         {
             after = Fixture.CommitChange(path);
-            Assert.Equal(new[] { "add", "commit" }, launches.Commands);
-            Assert.Equal(1, answers.Count);
+            Assert.Equal(new[] { "add", "commit", "rev-parse" }, launches.Commands);
+            Assert.Equal(0, answers.Count);
         }
 
         Assert.NotEqual(before, after);
