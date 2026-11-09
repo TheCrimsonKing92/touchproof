@@ -13,6 +13,9 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
         IntegrationBranch = integrationBranch;
         try
         {
+            if (GoalRepositoryWorktreeProvisionerSeedTemplate.TryCopyTo(CheckoutPath, integrationBranch))
+                return;
+
             Directory.CreateDirectory(CheckoutPath);
             Git("init", "-b", integrationBranch);
             Git("config", "user.name", "Worktree Provisioner Tests");
@@ -39,6 +42,12 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
 
     internal static string Run(string directory, params string[] arguments)
     {
+        if (arguments.Length == 2 && arguments[0] == "rev-parse" &&
+            (arguments[1] == "HEAD" ||
+             (arguments[1].StartsWith("refs/heads/", StringComparison.Ordinal) && arguments[1].Length > "refs/heads/".Length)) &&
+            GitProbeRefFileFastPath.TryAnswer(directory, arguments, hasSeamOverrideOrHook: false, out var answer))
+            return answer.StandardOutput.TrimEnd('\r', '\n');
+
         var result = GitCli.Run(directory, arguments);
         Assert.True(result.Succeeded && !result.DrainTimedOut && result.ProcessStarted, result.Error);
         return result.Output.TrimEnd('\r', '\n');
