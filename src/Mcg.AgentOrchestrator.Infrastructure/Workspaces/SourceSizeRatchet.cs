@@ -572,7 +572,7 @@ internal static class SourceSizeRatchet
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
-            new SourceClassCeiling("ConductorDriver", 14200, 70),
+            new SourceClassCeiling("ConductorDriver", 14198, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -615,7 +615,7 @@ internal static class SourceSizeRatchet
             // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
             // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
             // Goal c1182160: one defensive guard protects direct callers of the acceptance merge core from repository-set landing.
-            new SourceClassCeiling("CliCommandHandlers", 11031, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11011, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
