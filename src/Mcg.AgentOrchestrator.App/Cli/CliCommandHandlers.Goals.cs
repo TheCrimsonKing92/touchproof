@@ -145,26 +145,6 @@ private static void RejectPipelineForSimpleGoal(GoalIntakePipelineRequest? pipel
     }
 }
 
-private static void PrintScopeCollisionAdvisory(
-    CliExecutionContext context,
-    string rawObjective,
-    string? intakeItemId = null,
-    string? heading = null,
-    IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null)
-{
-    lifecycleObservations ??= GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
-        context.Workspace,
-        GoalScopeCollisionAdvisor.SelectComparisonCandidates(context.Kernel.Goals, intakeItemId));
-    GoalScopeCollisionReportTextView.Print(
-        GoalScopeCollisionAdvisor.Build(
-            [rawObjective],
-            context.Kernel.Goals,
-            intakeItemId,
-            lifecycleObservations, context.Workspace.RootDirectory),
-        intakeItemId,
-        heading);
-}
-
 private static void PrintBriefLintAdvisory(string briefText, string repositoryRoot)
 {
     try
@@ -327,7 +307,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
                 GoalObjectivePlanTextView.PrintGoalObjectivePlan(runObjectivePlan);
-                PrintScopeCollisionAdvisory(context, runObjective);
+                GoalScopeCollisionAdvisory.Print(context, runObjective);
                 PrintBriefLintAdvisory(runObjective, context.Workspace.ExecutionDirectory);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
@@ -355,14 +335,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (summary && !goalObjectivePlan.CanCreateGoal)
             {
                 GoalCreationSummaryView.PrintBlocked(goalObjectivePlan);
-                PrintScopeCollisionAdvisory(context, goalObjective);
+                GoalScopeCollisionAdvisory.Print(context, goalObjective, repositories: goalRepositories);
                 PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             }
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
             if (!summary) GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
-            PrintScopeCollisionAdvisory(context, goalObjective);
+            GoalScopeCollisionAdvisory.Print(context, goalObjective, repositories: goalRepositories);
             PrintBriefLintAdvisory(goalObjective, context.Workspace.ExecutionDirectory);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
@@ -393,7 +373,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             GoalObjectivePlanTextView.PrintGoalObjectivePlan(simpleObjectivePlan);
-            PrintScopeCollisionAdvisory(context, simpleObjective);
+            GoalScopeCollisionAdvisory.Print(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
             var simpleEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, simpleSourceBacklogLink?.Item.Id);

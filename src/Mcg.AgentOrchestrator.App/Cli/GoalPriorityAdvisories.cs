@@ -31,7 +31,7 @@ internal static class GoalPriorityAdvisories
         {
             var others = context.Kernel.Goals.Where(item => item.Id != goal.Id && !item.IsTerminal).ToArray();
             var byId = others.ToDictionary(item => item.Id.Value, StringComparer.Ordinal);
-            var report = GoalScopeCollisionAdvisor.Build([goal.Objective], others);
+            var report = GoalScopeCollisionAdvisor.Build([goal.Objective], others, repositories: goal.Repositories);
             foreach (var collision in report.Collisions.Where(BoardFillScopeDepends.Counts)
                          .DistinctBy(item => (item.GoalId, item.Kind, item.ProposedPath)))
             {

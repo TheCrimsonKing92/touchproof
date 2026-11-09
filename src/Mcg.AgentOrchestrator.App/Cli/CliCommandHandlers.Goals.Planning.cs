@@ -123,7 +123,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         lifecycleCandidates);
     foreach (var node in plan.Nodes)
     {
-        PrintScopeCollisionAdvisory(
+        GoalScopeCollisionAdvisory.Print(
             context,
             node.ReadyObjective,
             node.Intake.Id,
