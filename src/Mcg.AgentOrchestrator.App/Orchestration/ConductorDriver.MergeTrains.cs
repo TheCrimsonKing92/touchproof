@@ -9,6 +9,7 @@ internal sealed partial class ConductorDriver
 {
     internal MergeTrainPrefixBisection.Runner? MergeTrainBisectionRunner { get; set; }
     internal MergeTrainFocusedRecheckRunner.Runner? MergeTrainRecheckRunner { get; set; }
+    internal MergeTrainMemberRecheckRunner.Runner? MergeTrainMemberRunner { get; set; }
     internal MergeTrainFocusedRecheckDecision.DependencySelector MergeTrainRecheckDependencySelector { get; set; } = RepositoryRecheckTestSelection.Read;
 
     internal MergeTrainPrefixBisection.Runner CreateMergeTrainBisectionRunner(GoalId goalId) =>
@@ -386,7 +387,32 @@ internal sealed partial class ConductorDriver
                 return Fallback(detail);
             }
 
-            // Keep the bounded bisection; absent source attribution, retain drop-newest.
+            var memberRecheck = MergeTrainMemberRecheck.Run(receipt, attributed, messageSubjectFailure, attempt,
+                MergeTrainMemberRunner ?? MergeTrainMemberRecheckRunner.Create(_cohortAcceptanceVerifier, _cohortWorkspace,
+                    _cohortCleanupHooks, (runId, token) => CohortPartitionStableSlotLeaseSource is { } source
+                        ? source(runId, token) : _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(runId, token)),
+                new MergeTrainMemberRecheckOutcomeCache(Path.Combine(_cohortWorkspace.OrchestratorDirectory, "merge-train-acceptance.db")),
+                (member, source) => RecordTrainImplicatedMember(member, receipt, [], source),
+                memberEjection =>
+                {
+                    allEjections.Add(memberEjection);
+                    _mergeTrainAcceptanceStore.RecordEjections(attemptId, [memberEjection]);
+                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason);
+                },
+                (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
+                    members[0].GoalId.Value, detail, eventKind: kind), cancellationToken);
+            if (memberRecheck is { FallbackReason: null })
+            {
+                var memberSurvivors = memberRecheck.Remaining(receipt).Select(member => member.GoalId).ToHashSet();
+                composition = originalBindings.Where(member => memberSurvivors.Contains(member.GoalId)).ToArray();
+                redDropped = null;
+                pendingRecheck = null;
+                if (composition.Count < 2)
+                    return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+                continue;
+            }
+
+            // Keep the bounded bisection; an inconclusive member sweep retains drop-newest.
             // The dropped member remains absent from MemberResults for its later solo gate.
             var dropped = attributed ?? members[^1];
             if (!messageSubjectFailure)
