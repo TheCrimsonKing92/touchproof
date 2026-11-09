@@ -10,7 +10,7 @@ internal sealed class BuildReceiptLedger(Action<string, string>? appender = null
     private int _warned;
 
     internal static string ResolveStorePath(string worktreePath) =>
-        Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), FileName);
+        BuildReceiptStorePaths.Resolve(worktreePath, HostLedgerStateDirectory.Resolve(worktreePath));
 
     internal void Record(string worktreePath, BuildReceipt receipt)
     {

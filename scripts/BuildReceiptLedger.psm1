@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 $script:buildReceiptWarned = $false
+. (Join-Path $PSScriptRoot 'BuildReceiptStorePaths.ps1')
 
 function Start-BuildReceiptMeter {
     $cpu = -1L
@@ -42,12 +43,6 @@ function Write-BuildReceipt {
     param([string]$Root, [string]$GoalPrefix, [string]$Tree, [string[]]$Projects, $Meter)
     if ($null -eq $Meter) { return }
     try {
-        $hostRoot = $Root
-        $directory = [IO.DirectoryInfo]::new($Root)
-        while ($null -ne $directory.Parent) {
-            if ($directory.Parent.Name -eq '.orchestrator-worktrees') { $hostRoot = $directory.Parent.Parent.FullName; break }
-            $directory = $directory.Parent
-        }
         $goal = $GoalPrefix
         $context = Join-Path $Root '.orchestrator-context'
         if ([IO.Directory]::Exists($context)) {
@@ -64,7 +59,7 @@ function Write-BuildReceipt {
             cpu_ms_unavailable_reason = if ($null -eq $Meter.Cpu) { 'accounting-unavailable' } else { $null }
             cache = 'none'
         }
-        $state = Join-Path $hostRoot '.orchestrator'
+        $state = Get-BuildReceiptStateDirectory -Root $Root
         [IO.Directory]::CreateDirectory($state) | Out-Null
         $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($row | ConvertTo-Json -Depth 4 -Compress) + [Environment]::NewLine)
         # A single attempt: never wait for another writer or change the build verdict.

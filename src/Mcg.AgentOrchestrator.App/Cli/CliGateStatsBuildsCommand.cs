@@ -1,12 +1,13 @@
 using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliGateStatsBuildsCommand
 {
     internal static void Execute(IReadOnlyList<string> args, string orchestratorDirectory, TextWriter output,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, string? worktreePath = null)
     {
         DateTimeOffset? since = null;
         if (args.Count != 2)
@@ -17,7 +18,9 @@ internal static class CliGateStatsBuildsCommand
             var now = (clock ?? TimeProvider.System).GetUtcNow();
             since = hours > (now - DateTimeOffset.MinValue).TotalHours ? DateTimeOffset.MinValue : now.AddHours(-hours);
         }
-        var report = new BuildReceiptReport(SharedJsonlFile.ReadLines(Path.Combine(orchestratorDirectory, "build-receipts.jsonl")), since);
+        IReadOnlyList<string> paths = worktreePath is null ? [Path.Combine(orchestratorDirectory, "build-receipts.jsonl")]
+            : BuildReceiptStorePaths.ReadPaths(worktreePath, orchestratorDirectory);
+        var report = new BuildReceiptReport(paths.SelectMany(SharedJsonlFile.ReadLines), since);
         foreach (var row in report.Origins)
             output.WriteLine(FormattableString.Invariant($"origin={row.Origin}\tbuilds={row.Builds}\tcpu_ms={row.CpuMs}\twall_ms={row.WallMs}\tcache_hits={row.CacheHits}\tcpu_unavailable={row.CpuUnavailable}"));
         output.WriteLine(FormattableString.Invariant($"repeated_trees={report.Repeats.Count}\trepeat_builds={report.Repeats.Sum(row => row.Compiles - 1)}\trepeat_cpu_ms={report.Repeats.Sum(row => row.RepeatCpuMs)}"));

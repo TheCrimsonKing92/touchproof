@@ -20,6 +20,13 @@ public sealed class WorkerBuildProjectScopeProcessSpawningTests
         var initial = Build(helper, fixture.Root, isolatedRoot, WorkerBuildProjectScopeTests.Fixture.AllProjects);
         Assert.True(initial.ExitCode == 0, initial.Stdout + initial.Stderr);
         using var before = JsonDocument.Parse(File.ReadAllBytes(receiptPath));
+        // The actual helper has returned, including its final telemetry append.
+        Assert.True(WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root).Matches, initial.Stdout + initial.Stderr);
+        var ledgerPath = Path.Combine(fixture.Root, ".git", ".orchestrator", "build-receipts.jsonl");
+        Assert.True(BuildReceipt.TryParse(Assert.Single(File.ReadAllLines(ledgerPath)), out var initialRow));
+        Assert.Equal("worker-check", initialRow!.Origin);
+        Assert.Equal(before.RootElement.GetProperty("treeDigest").GetString(), initialRow.TreeDigest);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".orchestrator")));
         fixture.Git("mv", "Tests/Tests.cs", "Tests/RenamedTests.cs");
         fixture.Write("Tests/RenamedTests.cs", "public class RenamedTests { public int Changed => 1; }");
         Assert.False(WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root).Matches);
@@ -28,6 +35,9 @@ public sealed class WorkerBuildProjectScopeProcessSpawningTests
 
         Assert.True(followup.ExitCode == 0, followup.Stdout + followup.Stderr);
         using var after = JsonDocument.Parse(File.ReadAllBytes(receiptPath));
+        Assert.Equal(2, File.ReadAllLines(ledgerPath).Length);
+        Assert.True(WorktreeTreeDigest.TryCompute(fixture.Root, out var postReturnDigest, out var digestReason), digestReason);
+        Assert.Equal(after.RootElement.GetProperty("treeDigest").GetString(), postReturnDigest);
         Assert.Equal(WorkerBuildProjectScope.Resolve(fixture.Root, []).StableMetadataDigest,
             after.RootElement.GetProperty("scopeStableDigest").GetString());
         Assert.NotEqual(before.RootElement.GetProperty("treeDigest").GetString(), after.RootElement.GetProperty("treeDigest").GetString());
@@ -45,6 +55,8 @@ public sealed class WorkerBuildProjectScopeProcessSpawningTests
             () => WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root), _ => { fallbacks++; return new(false, -1, "unexpected fallback"); });
         Assert.False(admission.FailsRound, admission.Diagnostic);
         Assert.Equal(0, fallbacks);
+        File.AppendAllText(Path.Combine(fixture.Root, "Core", "Core.cs"), "\n// source changed after helper return\n");
+        Assert.Equal("digest-mismatch", WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root).Reason);
         fixture.SetMetadata(fixture.Metadata() with { IntegrationBranch = "other" });
         Assert.Equal("scope-mismatch", WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root).Reason);
     }

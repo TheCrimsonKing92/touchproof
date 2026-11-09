@@ -1,8 +1,9 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: hand-written ledgers in an independently owned temporary directory.
+// Parallel-safe: hand-written ledgers and metadata use independently owned directories.
 public sealed class GateStatsBuildsTests : CliTaskQueryTestSupport, IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "build-stats", Guid.NewGuid().ToString("N"));
@@ -64,6 +65,55 @@ public sealed class GateStatsBuildsTests : CliTaskQueryTestSupport, IDisposable
     [InlineData("--last-hours", "2", "--last-hours", "3")]
     public void Builds_RejectsInvalidArguments(params string[] flags) =>
         Assert.Equal(CliCommandHelp.GateStatsUsage, Assert.Throws<ArgumentException>(() => Report(flags)).Message);
+
+    [Fact]
+    public void Builds_OrdinaryRepository_ReadsMetadataAndLegacyRowsOnce()
+    {
+        var root = CreateRepositoryMetadata();
+        var state = Path.Combine(root, ".orchestrator");
+        Directory.CreateDirectory(state);
+        File.WriteAllText(Path.Combine(state, "build-receipts.jsonl"),
+            Row("worker-check", "a", 100, "none", "2026-11-09T10:00:00Z") + Environment.NewLine);
+        new BuildReceiptLedger().Record(root, new(DateTimeOffset.Parse("2026-11-09T11:00:00Z"),
+            "goal", "gate", "wbc1:git-tree:a", ["App/App.csproj"], 10, 200, null, "miss"));
+        Assert.Single(File.ReadAllLines(Path.Combine(root, ".git", ".orchestrator", "build-receipts.jsonl")));
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var output = CaptureConsole(() => CliGateStatsQueryCommand.Execute(["gate-stats", "builds"], workspace));
+
+        Assert.Contains("origin=worker-check\tbuilds=1\tcpu_ms=100", output);
+        Assert.Contains("origin=gate\tbuilds=1\tcpu_ms=200", output);
+        Assert.Contains("repeated_trees=1\trepeat_builds=1\trepeat_cpu_ms=200", output);
+        Assert.Contains("lines=2\tskipped=0", output);
+    }
+
+    [Fact]
+    public void Builds_ExternalState_AlsoReadsScriptFallbackReceipts()
+    {
+        var root = CreateRepositoryMetadata();
+        Write(Row("gate", "a", 200, "miss", "2026-11-09T11:00:00Z"));
+        var fallback = BuildReceiptLedger.ResolveStorePath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(fallback)!);
+        File.WriteAllText(fallback, Row("worker-check", "a", 100, "none", "2026-11-09T10:00:00Z") + Environment.NewLine);
+        using var output = new StringWriter();
+
+        CliGateStatsBuildsCommand.Execute(["gate-stats", "builds"], _root, output, worktreePath: root);
+
+        Assert.Contains("origin=gate\tbuilds=1\tcpu_ms=200", output.ToString());
+        Assert.Contains("origin=worker-check\tbuilds=1\tcpu_ms=100", output.ToString());
+        Assert.Contains("repeated_trees=1\trepeat_builds=1\trepeat_cpu_ms=200", output.ToString());
+        Assert.Contains("lines=2\tskipped=0", output.ToString());
+    }
+
+    private string CreateRepositoryMetadata()
+    {
+        var root = Path.Combine(_root, "repository");
+        Directory.CreateDirectory(Path.Combine(root, ".git", "objects"));
+        Directory.CreateDirectory(Path.Combine(root, ".git", "refs", "heads"));
+        File.WriteAllText(Path.Combine(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        File.WriteAllText(Path.Combine(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n\tbare = false\n");
+        return root;
+    }
 
     private void Write(params string[] lines)
     {
