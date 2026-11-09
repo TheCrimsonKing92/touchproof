@@ -13,7 +13,8 @@ internal static class OwnerConsoleControllerFactory
         IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
         Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
         OwnerGoalDetailQuery? goalDetail = null, OwnerConsoleSoundCommand? sound = null,
-        OrchestratorWorkspace? workspace = null) =>
+        string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null) =>
         new OwnerConsoleScreenController(questions, answers, dialogs, goalDetail ?? new OwnerGoalDetailQuery(state, tail),
-            conductor, digest, summary, clock, epics, answerTracking, resolutions, notifier, notifications, fleet, landings, sound, workspace);
+            conductor, digest, summary, clock, epics, answerTracking, resolutions, notifier, notifications, fleet, landings,
+            sound, conductorPolicyPath, workspace);
 }

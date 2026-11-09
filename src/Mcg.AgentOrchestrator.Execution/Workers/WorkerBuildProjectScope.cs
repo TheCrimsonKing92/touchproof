@@ -36,7 +36,7 @@ public static class WorkerBuildProjectScope
         Metadata? previous = File.Exists(path) ? ReadMetadata(root) : null;
         if (previous is not null)
         {
-            var squashed = DispatchBaseSquashedOff(root, head, previous);
+            var squashed = DispatchBaseSquashedOff(root, common, head, previous);
             // Retain every metadata guard, replacing only the confirmed stale dispatch ancestry.
             ValidateMetadata(root, branch, common, head, squashed ? previous with { DispatchBase = head } : previous);
             // Older worktrees initialized by the explicit operator bridge only know the branch prefix.
@@ -65,15 +65,15 @@ public static class WorkerBuildProjectScope
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
 
-        static bool DispatchBaseSquashedOff(string root, string head, Metadata previous)
+        static bool DispatchBaseSquashedOff(string root, string common, string head, Metadata previous)
         {
             foreach (var revision in new[] { previous.GoalBaseline, previous.DispatchBase })
                 if (revision is null || revision.Length is not (40 or 64) || !revision.All(Uri.IsHexDigit))
                     return false;
 
-            var baseline = GitCli.RunForRepository(root, "merge-base", "--is-ancestor", previous.GoalBaseline, head);
+            var baseline = GitAncestryMemo.Shared.IsAncestor(common, previous.GoalBaseline, head, root);
             if (!baseline.Succeeded || baseline.DrainTimedOut) return false;
-            var dispatch = GitCli.RunForRepository(root, "merge-base", "--is-ancestor", previous.DispatchBase, head);
+            var dispatch = GitAncestryMemo.Shared.IsAncestor(common, previous.DispatchBase, head, root);
             return dispatch.ExitCode == 1 && !dispatch.DrainTimedOut;
         }
     }
@@ -240,7 +240,11 @@ public static class WorkerBuildProjectScope
         void CheckAncestry(string ancestor, string descendant)
         {
             if (ancestry.Add(ancestor + ":" + descendant))
-                Git(root, "merge-base", "--is-ancestor", ancestor, descendant);
+            {
+                var result = GitAncestryMemo.Shared.IsAncestor(common, ancestor, descendant, root);
+                if (!result.Succeeded || result.DrainTimedOut)
+                    throw new IOException($"Worker build scope Git merge-base failed (exit={result.ExitCode}): {result.Error.Trim()}");
+            }
         }
     }
 

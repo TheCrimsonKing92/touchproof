@@ -52,8 +52,9 @@ internal static class OwnerConsoleFullScreenComposer
         epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
-        var settingsTabs = new List<IOwnerConsoleSettingsTab>();
+        List<IOwnerConsoleSettingsTab> settingsTabs = [];
         if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
+        if (controller.ConductorPolicyPath is { } policyPath) settingsTabs.Add(new OwnerConsolePolicySettingsTab(policyPath));
         if (controller.Workspace is { } workspace)
             settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
         if (boardSource?.Registry is { } registry)
