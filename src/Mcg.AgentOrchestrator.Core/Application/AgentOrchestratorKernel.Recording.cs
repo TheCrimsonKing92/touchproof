@@ -276,7 +276,7 @@ public sealed partial class AgentOrchestratorKernel
                     return;
                 }
                 var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
-                    testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow);
+                    testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow, RepositoryKey: parsedHumanInput.Directive?.PlannerEvidence?.Repository);
                 goal.RecordGateTestObligation(obligation);
                 Append(goal, taskId, ProgressKind.TaskNote, obligation.RecordingNote);
             }

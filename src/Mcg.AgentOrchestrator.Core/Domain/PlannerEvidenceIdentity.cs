@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -15,11 +16,14 @@ public sealed record PlannerEvidenceIdentity(
 public sealed record PlannerEvidencePayload(
     int CriterionIndex, string EvidenceKey, string Availability, string? Owner,
     string Needed, string Reason, string? Store, PlannerEvidenceStoreReference? StoreReference,
-    IReadOnlyList<string>? Selectors)
+    IReadOnlyList<string>? Selectors,
+    [property: JsonPropertyName("repository")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Repository = null)
 {
     public bool SemanticallyEquals(PlannerEvidencePayload? other) => other is not null &&
         CriterionIndex == other.CriterionIndex && EvidenceKey == other.EvidenceKey &&
         Availability == other.Availability && Owner == other.Owner && Needed == other.Needed &&
         Reason == other.Reason && Store == other.Store && StoreReference == other.StoreReference &&
+        Repository == other.Repository &&
         (Selectors ?? []).SequenceEqual(other.Selectors ?? [], StringComparer.Ordinal);
 }
