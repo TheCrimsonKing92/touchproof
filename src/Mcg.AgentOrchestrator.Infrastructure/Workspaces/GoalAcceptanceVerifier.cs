@@ -2727,7 +2727,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 arguments => RunLaneTestHostWithShardPermitAsync(arguments, worktreePath,
                     EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes),
                     CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
-                    cancellationToken), _testOverrides.ResolveBaseBuildIdentityForTests)));
+                    cancellationToken), _testOverrides.ResolveBaseBuildIdentityForTests),
+            ReceiptSite: BuildReceiptSite.Create(_executionContext, worktreePath, goalId?.Value)));
 
     private DotnetBuildEnvironmentLease AcquireCheckPermit(DotnetBuildEnvironment environment, GoalId? goalId, bool wait, CancellationToken ct) =>
         wait ? StructuralCoveragePermitWait.Acquire(environment, goalId, _storageRoot, _testOverrides, EmitGateProgress,
