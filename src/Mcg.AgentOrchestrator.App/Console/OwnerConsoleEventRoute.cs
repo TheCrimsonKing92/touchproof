@@ -8,6 +8,7 @@ internal sealed class OwnerConsoleEventRoute
 
     internal static bool IsPaneOnly(OwnerConductEvent item) =>
         item.EventKind.StartsWith("tick", StringComparison.OrdinalIgnoreCase) ||
+        item.EventKind is "gate-progress" or "remote-lane" ||
         OwnerEventFields.Head(item) == "ACCEPTANCE" && UniqueField(item, "result") == "running";
 
     // Missing discriminating fields are never positive evidence of an equivalent event.
