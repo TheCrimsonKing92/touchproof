@@ -9,6 +9,10 @@ internal sealed class OperatorGateCancellation(
     ConductorGroupedGateAttemptCoordinator grouped,
     ConductEventLogWriter events)
 {
+    internal ConductorParallelAcceptanceAttemptCoordinator Solo => solo;
+    internal ConductorGroupedGateAttemptCoordinator Grouped => grouped;
+    internal ConductEventLogWriter Events => events;
+
     internal void Apply(AgentOrchestratorKernel kernel, Goal goal, OperatorIntentRecord intent, DateTimeOffset now)
     {
         GateCancelOperatorIntentPayload? payload;
@@ -42,10 +46,17 @@ internal sealed class OperatorGateCancellation(
             var members = attempt.Grouped is { } group ? string.Join('+', group.Members.Select(m => m.GoalId)) : goal.Id.Value;
             events.AppendRequired("gate-cancel", goal.Id.Value,
                 $"GATE_CANCELLED attempt={attempt.AttemptId} kind={kind} members={members} intent={intent.Id} reason=operator", now);
-            if (attempt.Solo is not null && goal.Status == GoalStatus.Verifying &&
-                goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
-                kernel.ReconcileGoalAcceptanceVerified(goal.Id,
+            if (attempt.Solo is not null)
+                TryReturnSoloGoalToVerified(kernel, goal,
                     $"Operator gate-cancel intent {intent.Id} cancelled acceptance attempt {attempt.AttemptId}; goal returned to Verified without a verdict.");
         }
+    }
+
+    internal static bool TryReturnSoloGoalToVerified(AgentOrchestratorKernel kernel, Goal goal, string message)
+    {
+        if (goal.Status != GoalStatus.Verifying ||
+            !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)) return false;
+        kernel.ReconcileGoalAcceptanceVerified(goal.Id, message);
+        return true;
     }
 }

@@ -1,10 +1,36 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
     internal Func<ConductorParallelAcceptanceAttempt, string, bool>? SupersededAttemptStop { get; init; }
+    internal GateCandidateSupersessionStop? CandidateSupersessionStop { get; init; }
+    private GateCandidateSupersessionStop? _candidateSupersessionStop;
+
+    private void StopCandidateSupersededAttempts(AgentOrchestratorKernel kernel, ConductorDriver driver,
+        List<string> changedGoalLines, HashSet<GoalId> changedGoalIds)
+    {
+        var stop = CandidateSupersessionStop ?? (_candidateSupersessionStop ??=
+            _operatorIntents?.GateCancellation is { } cancellation
+                ? new(cancellation.Solo, cancellation.Grouped, cancellation.Events) : null);
+        if (stop is null) return;
+        try
+        {
+            var heads = new GateCandidateHeadObservations(
+                id => driver.AdmissionFacts.Active ? driver.AdmissionFacts.Reader?.Inputs(id)?.Branch : null,
+                id => AdmissionFactsRefReader.TryResolve(driver.ExecutionDirectory,
+                    $"refs/heads/{GoalWorktrees.BranchName(id)}", out var sha) ? sha : null);
+            var result = stop.Apply(kernel, heads);
+            foreach (var line in result.Progress) RecordParallelAcceptanceProgress(line, changedGoalLines);
+            changedGoalIds.UnionWith(result.ChangedGoalIds);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            RecordParallelAcceptanceProgress($"CANDIDATE_SUPERSESSION_CHECK_FAILED error={SanitizeReason(ex.Message)}", changedGoalLines);
+        }
+    }
 
     private void NoteLandingAndStopSupersededAttempts(
         AgentOrchestratorKernel kernel,

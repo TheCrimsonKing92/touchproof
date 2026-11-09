@@ -2232,6 +2232,8 @@ internal sealed partial class ConductorBatchLoop
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission));
+        ConductorTickStepLedger.Measure("candidate-supersession", () => StopCandidateSupersededAttempts(
+            kernel, driver, changedGoalLines, changedGoalIds));
         var (priorityOccupantsBefore, priorityResultsBefore, priorityBaseOrder) = ConductorTickStepLedger.Measure("priority-order", () =>
             (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
              state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
