@@ -32,10 +32,8 @@ set "ADOPTION_POINTER=%ROOT%.orchestrator\continuity\home-build-adoption.cmd.txt
 if not exist "%ADOPTION_POINTER%" goto intree_path
 set "ADOPTED_COMMIT="
 set "ADOPTED_DLL="
-(
-    set /p "ADOPTED_COMMIT="
-    set /p "ADOPTED_DLL="
-) < "%ADOPTION_POINTER%"
+:: Read the file directly: redirecting stdin can restore a dangling inherited handle.
+for /f "usebackq delims=" %%L in ("%ADOPTION_POINTER%") do if not defined ADOPTED_COMMIT (set "ADOPTED_COMMIT=%%L") else if not defined ADOPTED_DLL set "ADOPTED_DLL=%%L"
 if not defined ADOPTED_COMMIT goto intree_path
 if not defined ADOPTED_DLL goto intree_path
 if not exist "%ADOPTED_DLL%" goto intree_path
