@@ -115,7 +115,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     }
 
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
-
     internal OwnerConsoleDecision? SelectedDecision => Selected();
 
     internal static bool AnswersInConsole(OwnerConsoleDecision decision) =>

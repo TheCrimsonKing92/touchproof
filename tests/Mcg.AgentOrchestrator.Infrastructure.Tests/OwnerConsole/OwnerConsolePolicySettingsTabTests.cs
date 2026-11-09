@@ -17,8 +17,8 @@ public sealed class OwnerConsolePolicySettingsTabTests
         using var fixture = new Fixture();
         using var settings = new OwnerConsoleSettingsTestContext();
         var harness = new OwnerConsoleHarness();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, settings.Output,
-            new OwnerGoalDetailQuery(harness.State, harness.Tail), harness.Conductor, harness.DigestReport,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, settings.Output,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport,
             harness.Digest, harness.Clock, sound: settings.Sound, conductorPolicyPath: fixture.Path);
         using IApplication app = Application.Create();
         using var console = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);

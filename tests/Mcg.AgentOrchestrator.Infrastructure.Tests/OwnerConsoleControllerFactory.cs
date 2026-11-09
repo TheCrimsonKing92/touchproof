@@ -11,7 +11,9 @@ internal static class OwnerConsoleControllerFactory
         AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
         IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
         Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
-        OwnerGoalDetailQuery? goalDetail = null, OwnerConsoleSoundCommand? sound = null) =>
+        OwnerGoalDetailQuery? goalDetail = null, OwnerConsoleSoundCommand? sound = null,
+        string? conductorPolicyPath = null) =>
         new OwnerConsoleScreenController(questions, answers, dialogs, goalDetail ?? new OwnerGoalDetailQuery(state, tail),
-            conductor, digest, summary, clock, epics, answerTracking, resolutions, notifier, notifications, fleet, landings, sound);
+            conductor, digest, summary, clock, epics, answerTracking, resolutions, notifier, notifications, fleet, landings,
+            sound, conductorPolicyPath);
 }
