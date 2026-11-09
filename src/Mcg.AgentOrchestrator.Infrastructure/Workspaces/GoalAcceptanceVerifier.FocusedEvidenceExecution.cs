@@ -326,7 +326,8 @@ internal static class FocusedEvidenceExecution
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var planSummary = GoalAcceptanceVerifier.FormatFocusedEvidencePlanSummary(coverage) +
-            FocusedEvidenceTraitExcludedSelection.FormatDropped(coverage);
+            FocusedEvidenceTraitExcludedSelection.FormatDropped(coverage) +
+            FocusedEvidenceAllSkippedSelection.FormatSummary(checks);
         var summary = failed is null
             ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {GoalAcceptanceVerifier.FormatReceiptPaths(receiptPaths)}"
             : disposition == FindingEvidenceArmDisposition.ApparatusFailure
