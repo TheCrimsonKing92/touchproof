@@ -9,6 +9,10 @@ internal sealed class OwnerConsoleRefreshTimings(TimeProvider clock)
     private readonly object _sync = new();
     private readonly long[] _calls = new long[Loaders.Length];
     private readonly long[] _ticks = new long[Loaders.Length];
+    internal OwnerConsoleRefreshTriggerCounts Triggers { get; } = new();
+
+    internal string Line(long goalSnapshotsLoaded) => string.Create(CultureInfo.InvariantCulture,
+        $"{Detail()} {Triggers.Detail()} goal-snapshots-loaded={goalSnapshotsLoaded}");
 
     internal T Time<T>(string loader, Func<T> action)
     {

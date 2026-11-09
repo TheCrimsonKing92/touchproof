@@ -14,6 +14,45 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
     private static readonly string[] Tiers = ["calm", "attention", "alarm"];
     private readonly string _settingsPath = Path.GetFullPath(settingsPath);
     private readonly object _setLock = new();
+    private OwnerConsoleAlertSettingsCommand? _alertSettings;
+    private OwnerConsoleAlertSettingsCommand AlertSettings => _alertSettings ??= new(settings, TryWrite);
+
+    internal OwnerConsoleNotificationSettingsProvider Settings => settings;
+
+    internal string[] Clips(OwnerConsoleNotificationTier tier, OwnerConsoleCapturedOutput output)
+    {
+        try { lock (_setLock) return Library(tier, output) ?? []; }
+        catch (Exception ex) { output.WriteLine($"sound command failed: {ex.Message}"); return []; }
+    }
+
+    internal void Select(OwnerConsoleNotificationTier tier, string selector, OwnerConsoleCapturedOutput output)
+    {
+        try { lock (_setLock) Set(tier, selector, output); }
+        catch (Exception ex) { output.WriteLine($"sound command failed: {ex.Message}"); }
+    }
+
+    internal void Preview(OwnerConsoleNotificationTier tier, string selector, OwnerConsoleCapturedOutput output)
+    {
+        try
+        {
+            lock (_setLock)
+                if (Resolve(tier, selector, output) is { } clip)
+                    output.WriteLine(soundOutput.TryPlayFile(clip)
+                        ? $"sound play {TierName(tier)}: {Path.GetFileName(clip)}"
+                        : $"could not play {Path.GetFileName(clip)}");
+        }
+        catch (Exception ex) { output.WriteLine($"sound command failed: {ex.Message}"); }
+    }
+
+    internal bool SetThreshold(string key, int value, OwnerConsoleCapturedOutput output)
+    {
+        lock (_setLock) return AlertSettings.SetThreshold(key, value, output);
+    }
+
+    internal bool SetBellTiers(OwnerConsoleBellTiers tiers, OwnerConsoleCapturedOutput output)
+    {
+        lock (_setLock) return AlertSettings.SetBellTiers(tiers, output);
+    }
 
     internal static string DefaultLibraryRoot(string localAppData) =>
         Path.Combine(localAppData, "Mcg.AgentOrchestrator", "sounds");
@@ -58,14 +97,9 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
                 selector = selector[1..^1];
             if (set)
             {
-                lock (_setLock) Set(tier, selector, output);
+                Select(tier, selector, output);
             }
-            else if (Resolve(tier, selector, output) is { } clip)
-            {
-                output.WriteLine(soundOutput.TryPlayFile(clip)
-                    ? $"sound play {TierName(tier)}: {Path.GetFileName(clip)}"
-                    : $"could not play {Path.GetFileName(clip)}");
-            }
+            else Preview(tier, selector, output);
         }
         catch (Exception ex)
         {
@@ -132,10 +166,24 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
         var clip = selector.Equals("system", StringComparison.OrdinalIgnoreCase) ? null : Resolve(tier, selector, output);
         if (clip is null && !selector.Equals("system", StringComparison.OrdinalIgnoreCase)) return;
         var key = TierName(tier) + "SoundFile";
+        if (!TryWrite(key, clip is null ? null : JsonValue.Create(clip), "sound set failed", output)) return;
+        var snapshot = settings.Current;
+        settings.Publish(tier switch
+        {
+            OwnerConsoleNotificationTier.Calm => snapshot with { CalmSoundFile = clip },
+            OwnerConsoleNotificationTier.Attention => snapshot with { AttentionSoundFile = clip },
+            _ => snapshot with { AlarmSoundFile = clip }
+        });
+        output.WriteLine($"sound set {TierName(tier)}: {(clip is null ? "system sound" : Path.GetFileName(clip))}");
+    }
+
+    // All mutations share the prerequisite's fresh-read and atomic-replace path.
+    private bool TryWrite(string key, JsonNode? value, string failurePrefix, OwnerConsoleCapturedOutput output)
+    {
         var document = ReadDocument();
         foreach (var name in document.Select(field => field.Key).Where(name => name.Equals(key, StringComparison.OrdinalIgnoreCase)).ToArray())
             document.Remove(name);
-        if (clip is not null) document[key] = clip;
+        if (value is not null) document[key] = value;
         var directory = Path.GetDirectoryName(_settingsPath)!;
         var temporary = Path.Combine(directory, $".{Path.GetFileName(_settingsPath)}.{Guid.NewGuid():N}.tmp");
         try
@@ -147,22 +195,15 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
         }
         catch (Exception ex)
         {
-            output.WriteLine($"sound set failed: {ex.Message}");
-            return;
+            output.WriteLine($"{failurePrefix}: {ex.Message}");
+            return false;
         }
         finally
         {
             try { if (File.Exists(temporary)) File.Delete(temporary); }
             catch { /* A cleanup failure must not hide the save result. */ }
         }
-        var snapshot = settings.Current;
-        settings.Publish(tier switch
-        {
-            OwnerConsoleNotificationTier.Calm => snapshot with { CalmSoundFile = clip },
-            OwnerConsoleNotificationTier.Attention => snapshot with { AttentionSoundFile = clip },
-            _ => snapshot with { AlarmSoundFile = clip }
-        });
-        output.WriteLine($"sound set {TierName(tier)}: {(clip is null ? "system sound" : Path.GetFileName(clip))}");
+        return true;
     }
 
     private JsonObject ReadDocument()
@@ -183,7 +224,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
         return new JsonObject();
     }
 
-    private static string? Selected(OwnerConsoleNotificationSettings snapshot, OwnerConsoleNotificationTier tier) => tier switch
+    internal static string? Selected(OwnerConsoleNotificationSettings snapshot, OwnerConsoleNotificationTier tier) => tier switch
     {
         OwnerConsoleNotificationTier.Calm => snapshot.CalmSoundFile,
         OwnerConsoleNotificationTier.Attention => snapshot.AttentionSoundFile,

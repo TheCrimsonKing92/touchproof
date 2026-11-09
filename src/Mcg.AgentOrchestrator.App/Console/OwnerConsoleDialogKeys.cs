@@ -6,6 +6,11 @@ internal sealed class OwnerConsoleDialogKeys(IOwnerConsoleKeySurface _view, Owne
 {
     internal async Task<bool> HandleAsync(Key key)
     {
+        if (_view.SettingsView is { IsOpen: true } settings)
+        {
+            if (settings.HandleKey(key)) _view.FocusPane(settings.ReturnPane);
+            return true;
+        }
         if (_view.GateView.IsOpen)
         {
             if (key == OwnerConsoleBindings.OpenFields)
