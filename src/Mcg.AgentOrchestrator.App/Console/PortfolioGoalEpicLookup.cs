@@ -7,6 +7,10 @@ internal sealed class PortfolioGoalEpicLookup(string path) : IOwnerGoalEpicLooku
 {
     private PortfolioStore? _store;
 
+    public Task<IReadOnlyDictionary<string, string>> GetTitlesAsync(
+        IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken) =>
+        new PortfolioGoalEpicTitleReader(path).ReadAsync(goalIds, cancellationToken);
+
     public async Task<string> GetTitleAsync(string goalId, CancellationToken cancellationToken)
     {
         if (!File.Exists(path)) return string.Empty;

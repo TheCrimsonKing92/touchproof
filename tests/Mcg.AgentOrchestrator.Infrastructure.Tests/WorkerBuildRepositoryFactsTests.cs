@@ -194,7 +194,7 @@ public sealed class WorkerBuildRepositoryFactsTests
         var result = WorkerBuildProjectScope.Resolve(fixture.Root, ["Tests/Tests.csproj"]);
         var launches = capture.Snapshot().ByEntry[(int)LaunchLockEntryPoint.GitCli];
         Assert.NotEmpty(result.Projects);
-        Assert.Equal(3L + distinct, launches);
+        Assert.Equal(state == "distinct-head" ? 5L : 3L, launches);
     }
 
     private static void AdvanceDispatch(Fixture fixture)

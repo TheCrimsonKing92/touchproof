@@ -261,6 +261,8 @@ internal static class LaunchLockTelemetry
             foreach (var line in FormatByClass(classes, processId)) yield return line;
             foreach (var line in LaunchLockSiteFormatter.FormatBySite(classes, attribution.SiteSnapshot(), processId))
                 yield return line;
+            if (ReferenceEquals(attribution, Attribution) && attribution.IsActive)
+                yield return GitAncestryMemo.FormatSummary(processId);
         }
     }
 

@@ -1,6 +1,8 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
+using Terminal.Gui.Input;
+using GuiApplication = Terminal.Gui.App.Application;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -49,6 +51,14 @@ internal static class OwnerConsoleFullScreenHost
         Task? fill = null;
         OwnerRefreshCoordinator? refresh = null;
         using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
+        using var backoff = new OwnerConsoleLoopBackoff(clock,
+            rate => GuiApplication.MaximumIterationsPerSecond = (ushort)rate, GuiApplication.MaximumIterationsPerSecond);
+        ITimer? idleTimer = null;
+        IKeyboard? keyboard = null;
+        IMouse? mouse = null;
+        void OnKey(object? sender, Key key) => backoff.OnInput();
+        void OnMouse(object? sender, Mouse item) => backoff.OnInput();
+        void OnDraw(object? sender, EventArgs args) => backoff.OnRender();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
@@ -57,7 +67,11 @@ internal static class OwnerConsoleFullScreenHost
         var timings = new OwnerConsoleRefreshTimings(clock);
         var timingsFile = new OwnerConsoleRefreshTimingsFile(
             Path.Combine(workspace.LogDirectory, "owner-console-refresh-timings.txt"), clock, Environment.ProcessId);
-        void Post(string phase, Action action) => app.Invoke(diagnostics?.ObservePost(phase, action) ?? action);
+        void Post(string phase, Action action)
+        {
+            Action render = () => { backoff.OnRender(); action(); };
+            app.Invoke(diagnostics?.ObservePost(phase, render) ?? render);
+        }
         try
         {
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
@@ -100,7 +114,7 @@ internal static class OwnerConsoleFullScreenHost
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
                 activityLoader.ReadNew, new OwnerConsoleLandedTodayScan(workspace.GoalLifecycleEventsDirectory, clock).Current,
-                timingsFile.Write, action => app.Invoke(action), Post, () => view!, evidence);
+                timingsFile.Write, action => app.Invoke(() => { backoff.OnRender(); action(); }), Post, () => view!, evidence);
             coalescer = new((items, scope) => refresh.RefreshAsync(items, scope: scope));
 
             refresh.HoldForStartup();
@@ -115,6 +129,14 @@ internal static class OwnerConsoleFullScreenHost
                 }, token)
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
                 app.Init();
+                keyboard = app.Keyboard;
+                mouse = app.Mouse;
+                if (keyboard is not null) keyboard.KeyDown += OnKey;
+                if (mouse is not null) mouse.MouseEvent += OnMouse;
+                app.LayoutAndDrawComplete += OnDraw;
+                backoff.OnRender();
+                idleTimer = clock.CreateTimer(_ => backoff.Tick(), null,
+                    TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
                 var settingsPath = Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json");
                 var settings = new OwnerConsoleNotificationSettingsProvider(OwnerConsoleNotificationSettings.Load(settingsPath));
                 var soundOutput = new WindowsOwnerConsoleSoundOutput();
@@ -135,7 +157,8 @@ internal static class OwnerConsoleFullScreenHost
                     notifier: notifier,
                     notifications: settings.Current,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
-                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument), sound: sound, workspace: workspace);
+                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument), sound: sound,
+                    conductorPolicyPath: Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"), workspace: workspace);
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);
@@ -185,6 +208,11 @@ internal static class OwnerConsoleFullScreenHost
         }
         finally
         {
+            idleTimer?.Dispose();
+            if (keyboard is not null) keyboard.KeyDown -= OnKey;
+            if (mouse is not null) mouse.MouseEvent -= OnMouse;
+            app.LayoutAndDrawComplete -= OnDraw;
+            backoff.Dispose();
             linked.Cancel();
             try { await periodicRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
             catch (OperationCanceledException) { }
