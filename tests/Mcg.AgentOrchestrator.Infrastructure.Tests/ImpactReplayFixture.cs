@@ -16,6 +16,7 @@ internal sealed class ImpactReplayFixture : IDisposable
     private readonly string _branch;
     private readonly bool _changedFooTests;
     private readonly bool _extraBetaClass;
+    private readonly bool _balancedPool;
     private string StateDirectory { get; }
     public string FlakeLedgerPath => Path.Combine(_root, ".orchestrator", "lane-flakes.jsonl");
     public string OutputDirectory => Path.Combine(StateDirectory, "reports");
@@ -23,13 +24,16 @@ internal sealed class ImpactReplayFixture : IDisposable
 
     public ImpactReplayFixture(int changedSourceCount = 1, bool changedFooTests = false,
         bool extraBetaClass = false, IReadOnlyDictionary<string, string>? changedTestFiles = null,
-        bool separateStateDirectory = false, IReadOnlyDictionary<string, string>? initialTestFiles = null)
+        bool separateStateDirectory = false, IReadOnlyDictionary<string, string>? initialTestFiles = null,
+        bool balancedPool = false, IReadOnlyDictionary<string, string>? initialRepositoryFiles = null,
+        IReadOnlyDictionary<string, string>? changedRepositoryFiles = null)
     {
         StateDirectory = separateStateDirectory
             ? Path.Combine(_root, ".orchestrator", "projects", "fixture")
             : Path.Combine(_root, ".orchestrator");
         _changedFooTests = changedFooTests;
         _extraBetaClass = extraBetaClass;
+        _balancedPool = balancedPool;
         Git("init", "--quiet", "--template=");
         Git("config", "user.name", "Impact replay fixture");
         Git("config", "user.email", "impact-replay@example.invalid");
@@ -85,12 +89,31 @@ internal sealed class ImpactReplayFixture : IDisposable
             lanes.Add(JsonNode.Parse("""
                 { "name": "Foo lane", "filter": "FullyQualifiedName~FooTests", "estimatedSerialSeconds": 5 }
                 """));
+        if (balancedPool)
+        {
+            lanes.Add(JsonNode.Parse("""
+                { "name": "Pool remainder", "filter": "FullyQualifiedName~Pool", "estimatedSerialSeconds": 1 }
+                """));
+            manifest["engine"]!["balancedLanePool"] = JsonNode.Parse("""
+                { "laneCount": 2, "poolEligibleLaneNames": ["Pool remainder"] }
+                """ );
+            Write(TestProject + "/PoolAlphaTests.cs", """
+                namespace SampleTests;
+                public class PoolAlphaTests { [Xunit.Fact] public void Works() { var subject = new Sample.Alpha(); } }
+                """);
+            Write(TestProject + "/PoolBetaTests.cs", """
+                namespace SampleTests;
+                public class PoolBetaTests { [Xunit.Fact] public void Works() { var subject = new Sample.Beta(); } }
+                """);
+        }
         File.WriteAllText(manifestPath, manifest.ToJsonString());
         foreach (var (path, text) in initialTestFiles ?? new Dictionary<string, string>())
             Write(TestProject + "/" + path, text);
+        foreach (var (path, text) in initialRepositoryFiles ?? new Dictionary<string, string>()) Write(path, text);
         Commit();
         _main = Git("rev-parse", "HEAD").Trim();
-        Write("src/Sample/Alpha.cs", "namespace Sample; public class Alpha { public int Value => 2; }");
+        if (changedSourceCount > 0)
+            Write("src/Sample/Alpha.cs", "namespace Sample; public class Alpha { public int Value => 2; }");
         for (var i = 1; i < changedSourceCount; i++)
             Write($"src/Sample/Extra{i}.cs", $"namespace Sample; public class Extra{i} {{ }}");
         if (changedFooTests)
@@ -100,6 +123,7 @@ internal sealed class ImpactReplayFixture : IDisposable
                 """);
         foreach (var (path, text) in changedTestFiles ?? new Dictionary<string, string>())
             Write(TestProject + "/" + path, text);
+        foreach (var (path, text) in changedRepositoryFiles ?? new Dictionary<string, string>()) Write(path, text);
         Commit();
         _branch = Git("rev-parse", "HEAD").Trim();
         Assert.NotEqual(_main, _branch);
@@ -108,7 +132,9 @@ internal sealed class ImpactReplayFixture : IDisposable
     }
 
     public void AddAttempt(string id, bool failingBeta = false, bool rerunBetaPass = false,
-        bool earlierBetaPass = false, bool rerunBetaFailure = false, bool rerunOtherLanePass = false)
+        bool earlierBetaPass = false, bool rerunBetaFailure = false, bool rerunOtherLanePass = false,
+        bool failingPoolBeta = false, bool failingPoolAlpha = false, bool repeatPool = false,
+        bool poolDurationMissing = false)
     {
         var directory = Path.Combine(StateDirectory, "acceptance-gate-attempts", "fixture-goal") + Path.DirectorySeparatorChar;
         var trxPaths = new List<string>();
@@ -141,12 +167,39 @@ internal sealed class ImpactReplayFixture : IDisposable
             if (rerunBetaFailure) AppendTrxResult(directory + name, "BetaTests", "Failed", "StillFails");
             SetTrxCompletion(directory + name, "Completed");
         }
+        if (_balancedPool)
+        {
+            AddPoolTrx("balanced-1", "PoolAlphaTests", failingPoolAlpha, 2);
+            AddPoolTrx("balanced-2", "PoolBetaTests", failingPoolBeta, 8);
+            if (repeatPool) AddPoolTrx("balanced-2-run-1", "PoolBetaTests", failingPoolBeta, 3);
+            // Named-lane observed costs differ from their preserved estimates.
+            foreach (var name in trxPaths.Where(name => !name.Contains("balanced-", StringComparison.Ordinal)))
+            {
+                var document = XDocument.Load(directory + name);
+                foreach (var result in document.Descendants().Where(e => e.Name.LocalName == "UnitTestResult"))
+                    result.SetAttributeValue("duration", "00:00:01");
+                document.Save(directory + name);
+            }
+        }
         Write(directory + id + ".attempt.json", JsonSerializer.Serialize(new
         {
             attemptId = id, goalId = "fixture-goal", kind = "gate",
             startedAt = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero),
             branchHeadSha = _branch, mainHeadSha = _main, testResultPaths = trxPaths
         }, Json));
+
+        void AddPoolTrx(string slug, string className, bool failed, int seconds)
+        {
+            var name = $"{id}.infrastructure-tests-{slug}.trx";
+            trxPaths.Add(name);
+            Write(directory + name, "<TestRun><TestDefinitions /><Results /></TestRun>");
+            AppendTrxResult(directory + name, className, failed ? "Failed" : "Passed");
+            var document = XDocument.Load(directory + name);
+            if (!poolDurationMissing)
+                document.Descendants().Single(e => e.Name.LocalName == "UnitTestResult")
+                    .SetAttributeValue("duration", $"00:00:{seconds:00}");
+            document.Save(directory + name);
+        }
         Write(directory + id + ".result.json", JsonSerializer.Serialize(new
         {
             kind = "completed", branchHeadSha = _branch, mainHeadSha = _main
@@ -203,12 +256,12 @@ internal sealed class ImpactReplayFixture : IDisposable
         document.Save(path);
     }
 
-    public (ImpactReplayReport Report, string Markdown) Run(bool allowSkippedInputs = false)
+    public (ImpactReplayReport Report, string Markdown) Run(bool allowSkippedInputs = false, string[]? extraArguments = null)
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
         var exit = CliImpactReplayCommand.Run(
-            ["impact-replay", "--since", "2026-10-01", "--limit", "100", "--out", OutputDirectory],
+            ["impact-replay", "--since", "2026-10-01", "--limit", "100", "--out", OutputDirectory, .. extraArguments ?? []],
             _root, StateDirectory, CheckoutParent, output, error);
         Assert.True(exit == 0, $"exit={exit}; stdout={output}; stderr={error}");
         Assert.Equal("", error.ToString());
