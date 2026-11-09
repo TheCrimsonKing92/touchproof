@@ -112,11 +112,11 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         Assert.DoesNotContain("operator-intent-list", Phase(tick, "prewalk"));
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
         Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
-        Assert.Equal(39, probeCalls);
+        Assert.Equal(38, probeCalls);
         var outsideCalls = 0;
         ConductorTickStepLedger.Measure("author", () => outsideCalls++);
         Assert.Equal(1, outsideCalls);
-        Assert.Equal(39, probeCalls);
+        Assert.Equal(38, probeCalls);
     }
 
     [Xunit.Fact(DisplayName = "Repeated fractional CPU samples truncate after accumulation and reset each tick")]

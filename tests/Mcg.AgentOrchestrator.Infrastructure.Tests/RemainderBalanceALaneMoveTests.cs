@@ -126,7 +126,7 @@ public sealed class RemainderBalanceALaneMoveTests
         var lanes = LoadLanes();
         var balanceA = Assert.Single(lanes, lane => lane.Name == BalanceA);
         var remainder = Assert.Single(lanes, lane => lane.Name == Remainder);
-        Assert.Equal(40, MovedClassNames.Length);
+        Assert.Equal(39, MovedClassNames.Length);
         Assert.Equal("FullyQualifiedName~RunEventStoreTests" + InclusionBlock(), balanceA.Filter);
         Assert.Equal(371.4, balanceA.EstimatedSerialSeconds);
         Assert.Empty(balanceA.ExclusiveResourceKeys);
