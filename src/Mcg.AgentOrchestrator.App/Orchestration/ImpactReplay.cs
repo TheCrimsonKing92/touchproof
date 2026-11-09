@@ -138,6 +138,11 @@ internal static class ImpactReplay
                         if (skippedLanes.Contains(lane.Lane, StringComparer.Ordinal)) savedNamed += seconds;
                     }
                 }
+                var classLevel = ImpactReplayClassLevelSavings.Measure(evidence.LaneOutcomes, evidence.BalancedLaneOutcomes,
+                    attemptFloor, ImpactReplayClassLevelSavings.RetainedClasses(selectedFullNames, guards?.Classes ?? [],
+                        lanes, attemptFloor, classes), classes, resolved,
+                    unmapped || augmented.AbandonReason is not null || selection.Outcome == ReverseDependencySelectionOutcome.Abandoned,
+                    durationComplete);
                 records.Add(new(attempt.AttemptId, attempt.GoalId, attempt.StartedAt, attempt.MainHeadSha,
                     attempt.BranchHeadSha, unmapped || augmented.AbandonReason is not null ? "Abandoned" : selection.Outcome.ToString(),
                     augmented.AbandonReason is not null ? "ChangedTestSupportUnresolved" :
@@ -148,7 +153,12 @@ internal static class ImpactReplay
                     evidence.LaneOutcomes, failures,
                     warnings.Count == 0, warnings, productionSources.Length, pool.Classes, evidence.BalancedLaneOutcomes,
                     pool.SecondsSaved, savedNamed, observedNamed + pool.ObservedSeconds, durationComplete,
-                    evidence.UnresolvedFailures, augmented.OtherFiles));
+                    evidence.UnresolvedFailures, augmented.OtherFiles,
+                    ClassLevelSecondsSaved: classLevel.SecondsSaved,
+                    ClassLevelNonFloorTestSeconds: classLevel.NonFloorTestSeconds,
+                    ClassLevelUnavailableReason: classLevel.UnavailableReason,
+                    ClassLevelCpuSecondsSaved: classLevel.CpuSecondsSaved,
+                    ClassLevelCpuUnavailableReason: classLevel.CpuUnavailableReason));
                 unmappedClasses.AddRange(attemptUnmappedClasses);
                 if (augmented.Gained) gainedAttempts++;
             }

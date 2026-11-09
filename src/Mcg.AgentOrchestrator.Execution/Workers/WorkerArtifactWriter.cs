@@ -119,6 +119,8 @@ internal sealed partial class WorkerArtifactWriter
             citedPriorEvidence);
         var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
         var testImpactPlan = WorkerTestImpactPlanSelection.For(changedFiles, workingDirectory, _targetHome);
+        var repositoryDiffs = WorkerRepositoryDiffArtifacts.Write(
+            goal, contextDirectory, _gitContext, PriorVerificationMaxChars, preserveCompleteArtifacts);
         WriteText(
             Path.Combine(contextDirectory, "deterministic-verification.md"),
             BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
@@ -130,8 +132,9 @@ internal sealed partial class WorkerArtifactWriter
                 workingDirectory,
                 plannerUsesDurableResearch,
                 changedFiles,
-                testImpactPlan));
-        WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
+                testImpactPlan,
+                repositoryDiffs));
+        WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch, repositoryDiffs));
         var selectedSkills = _skillSelector.SelectSkillRequirements(goal, task, workingDirectory);
         WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory, contextDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
@@ -160,7 +163,8 @@ internal sealed partial class WorkerArtifactWriter
                 preflightFindings,
                 plannerUsesDurableResearch,
                 !string.IsNullOrEmpty(citedPriorEvidence),
-                preserveCompleteArtifacts));
+                preserveCompleteArtifacts,
+                repositoryDiffs));
 
         var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts, selectedSkills);
         var storeSources = new[] { goal.AuthoritativeBrief.Text }
@@ -169,9 +173,9 @@ internal sealed partial class WorkerArtifactWriter
         var storeReferences = WriteStoreReferences(contextDirectory, storeSources, orchestratorStoreRoot, clock ?? new SystemClock());
         WriteText(
             Path.Combine(contextDirectory, "manifest.md"),
-            BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory, plannerUsesDurableResearch, storeReferences));
+            BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory, plannerUsesDurableResearch, storeReferences, repositoryDiffs));
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory, storeReferences));
-        WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings, storeReferences);
+        WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings, storeReferences, repositoryDiffs);
         SnapshotCurrentPackage(contextDirectory, task.Id, guidanceFiles);
 
         WriteAcceptanceCriteriaIfNonEmpty(goal.Objective, workingDirectory);
@@ -211,7 +215,8 @@ internal sealed partial class WorkerArtifactWriter
         IReadOnlyList<string>? preflightFindings,
         bool plannerUsesDurableResearch,
         bool hasCitedPriorEvidence,
-        bool preserveCompleteArtifacts)
+        bool preserveCompleteArtifacts,
+        IReadOnlyList<string> repositoryDiffs)
     {
         var priorTasks = goal.Tasks
             .TakeWhile(t => t.Id != task.Id)
@@ -297,6 +302,7 @@ internal sealed partial class WorkerArtifactWriter
             lines.Add("- source-survey.md: compact repository source inventory and task-term matches.");
         }
         lines.Add("- diff-summary.md: compact git status and changed-file summary for current workspace state.");
+        lines.AddRange(WorkerRepositoryDiffArtifacts.IndexLines(repositoryDiffs));
         if (preflightFindings is { Count: > 0 })
         {
             lines.Add("- subscription-preflight.md: deterministic profile, sandbox, worktree, retry, and capability status for this dispatch.");
@@ -564,7 +570,8 @@ internal sealed partial class WorkerArtifactWriter
         string workingDirectory,
         bool plannerUsesDurableResearch,
         IReadOnlyList<string> changedFiles,
-        RepositoryTestImpactPlan testImpactPlan)
+        RepositoryTestImpactPlan testImpactPlan,
+        IReadOnlyList<string> repositoryDiffs)
     {
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
@@ -634,6 +641,7 @@ internal sealed partial class WorkerArtifactWriter
                 "  Failure handling: unexpected dirty files are blockers unless they are part of the assigned task.",
             ]);
         }
+        lines.AddRange(WorkerRepositoryDiffArtifacts.BrokerLines(repositoryDiffs));
         if (planningRole)
             lines.AddRange(PlanningBrokerGuidance.AcceptanceEvidenceLines());
         else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
@@ -694,7 +702,8 @@ internal sealed partial class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        bool plannerUsesDurableResearch)
+        bool plannerUsesDurableResearch,
+        IReadOnlyList<string> repositoryDiffs)
     {
         var selected = _skillSelector.SelectSkillRequirements(goal, task, workingDirectory);
         var completedPriorTasks = goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id)
@@ -732,6 +741,9 @@ internal sealed partial class WorkerArtifactWriter
             $"- completed prior tasks before this task: {completedPriorTasks}",
             $"- selected skills: {(selected.Count == 0 ? "none" : string.Join(", ", selected.Select(skill => $"{skill.Name}:{(skill.Available ? "available" : "missing")}")))}"
         };
+        if (repositoryDiffs.Count > 0)
+            lines.InsertRange(lines.IndexOf("## Retrieval Handles") - 1,
+                WorkerRepositoryDiffArtifacts.BudgetLines(repositoryDiffs, PriorVerificationMaxChars));
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -1056,7 +1068,8 @@ internal sealed partial class WorkerArtifactWriter
         IReadOnlyList<string>? preflightFindings,
         string? contextDirectory = null,
         bool plannerUsesDurableResearch = false,
-        IReadOnlyList<StoreReferenceOutcome>? storeReferences = null)
+        IReadOnlyList<StoreReferenceOutcome>? storeReferences = null,
+        IReadOnlyList<string>? repositoryDiffs = null)
     {
         var lines = new List<string>
         {
@@ -1084,6 +1097,7 @@ internal sealed partial class WorkerArtifactWriter
             "- context-package.json: task-scoped package metadata and fallback guidance for this dispatch."
         };
 
+        lines.AddRange(WorkerRepositoryDiffArtifacts.IndexLines(repositoryDiffs));
         if (!string.IsNullOrWhiteSpace(contextDirectory) &&
             File.Exists(Path.Combine(contextDirectory, "prior-goal-evidence.md")))
         {
@@ -1159,6 +1173,7 @@ internal sealed partial class WorkerArtifactWriter
         Directory.CreateDirectory(packageDirectory);
         // Optional artifacts must not survive a refresh after their source disappears.
         File.Delete(Path.Combine(packageDirectory, "prior-goal-evidence.md"));
+        WorkerRepositoryDiffArtifacts.DeleteStaleArtifacts(packageDirectory);
         DeleteLinkedBacklogFile(Path.Combine(packageDirectory, LinkedBacklogRecordEvidence.FileName));
         SnapshotStoreReferences(contextDirectory, packageDirectory);
         foreach (var file in Directory.EnumerateFiles(contextDirectory, "*", SearchOption.TopDirectoryOnly))
@@ -1189,7 +1204,8 @@ internal sealed partial class WorkerArtifactWriter
         string workingDirectory,
         IReadOnlyList<string> guidanceFiles,
         IReadOnlyList<string>? preflightFindings,
-        IReadOnlyList<StoreReferenceOutcome> storeReferences)
+        IReadOnlyList<StoreReferenceOutcome> storeReferences,
+        IReadOnlyList<string> repositoryDiffs)
     {
         var artifactNames = new List<string>
         {
@@ -1225,6 +1241,7 @@ internal sealed partial class WorkerArtifactWriter
             artifactNames.Add("subscription-preflight.md");
         }
 
+        artifactNames.AddRange(repositoryDiffs);
         artifactNames.AddRange(guidanceFiles);
         artifactNames.AddRange(storeReferences.Where(reference => reference.Resolved).Select(reference => reference.RelativePath!));
         var entries = artifactNames
@@ -1297,6 +1314,7 @@ internal sealed partial class WorkerArtifactWriter
             "planner-plan.md" => "Complete validated Planner artifact retained outside generic context trimming.",
             "source-survey.md" => "Compact repository source inventory, task-term matches, symbols, tests, call-site hints, and ownership hints.",
             "diff-summary.md" => "Compact git status, changed files, and diff stat.",
+            _ when WorkerRepositoryDiffArtifacts.IsSupplementalName(relativePath) => WorkerRepositoryDiffArtifacts.Summary(relativePath),
             "prior-task-summaries.md" => "Compact prior task outcomes and verification summaries.",
             "prior-task-evidence.md" => "Larger prior verification evidence for targeted inspection.",
             "prior-goal-evidence.md" => "Bounded stored classifier receipts and verification summaries for cited prior goals/tasks.",
@@ -1326,6 +1344,7 @@ internal sealed partial class WorkerArtifactWriter
             "research-notes.md" or "planner-plan.md" => "materialized byte-complete from the latest validated upstream durable receipt",
             "source-survey.md" => "generated from source files, objective, task text, and verification plan in the working directory at dispatch preparation",
             "diff-summary.md" => "generated from git status and diff commands in the working directory at dispatch preparation",
+            _ when WorkerRepositoryDiffArtifacts.IsSupplementalName(relativePath) => "generated from the declared repository's goal worktree at dispatch preparation",
             "context-package.json" => "generated with the current task package at dispatch preparation",
             "subscription-preflight.md" => "generated from subscription preflight immediately before dispatch preparation",
             "AGENTS.md" => "copied from working directory at dispatch preparation",
@@ -1345,6 +1364,7 @@ internal sealed partial class WorkerArtifactWriter
             "deterministic-verification.md" => ["Tester", "Reviewer"],
             CriteriaSelfCheckPromptContext.FileName => ["Developer", "Tester", "Reviewer"],
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],
+            _ when WorkerRepositoryDiffArtifacts.IsSupplementalName(relativePath) => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
             "subscription-preflight.md" => ["Developer", "Tester", "Reviewer"],
             "prior-task-evidence.md" => ["Developer", "Tester", "Reviewer"],
             "prior-goal-evidence.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
