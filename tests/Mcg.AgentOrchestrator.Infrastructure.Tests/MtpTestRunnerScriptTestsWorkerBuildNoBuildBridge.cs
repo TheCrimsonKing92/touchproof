@@ -330,7 +330,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
             Directory.CreateDirectory(Path.Combine(Root, "config"));
             var candidate = MtpTestRunnerScriptTests.RepositoryRoot();
             _bindings = new WorkerBuildBridgeCandidateBindings(candidate);
-            foreach (var file in new[] { "Invoke-WorkerBuildCheck.ps1", "WorkerBuildReceipt.psm1", "MtpTestRunner.psm1", "Invoke-TestSummary.ps1" })
+            foreach (var file in new[] { "Invoke-WorkerBuildCheck.ps1", "WorkerBuildScopeToolCache.ps1", "WorkerBuildReceipt.psm1", "MtpTestRunner.psm1", "Invoke-TestSummary.ps1" })
                 File.Copy(Path.Combine(candidate, "scripts", file), Path.Combine(Root, "scripts", file));
             var omitted = omitDependency ? typeof(WorkerBuildProjectScope).Assembly.GetName().Name : null;
             _bindings.WriteFixture(Root, omitted, invalidSource);
@@ -406,6 +406,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         {
             var start = StartInfo(Root, WorkerShell.Executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", .. args]);
             start.Environment["MCG_DOTNET_ISOLATED_ROOT"] = IsolatedRoot;
+            start.Environment["MCG_WORKER_BUILD_SCOPE_TOOL_CACHE"] = Path.Combine(_parent, "scope-cache");
             return start;
         }
 

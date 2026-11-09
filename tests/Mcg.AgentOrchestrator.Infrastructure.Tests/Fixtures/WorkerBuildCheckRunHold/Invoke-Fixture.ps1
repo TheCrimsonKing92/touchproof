@@ -109,6 +109,7 @@ exit 0
     $shimCommand = @'
 @echo off
 set "DOTNET_SHIM_RAW_ARGUMENTS=%*"
+if "%~1"=="--version" goto scope
 if not "%DOTNET_SHIM_RAW_ARGUMENTS:WorkerBuildScopeTool=%"=="%DOTNET_SHIM_RAW_ARGUMENTS%" goto scope
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1"
 exit /b %ERRORLEVEL%

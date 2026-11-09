@@ -15,6 +15,7 @@ if (Test-Path -LiteralPath (Join-Path (Get-Location).Path '.orchestrator-context
     exit $LASTEXITCODE
 }
 Import-Module (Join-Path $PSScriptRoot "WorkerBuildReceipt.psm1") -Force
+. (Join-Path $PSScriptRoot 'WorkerBuildScopeToolCache.ps1')
 
 function ConvertTo-SafePathSegment {
     param([string]$Value)
@@ -485,9 +486,10 @@ try {
     $scopeToolRoot = Join-Path $processTempPath "scope-tool"
     $scopeToolBin = Join-Path $scopeToolRoot "bin"
     $scopeToolLog = Join-Path $runLogRoot "scope-bootstrap.txt"
-    & dotnet build $scopeToolProject --nologo --configuration Debug --verbosity minimal --artifacts-path $scopeToolRoot --output $scopeToolBin -maxcpucount:1 -p:BuildInParallel=false -tl:off *> $scopeToolLog
-    if ($LASTEXITCODE -ne 0) { throw "worker build scope tool bootstrap failed; complete-log: $scopeToolLog" }
-    $scopeToolDll = Join-Path $scopeToolBin "WorkerBuildScopeTool.dll"
+    $scopeTool = Resolve-WorkerBuildScopeTool -ToolProject $scopeToolProject -WorkingDirectory $repositoryRoot -BuildRoot $scopeToolRoot -BuildBin $scopeToolBin -BootstrapLog $scopeToolLog
+    Write-Output $scopeTool.Line
+    if ($scopeTool.Failure) { throw $scopeTool.Failure }
+    $scopeToolDll = $scopeTool.Dll
     if (-not (Test-Path -LiteralPath $scopeToolDll -PathType Leaf)) { throw "worker build scope tool output missing: $scopeToolDll" }
     $scopeResultPath = Join-Path $processTempPath "scope.json"
     $scopeArguments = @($repositoryRoot, $scopeResultPath)

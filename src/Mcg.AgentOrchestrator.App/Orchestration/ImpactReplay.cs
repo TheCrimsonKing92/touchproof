@@ -8,9 +8,10 @@ internal static class ImpactReplay
 {
     internal static ImpactReplayReport Read(string executionDirectory, string orchestratorDirectory,
         DateTimeOffset? since = null, int limit = 100, IReadOnlyList<string>? floor = null,
-        string? tempCheckoutParent = null)
+        string? tempCheckoutParent = null, int? maxChangedSourceFiles = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxChangedSourceFiles ?? 5, 1);
         var skipped = new List<ImpactReplayDiagnostic>();
         var unreplayable = new List<ImpactReplayDiagnostic>();
         var cleanupErrors = new List<string>();
@@ -55,8 +56,9 @@ internal static class ImpactReplay
                     .Select(check => check.Name).ToArray();
                 var classes = AcceptanceTestClassSourceScanner.Scan(checkout);
                 var lanes = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, classes);
-                var evidence = ImpactReplayTrxEvidence.Read(attempt, lanes, checkNames, classes);
-                if (evidence.LaneOutcomes.Count == 0)
+                var poolNames = ImpactReplayBalancedPool.LaneNames(settings.BalancedLanePool);
+                var evidence = ImpactReplayTrxEvidence.Read(attempt, lanes, checkNames, classes, poolNames);
+                if (evidence.LaneOutcomes.Count == 0 && evidence.BalancedLaneOutcomes.Count == 0)
                 {
                     skipped.Add(new(attempt.AttemptId, "No Infrastructure.Tests lane evidence."));
                     continue;
@@ -64,28 +66,36 @@ internal static class ImpactReplay
                 var attemptFloor = lanes.Where(lane => floor is null ? IsDefaultFloor(lane.Name) : floor.Contains(lane.Name, StringComparer.Ordinal))
                     .Select(lane => lane.Name).Order(StringComparer.Ordinal).ToArray();
                 floorNames.UnionWith(attemptFloor);
-                var selection = ReverseDependencyTestImpactReader.Read(checkout,
-                    changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray(), bypassCache: true);
-                var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedFiles, selection.TestClassNames);
+                var routing = new ImpactReplayChangedSourceRouting(checkout);
+                var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var changedTests = changedSources.Where(routing.IsTestSource).ToArray();
+                var productionSources = changedSources.Except(changedTests, StringComparer.OrdinalIgnoreCase).ToArray();
+                var selection = productionSources.Length == 0 && changedTests.Length > 0
+                    ? ReverseDependencyTestSelection.Resolved([])
+                    : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
+                        maximumChangedSourceFiles: maxChangedSourceFiles ?? 5);
+                var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
                 var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
+                var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
+                var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
                 var unmapped = false;
-                var attemptUnmappedClasses = new List<ImpactReplayUnmappedTestClasses.Occurrence>();
-                foreach (var simpleName in augmented.Classes)
+                foreach (var selector in selection.TestClassNames.Concat(augmented.QualifiedClasses).Distinct(StringComparer.Ordinal))
                 {
-                    var matches = classes.Where(item => item.FullName.Split('.', '+').Last() == simpleName).ToArray();
+                    var matches = classes.Where(item => selector.Contains('.') || selector.Contains('+')
+                        ? item.FullName == selector : item.FullName.Split('.', '+').Last() == selector).ToArray();
                     if (matches.Length == 0) unmapped = true;
-                    var singleMatchHasLane = false;
                     foreach (var item in matches)
                     {
+                        selectedFullNames.Add(item.FullName);
                         var memberships = AcceptanceLaneMembership.LanesIncluding(lanes, item.FullName);
-                        if (memberships.Count == 0) unmapped = true;
+                        var inPool = observedPool.Classes.Any(record => record.ClassName == item.FullName);
+                        if (memberships.Count == 0 && !inPool) unmapped = true;
                         selectedLanes.UnionWith(memberships.Select(lane => lane.Name));
-                        if (matches.Length == 1) singleMatchHasLane = memberships.Count > 0;
                     }
-                    var diagnostic = ImpactReplayUnmappedTestClasses.Classify(attempt.AttemptId, simpleName,
-                        matches.Select(item => item.FullName).ToArray(), singleMatchHasLane);
-                    if (diagnostic is not null) attemptUnmappedClasses.Add(diagnostic);
                 }
+                var attemptUnmappedClasses = ImpactReplaySelectedClassDiagnostics.Read(attempt.AttemptId,
+                    checkout, changedTests, augmented.Classes, classes, lanes, observedPool.Classes);
                 var resolved = selection.Outcome == ReverseDependencySelectionOutcome.Resolved && !unmapped && augmented.AbandonReason is null;
                 var ran = evidence.LaneOutcomes.Select(item => item.Lane).Order(StringComparer.Ordinal).ToArray();
                 if (!resolved) selectedLanes.UnionWith(ran);
@@ -95,21 +105,40 @@ internal static class ImpactReplay
                 if (augmented.AbandonReason is not null) warnings.Add(augmented.AbandonReason);
                 var failures = ImpactReplayRecordedFlakeClassifier.Classify(attempt.AttemptId,
                     evidence.Failures.Select(failure => failure with
-                    { WouldRun = failure.Lane is null ? null : selectedLanes.Contains(failure.Lane) }).ToArray(),
-                    evidence.LaneOutcomes, checkNames, classes, flakeRows);
+                    { WouldRun = failure.Lane is null ? null : poolNames.Contains(failure.Lane, StringComparer.Ordinal)
+                        ? !resolved || selectedFullNames.Contains(failure.ClassName) || !classes.Any(c => c.FullName == failure.ClassName)
+                        : selectedLanes.Contains(failure.Lane) }).ToArray(),
+                    evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), checkNames, classes, flakeRows);
+                var pool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, resolved);
+                double observedNamed = 0, savedNamed = 0;
+                var durationComplete = pool.Complete;
+                foreach (var lane in evidence.LaneOutcomes)
+                {
+                    if (lane.TrxPaths.Count == 0) durationComplete = false;
+                    foreach (var path in lane.TrxPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        var duration = ImpactReplayTrxDurations.Read(path, classes);
+                        durationComplete &= duration.Complete;
+                        var seconds = duration.Results.Sum(r => r.Seconds ?? 0);
+                        observedNamed += seconds;
+                        if (skippedLanes.Contains(lane.Lane, StringComparer.Ordinal)) savedNamed += seconds;
+                    }
+                }
                 records.Add(new(attempt.AttemptId, attempt.GoalId, attempt.StartedAt, attempt.MainHeadSha,
                     attempt.BranchHeadSha, unmapped || augmented.AbandonReason is not null ? "Abandoned" : selection.Outcome.ToString(),
-                    augmented.AbandonReason is not null ? "ChangedTestClassUnresolved" :
+                    augmented.AbandonReason is not null ? "ChangedTestSupportUnresolved" :
                         unmapped ? "UnmappedTestClass" : selection.DegradationKind?.ToString() ?? (resolved ? null : selection.Outcome.ToString()),
                     augmented.AbandonReason ?? selection.Reason, changedFiles, augmented.Classes, attemptFloor, ran,
                     selectedLanes.Order(StringComparer.Ordinal).ToArray(), skippedLanes,
                     lanes.Where(lane => skippedLanes.Contains(lane.Name, StringComparer.Ordinal)).Sum(lane => lane.EstimatedSerialSeconds),
                     evidence.LaneOutcomes, failures,
-                    warnings.Count == 0, warnings));
+                    warnings.Count == 0, warnings, productionSources.Length, pool.Classes, evidence.BalancedLaneOutcomes,
+                    pool.SecondsSaved, savedNamed, observedNamed + pool.ObservedSeconds, durationComplete,
+                    evidence.UnresolvedFailures, augmented.OtherFiles));
                 unmappedClasses.AddRange(attemptUnmappedClasses);
                 if (augmented.Gained) gainedAttempts++;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or System.Xml.XmlException or ArgumentException or InvalidOperationException or InvalidDataException)
             { unreplayable.Add(new(attempt.AttemptId, ex.Message)); }
             finally
             {
@@ -128,7 +157,9 @@ internal static class ImpactReplay
             }
         }
         return new(floor is null ? "default" : "override", floorNames.ToArray(), records, skipped, unreplayable, cleanupErrors, gainedAttempts,
-            ImpactReplayUnmappedTestClasses.Aggregate(unmappedClasses));
+            ImpactReplayUnmappedTestClasses.Aggregate(unmappedClasses),
+            maxChangedSourceFiles is not null || records.Any(r => r.BalancedLaneOutcomes?.Count > 0)
+                ? ImpactReplayMeasurement.Create(maxChangedSourceFiles ?? 5, records) : null);
     }
 
     private static bool IsDefaultFloor(string name) =>
