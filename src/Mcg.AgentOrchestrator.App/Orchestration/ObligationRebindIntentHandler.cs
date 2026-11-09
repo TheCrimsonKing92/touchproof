@@ -40,7 +40,8 @@ internal static class ObligationRebindIntentHandler
             answeredRequests: kernel.HumanInputRequests);
         if (!current.Any(result =>
                 result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or
-                    GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded) &&
+                    GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded or
+                    GateTestObligationEvaluator.Outcome.AllSkipped) &&
                 result.Obligation.Selectors.Any(selector => selector.Split('.').Contains(payload.OldClass, StringComparer.Ordinal))))
             throw new InvalidOperationException("no-matching-obligation");
 
@@ -89,7 +90,8 @@ internal static class ObligationRebindIntentHandler
         var matches = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateSha,
                 answeredRequests: kernel.HumanInputRequests)
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or
-                GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded) &&
+                GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded or
+                GateTestObligationEvaluator.Outcome.AllSkipped) &&
                 result.Obligation.Selectors.Contains(payload.Selector, StringComparer.Ordinal)).ToArray();
         if (matches.Length == 0) throw new InvalidOperationException("no-matching-obligation");
         if (payload.Drop == true && matches.Any(result => result.Obligation.Selectors.Count <= 1))
