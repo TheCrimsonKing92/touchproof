@@ -72,7 +72,7 @@ public sealed class GoPackageFocusedEvidenceTests
     public void UnscopableRequestsFallBackToTheDeclaredCheck()
     {
         using var fixture = new Fixture();
-        foreach (var request in new[] { "internal/missing:TestX", "internal/drift:TestMissingColumn/empty_input",
+        foreach (var request in new[] { "internal/missing:TestX", "internal/drift:TestMissingColumn/",
             "../outside:TestX", "Core.Tests:FooTests", "internal/drift:", "internal/drift:TestX|",
             "internal/drift:^TestX$", "internal/drift:FooTests" })
         {

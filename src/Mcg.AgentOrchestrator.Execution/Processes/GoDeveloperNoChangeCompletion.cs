@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class GoDeveloperNoChangeCompletion
 {
     private static readonly Regex TestIdentity = new(
-        @"^[a-z_][a-z0-9_]*[.:]Test[A-Z0-9_][A-Za-z0-9_]*$",
+        @"^[a-z_][a-z0-9_]*[.:]Test[A-Z0-9_][A-Za-z0-9_]*(?:/[^\s,;/]+)*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal static IReadOnlyList<string> ParseTestIdentities(string testsField)

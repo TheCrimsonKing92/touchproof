@@ -96,27 +96,36 @@ internal static class GoPackageFocusedEvidence
                     ? name["FullyQualifiedName~".Length..] : name)
                 .ToArray();
             var scoped = PackagePattern.IsMatch(package) && HasTestFile(worktreePath, package) &&
-                (separator < 0 || names.All(name => TestNamePattern.IsMatch(name)));
-            AcceptanceManifestCheck check;
+                (separator < 0 || names.All(name => TestNamePattern.IsMatch(name) || GoSubtestRunSelector.IsSubtestName(name)));
+            var itemChecks = new List<AcceptanceManifestCheck>();
             if (scoped)
             {
                 scopedCount++;
                 names = names.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
-                var union = string.Join('|', names);
-                check = new AcceptanceManifestCheck
+                var topLevelNames = names.Where(name => TestNamePattern.IsMatch(name)).ToArray();
+                var selections = names.Where(GoSubtestRunSelector.IsSubtestName).Select(name => new[] { name }).ToList();
+                if (separator < 0 || topLevelNames.Length > 0)
+                    selections.Insert(0, topLevelNames);
+                foreach (var selection in selections)
                 {
-                    Name = FocusedPrefix + package + (separator < 0 ? "" : " " + union),
-                    Type = "command",
-                    Command = declared.Command,
-                    TimeoutMinutes = declared.TimeoutMinutes,
-                    Arguments = separator < 0
-                        ? ["test", "-count=1", "-v", "./" + package]
-                        : ["test", "-count=1", "-v", "-run", "^(" + union + ")$", "./" + package]
-                };
+                    var union = string.Join('|', selection);
+                    var runPattern = selection.Length == 1 && GoSubtestRunSelector.IsSubtestName(selection[0])
+                        ? GoSubtestRunSelector.BuildRunPattern(selection[0]) : "^(" + union + ")$";
+                    itemChecks.Add(new AcceptanceManifestCheck
+                    {
+                        Name = FocusedPrefix + package + (separator < 0 ? "" : " " + union),
+                        Type = "command",
+                        Command = declared.Command,
+                        TimeoutMinutes = declared.TimeoutMinutes,
+                        Arguments = separator < 0
+                            ? ["test", "-count=1", "-v", "./" + package]
+                            : ["test", "-count=1", "-v", "-run", runPattern, "./" + package]
+                    });
+                }
             }
             else
             {
-                check = new AcceptanceManifestCheck
+                itemChecks.Add(new AcceptanceManifestCheck
                 {
                     Name = FallbackPrefix + declared.Name,
                     Type = "command",
@@ -125,11 +134,12 @@ internal static class GoPackageFocusedEvidence
                     Arguments = declared.Arguments.Contains("-v", StringComparer.Ordinal)
                         ? declared.Arguments
                         : declared.Arguments.Take(1).Append("-v").Concat(declared.Arguments.Skip(1)).ToArray()
-                };
+                });
             }
-            if (checkNames.Add(check.Name))
-                built.Add(check);
-            mappings.Add(new FocusedEvidenceTargetCoverage(item, [check.Name]));
+            foreach (var check in itemChecks)
+                if (checkNames.Add(check.Name))
+                    built.Add(check);
+            mappings.Add(new FocusedEvidenceTargetCoverage(item, itemChecks.Select(check => check.Name).ToArray()));
         }
 
         checks = built;
