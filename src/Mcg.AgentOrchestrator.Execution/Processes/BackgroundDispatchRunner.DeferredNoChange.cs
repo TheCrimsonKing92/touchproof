@@ -67,19 +67,7 @@ public sealed partial class BackgroundDispatchRunner
         return true;
     }
 
-    private string WithDeferredNoChangeDecline(
-        Goal goal, TaskSpec task, GoalWorktreeDispatchEvidence worktreeEvidence,
-        string? standardOutput, string standardError, string? diagnostic)
-    {
-        if (standardOutput is null) return diagnostic ?? string.Empty;
-        DeveloperDeferredNoChangeQualifier.TryQualify(
-            goal, task, worktreeEvidence.Head, worktreeEvidence.IsClean,
-            worktreeEvidence.HasRelevantCommitAfterDispatch,
-            standardOutput, standardError, _completionClassifier, out _, out var declineCode);
-        return AppendDeferredNoChangeDecline(task, standardOutput, diagnostic, declineCode);
-    }
-
-    private string AppendDeferredNoChangeDecline(
+    internal string AppendDeferredNoChangeDecline(
         TaskSpec task, string standardOutput, string? diagnostic, string? declineCode)
     {
         if (task.RequiredRole != AgentRole.Developer || declineCode is null ||
