@@ -26,6 +26,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal OrchestratorWorkspace? Workspace => workspace;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     private OwnerDecisionWorkflow? _decisionWorkflow;
+    private OwnerConsoleCommandDispatch? _commandDispatch;
+    private OwnerConsoleGoalDetailFlow? _goalDetailFlow;
     private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
     public void Dispose() => _answerTracking.Dispose();
     internal event Action? ModelApplied;
@@ -52,7 +54,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (item.Kind == "owner-question-resolved" && resolutions is not null)
         {
             OwnerQuestionResolution? resolution = null;
-            if (!await RunDependencyAsync("question resolution", async stepToken =>
+            if (!await OwnerConsoleCommandDispatch.RunDependencyAsync("question resolution", async stepToken =>
                 resolution = await resolutions.ReadAsync(item, stepToken), operation, cancellationToken)) return;
             if (resolution is not null)
             {
@@ -63,7 +65,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             }
         }
         IReadOnlyList<OwnerConsoleDecision> live = [];
-        if (!await RunDependencyAsync("activity decision state", async stepToken =>
+        if (!await OwnerConsoleCommandDispatch.RunDependencyAsync("activity decision state", async stepToken =>
         {
             var snapshot = await questions.ReadAsync(stepToken);
             live = Model?.Decisions.Where(decision => snapshot.Live.Contains(decision.ToQuestion())).ToArray() ?? [];
@@ -137,141 +139,24 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             handler => ModelApplied -= handler, operation, cancellationToken);
 
     internal Task<OwnerGoalChangeSummary?> LoadGoalSummaryAsync(string goalId, CancellationToken token) =>
-        _goalDetail.LoadSummaryAsync(goalId, token);
+        (_goalDetailFlow ??= NewGoalDetailFlow()).LoadGoalSummaryAsync(goalId, token);
 
-    internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var row = Model?.Board.FirstOrDefault(item => !item.IsForeign && !item.IsDiagnostic && item.GoalId == goalId);
-        var retained = _goalLastGood.TryGet(goalId, out var prior);
-        using var dialog = new OwnerConsoleGoalDialog(this, retained ? prior : OwnerConsoleGoalDetailLoading.Placeholder(goalId, row),
-            token => ComposeGoalAsync(goalId, token),
-            decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken,
-            loadOnStart: true, initialContentLoaded: retained, remember: content => _goalLastGood.Remember(goalId, content),
-            structuredText: async (title, text, fields) => { await dialogs.ShowStructuredAsync(title, text, fields); });
-        await dialogs.ShowGoalAsync(dialog);
-        _requestedEpicId = dialog.RequestedEpicId;
-        _requestedGateGoalId = dialog.RequestedGateGoalId;
-    }
+    internal Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default) =>
+        (_goalDetailFlow ??= NewGoalDetailFlow()).ShowGoalDetailAsync(goalId, operation, cancellationToken);
 
-    private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token)
-    {
-        var output = new OwnerConsoleCapturedOutput();
-        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(_goalDetail, goalId, output, token,
-            clock.LocalTimeZone, () => Model?.Gate,
-            Model?.Board.FirstOrDefault(item => !item.IsForeign && !item.IsDiagnostic && item.GoalId == goalId)?.PriorityWarning).ConfigureAwait(false);
-        if (goal is null) return null;
-        var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
-        var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
-        var choiceLines = new List<int>();
-        if (resolved.Count > 0)
-        {
-            lines.Add("Resolved questions (Enter to open):");
-            foreach (var question in resolved)
-            { choiceLines.Add(lines.Count); lines.Add(OwnerQuestionResolutionText.Summary(question, clock.LocalTimeZone)); }
-        }
-        var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
-        var epicId = epics is null ? null : await epics.FindGoalEpicAsync(goalId, token).ConfigureAwait(false);
-        var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
-        var gateGoalId = Model?.Gate?.ForMember(goalId) is not null ? goalId : null;
-        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId, gateGoalId,
-            new(output.Structured?.Detail, choiceLines.Select((line, index) => (line, fields: OwnerQuestionResolutionText.Fields(resolved[index])))
-                .ToDictionary(item => item.line, item => item.fields)),
-            goal.RetainedAcceptanceFailure is { } failed ? new(OwnerConsoleGoalLanding.FailureFields(failed)) : null);
-    }
+    private Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token) =>
+        (_goalDetailFlow ??= NewGoalDetailFlow()).ComposeGoalAsync(goalId, token);
 
-    internal async Task RunCommandAsync(string raw, OwnerConsoleScreenOperation? operation = null,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var line = raw.Trim().TrimStart(OwnerConsoleBindings.CommandLineKey).Trim();
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0) return;
-        var output = new OwnerConsoleCapturedOutput();
-        string? goalId = null;
-        OwnerFleetViewModel? fleetModel = null;
-        OwnerLandingsPage? landingsPage = null;
-        var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
-        if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_settingsRequested) return;
-        if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
-        if (fleetModel is not null) { await dialogs.ShowFleetAsync(_fleetKeys, fleetModel, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth)); return; }
-        if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
-        if ((output.Structured ?? control.Fields) is { } commandFields)
-            await dialogs.ShowStructuredAsync("Command result", output.Text, commandFields);
-        else await dialogs.ShowTextAsync("Command result", output.Text);
+    internal Task RunCommandAsync(string raw, OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default) =>
+        (_commandDispatch ??= NewCommandDispatch()).RunAsync(raw, operation, cancellationToken);
 
-        async Task ExecuteAsync(CancellationToken stepToken)
-        {
-            switch (parts[0].ToLowerInvariant())
-            {
-                case "conductor": control.HandleConductor(line); break;
-                case "digest":
-                    if (parts.Length != 1) output.WriteLine("usage: digest");
-                    else
-                    {
-                        var result = summary.ReadStructuredSummary();
-                        foreach (var item in result.Lines.Take(5)) output.WriteLine(item);
-                        output.Structured = result.Fields;
-                    }
-                    break;
-                case "metrics": control.HandleMetrics(line); break;
-                case "fleet":
-                    if (parts.Length != 1) output.WriteLine("usage: fleet");
-                    else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
-                    else fleetModel = fleet();
-                    break;
-                case "landings":
-                    if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
-                    else if (landings is null) output.WriteLine("landings view unavailable in this session");
-                    else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
-                    break;
-                case "sound":
-                    if (sound is null) output.WriteLine("sound unavailable in this session");
-                    else sound.Run(line, output);
-                    break;
-                case OwnerConsoleBindings.SettingsCommand:
-                    if (parts.Length != 1) output.WriteLine("usage: settings");
-                    else if (sound is null) output.WriteLine("settings unavailable in this session");
-                    else _settingsRequested = true;
-                    break;
-                case "bell":
-                    lock (_notificationGate) _bell.Run(parts.Skip(1).ToArray(), output);
-                    break;
-                case var verb when verb == OwnerConsoleBindings.Goal.Command:
-                    if (parts.Length != 2) { output.WriteLine("usage: " + OwnerConsoleBindings.Goal.Usage); break; }
-                    goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);
-                    break;
-                default:
-                    output.WriteLine("unknown command");
-                    output.WriteLine("valid commands: " + OwnerConsoleKeyHints.CommandPrompt);
-                    break;
-            }
-        }
-    }
+    private OwnerConsoleGoalDetailFlow NewGoalDetailFlow() => new(this, _goalDetail, _goalLastGood, dialogs, clock,
+        epics, resolutions, () => Model, ShowDecisionAsync,
+        (epicId, gateGoalId) => { _requestedEpicId = epicId; _requestedGateGoalId = gateGoalId; });
 
-    private async Task ShowLandingsAsync(OwnerLandingsPage page, OwnerConsoleScreenOperation? operation,
-        CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var chosen = page.Fields is { } fields
-                ? await dialogs.ShowStructuredAsync("Landings", page.Text, fields, page.ChoiceLines)
-                : await dialogs.ShowPageAsync("Landings", page.Text, page.ChoiceLines);
-            if (chosen is not { } index || index < 0 || index >= page.ChoiceGoalIds.Count) return;
-            await ShowGoalDetailAsync(page.ChoiceGoalIds[index], operation, cancellationToken);
-            if (_requestedEpicId is not null || _requestedGateGoalId is not null) return;
-        }
-    }
-
-    private static async Task<bool> RunDependencyAsync(string label, Func<CancellationToken, Task> action,
-        OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
-    {
-        if (operation is not null) return await operation.RunAsync(label, action, cancellationToken);
-        await action(cancellationToken);
-        return true;
-    }
+    private OwnerConsoleCommandDispatch NewCommandDispatch() => new(dialogs, conductor, digest, summary, clock,
+        fleet, landings, sound, _goalDetail, _fleetKeys, _notificationGate, _bell, () => _settingsRequested,
+        () => _settingsRequested = true, () => _requestedEpicId, () => _requestedGateGoalId, ShowGoalDetailAsync);
 }
