@@ -20,6 +20,7 @@ public static class AcceptanceHermeticEnvironment
     // operator having configured git at all.
     private const string HermeticGitIdentityName = ConductorGitIdentity.GateName;
     private const string HermeticGitIdentityEmail = ConductorGitIdentity.GateEmail;
+    private const string NuGetPackageRootVariable = "NuGetPackageRoot";
 
     public static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
@@ -88,6 +89,9 @@ public static class AcceptanceHermeticEnvironment
         environment["MSBUILDDISABLENODEREUSE"] = "1";
         environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         environment[NuGetPackagesVariable] = nugetPackages;
+        // No-op restores can retain props whose fallback uses UserProfile, which is redirected above.
+        environment[NuGetPackageRootVariable] = nugetPackages.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
         {
             // NUGET_PACKAGES isolates restored packages, but NuGet's HTTP cache is derived from
@@ -189,6 +193,7 @@ public static class AcceptanceHermeticEnvironment
         name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PSModuleAnalysisCachePath", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("MSBUILDDISABLENODEREUSE", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals(NuGetPackageRootVariable, StringComparison.OrdinalIgnoreCase) ||
         // The four deterministic git identity variables this function sets. They are DECLARED here rather
         // than inherited: the allow-list is what the hermetic environment is permitted to contain, so every
         // variable ConfigureHermeticVerificationEnvironment writes must be nameable here or the gate's own
