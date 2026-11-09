@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: plain library graph, private trees/cache/artifacts, hermetic child environments.
 // Real builds deliberately verify compiler execution and restored bytes across worktree roots.
+// Shared/props miss conditions use resolver keys without builds.
 public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : IDisposable
 {
     private const string Shared = "src/Shared/Shared.csproj";
@@ -36,18 +37,49 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
         Assert.Equal(2, warm.CompilerCalls);
         foreach (var project in new[] { Shared, LeafB })
             Assert.Equal(File.ReadAllBytes(Assembly(cold.Environment, project)), File.ReadAllBytes(Assembly(warm.Environment, project)));
+    }
 
-        File.AppendAllText(Source(two, Shared), "\npublic class SharedEdit { }");
-        var shared = await Gate(two, "shared", cache);
-        AssertMisses(shared);
-        Assert.Equal(4, shared.CompilerCalls);
+    [Fact]
+    public async Task ResolveAsync_SharedOrPropsEdit_ChangesEveryProjectKey()
+    {
+        var baseline = Path.Combine(_root, "baseline");
+        var tree = Path.Combine(_root, "keys");
+        Seed(baseline);
+        File.AppendAllText(Source(baseline, LeafA), "\npublic class LeafEdit { }");
+        var leaf = await ResolveVariant(() => { });
+        var shared = await ResolveVariant(() =>
+            File.AppendAllText(Source(tree, Shared), "\npublic class SharedEdit { }"));
+        var propsOnly = await ResolveVariant(() =>
+        {
+            var props = Path.Combine(tree, "Directory.Build.props");
+            File.WriteAllText(props, File.ReadAllText(props).Replace("</PropertyGroup>",
+                "<CacheProbe>changed</CacheProbe></PropertyGroup>", StringComparison.Ordinal));
+            Assert.Contains("<CacheProbe>changed</CacheProbe>", File.ReadAllText(props));
+        });
+        foreach (var project in new[] { Shared, LeafA, LeafB, Consumer })
+        {
+            Assert.NotEqual(leaf[project], shared[project]);
+            Assert.NotEqual(leaf[project], propsOnly[project]);
+        }
 
-        var props = Path.Combine(two, "Directory.Build.props");
-        File.WriteAllText(props, File.ReadAllText(props).Replace("</PropertyGroup>",
-            "<CacheProbe>changed</CacheProbe></PropertyGroup>", StringComparison.Ordinal));
-        var propsOnly = await Gate(two, "props", cache);
-        AssertMisses(propsOnly);
-        Assert.Equal(4, propsOnly.CompilerCalls);
+        var leafB = await ResolveVariant(() =>
+            File.AppendAllText(Source(tree, LeafB), "\npublic class LeafBEdit { }"));
+        Assert.Equal(leaf[Shared], leafB[Shared]);
+        Assert.NotEqual(leaf[LeafB], leafB[LeafB]);
+
+        async Task<Dictionary<string, string>> ResolveVariant(Action edit)
+        {
+            // Keep the root fixed: Consumer keys intentionally include the worktree path.
+            if (Directory.Exists(tree)) Directory.Delete(tree, recursive: true);
+            CopyTree(baseline, tree);
+            edit();
+            var identity = await InjectedGraphIdentity(tree);
+            return new[] { Shared, LeafA, LeafB, Consumer }.ToDictionary(project => project, project =>
+            {
+                Assert.True(DotnetBaseBuildCacheProjectKeys.TryGet(identity.ProjectKeys, project, out var key), project);
+                return key;
+            });
+        }
     }
 
     [Fact]
@@ -216,6 +248,46 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
                     Items = items
                 })));
             }, new Dictionary<string, string> { ["ROOT"] = tree, ["ESCAPED_ROOT"] = tree.Replace("\\", "\\\\", StringComparison.Ordinal) });
+        return Assert.IsType<DotnetBaseBuildCacheIdentity>(identity);
+    }
+
+    private async Task<DotnetBaseBuildCacheIdentity> InjectedGraphIdentity(string tree)
+    {
+        foreach (var relative in new[] { "dotnet/sdk/10.0/compiler.dll", "dotnet/packs/ref.dll" })
+        {
+            var path = Path.GetFullPath(relative, tree);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, relative);
+        }
+        var environment = EnvironmentFor("keys");
+        var identity = await DotnetBaseBuildCacheIdentityResolver.ResolveAsync(tree, RestoreProjects,
+            ["dotnet", "build", Consumer, "-v:minimal"], environment, args =>
+            {
+                var project = args[2];
+                var assets = Path.Combine(environment.ArtifactsPath, "obj", Path.GetFileNameWithoutExtension(project), "project.assets.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(assets)!);
+                File.WriteAllText(assets, JsonSerializer.Serialize(new
+                {
+                    packageFolders = new Dictionary<string, object> { [Path.Combine(tree, "packages")] = new { } },
+                    libraries = new Dictionary<string, object>()
+                }));
+                var preprocess = args.SingleOrDefault(arg => arg.StartsWith("-preprocess:", StringComparison.Ordinal));
+                if (preprocess is not null) File.WriteAllText(preprocess[12..], "import " + tree);
+                if (!args.Any(arg => arg.StartsWith("-getProperty:", StringComparison.Ordinal)))
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                var items = args.Single(arg => arg.StartsWith("-getItem:", StringComparison.Ordinal))[9..].Split(',')
+                    .ToDictionary(name => name, _ => (object)Array.Empty<object>());
+                var directory = Path.GetDirectoryName(project)!;
+                items["Compile"] = new[] { new { FullPath = Path.Combine(directory, "Value.cs") } };
+                items["ProjectReference"] = System.Xml.Linq.XDocument.Load(project).Descendants("ProjectReference")
+                    .Select(element => new { FullPath = Path.GetFullPath((string)element.Attribute("Include")!, directory) }).ToArray();
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, JsonSerializer.Serialize(new
+                {
+                    Properties = new { TargetFramework = "net10.0", TargetFrameworks = "", NETCoreSdkVersion = "10.0",
+                        MSBuildSDKsPath = Path.Combine(tree, "dotnet/sdk/10.0/Sdks"), ProjectAssetsFile = assets },
+                    Items = items
+                })));
+            }, new Dictionary<string, string> { ["ROOT"] = tree }, [Consumer]);
         return Assert.IsType<DotnetBaseBuildCacheIdentity>(identity);
     }
 
