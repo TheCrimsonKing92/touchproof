@@ -97,9 +97,15 @@ public sealed class TerminalBuildRootRetentionScenarioTests : IDisposable
         StateDbMigrations.EnsureUpToDate(otherDb);
         InsertGoal(otherDb, "ffffffff000000000000000000000000", "unknown-status", DateTimeOffset.UtcNow.AddDays(-10));
         var result = Sweep();
-        Assert.Equal("SWEEP_BUILD_ROOT_RETENTION window-days=3 reclaimed=0 bytes=0 skipped=0 reasons=goal-store-unavailable",
-            Summary(result));
-        for (var index = 0; index < _roots.Count; index++) Assert.Equal(snapshots[index], Snapshot(_roots[index]));
+        var summary = Summary(result);
+        Assert.Contains("reclaimed=2", summary);
+        Assert.Contains("unavailable-stores=other:read-failed", summary);
+        Assert.Contains("unstored-skipped=goal-store-unavailable", summary);
+        Assert.DoesNotContain("reasons=goal-store-unavailable", summary);
+        Assert.DoesNotContain(result.OperatorEvents, line => line.StartsWith("SWEEP_UNSTORED_BUILD_ROOT_RETENTION", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(_roots[0]));
+        Assert.False(Directory.Exists(_roots[1]));
+        for (var index = 2; index < _roots.Count; index++) Assert.Equal(snapshots[index], Snapshot(_roots[index]));
     }
 
     private TerminalGoalSweepOwnedRootResult Sweep(string? db = null, bool reclaimGoalRoots = true) =>

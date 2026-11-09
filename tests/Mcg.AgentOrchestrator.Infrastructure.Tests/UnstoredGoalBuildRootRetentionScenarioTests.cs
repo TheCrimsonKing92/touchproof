@@ -70,8 +70,11 @@ public sealed class UnstoredGoalBuildRootRetentionScenarioTests : IDisposable
         var third = Sweep();
 
         Assert.DoesNotContain(third.OperatorEvents, line => line.StartsWith("SWEEP_UNSTORED_BUILD_ROOT_RETENTION", StringComparison.Ordinal));
-        Assert.Contains("reasons=goal-store-unavailable", Assert.Single(third.OperatorEvents.Where(line =>
-            line.StartsWith("SWEEP_BUILD_ROOT_RETENTION ", StringComparison.Ordinal))));
+        var thirdSummary = Assert.Single(third.OperatorEvents.Where(line =>
+            line.StartsWith("SWEEP_BUILD_ROOT_RETENTION ", StringComparison.Ordinal)));
+        Assert.Contains("unavailable-stores=unknown:read-failed", thirdSummary);
+        Assert.Contains("unstored-skipped=goal-store-unavailable", thirdSummary);
+        Assert.DoesNotContain("reasons=goal-store-unavailable", thirdSummary);
         AssertUnchanged(protectedRoots, before);
     }
 
