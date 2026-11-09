@@ -7,7 +7,6 @@ internal static class OwnerConsoleSizeBaseline
     // Raising a ceiling requires a one-line justification comment immediately above its row.
     internal static IReadOnlyDictionary<string, int> Files { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
     {
-        ["OwnerConsoleLoop.cs"] = 278,
         ["OwnerConsoleScreenController.cs"] = 277,
         ["OwnerGoalChangeSummaryQuery.cs"] = 152,
         // Relocated section builders preserve existing text and ordering; individual methods stay below 60 lines.
@@ -28,8 +27,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleJsonlTail.cs::OwnerConsoleJsonlTail.Select",
         "OwnerConsoleKeyRouter.cs::OwnerConsoleKeyRouter.RouteAsync",
         "OwnerConsoleLineFitter.cs::OwnerConsoleLineFitter.Fit",
-        "OwnerConsoleLoop.cs::OwnerConsoleLoop.RunAsync",
-        "OwnerConsoleLoop.cs::OwnerConsoleLoop.RunAsync.RunStepAsync",
         "OwnerConsolePaneKeys.cs::OwnerConsolePaneKeys.HandleAsync",
         "OwnerConsoleScreenController.cs::OwnerConsoleScreenController.RunCommandAsync",
         "OwnerConsoleStageDescriber.cs::OwnerConsoleStageDescriber.Describe",
