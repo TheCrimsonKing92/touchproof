@@ -229,7 +229,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         if (OperatingSystem.IsWindows())
         {
             Xunit.Assert.Contains(
-                "capture=owned-file-handles",
+                "resolved=ref-files",
                 receipt.EnvironmentContract,
                 StringComparison.Ordinal);
         }

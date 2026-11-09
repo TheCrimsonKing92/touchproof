@@ -55,12 +55,13 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
         Assert.NotEqual(0, expectedExit);
         Assert.Contains("nothing to commit", stdout, StringComparison.Ordinal);
         using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        using var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers();
 
         var exception = Assert.Throws<InvalidOperationException>(() => RunGit(repo, "commit", "-m", "Empty"));
 
         Assert.Contains(stdout.Trim(), exception.Message, StringComparison.Ordinal);
         Assert.Contains($"exit={expectedExit}", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(2, launches.Count);
+        Assert.Equal(2, launches.Count + answers.Count);
     });
 
     [Xunit.Fact]

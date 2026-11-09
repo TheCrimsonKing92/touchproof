@@ -15,6 +15,7 @@
     <Compile Include="..\InfrastructureTestSupport.cs" Link="InfrastructureTestSupport.cs" />
     <Compile Include="..\InfrastructureTestSupportGitCommit.cs" Link="InfrastructureTestSupportGitCommit.cs" />
     <Compile Include="..\InfrastructureTestSupportGitProbeSeam.cs" Link="InfrastructureTestSupportGitProbeSeam.cs" />
+    <Compile Include="..\GitProbeRefFileFastPath.cs" Link="GitProbeRefFileFastPath.cs" />
     <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <Compile Include="..\WorkerDispatchTestsSeededRepositoryFactory.cs" Link="WorkerDispatchTestsSeededRepositoryFactory.cs" />
     <Compile Include="..\WorkerDispatchTestsSeededRepositoryFactory.TemplateCache.cs" Link="WorkerDispatchTestsSeededRepositoryFactory.TemplateCache.cs" />
