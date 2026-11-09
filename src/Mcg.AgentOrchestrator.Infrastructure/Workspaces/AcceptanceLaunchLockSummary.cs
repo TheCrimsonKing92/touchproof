@@ -55,7 +55,8 @@ internal static class AcceptanceLaunchLockSummary
             using var classReader = new StringReader(selectedOutput);
             while (classReader.ReadLine() is { } line)
                 if ((line.StartsWith(ByClassPrefix, StringComparison.Ordinal) ||
-                     line.StartsWith(BySitePrefix, StringComparison.Ordinal)) &&
+                     line.StartsWith(BySitePrefix, StringComparison.Ordinal) ||
+                     line.StartsWith("LAUNCH_LOCK_CPU_BY_CLASS ", StringComparison.Ordinal)) &&
                     TryReadPid(line, out var classProcessId) && classProcessId == processId)
                     lines.Add(line);
         }

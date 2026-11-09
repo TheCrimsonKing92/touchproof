@@ -42,6 +42,7 @@ internal static class HandleListProcessLauncher
         {
             var result = Create(application, commandLine, environment, workingDirectory, creationFlags,
                 IntPtr.Zero, stdoutHandle, stderrHandle, [stdoutHandle, stderrHandle], out createTicks);
+            LaunchLockChildCpuTracker.Track(result.ProcessHandle);
             return new(true, result.ProcessHandle, result.ThreadHandle, result.ProcessId, 0);
         }
         catch (Win32Exception failure)
