@@ -7,6 +7,7 @@ internal static class OwnerConsoleBindings
     internal const char SettingsPreviewKey = 'p';
     internal const char SettingsSystemKey = 's';
     internal const char SettingsMuteKey = 'm';
+    internal const char SettingsToggleKey = ' ';
     internal static Terminal.Gui.Input.Key OpenFields => Terminal.Gui.Input.Key.F2;
     internal static Terminal.Gui.Input.Key CopyField => Terminal.Gui.Input.Key.C.WithCtrl;
     internal const string FieldsHint = "F2 fields  Left/Right cell  Ctrl+C copy cell";
