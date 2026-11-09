@@ -7,14 +7,12 @@ using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 // Parallel safe: each case owns a unique temporary TRX directory; no processes or shared state.
 public sealed class FocusedEvidenceAllSkippedSelectionTests
 {
-    [Theory]
-    [InlineData("NotExecuted")]
-    [InlineData(" notexecuted ")]
-    public void MixedReceipt_AllSkippedSelectionIsCoveredWithoutAddingExecution(string outcome)
+    [Fact]
+    public void MixedReceipt_AllSkippedSelectionIsCoveredWithoutAddingExecution()
     {
         using var fixture = new Fixture();
         var path = fixture.Write("mixed.trx", ("AlphaTests.Runs", "Passed"),
-            ("SkippedTests.First", outcome), ("SkippedTests.Second", outcome));
+            ("SkippedTests.First", "NotExecuted"), ("SkippedTests.Second", "NotExecuted"));
 
         var coverage = Inspect([path], "AlphaTests", "SkippedTests");
         var skipped = Assert.Single(coverage.AllSkippedSelections!);
@@ -42,6 +40,23 @@ public sealed class FocusedEvidenceAllSkippedSelectionTests
         Assert.Equal("all-skipped", reason.GetProperty("Reasons")[0].GetString());
         Assert.Equal("; all-skipped: FullyQualifiedName~SkippedTests (all-skipped)",
             FocusedEvidenceAllSkippedSelection.FormatSummary([receipt]));
+    }
+
+    [Theory]
+    [InlineData("notexecuted")]
+    [InlineData(" notexecuted ")]
+    public void Coverage_NormalizesNotExecutedOutcomes(string outcome)
+    {
+        using var fixture = new Fixture();
+        var path = fixture.Write("normalized.trx", ("SkippedTests.First", outcome),
+            ("SkippedTests.Second", outcome));
+
+        var coverage = Inspect([path], "SkippedTests");
+
+        var skipped = Assert.Single(coverage.AllSkippedSelections!);
+        Assert.Equal("FullyQualifiedName~SkippedTests", skipped.Selection);
+        Assert.Equal("all-skipped", Assert.Single(skipped.Reasons));
+        Assert.Empty(coverage.UnreadableReceiptPaths);
     }
 
     [Fact]
