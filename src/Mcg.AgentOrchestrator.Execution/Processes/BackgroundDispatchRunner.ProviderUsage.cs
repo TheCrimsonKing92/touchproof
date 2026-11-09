@@ -20,9 +20,6 @@ public sealed partial class BackgroundDispatchRunner
         return new(null, "unsupported");
     }
 
-    private static DateTimeOffset? ReceiptlessUsageAttemptAt(TaskDispatchRecord? dispatch) =>
-        dispatch?.ContextPackageReceipt is null ? dispatch?.DispatchedAt : null;
-
     private static TaskSpec GetTaskAfterReceiptlessUsage(
         AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, DispatchRefreshOutcome outcome)
     {
