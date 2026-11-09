@@ -31,8 +31,6 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.CohortAcceptance.Database),
                 StoreSchemaRegistry.CohortAttributionRetractions.StoreName,
                 StoreSchemaRegistry.CohortSoloInheritedReceipts.StoreName),
-            [StoreSchemaRegistry.FollowerGateAcceptance.StoreName] = new(FollowerGateAcceptanceStoreSetup.Setup,
-                directory => Path.Combine(directory, StoreSchemaRegistry.FollowerGateAcceptance.Database)),
             [StoreSchemaRegistry.CollaborationItems.StoreName] = new(CollaborationItemStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.CollaborationItems.Database)),
             [StoreSchemaRegistry.RunEvents.StoreName] = new(RunEventStoreSetup.Setup,

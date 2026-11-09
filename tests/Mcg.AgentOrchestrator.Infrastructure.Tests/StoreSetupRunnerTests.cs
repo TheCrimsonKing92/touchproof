@@ -74,7 +74,7 @@ public sealed class StoreSetupRunnerTests
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "experiments.db", "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
-                "operator-lessons.db", "operator-escapes.db", "operator-directives.db", "cohort-acceptance.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
+                "operator-lessons.db", "operator-escapes.db", "operator-directives.db", "cohort-acceptance.db", "merge-train-acceptance.db",
                 "collaboration-items.db", "collaboration-items.db-wal", "collaboration-items.db-shm",
                 "run-events.db", "run-events.db-wal", "run-events.db-shm",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "author-claims.db", "steward-triggers.db", "judge-panel.db", "board-fill.db", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));
@@ -121,9 +121,6 @@ public sealed class StoreSetupRunnerTests
         }
 
         Assert.Equal(first, StoreSetupRunner.Run(workspace.OrchestratorDirectory));
-        Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.FollowerGateAcceptance.StoreName).Version);
-        using var follower = Open(Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.FollowerGateAcceptance.Database), SqliteOpenMode.ReadOnly);
-        Assert.Equal(1, StoreSchemaVersions.Read(follower, StoreSchemaRegistry.FollowerGateAcceptance.StoreName));
         Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.ProgressiveReviewSteering.StoreName).Version);
         using var steering = Open(Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewSteering.Database), SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(steering, StoreSchemaRegistry.ProgressiveReviewSteering.StoreName));

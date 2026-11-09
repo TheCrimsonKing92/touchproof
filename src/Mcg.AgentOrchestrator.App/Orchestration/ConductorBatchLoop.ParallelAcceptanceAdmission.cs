@@ -327,7 +327,6 @@ internal sealed partial class ConductorBatchLoop
             goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds, _utcNow()));
         (state.CohortEligible, state.ProductionCandidates) = ConductorTickStepLedger.Measure("prep-train-receipts", () => LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel));
-        ConductorTickStepLedger.Measure("prep-follower-receipts", () => CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel));
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission()
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
             : ConductorTickStepLedger.Measure("prep-oldest-waiter", () => ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds));
@@ -562,7 +561,6 @@ internal sealed partial class ConductorBatchLoop
         Func<bool> suppressNewAcceptanceAdmission)
     {
         if (suppressNewAcceptanceAdmission()) return;
-        AdmitFollowerGate(state, kernel, driver, policy, tick, changedGoalLines);
         var oldestWaiter = state.OldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
         foreach (var goal in state.OrderedEligible)

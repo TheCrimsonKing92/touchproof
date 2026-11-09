@@ -9,7 +9,6 @@ public sealed class StoreSchemaDiagnosticsTests
     [Theory]
     [InlineData("collaboration-items")]
     [InlineData("dogfood-log")]
-    [InlineData("follower-gate-acceptance")]
     [InlineData("merge-train-acceptance")]
     [InlineData("operator-escapes")]
     [InlineData("operator-intents")]
@@ -69,8 +68,6 @@ public sealed class StoreSchemaDiagnosticsTests
                 path => CollaborationItemStore.OpenReadOnly(path)),
             "dogfood-log" => (StoreSchemaRegistry.DogfoodLog, DogfoodLogStore.Setup,
                 path => DogfoodLogStore.OpenReadOnly(path)),
-            "follower-gate-acceptance" => (StoreSchemaRegistry.FollowerGateAcceptance, FollowerGateAcceptanceStoreSetup.Setup,
-                path => FollowerGateAcceptanceStore.OpenReadOnly(path)),
             "merge-train-acceptance" => (StoreSchemaRegistry.MergeTrainAcceptance, MergeTrainAcceptanceStore.Setup,
                 path => MergeTrainAcceptanceStore.OpenReadOnly(path)),
             "operator-escapes" => (StoreSchemaRegistry.OperatorEscapes, SqliteOperatorEscapeStore.Setup,

@@ -206,18 +206,13 @@ public sealed class OperatorGateCancellationTests
     }
 
     [Theory]
-    [InlineData("follower")]
     [InlineData("focused-evidence")]
     public void Apply_ExcludedAttempt_LeavesHolderAndMetadataUntouched(string kind)
     {
         using var f = new Fixture();
         var goal = f.Goal();
-        if (kind == "follower") f.Group(kind, "excluded", goal);
-        else
-        {
-            var attempt = f.Single(goal);
-            Fixture.SaveSolo(attempt with { Kind = kind });
-        }
+        var attempt = f.Single(goal);
+        Fixture.SaveSolo(attempt with { Kind = kind });
         var before = f.Metadata();
         f.Jobs.Clear();
         Assert.Equal("no-live-gate-attempt", Assert.Throws<InvalidOperationException>(() =>

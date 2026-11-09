@@ -44,7 +44,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
                 ["prep-cohort-receipts"] = 0, ["prep-train-reconcile"] = 0, ["prep-projection"] = 0,
                 ["prep-census"] = 0, ["prep-plan-receipt"] = 0, ["prep-cohort-members"] = 0,
                 ["prep-obligation-filter"] = 0, ["prep-merge-conflict"] = 0, ["prep-approval-hold"] = 0,
-                ["prep-train-receipts"] = 0, ["prep-follower-receipts"] = 0, ["prep-oldest-waiter"] = 0,
+                ["prep-train-receipts"] = 0, ["prep-oldest-waiter"] = 0,
                 ["prep-retry-priority"] = 0, ["prep-interaction-keys"] = 0, ["prep-probe-backoff"] = 0,
                 ["merge-train"] = 0, ["pair-cohort"] = 0, ["solo-admission"] = 0,
                 ["activation-probe-record"] = 0, ["priority-order"] = 0, ["hold-cohort-members"] = 0,
@@ -67,7 +67,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             // The 37 ms capture belongs to the early phase: 221 - 37 = 184 ms.
             Assert.EndsWith(" cpu_ms=184", line);
             // Emission order differs from call order; instrumentation cannot reorder calls.
-            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick" }, observed);
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }

@@ -182,7 +182,7 @@ public sealed class RemoteLaneExecutorExperimentFlagTests
     }
 
     [Theory]
-    [InlineData("followerGatesEnabled", ExperimentFlagFileKind.RemoteLaneExecutors, null)]
+    [InlineData("buildGcConserveMemory", ExperimentFlagFileKind.RemoteLaneExecutors, null)]
     [InlineData("sampleEvery", ExperimentFlagFileKind.RemoteLaneExecutors, null)]
     [InlineData("FocusedEvidenceShadow", ExperimentFlagFileKind.RemoteLaneExecutors, null)]
     [InlineData("focusedEvidenceShadow", ExperimentFlagFileKind.ConductorPolicy, null)]

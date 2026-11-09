@@ -144,7 +144,7 @@ public sealed class ConductorExperimentFlagToggleControllerTests
     {
         Baseline = new(ExperimentBaselineKind.AlternatingGates),
         Intervention = new(ExperimentInterventionKind.ConfigFlag, "toggle", new(
-            ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true, false))
+            ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true, false))
     }, ExperimentFlagTestFixture.Now, ExperimentOutcomeState.Open, null);
 
     private static GateLaneTimeLedgerRecord Gate(ExperimentRecord record) => new(record.CreatedAt.AddMinutes(1),

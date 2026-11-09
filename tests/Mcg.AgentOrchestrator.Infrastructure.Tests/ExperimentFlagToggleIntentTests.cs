@@ -166,7 +166,7 @@ public sealed class ExperimentFlagToggleIntentTests
         var spec = AlternatingSpec() with
         {
             Intervention = new(ExperimentInterventionKind.ConfigFlag, "toggle",
-                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true, false))
+                new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true, false))
         };
         spec = failure switch
         {

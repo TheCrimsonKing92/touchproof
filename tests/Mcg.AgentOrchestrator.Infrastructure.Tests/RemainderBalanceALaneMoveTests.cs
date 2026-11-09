@@ -20,7 +20,6 @@ public sealed class RemainderBalanceALaneMoveTests
         "ProviderUsageHoldEventsScenarioTests",
         "RemoteExecutorAdmissionConsumersTests",
         "ProviderHoldFallbackScenarioTests",
-        "AcceptanceRunExecutionContextTestsFollowerPinnedBase",
         "WorkerDispatchTestsSeededRepositoryFactoryTests",
         "PendingStoreSetupCliWriteTests",
         "ConductorEvidenceAttemptLifecycleTests",

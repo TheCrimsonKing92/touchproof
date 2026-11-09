@@ -9,7 +9,7 @@ public sealed class AcceptanceAdmissionPathSetTests
         [
             "AcceptanceHolderIdentity.cs", "AcceptanceHolderLease.cs", "AcceptanceJobCustodianHost.cs",
             "ConductorBatchLoop.LiveAcceptanceAdmission.cs", "ConductorBatchLoop.ParallelAcceptanceAdmission.cs",
-            "ConductorDriver.AcceptanceCohortExecution.cs", "ConductorDriver.FollowerGates.cs",
+            "ConductorDriver.AcceptanceCohortExecution.cs",
             "ConductorDriver.GroupedGateAttempts.cs", "ConductorDriver.MergeTrains.cs",
             "ConductorGroupedGateAttemptHost.cs", "ConductorGroupedGateAttempts.cs",
             "ConductorLiveGroupedGateCount.cs", "ConductorOrphanGateAttemptAdoption.cs",
@@ -44,7 +44,6 @@ public sealed class AcceptanceAdmissionPathSetTests
 
     [Xunit.Theory]
     [Xunit.InlineData("ConductorBatchLoop.FallbackAcceptance.cs")]
-    [Xunit.InlineData("ConductorBatchLoop.FollowerGateAdmission.cs")]
     public void AdditionalAdmissionPrefix_Touches(string name) => Assert.True(
         AcceptanceAdmissionPathSet.Touches(["src/Mcg.AgentOrchestrator.App/Orchestration/" + name]));
 

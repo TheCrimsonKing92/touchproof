@@ -33,7 +33,7 @@ internal sealed class ConductorTickStepLedger
     {
         "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt",
         "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold",
-        "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-retry-priority",
+        "prep-train-receipts", "prep-oldest-waiter", "prep-retry-priority",
         "prep-interaction-keys", "prep-probe-backoff"
     });
     private static readonly AsyncLocal<ConductorTickStepLedger?> Current = new();

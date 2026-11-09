@@ -31,7 +31,7 @@ public sealed class ConductorExperimentFlagActionEventTests
         Assert.Equal(asOf, entry.GetProperty("timestamp").GetDateTimeOffset());
         Assert.False(entry.TryGetProperty("operator", out _));
         var expected = $"EXPERIMENT_FLAG_ACTION experiment={record.Id} action={action} " +
-            "file=conductor-policy property=followerGatesEnabled from=true to=" +
+            "file=conductor-policy property=buildGcConserveMemory from=true to=" +
             (action == "keep" ? $"true backlog=experiment-flag-keep-{record.Id}" : "false");
         Assert.Equal(expected, entry.GetProperty("detail").GetString());
         AssertActionState(fixture, record, action);
@@ -175,13 +175,13 @@ public sealed class ConductorExperimentFlagActionEventTests
     public void Detail_ValidTarget_FormatsExactValues(string action, bool? before,
         bool? prior, bool applied, string from, string to)
     {
-        var record = HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", applied, prior));
+        var record = HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", applied, prior));
 
         var detail = ExperimentFlagActionEvent.Detail(record, action, before);
 
         Assert.Equal("experiment-flag-action", ExperimentFlagActionEvent.Kind);
         Assert.Equal($"EXPERIMENT_FLAG_ACTION experiment={FixedId} action={action} " +
-            $"file=conductor-policy property=followerGatesEnabled from={from} to={to}" +
+            $"file=conductor-policy property=buildGcConserveMemory from={from} to={to}" +
             (action == "keep" ? $" backlog=experiment-flag-keep-{FixedId}" : ""), detail);
     }
 
@@ -201,14 +201,14 @@ public sealed class ConductorExperimentFlagActionEventTests
     [InlineData("Keep")]
     public void Detail_UnsupportedAction_Throws(string action) =>
         Assert.Throws<ArgumentException>(() => ExperimentFlagActionEvent.Detail(
-            HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)), action, true));
+            HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true)), action, true));
 
     [Theory]
     [InlineData(ExperimentInterventionKind.Policy, true)]
     [InlineData(ExperimentInterventionKind.ConfigFlag, false)]
     public void Detail_InvalidIntervention_Throws(ExperimentInterventionKind kind, bool hasTarget)
     {
-        var record = HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true));
+        var record = HandBuilt(new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true));
         record = record with { Spec = record.Spec with { Intervention = new(kind, "test",
             hasTarget ? record.Spec.Intervention.FlagTarget : null) } };
 
