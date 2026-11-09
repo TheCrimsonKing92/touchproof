@@ -32,16 +32,17 @@ internal static class ReverseDependencyTestImpactReader
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
         int maximumSelectedTestClasses = MaximumSelectedTestClasses,
         int? maximumFrontierSymbols = MaximumFrontierSymbols,
-        bool propagateShippingSourceReach = false)
+        bool propagateShippingSourceReach = false,
+        int maximumChangedSourceFiles = MaximumChangedSourceFiles)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null, maximumSelectedTestClasses,
             null, maximumFrontierSymbols ?? MaximumFrontierSymbols);
-        if (changedSourcePaths.Count is 0 or > MaximumChangedSourceFiles)
+        if (changedSourcePaths.Count == 0 || changedSourcePaths.Count > maximumChangedSourceFiles)
         {
             return ReverseDependencyTestSelection.Abandoned(
                 ReverseDependencyDegradationKind.ChangedSourceFileCount,
-                $"Focused reverse-dependency selection supports 1-{MaximumChangedSourceFiles} changed source files.",
+                $"Focused reverse-dependency selection supports 1-{maximumChangedSourceFiles} changed source files.",
                 headroom: headroom);
         }
 

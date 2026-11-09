@@ -24,11 +24,15 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerConsoleInputTraceOptions.cs",
         ConsolePath + "OwnerConsoleJsonlTail.cs",
         ConsolePath + "OwnerConsoleLandedToday.cs",
+        // Reads lifecycle event files to reconcile the landed-today scan with stream deliveries.
+        ConsolePath + "OwnerConsoleLandingBaseline.cs",
         ConsolePath + "OwnerConsoleNotificationSettings.cs",
         ConsolePath + "OwnerConsoleRefreshTimingsFile.cs",
         // The sound command owns library access and atomic settings persistence, not presentation.
         ConsolePath + "OwnerConsoleSoundCommand.cs",
         ConsolePath + "OwnerConsoleStartupActivity.cs",
+        // Reads state and collaboration store file metadata, including WAL files, for change detection.
+        ConsolePath + "OwnerConsoleStoreFingerprint.cs",
         ConsolePath + "OwnerConsoleVerb.cs",
         ConsolePath + "OwnerConsoleWorkspaceCatalog.cs",
         ConsolePath + "OwnerGateFailureEvidence.cs",

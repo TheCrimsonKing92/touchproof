@@ -13,14 +13,31 @@ internal static class CliGateStatsLaunchesCommand
     internal static void Execute(IReadOnlyList<string> args, string orchestratorDirectory, TextWriter output)
     {
         var flags = new Dictionary<string, int>(StringComparer.Ordinal);
+        var bySite = false;
+        string? classFilter = null;
         for (var i = 2; i < args.Count; i++)
         {
             var flag = args[i];
+            if (flag == "--by-site")
+            {
+                if (bySite) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
+                bySite = true;
+                continue;
+            }
+            if (flag == "--class")
+            {
+                if (classFilter is not null || ++i >= args.Count || string.IsNullOrWhiteSpace(args[i]) ||
+                    args[i].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException(CliCommandHelp.GateStatsUsage);
+                classFilter = args[i];
+                continue;
+            }
             if (flag is not ("--last" or "--top") || ++i >= args.Count ||
                 !int.TryParse(args[i], NumberStyles.None, CultureInfo.InvariantCulture, out var value) ||
                 value <= 0 || !flags.TryAdd(flag, value))
                 throw new ArgumentException(CliCommandHelp.GateStatsUsage);
         }
+        if (classFilter is not null && !bySite) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
 
         var skipped = 0;
         var files = new List<(string Path, string Attempt, DateTimeOffset Time)>();
@@ -38,6 +55,7 @@ internal static class CliGateStatsLaunchesCommand
             .OrderByDescending(group => group.First().Time).ThenBy(group => group.Key, StringComparer.Ordinal)
             .Take(flags.GetValueOrDefault("--last", 10)).ToArray();
         var totals = new Dictionary<string, ClassTotal>(StringComparer.Ordinal);
+        var siteTotals = new Dictionary<(string Site, string Git), long>();
         foreach (var attempt in attempts)
         foreach (var file in attempt)
         {
@@ -47,6 +65,15 @@ internal static class CliGateStatsLaunchesCommand
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { skipped++; continue; }
             foreach (var line in lines)
             {
+                if (bySite)
+                {
+                    if (!line.StartsWith("LAUNCH_LOCK_BY_SITE", StringComparison.Ordinal)) continue;
+                    if (!TryParseSite(line, out var className, out var site, out var subcommand, out var count))
+                    { skipped++; continue; }
+                    if (classFilter is null || string.Equals(classFilter, className, StringComparison.Ordinal))
+                        siteTotals[(site, subcommand)] = siteTotals.GetValueOrDefault((site, subcommand)) + count;
+                    continue;
+                }
                 if (!line.StartsWith("LAUNCH_LOCK_BY_CLASS", StringComparison.Ordinal)) continue;
                 if (!TryParse(line, out var name, out var launches, out var git, out var createMs))
                 { skipped++; continue; }
@@ -58,7 +85,15 @@ internal static class CliGateStatsLaunchesCommand
             }
         }
 
-        foreach (var pair in totals.OrderByDescending(pair => pair.Value.Launches)
+        if (bySite)
+        {
+            foreach (var pair in siteTotals.OrderByDescending(pair => pair.Value)
+                         .ThenBy(pair => pair.Key.Site, StringComparer.Ordinal)
+                         .ThenBy(pair => pair.Key.Git, StringComparer.Ordinal).Take(flags.GetValueOrDefault("--top", 20)))
+                output.WriteLine(FormattableString.Invariant(
+                    $"site={pair.Key.Site}\tgit={pair.Key.Git}\tlaunches={pair.Value}"));
+        }
+        else foreach (var pair in totals.OrderByDescending(pair => pair.Value.Launches)
                      .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(flags.GetValueOrDefault("--top", 20)))
             output.WriteLine(FormattableString.Invariant(
                 $"class={pair.Key}\tgates={pair.Value.Attempts.Count}\tlaunches={pair.Value.Launches}\tgit_cli_launches={pair.Value.GitCli}\tcreate_ms_total={pair.Value.CreateMs:F3}"));
@@ -107,6 +142,31 @@ internal static class CliGateStatsLaunchesCommand
 
     private static bool Count(string text, out long value) =>
         long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value);
+
+    private static bool TryParseSite(string line, out string name, out string site, out string git, out long launches)
+    {
+        name = site = git = "";
+        launches = 0;
+        var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length != 6 || tokens[0] != "LAUNCH_LOCK_BY_SITE") return false;
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var token in tokens.Skip(1))
+        {
+            var separator = token.IndexOf('=');
+            if (separator <= 0 || separator == token.Length - 1 || token.Any(char.IsWhiteSpace) ||
+                !fields.TryAdd(token[..separator], token[(separator + 1)..])) return false;
+        }
+        if (!fields.TryGetValue("pid", out var pid) ||
+            !int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out _) ||
+            !fields.TryGetValue("class", out var className) ||
+            !fields.TryGetValue("site", out var caller) ||
+            !fields.TryGetValue("git", out var subcommand) ||
+            !fields.TryGetValue("launches", out var count) || !Count(count, out launches)) return false;
+        name = className;
+        site = caller;
+        git = subcommand;
+        return true;
+    }
 
     private sealed class ClassTotal
     {

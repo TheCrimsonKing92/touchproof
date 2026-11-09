@@ -12,6 +12,7 @@ internal sealed record OwnerConsoleNotificationSettings
     internal string? AttentionSoundFile { get; init; }
     internal string? AlarmSoundFile { get; init; }
     internal string? SoundLibrary { get; init; }
+    internal OwnerConsoleBellTiers BellTiers { get; init; } = OwnerConsoleBellTiers.All;
 
     internal static OwnerConsoleNotificationSettings Load(string path)
     {
@@ -31,7 +32,8 @@ internal sealed record OwnerConsoleNotificationSettings
                 CalmSoundFile = Sound("calmSoundFile"),
                 AttentionSoundFile = Sound("attentionSoundFile"),
                 AlarmSoundFile = Sound("alarmSoundFile"),
-                SoundLibrary = Sound("soundLibrary")
+                SoundLibrary = Sound("soundLibrary"),
+                BellTiers = EnabledTiers()
             };
 
             TimeSpan Duration(string key, double secondsPerUnit, TimeSpan fallback)
@@ -44,6 +46,23 @@ internal sealed record OwnerConsoleNotificationSettings
             string? Sound(string key) => fields.TryGetValue(key, out var field) &&
                 field.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(field.GetString())
                     ? field.GetString() : null;
+            OwnerConsoleBellTiers EnabledTiers()
+            {
+                var tiers = OwnerConsoleBellTiers.All;
+                if (!fields.TryGetValue("mutedTiers", out var field) || field.ValueKind != JsonValueKind.Array) return tiers;
+                foreach (var item in field.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String) continue;
+                    tiers = item.GetString() switch
+                    {
+                        "calm" => tiers with { Calm = false },
+                        "attention" => tiers with { Attention = false },
+                        "alarm" => tiers with { Alarm = false },
+                        _ => tiers
+                    };
+                }
+                return tiers;
+            }
         }
         catch { return defaults; }
     }

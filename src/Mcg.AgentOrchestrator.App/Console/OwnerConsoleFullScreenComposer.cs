@@ -19,7 +19,7 @@ internal static class OwnerConsoleFullScreenComposer
         OwnerConsoleScreenOperation Operation, OwnerConsoleFullScreenLayout Layout,
         OwnerConsoleRenderCoordinator RenderCoordinator, OwnerConsolePreviewPane PreviewPane,
         OwnerConsoleViewTrace Trace, OwnerConsoleBoardSelection Selection,
-        OwnerConsolePaneRenderer PaneRenderer, OwnerConsoleEpicDialog EpicView) Build(
+        OwnerConsolePaneRenderer PaneRenderer, OwnerConsoleEpicDialog EpicView, OwnerConsoleSettingsView SettingsView) Build(
         OwnerConsoleFullScreenView view, IApplication app, OwnerConsoleScreenController controller,
         CancellationToken token, CancellationToken lifetimeToken, TimeProvider clock,
         OwnerConsoleLoopOptions? options, OwnerConsoleInputDiagnostics? diagnostics,
@@ -51,7 +51,9 @@ internal static class OwnerConsoleFullScreenComposer
         epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
-        return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView);
+        var settingsView = new OwnerConsoleSettingsView(controller.Sound is { } sound
+            ? [new OwnerConsoleAlertsSettingsTab(sound)] : []);
+        return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }
 
     // Wiring invokes view callbacks immediately, so Build's results must already be stored on the view.
@@ -65,7 +67,7 @@ internal static class OwnerConsoleFullScreenComposer
         Label notice, Label status, Label hints, Label epicHint, OwnerConsoleRenderState state,
         OwnerConsoleBoardCollapse collapse, Func<string?> completionHint, Action<string?> setCompletionHint)
     {
-        layout.Compose(view.Window, status, notice, hints, epicHint, view.CommandLine, view.EpicView, view.GateView);
+        layout.Compose(view.Window, status, notice, hints, epicHint, view.CommandLine, view.EpicView, view.GateView, view.SettingsView);
         new OwnerConsoleFullScreenWiring(
             previewPane.Body, notice, status, view.DecisionsPane, board, view.ActivityPane, view.CommandLine, activityPane,
             controller, diagnostics, trace.State,

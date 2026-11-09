@@ -103,13 +103,13 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds] [--relaunch]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string StorageHealthUsage = "Usage: storage-health [--json]";
-    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...] | gate-stats launches [--last <n>] [--top <k>]";
+    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...] | gate-stats launches [--last <n>] [--top <k>] [--by-site [--class <name>]]";
     public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
-    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...]";
+    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...] [--max-changed-source-files <n>]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -693,7 +693,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GateStats = new(
         GateStatsUsage,
         "Read gate timings (default last=10, top=20), test flakes (default last=20, top=20), and failures (default last=20). Drill into one failure with --attempt. Lane timings use recorded observations; classes use TRX lane slugs. P90 is nearest rank; ISO times require Z or an offset.",
-        ["--last", "--lane", "--top", "--before", "--after", "--attempt", "--gate", "--json", "--help", "-h"]);
+        ["--last", "--lane", "--top", "--before", "--after", "--attempt", "--gate", "--json", "--by-site", "--class", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BuildAttribution = new(
         BuildAttributionUsage,
@@ -715,7 +715,7 @@ internal static class CliCommandHelp
         ["--max-candidates", "--executor", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
-        ["--since", "--limit", "--out", "--floor", "--help", "-h"]);
+        ["--since", "--limit", "--out", "--floor", "--max-changed-source-files", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
     public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
         "       obligation-rebind <goal-prefix> --selector \"<old selector>\" --to \"<new selector>\" --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
