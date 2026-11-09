@@ -3,13 +3,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource questions, IOwnerAnswerSubmitter answers,
-    IOwnerConsoleDialogs dialogs, OwnerGoalDetailQuery goalDetail,
-    IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
-    IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
+    IOwnerConsoleDialogs dialogs, OwnerGoalDetailQuery goalDetail, IOwnerConsoleConductor conductor,
+    IOwnerConsoleDigestReport digest, IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
     Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
-    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null) : IDisposable
+    OwnerConsoleSoundCommand? sound = null, string? conductorPolicyPath = null, OrchestratorWorkspace? workspace = null, OwnerConsoleAgentsSettingsTab? agentsSettings = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerFleetViewKeys _fleetKeys = new();
@@ -22,6 +21,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private readonly OwnerConsoleBellCommand _bell = new(sound);
     private OwnerConsoleBellTiers EffectiveBellTiers => _bell.Tiers;
     internal OwnerConsoleSoundCommand? Sound => sound;
+    internal OwnerConsoleAgentsSettingsTab? AgentsSettings => agentsSettings;
     internal string? ConductorPolicyPath => conductorPolicyPath;
     internal OrchestratorWorkspace? Workspace => workspace;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);

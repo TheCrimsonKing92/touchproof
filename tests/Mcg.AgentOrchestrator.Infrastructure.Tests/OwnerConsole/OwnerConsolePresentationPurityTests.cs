@@ -16,6 +16,8 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerActivityEvidenceReader.cs",
         ConsolePath + "OwnerAnswerIntentSubmitter.cs",
         ConsolePath + "OwnerConsoleAdapters.cs",
+        // Owns catalog reads and atomic saves, not presentation.
+        ConsolePath + "OwnerConsoleAgentsSettingsStore.cs",
         ConsolePath + "OwnerConsoleBoardComposer.cs",
         ConsolePath + "OwnerConsoleBoardSource.cs",
         ConsolePath + "OwnerConsoleEvidenceAttemptProgressReader.cs",
