@@ -13,7 +13,7 @@ internal static class DeveloperReportEvidence
             return false;
         var required = DeveloperDeferredTestClassNames.Parse(requiredField);
         if (required.Count == 0)
-            return false;
+            return UnnamedDeveloperReportEvidence.TryMatch(criterion, developer, out tests, out skipReason);
 
         if (!TryReadReport(developer, out var reportedField))
         {

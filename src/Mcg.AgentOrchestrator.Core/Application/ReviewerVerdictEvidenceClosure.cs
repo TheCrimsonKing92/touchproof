@@ -28,6 +28,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
                     out var developerCandidate);
                 string? reportTests = null;
                 if (reason == "verdict-not-met" && owner == "developer" &&
+                    !UnnamedDeveloperReportEvidence.IsNotMet(verification, request.PlannerIdentity!.CriterionIndex - 1) &&
                     ResolveCriterion(goal, request.PlannerIdentity!) is { } criterion)
                 {
                     if (DeveloperReportEvidence.TryMatch(criterion, developer!, out reportTests, out var reportReason))

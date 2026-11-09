@@ -365,9 +365,8 @@ public sealed partial class AgentOrchestratorKernel
                     goal.HasCurrentPlannerExecutionAuthority(item))
                     .Select(item => item.Criterion))
                 .Distinct(StringComparer.Ordinal)
-                .Where(criterion => !refinedSpec.OperatorOwnedAcceptanceCriteria.Contains(
-                    criterion,
-                    StringComparer.OrdinalIgnoreCase))
+                .Where(criterion => ReviewerExecutedCriterionPresentation.ShowAsGateOwned(
+                    task.RequiredRole, criterion, refinedSpec.OperatorOwnedAcceptanceCriteria))
                 .ToArray();
             if (acceptanceGateOwnedCriteria.Length > 0)
             {
