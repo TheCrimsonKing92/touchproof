@@ -9,6 +9,6 @@ public sealed partial class BackgroundDispatchRunner
     private static string ResolveDispatchHostAssembly() =>
         Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
 
-    private static bool IsLocalDispatch(TaskDispatchRecord dispatch) =>
+    internal static bool IsLocalDispatch(TaskDispatchRecord dispatch) =>
         dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
 }
