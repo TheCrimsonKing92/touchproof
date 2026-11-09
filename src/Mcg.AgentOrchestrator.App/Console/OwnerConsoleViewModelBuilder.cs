@@ -103,6 +103,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 .Select(goal => (Goal: goal, Key: OwnerConsoleBoardSortKey.For(goal)))
                 .Where(item => IsActive(item.Goal.Status) || item.Key.Rank == OwnerConsoleAttention.RecentTerminal &&
                     item.Key.Since is { } at && now - at <= TimeSpan.FromHours(24)).OrderBy(item => item.Key).ToArray();
+            var epicTitles = ranked.Length == 0 ? new Dictionary<string, string>() :
+                await epics.GetTitlesAsync(ranked.Select(item => item.Goal.Id.Value).ToArray(), cancellationToken);
             var queuePosition = 0;
             foreach (var (goal, key) in ranked)
             {
@@ -116,7 +118,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 if (key.Rank == OwnerConsoleAttention.GateRunning && (gate is null || gate.ForMember(goal.Id.Value) is not null) &&
                     gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
-                var row = new OwnerConsoleBoardRow(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
+                var row = new OwnerConsoleBoardRow(Prefix(goal.Id.Value), epicTitles.GetValueOrDefault(goal.Id.Value, ""),
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
                     key.Rank == OwnerConsoleAttention.RecentTerminal, OwnerConsolePriorityText.Column(goal),

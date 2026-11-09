@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerActivityEvidenceLoader(Func<OwnerConductEvent, OwnerActivityTestEvidence?>? read)
 {
     private long _sequence;
+    private readonly OwnerActivityEvidenceCache _cache = new();
 
     internal long Begin() => Interlocked.Increment(ref _sequence);
 
@@ -16,7 +17,7 @@ internal sealed class OwnerActivityEvidenceLoader(Func<OwnerConductEvent, OwnerA
     {
         var resolved = new Dictionary<OwnerConductEvent, OwnerActivityTestEvidence?>();
         if (read is not null)
-            foreach (var item in events.Where(NeedsEvidence).Distinct()) resolved.Add(item, read(item));
+            foreach (var item in events.Where(NeedsEvidence).Distinct()) resolved.Add(item, _cache.Read(item, read));
         return resolved;
     }
 

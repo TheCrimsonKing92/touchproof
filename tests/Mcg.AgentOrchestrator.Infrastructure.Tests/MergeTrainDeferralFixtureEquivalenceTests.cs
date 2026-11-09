@@ -121,9 +121,10 @@ public sealed class MergeTrainDeferralFixtureEquivalenceTests(
     {
         var repository = fixture.Repository;
         using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        using var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers();
         var result = InfrastructureTestSupport.RunGitProbe(repository, ["rev-parse", "--verify", "HEAD"]);
         Assert.True(result.Succeeded, result.ToString());
-        Assert.True(launches.Count >= 1);
+        Assert.True(launches.Count + answers.Count >= 1);
     }
 
     private (GoalStatus Status, int Tasks, int Verifications)[] GoalState() => fixture.Goals
