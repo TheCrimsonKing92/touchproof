@@ -173,8 +173,10 @@ internal sealed class OwnerConsolePolicySettingsTab : IOwnerConsoleSettingsTab
             File.Move(temporary, _path, overwrite: true);
             _editingKey = null;
             Message = $"saved {key}. " + (key == "maxTotalBudget" ? "Not read by the conductor." :
-                key.StartsWith("build", StringComparison.Ordinal) || key == "acceptanceChildrenOptOutExecutionThrottling"
-                    ? "Applies on next use." : "Applies on the next conductor relaunch.");
+                (key.StartsWith("build", StringComparison.Ordinal) || key == "acceptanceChildrenOptOutExecutionThrottling"
+                    ? "Applies on next use." : "File-sourced conductors apply this on the next tick.") +
+                " In-flight attempts keep their policy snapshot; running builds keep their environment." +
+                " Conductors started with --policy ignore file policy; relaunch without --policy to use it.");
             Refresh();
         }
         catch (Exception ex) when (IsFileOrPolicyError(ex))

@@ -43,10 +43,10 @@ public sealed class OwnerConsolePolicySettingsTabTests
         view.Open(OwnerConsolePane.Board);
         Edit(view, "acceptanceWidth", "3");
         Assert.False(tab.Editing);
-        Assert.Contains("next conductor relaunch", tab.StatusText);
+        Assert.Contains("next tick", tab.StatusText);
         Edit(view, "boardFillMaxDraftsPerDay", "8");
         Assert.False(tab.Editing);
-        Assert.Contains("next conductor relaunch", tab.StatusText);
+        Assert.Contains("next tick", tab.StatusText);
         var expected = fixture.Original.Replace("\"acceptanceWidth\": 1", "\"acceptanceWidth\": 3", StringComparison.Ordinal)
             .Replace("\"boardFillMaxDraftsPerDay\": 6", "\"boardFillMaxDraftsPerDay\": 8", StringComparison.Ordinal);
         Assert.NotEqual(before, File.ReadAllBytes(fixture.Path));
@@ -153,13 +153,15 @@ public sealed class OwnerConsolePolicySettingsTabTests
     [InlineData("buildGcConserveMemoryLevel", "9", "next use")]
     [InlineData("buildGcHeapCount", "4", "next use")]
     [InlineData("buildRootRetentionDays", "7", "next use")]
-    [InlineData("acceptanceAttemptBelowNormalPriority", "false", "next conductor relaunch")]
-    [InlineData("cascadeTesterCheapFirst", "false", "next conductor relaunch")]
-    [InlineData("maxConcurrentPaidWorkers", "6", "next conductor relaunch")]
-    [InlineData("maxCriterionRetries", "3", "next conductor relaunch")]
-    [InlineData("plannerSampleCount", "3", "next conductor relaunch")]
-    [InlineData("autoPromoteRiskThreshold", "Security", "next conductor relaunch")]
-    [InlineData("autoPromoteRiskThreshold", "null", "next conductor relaunch")]
+    [InlineData("acceptanceWidth", "3", "next tick")]
+    [InlineData("boardFillMaxDraftsPerDay", "8", "next tick")]
+    [InlineData("acceptanceAttemptBelowNormalPriority", "false", "next tick")]
+    [InlineData("cascadeTesterCheapFirst", "false", "next tick")]
+    [InlineData("maxConcurrentPaidWorkers", "6", "next tick")]
+    [InlineData("maxCriterionRetries", "3", "next tick")]
+    [InlineData("plannerSampleCount", "3", "next tick")]
+    [InlineData("autoPromoteRiskThreshold", "Security", "next tick")]
+    [InlineData("autoPromoteRiskThreshold", "null", "next tick")]
     [InlineData("maxTotalBudget", "21.00", "Not read by the conductor")]
     public void OtherEditableKeys_SaveOnlyTheirValueAndReportTiming(string key, string input, string timing)
     {
@@ -170,6 +172,14 @@ public sealed class OwnerConsolePolicySettingsTabTests
         Edit(view, key, input);
         Assert.False(tab.Editing);
         Assert.Contains(timing, tab.StatusText);
+        Assert.DoesNotContain("next conductor relaunch", tab.StatusText);
+        if (key != "maxTotalBudget")
+        {
+            Assert.Contains("In-flight attempts keep their policy snapshot", tab.StatusText);
+            Assert.Contains("running builds keep their environment", tab.StatusText);
+            Assert.Contains("Conductors started with --policy ignore file policy", tab.StatusText);
+            Assert.Contains("relaunch without --policy to use it", tab.StatusText);
+        }
         var before = Parse(fixture.Original);
         var after = Parse(File.ReadAllText(fixture.Path));
         Assert.False(JsonNode.DeepEquals(before[key], after[key]));
