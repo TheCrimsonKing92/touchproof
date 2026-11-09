@@ -1,9 +1,12 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record GateTestObligation(
     string Id, int BriefVersion, IReadOnlyList<string> Selectors,
     string? RequestingTaskId, string Question, DateTimeOffset RecordedAt,
-    PlannerEvidenceIdentity? PlannerIdentity = null, PlannerEvidencePayload? PlannerEvidence = null)
+    PlannerEvidenceIdentity? PlannerIdentity = null, PlannerEvidencePayload? PlannerEvidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RepositoryKey = null)
 {
     public bool HasSameIdentity(GateTestObligation other) => PlannerIdentity is null && other.PlannerIdentity is null
         ? Id == other.Id && BriefVersion == other.BriefVersion

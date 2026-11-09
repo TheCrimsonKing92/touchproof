@@ -13,6 +13,9 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
         IntegrationBranch = integrationBranch;
         try
         {
+            if (GoalRepositoryWorktreeProvisionerSeedTemplate.TryCopyTo(CheckoutPath, integrationBranch))
+                return;
+
             Directory.CreateDirectory(CheckoutPath);
             Git("init", "-b", integrationBranch);
             Git("config", "user.name", "Worktree Provisioner Tests");

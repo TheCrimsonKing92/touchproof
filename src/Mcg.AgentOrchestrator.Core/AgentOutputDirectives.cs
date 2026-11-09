@@ -286,6 +286,14 @@ public static class AgentOutputDirectives
                 testNames = tests.EnumerateArray().Select(test => test.GetString()!).ToArray();
             }
 
+            string? repository = null;
+            if (root.TryGetProperty("repository", out var repositoryProperty) && repositoryProperty.ValueKind != JsonValueKind.Null)
+            {
+                if (repositoryProperty.ValueKind != JsonValueKind.String)
+                    return MalformedEvidenceRequest("repository must be a declared repository key string");
+                repository = repositoryProperty.GetString();
+            }
+
             PlannerEvidenceStoreReference? storeReference = null;
             if (root.TryGetProperty("store_ref", out var storeRef))
             {
@@ -365,7 +373,7 @@ public static class AgentOutputDirectives
 
             evidenceOwner = GateTestObligation.IsAcceptanceGateOwner(evidenceOwner) ? "acceptance-gate" : evidenceOwner;
             var payload = new PlannerEvidencePayload(criterionIndex, evidenceKey, availability.ToLowerInvariant(),
-                evidenceOwner, needed, reason, hasStore ? store : null, storeReference, testNames);
+                evidenceOwner, needed, reason, hasStore ? store : null, storeReference, testNames, repository);
             var question =
                 $"Planner evidence request for criterion {criterionIndex}: {needed}. " +
                 $"Availability: {availabilityText}. Reason: {reason}";
