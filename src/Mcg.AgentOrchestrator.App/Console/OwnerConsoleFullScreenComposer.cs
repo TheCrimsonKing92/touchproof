@@ -54,6 +54,7 @@ internal static class OwnerConsoleFullScreenComposer
         List<IOwnerConsoleSettingsTab> settingsTabs = [];
         if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
         if (controller.ConductorPolicyPath is { } policyPath) settingsTabs.Add(new OwnerConsolePolicySettingsTab(policyPath));
+        if (controller.Workspace is { } workspace) settingsTabs.Add(new OwnerConsoleExecutorsSettingsTab(workspace, new(workspace)));
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }

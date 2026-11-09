@@ -88,6 +88,29 @@ internal static class ImpactReplayReportWriter
             if (nonCSharp.Length > 0) text.AppendLine($"- {Cell(attempt.AttemptId)}: non-C# changes: {Cell(string.Join(", ", nonCSharp))}");
         }
         foreach (var error in report.CleanupErrors) text.AppendLine($"- {Cell(error)}");
+        if (report.Measurement is { } measurement)
+        {
+            text.AppendLine();
+            text.AppendLine("## Balanced pool and skip measurement");
+            text.AppendLine();
+            text.AppendLine($"- Maximum changed source files: {measurement.MaximumChangedSourceFiles}");
+            text.AppendLine($"- Changed source file count distribution: {string.Join(", ", measurement.ChangedSourceFileCountDistribution.Select(p => $"{p.Key}: {p.Value}"))}");
+            text.AppendLine($"- Named-lane estimated seconds saved: {Number(measurement.NamedLaneSecondsSaved)}");
+            text.AppendLine($"- Balanced-pool seconds saved: {Number(measurement.BalancedPoolSecondsSaved)}");
+            text.AppendLine($"- Share of Infrastructure test seconds skipped (readable TRX durations): {(measurement.ShareOfTestSecondsSkipped is { } share ? Percent(share) : "unavailable")}");
+            text.AppendLine($"- Miss count (including recorded flakes): {measurement.MissCount}");
+            text.AppendLine($"- Complete miss checks: {measurement.CompleteMissCheckCount}");
+            text.AppendLine($"- Attempts with incomplete duration coverage: {measurement.IncompleteDurationCoverageCount}");
+        }
+        var unresolved = report.Attempts.SelectMany(a => (a.UnresolvedFailures ?? []).Select(f => (a.AttemptId, Failure: f))).ToArray();
+        if (unresolved.Length > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("## Unresolved failing classes");
+            text.AppendLine();
+            foreach (var entry in unresolved)
+                text.AppendLine($"- {Cell(entry.AttemptId)}: {Cell(entry.Failure.Identity)}; TRX: {Cell(entry.Failure.TrxPath)}; {Cell(entry.Failure.Reason)}");
+        }
         var unmapped = report.UnmappedTestClasses ?? ImpactReplayUnmappedTestClasses.Empty;
         text.AppendLine();
         text.AppendLine("## Unmapped test classes");
