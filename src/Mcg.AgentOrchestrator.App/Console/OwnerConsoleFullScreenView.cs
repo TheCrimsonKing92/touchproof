@@ -40,6 +40,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
     public OwnerConsoleEpicDialog EpicView { get; }
     public OwnerConsoleGateDialog GateView { get; } = new();
+    public OwnerConsoleSettingsView SettingsView { get; }
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
@@ -101,7 +102,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         _refresh = refresh;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _token = _lifetime.Token;
-        (NoticeStrip, _noticeExpiry, _operation, _layout, _renderCoordinator, _previewPane, _trace, _selection, _paneRenderer, EpicView) =
+        (NoticeStrip, _noticeExpiry, _operation, _layout, _renderCoordinator, _previewPane, _trace, _selection, _paneRenderer, EpicView, SettingsView) =
             OwnerConsoleFullScreenComposer.Build(this, app, controller, token, _token, clock ?? TimeProvider.System, options, diagnostics,
                 _decisionsPane, _activityPane, _board, _notice, _status, _hints, _epicHint, _statusPresenter, _state, _working, _collapse);
         (_keys, _bindingRunner, _keyboard) = OwnerConsoleFullScreenComposer.Attach(this, app, controller, refresh, _token,
@@ -109,7 +110,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
     }
 
-    internal void Render(OwnerConsoleViewModel model) => _paneRenderer.Render(model);
+    internal void Render(OwnerConsoleViewModel model)
+    {
+        _paneRenderer.Render(model);
+        SettingsView.Refresh();
+    }
 
     internal void Fit(int activityWidth, int boardTitleWidth) => _paneRenderer.Fit(activityWidth, boardTitleWidth);
 
@@ -182,6 +187,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             await EpicView.OpenAsync(FocusedPane, epicId);
         if (_controller.TakeRequestedGateGoalId() is { } gateGoalId && !_token.IsCancellationRequested)
             OpenGate(gateGoalId);
+        if (_controller.TakeSettingsRequested() && !_token.IsCancellationRequested)
+            SettingsView.Open(FocusedPane);
     }
 
     public void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
@@ -224,12 +231,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     internal void Invoke(Action action)
     {
-        if (_app.Initialized && _diagnostics is not null)
-        {
-            _app.Invoke(_diagnostics.ObservePost("view-invoke", action, _trace.State));
-        }
-        else if (_app.Initialized) _app.Invoke(action);
-        else action();
+        if (!_app.Initialized) action();
+        else _app.Invoke(_diagnostics?.ObservePost("view-invoke", action, _trace.State) ?? action);
     }
 
     public void Dispose()

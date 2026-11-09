@@ -7,10 +7,13 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
 {
     private readonly object _sync = new();
     private Generation? _current;
+    private readonly OwnerConsoleGoalSnapshotCache _cache = new();
+    private long _storeLoadedGoals;
+    internal long StoreLoadedGoals => Interlocked.Read(ref _storeLoadedGoals);
 
-    internal IDisposable BeginRefresh()
+    internal IDisposable BeginRefresh(bool reuseUnchanged = false)
     {
-        var generation = new Generation();
+        var generation = new Generation(reuseUnchanged);
         lock (_sync) _current = generation;
         return new RefreshHandle(() =>
         {
@@ -21,6 +24,23 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
         });
     }
 
+    internal void Observe(IReadOnlyList<GoalSummary> rows)
+    {
+        lock (_sync)
+        {
+            if (_current is not { Reuse: true } generation) return;
+            generation.Versions = _cache.Observe(rows);
+            foreach (var (id, version) in generation.Versions)
+            {
+                if (generation.Requested.Contains(id) || _cache.Find(id, version) is not { } loaded) continue;
+                var batch = new Batch([new(id)]);
+                batch.Completion.SetResult(loaded);
+                generation.Batches.Add(batch);
+                generation.Requested.Add(id);
+            }
+        }
+    }
+
     internal async Task<OwnerConsoleLoadedGoals> LoadAsync(IReadOnlyCollection<GoalId> ids,
         CancellationToken cancellationToken)
     {
@@ -29,14 +49,18 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
         var ordered = requested.Order(StringComparer.Ordinal).Select(id => new GoalId(id)).ToArray();
         Batch? reserved = null;
         Batch[]? batches = null;
+        Generation? owner = null;
+        IReadOnlyDictionary<string, string>? versions = null;
         lock (_sync)
         {
             if (_current is { } generation)
             {
+                owner = generation;
                 var missing = ordered.Where(id => !generation.Requested.Contains(id.Value)).ToArray();
                 if (missing.Length > 0)
                 {
                     reserved = new(missing);
+                    versions = generation.Versions;
                     generation.Batches.Add(reserved);
                     generation.Requested.UnionWith(reserved.Ids);
                 }
@@ -46,23 +70,30 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
         if (batches is null)
         {
             var kernel = await state.LoadGoalsAsync(ordered, cancellationToken).ConfigureAwait(false);
+            Interlocked.Add(ref _storeLoadedGoals, kernel.Goals.Count);
             return Select(kernel.Goals, kernel.HumanInputRequests, requested);
         }
 
         // Reserve before leaving the lock. Joiners share success, failure or cancellation,
         // and completion belongs to these batches even if a newer generation has begun.
-        if (reserved is not null) _ = PopulateAsync(reserved, cancellationToken);
+        if (reserved is not null) _ = PopulateAsync(reserved, owner!, versions!, cancellationToken);
         var loaded = await Task.WhenAll(batches.Select(batch => batch.Completion.Task))
             .WaitAsync(cancellationToken).ConfigureAwait(false);
         return Select(loaded.SelectMany(batch => batch.Goals), loaded.SelectMany(batch => batch.Requests), requested);
     }
 
-    private async Task PopulateAsync(Batch batch, CancellationToken cancellationToken)
+    private async Task PopulateAsync(Batch batch, Generation generation,
+        IReadOnlyDictionary<string, string> versions, CancellationToken cancellationToken)
     {
         try
         {
             var kernel = await state.LoadGoalsAsync(batch.Query, cancellationToken).ConfigureAwait(false);
-            batch.Completion.SetResult(Select(kernel.Goals, kernel.HumanInputRequests, batch.Ids));
+            Interlocked.Add(ref _storeLoadedGoals, kernel.Goals.Count);
+            cancellationToken.ThrowIfCancellationRequested();
+            var loaded = Select(kernel.Goals, kernel.HumanInputRequests, batch.Ids);
+            lock (_sync)
+                if (generation.Reuse && ReferenceEquals(_current, generation)) _cache.Store(loaded, versions);
+            batch.Completion.SetResult(loaded);
         }
         catch (OperationCanceledException ex) { batch.Completion.SetCanceled(ex.CancellationToken); }
         catch (Exception ex) { batch.Completion.SetException(ex); }
@@ -74,8 +105,10 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
             .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal).ToArray(),
         requests.Where(request => ids.Contains(request.GoalId.Value)).ToArray());
 
-    private sealed class Generation
+    private sealed class Generation(bool reuse)
     {
+        internal bool Reuse { get; } = reuse;
+        internal Dictionary<string, string> Versions = new(StringComparer.Ordinal);
         internal readonly HashSet<string> Requested = new(StringComparer.Ordinal);
         internal readonly List<Batch> Batches = [];
     }

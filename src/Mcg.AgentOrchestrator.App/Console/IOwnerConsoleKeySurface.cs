@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal interface IOwnerConsoleKeySurface
 {
     OwnerConsoleGateDialog GateView { get; }
+    OwnerConsoleSettingsView? SettingsView => null;
     OwnerConsoleEpicDialog EpicView { get; }
     TextField CommandLine { get; }
     bool EditingCommand { get; set; }
