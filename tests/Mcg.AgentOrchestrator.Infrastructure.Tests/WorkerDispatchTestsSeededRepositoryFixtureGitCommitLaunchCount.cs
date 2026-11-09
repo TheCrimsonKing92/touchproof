@@ -60,11 +60,12 @@ public sealed class WorkerDispatchTestsSeededRepositoryFixtureGitCommitLaunchCou
     public void NothingToCommitThrowsWithCommitThenHeadReceiptsAndTwoLaunches() => WithRepository((repository, _) =>
     {
         using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+        using var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers();
 
         var failure = Assert.Throws<Factory.SeededRepositoryFailureException>(() =>
             Factory.RunFixtureGit(repository, ["commit", "-m", "Empty"], CommitTime));
 
-        Assert.Equal(2, launches.Count);
+        Assert.Equal(2, launches.Count + answers.Count);
         Assert.Equal(Factory.ValidationCheck.FixtureGitCommand, failure.Diagnostic.Check);
         Assert.NotNull(failure.Diagnostic.ProbeReceipts);
         Assert.Collection(failure.Diagnostic.ProbeReceipts,

@@ -13,6 +13,35 @@ internal static partial class InfrastructureTestSupport
 
     private static readonly AsyncLocal<GitProbeSeam?> GitProbeSeamScope = new();
     private static readonly AsyncLocal<GitProbeLaunchCounter?> GitProbeLaunchCounterScope = new();
+    private static readonly AsyncLocal<GitProbeRefFileAnswerCounter?> GitProbeRefFileAnswerCounterScope = new();
+
+    internal static GitProbeRefFileAnswerCounter CountGitProbeRefFileAnswers()
+    {
+        var counter = new GitProbeRefFileAnswerCounter(GitProbeRefFileAnswerCounterScope.Value);
+        GitProbeRefFileAnswerCounterScope.Value = counter;
+        return counter;
+    }
+
+    internal static void RecordGitProbeRefFileAnswer() => GitProbeRefFileAnswerCounterScope.Value?.Increment();
+
+    internal sealed class GitProbeRefFileAnswerCounter(GitProbeRefFileAnswerCounter? previous) : IDisposable
+    {
+        private int count;
+        private bool disposed;
+
+        internal int Count => Volatile.Read(ref count);
+
+        internal void Increment() => Interlocked.Increment(ref count);
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+
+            GitProbeRefFileAnswerCounterScope.Value = previous;
+            disposed = true;
+        }
+    }
 
     internal static GitProbeLaunchCounter CountGitProbeLaunches()
     {
