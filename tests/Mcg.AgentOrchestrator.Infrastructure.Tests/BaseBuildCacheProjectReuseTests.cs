@@ -141,7 +141,7 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
         Assert.NotNull(completed.Run.Result.ResultSummary);
         var summary = completed.Run.Result.ResultSummary!;
         Assert.DoesNotContain("unresolved-build-inputs", summary);
-        var fields = summary.Split(' ').Where(token => token.Contains('='))
+        var fields = summary.Split("; ")[0].Split(' ').Where(token => token.Contains('='))
             .Select(token => token.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
         foreach (var phaseName in new[] { "identity_resolution", "identity_revalidation", "run_build_commands", "cache_restore_copy", "cache_capture_publish" })
         {

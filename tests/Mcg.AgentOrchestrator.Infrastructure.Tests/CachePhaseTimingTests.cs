@@ -150,7 +150,8 @@ public sealed class CachePhaseTimingTests : IDisposable
         Assert.True(result.Run.Result.Passed);
         Assert.Same(environment, phase.BuildEnvironment);
         var summary = result.Run.Result.ResultSummary!;
-        Assert.EndsWith("original", summary);
+        Assert.Equal("original", summary.Split("; ")[1]);
+        Assert.Contains("; build_command=dotnet build ", summary);
         Assert.Contains("evictions=none; original", summary);
         var fields = Fields(summary);
         Assert.Equal(long.Parse(fields["build_phase_ms"], CultureInfo.InvariantCulture), result.Run.Result.DurationMilliseconds);
@@ -307,7 +308,8 @@ public sealed class CachePhaseTimingTests : IDisposable
             return Task.FromResult<DotnetBaseBuildCacheIdentity?>(null);
         });
         var result = await AcceptanceDotnetBuildPhase.EnsureAsync(phase, "attempt", hooks);
-        Assert.Equal("fallback", result.Run.Result.ResultSummary);
+        Assert.Equal("fallback", result.Run.Result.ResultSummary!.Split("; ")[0]);
+        Assert.Contains("; build_command=dotnet build", result.Run.Result.ResultSummary);
         Assert.Equal(unresolved ? 1 : 0, resolutions);
         Assert.Equal(1, builds);
         var repeated = await AcceptanceDotnetBuildPhase.EnsureAsync(phase, "attempt", hooks);
@@ -331,7 +333,9 @@ public sealed class CachePhaseTimingTests : IDisposable
             Assert.Null(prepare);
             return Task.FromResult((new AcceptanceCheckResult("build", true, 0, null, ResultSummary: "fallback"), false));
         }, _ => environment, label => label, () => cache, (_, _) => Task.FromResult<DotnetBaseBuildCacheIdentity?>(identity));
-        Assert.Equal("fallback", (await AcceptanceDotnetBuildPhase.EnsureAsync(phase, "attempt", hooks)).Run.Result.ResultSummary);
+        var summary = (await AcceptanceDotnetBuildPhase.EnsureAsync(phase, "attempt", hooks)).Run.Result.ResultSummary!;
+        Assert.Equal("fallback", summary.Split("; ")[0]);
+        Assert.Contains("; build_command=dotnet build", summary);
         Assert.Equal(1, calls);
     }
 
@@ -354,7 +358,7 @@ public sealed class CachePhaseTimingTests : IDisposable
             File.WriteAllText(Path.Combine(directory, "cache.txt"), value);
         }
     }
-    private static Dictionary<string, string> Fields(string summary) => summary.Split(' ').Where(token => token.Contains('='))
+    private static Dictionary<string, string> Fields(string summary) => summary.Split("; ")[0].Split(' ').Where(token => token.Contains('='))
         .Select(token => token.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
     private static void AssertPhase(Dictionary<string, string> fields, string phase, string ms, string count, string status)
     {

@@ -1,7 +1,8 @@
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Session state records consumed crossings even while a tier is muted.
-internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationSettings settings)
+internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationSettings initialSettings,
+    Func<OwnerConsoleNotificationSettings>? currentSettings = null)
 {
     private readonly Dictionary<string, (bool Eligible, bool Consumed)> _decisions = new(StringComparer.Ordinal);
     private DateTimeOffset? _lastCalm;
@@ -15,19 +16,20 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
     internal IReadOnlyList<OwnerConsoleNotificationTier> Detect(OwnerConsoleViewModel? previous,
         OwnerConsoleViewModel current, DateTimeOffset now, OwnerConsoleBellTiers enabled)
     {
+        var settings = currentSettings?.Invoke() ?? initialSettings;
         if (previous is null || Unready(previous) || Unready(current))
         {
-            Baseline(current, now);
+            Baseline(current, now, settings);
             return [];
         }
-        if (!_initialized) Baseline(previous, now);
+        if (!_initialized) Baseline(previous, now, settings);
 
         var started = !previous.Status.ConductorRunning && current.Status.ConductorRunning;
         if (started) _restartAt = now;
         var calm = current.Status.LandedToday > previous.Status.LandedToday || started;
-        var attention = ObserveDecisions(current, now, baseline: false);
-        var alarm = ObserveStop(previous.Status, current.Status, now);
-        alarm |= ObserveTick(current, now, baseline: false);
+        var attention = ObserveDecisions(current, now, settings, baseline: false);
+        var alarm = ObserveStop(previous.Status, current.Status, now, settings);
+        alarm |= ObserveTick(current, now, settings, baseline: false);
 
         var result = new List<OwnerConsoleNotificationTier>(3);
         if (calm && enabled.Calm && (_lastCalm is null || now - _lastCalm >= settings.CalmCoalesce))
@@ -40,7 +42,8 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         return result;
     }
 
-    private bool ObserveStop(OwnerConsoleStatus previous, OwnerConsoleStatus current, DateTimeOffset now)
+    private bool ObserveStop(OwnerConsoleStatus previous, OwnerConsoleStatus current, DateTimeOffset now,
+        OwnerConsoleNotificationSettings settings)
     {
         if (current.ConductorRunning)
         {
@@ -81,15 +84,16 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         return false;
     }
 
-    private void Baseline(OwnerConsoleViewModel model, DateTimeOffset now)
+    private void Baseline(OwnerConsoleViewModel model, DateTimeOffset now, OwnerConsoleNotificationSettings settings)
     {
         _initialized = true;
         _decisions.Clear();
-        ObserveDecisions(model, now, baseline: true);
-        ObserveTick(model, now, baseline: true);
+        ObserveDecisions(model, now, settings, baseline: true);
+        ObserveTick(model, now, settings, baseline: true);
     }
 
-    private bool ObserveDecisions(OwnerConsoleViewModel model, DateTimeOffset now, bool baseline)
+    private bool ObserveDecisions(OwnerConsoleViewModel model, DateTimeOffset now,
+        OwnerConsoleNotificationSettings settings, bool baseline)
     {
         var live = model.Decisions.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var id in _decisions.Keys.Where(id => !live.Contains(id)).ToArray()) _decisions.Remove(id);
@@ -112,7 +116,8 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         return ring;
     }
 
-    private bool ObserveTick(OwnerConsoleViewModel model, DateTimeOffset now, bool baseline)
+    private bool ObserveTick(OwnerConsoleViewModel model, DateTimeOffset now,
+        OwnerConsoleNotificationSettings settings, bool baseline)
     {
         if (!model.Status.ConductorRunning || model.Status.LatestTickAt is not { } tick) return false;
         var reference = _restartAt is { } restart && restart > tick ? restart : tick;

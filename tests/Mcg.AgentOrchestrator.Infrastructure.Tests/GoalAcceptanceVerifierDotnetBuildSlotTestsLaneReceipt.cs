@@ -172,7 +172,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
             using var health = GateHostHealthProbe.PushProbe(() => new(GateLoadSample.Unavailable("fixture"), GateLoadSample.Unavailable("fixture")));
             using var gates = GateLoadContextProbe.PushConcurrentGateCountProbe(() => 1);
             using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(() => new(10, 4, 1000));
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, Runner, time);
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, Runner, time);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(30));
             var result = await verifier.RunOwnedAsync(root, new GoalId("12345678123456781234567812345678"),
                 changedFiles: null, stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease,
@@ -296,7 +296,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
             if (retry)
                 LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
                     path, [new BuildLockHolder(null, "foreign-csc", null, false)], "test");
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (args, _, _) =>
             {
                 var isTest = runner == "mtp" ? IsMtpExecutableCall(args, "Sample.Tests") : IsVstestExecution(args);
                 if (!isTest)

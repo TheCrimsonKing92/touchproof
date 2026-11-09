@@ -95,10 +95,11 @@ internal static class OwnerConsoleFullScreenHost
                         $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}");
                     return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
-                });
+                }, decisionsMarker: boardSource is null ? OwnerConsoleStoreFingerprint.For(workspace.SqliteStatePath,
+                    Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")) : null);
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
-                activityLoader.ReadNew, () => OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock),
+                activityLoader.ReadNew, new OwnerConsoleLandedTodayScan(workspace.GoalLifecycleEventsDirectory, clock).Current,
                 timingsFile.Write, action => app.Invoke(action), Post, () => view!, evidence);
             coalescer = new((items, scope) => refresh.RefreshAsync(items, scope: scope));
 

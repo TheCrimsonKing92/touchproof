@@ -174,7 +174,7 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
+            var verifier = VstestCompleteOutputFixture.Verifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 || !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase))
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));

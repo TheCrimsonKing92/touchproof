@@ -6,6 +6,8 @@ internal sealed class OwnerConsoleEventRefreshFilter
 {
     private readonly object _sync = new();
     private DateTimeOffset? _skipped;
+    private readonly OwnerConsoleEventRoute _route = new();
+    private readonly List<OwnerConductEvent> _deferred = [];
 
     // Maps protects activity; committed changes protect board and decisions;
     // gate/evidence kinds and ACCEPTANCE details protect the gate pane; tick protects latest tick.
@@ -18,7 +20,17 @@ internal sealed class OwnerConsoleEventRefreshFilter
 
     internal void Route(OwnerConductEvent item, OwnerConsoleRefreshCoalescer coalescer)
     {
-        if (ChangesView(item))
+        bool repeated;
+        lock (_sync)
+        {
+            repeated = _route.IsRepeatedGoal(item);
+            if (repeated)
+            {
+                _deferred.Add(item);
+                if (_deferred.Count > OwnerConsoleStartupActivity.MaxRawEvents) _deferred.RemoveAt(0);
+            }
+        }
+        if (!repeated && ChangesView(item))
         {
             coalescer.Request(item, OwnerConsoleRefreshScope.None);
             return;
@@ -26,6 +38,16 @@ internal sealed class OwnerConsoleEventRefreshFilter
         lock (_sync)
         {
             if (_skipped is null || item.Timestamp > _skipped) _skipped = item.Timestamp;
+        }
+    }
+
+    internal IReadOnlyList<OwnerConductEvent> TakeDeferred()
+    {
+        lock (_sync)
+        {
+            var items = _deferred.ToArray();
+            _deferred.Clear();
+            return items;
         }
     }
 
