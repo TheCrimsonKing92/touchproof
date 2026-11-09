@@ -29,12 +29,12 @@ public sealed class MultiRepositoryLandingTuplePinTests
         var original = Tuple("original");
         using (MultiRepositoryLandingTuplePin.Enter(goal, original))
         {
-            Assert.Throws<IOException>(() =>
+            Assert.Throws<IOException>((Action)(() =>
             {
                 using var inner = MultiRepositoryLandingTuplePin.Enter(goal, Tuple("inner"));
                 Assert.Equal(Tuple("inner"), MultiRepositoryLandingTuplePin.For(goal));
                 throw new IOException("fixture landing failure");
-            });
+            }));
             Assert.Equal(original, MultiRepositoryLandingTuplePin.For(goal));
         }
         Assert.Null(MultiRepositoryLandingTuplePin.For(goal));
