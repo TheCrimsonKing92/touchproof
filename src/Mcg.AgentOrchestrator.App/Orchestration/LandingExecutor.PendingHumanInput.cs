@@ -28,7 +28,8 @@ internal static partial class LandingExecutor
             new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray(),
             journalDirectory: workspace.ExecutionDirectory,
             currentRepositoryTuple: () => MultiRepositoryGoal.Applies(goal)
-                ? GoalRepositoryCandidateIdentity.Compute(goal, workspace).Identity?.RepositoryTupleCanonical : null);
+                ? MultiRepositoryLandingTuplePin.For(goal.Id)
+                    ?? GoalRepositoryCandidateIdentity.Compute(goal, workspace).Identity?.RepositoryTupleCanonical : null);
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.RenameProvenance.Length > 0))
             Console.WriteLine(result.RenameProvenance);
