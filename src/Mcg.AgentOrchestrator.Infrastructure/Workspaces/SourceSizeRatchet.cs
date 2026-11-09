@@ -639,7 +639,7 @@ internal static class SourceSizeRatchet
             // Goal 8846120e extracts AcceptanceProcessRunner; main d2ecd0a2e integrated, measured 7830 lines in 26 partials.
             // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6911, 17),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6622, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
