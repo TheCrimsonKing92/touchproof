@@ -676,7 +676,7 @@ internal static class SourceSizeRatchet
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
             // Goal 350ad330: declaration mutation and brief-section call; rendering remains in its own type.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9106, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9105, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

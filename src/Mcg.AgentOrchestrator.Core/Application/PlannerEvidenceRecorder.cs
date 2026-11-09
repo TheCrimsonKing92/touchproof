@@ -82,7 +82,8 @@ internal sealed class PlannerEvidenceRecorder(
                 {
                     var obligation = new GateTestObligation(identity?.StableId ?? directive.QuestionFingerprint,
                         dispatchBriefVersion ?? goal.AuthoritativeBrief.Version, directive.TestNames.ToArray(),
-                        task.Id.Value, directive.Question, clock.UtcNow, identity, directive.PlannerEvidence);
+                        task.Id.Value, directive.Question, clock.UtcNow, identity, directive.PlannerEvidence,
+                        RepositoryKey: directive.PlannerEvidence?.Repository);
                     goal.RecordGateTestObligation(obligation);
                     append(goal, task.Id, ProgressKind.TaskNote, obligation.RecordingNote);
                 }
