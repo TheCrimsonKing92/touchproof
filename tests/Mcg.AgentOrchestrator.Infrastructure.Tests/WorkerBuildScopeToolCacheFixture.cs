@@ -12,6 +12,23 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
     internal string Cache => Path.Combine(Parent, "cache");
     internal string Home => Path.Combine(Parent, "home");
     internal string Stub => Path.Combine(Parent, "dotnet.ps1");
+    private static readonly string GitPath = ResolveGitPath();
+
+    private static string ResolveGitPath()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        if (!OperatingSystem.IsWindows()) return path;
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            // Git for Windows' cmd/git.exe launches mingw64/bin/git.exe. Keep the
+            // same installation and real Git semantics without a launcher per probe.
+            var launcher = Path.Combine(directory.Trim('"'), "git.exe");
+            if (!File.Exists(launcher)) continue;
+            var native = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(launcher)!, "..", "mingw64", "bin", "git.exe"));
+            return File.Exists(native) ? Path.GetDirectoryName(native) + Path.PathSeparator + path : path;
+        }
+        return path;
+    }
 
     internal WorkerBuildScopeToolCacheFixture()
     {
@@ -112,6 +129,7 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
         info.Environment.Clear();
         foreach (var name in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "DOTNET_ROOT", "DOTNET_ROOT_X64", "NUGET_PACKAGES", "TEMP", "TMP" })
             if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
+        info.Environment["PATH"] = GitPath;
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass" }.Concat(arguments)) info.ArgumentList.Add(argument);
         return info;
     }
@@ -144,6 +162,65 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
         return info;
     }
 
+    internal TestChildProcessCapture.Result[] RepeatedHelpers(string work, string log)
+    {
+        var driver = Path.Combine(Parent, "repeated.ps1");
+        File.WriteAllText(driver, """
+            Set-StrictMode -Version Latest
+            $ErrorActionPreference = 'Stop'
+            . $env:CACHE_STUB
+            $originalTemp = $env:TEMP
+            $originalTmp = $env:TMP
+            $vectorLog = $env:CACHE_VECTOR_LOG
+            $runs = @(
+                for ($index = 0; $index -lt 4; $index++) {
+                    # The real helper is called in its own script scope (including
+                    # its exit statement). Restore its process environment between
+                    # calls so a deleted process-temp folder cannot become TEMP.
+                    $env:TEMP = $originalTemp
+                    $env:TMP = $originalTmp
+                    $env:CACHE_VECTOR_LOG = "$vectorLog.$index"
+                    if ($index -eq 2) {
+                        $entries = [IO.Directory]::GetDirectories($env:MCG_WORKER_BUILD_SCOPE_TOOL_CACHE)
+                        if ($entries.Count -ne 1) { throw 'Expected one entry before corrupting its DLL.' }
+                        $dll = Join-Path $entries[0] 'WorkerBuildScopeTool.dll'
+                        $bytes = [IO.File]::ReadAllBytes($dll)
+                        $bytes[0] = $bytes[0] -bxor 255
+                        [IO.File]::WriteAllBytes($dll, $bytes)
+                    }
+                    $lines = @(& (Join-Path $env:CACHE_HOME 'scripts/Invoke-WorkerBuildCheck.ps1') $env:CACHE_PROJECT)
+                    $code = $LASTEXITCODE
+                    $entries = [IO.Directory]::GetDirectories($env:MCG_WORKER_BUILD_SCOPE_TOOL_CACHE)
+                    if ($entries.Count -ne 1) { throw 'Expected one published cache entry.' }
+                    [pscustomobject]@{
+                        ExitCode = $code; Stdout = ($lines -join "`n")
+                        Entry = $entries[0]
+                        Manifest = [IO.File]::ReadAllText((Join-Path $entries[0] 'manifest.json'))
+                        DllHash = (Get-FileHash -LiteralPath (Join-Path $entries[0] 'WorkerBuildScopeTool.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+                    }
+                }
+            )
+            ConvertTo-Json -InputObject $runs -Depth 4 -Compress
+            exit 0
+            """);
+        var start = Helper(work, "stub", log);
+        start.ArgumentList[^1] = driver;
+        var captured = Run(start);
+        Assert.True(captured.ExitCode == 0, captured.Stdout + captured.Stderr);
+        using var document = JsonDocument.Parse(captured.Stdout);
+        var rows = document.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(4, rows.Length);
+        return rows.Select(row =>
+        {
+            // Validate each generation's snapshot, including the first build and
+            // repair, rather than inspecting only the final filesystem state.
+            using var manifest = JsonDocument.Parse(row.GetProperty("Manifest").GetString()!);
+            Assert.Equal(Path.GetFileName(row.GetProperty("Entry").GetString()), manifest.RootElement.GetProperty("sourceDigest").GetString());
+            Assert.Equal(row.GetProperty("DllHash").GetString(), manifest.RootElement.GetProperty("dllSha256").GetString());
+            return new TestChildProcessCapture.Result(row.GetProperty("ExitCode").GetInt32(), row.GetProperty("Stdout").GetString()!, captured.Stderr);
+        }).ToArray();
+    }
+
     internal void InitGit(string root)
     {
         Git(root, "init", "--initial-branch=fixture");
@@ -154,7 +231,10 @@ internal sealed class WorkerBuildScopeToolCacheFixture : IDisposable
 
     internal string Git(string root, params string[] arguments)
     {
-        var result = InfrastructureTestSupport.RunGitProbe(root, arguments);
+        var environment = new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP" }
+            .ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.OrdinalIgnoreCase);
+        environment["PATH"] = GitPath;
+        var result = InfrastructureTestSupport.RunGitProbe(root, arguments, inheritedEnvironment: environment);
         Assert.True(result.Succeeded, result.ToString());
         InfrastructureTestSupport.RequireCompleteGitOutput(result);
         return result.StandardOutput;

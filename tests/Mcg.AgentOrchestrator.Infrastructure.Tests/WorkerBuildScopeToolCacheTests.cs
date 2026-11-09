@@ -11,8 +11,10 @@ public sealed class WorkerBuildScopeToolCacheTests
     {
         using var fixture = new WorkerBuildScopeToolCacheFixture();
         var work = fixture.Work("work");
-        var log = Path.Combine(fixture.Parent, "vectors.txt");
-        var first = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
+        var logBase = Path.Combine(fixture.Parent, "vectors.txt");
+        var runs = fixture.RepeatedHelpers(work, logBase);
+        var log = logBase + ".0";
+        var first = runs[0];
         Success(first);
         var miss = CacheLine(first.Stdout);
         Assert.Matches(@"^scope-tool: cache=miss digest=[a-f0-9]{12} build_ms=\d+$", miss);
@@ -22,8 +24,8 @@ public sealed class WorkerBuildScopeToolCacheTests
         WorkerBuildScopeToolCacheFixture.ValidEntry(entry);
         Assert.Contains("digest=" + Path.GetFileName(entry)[..12], miss);
 
-        File.Delete(log);
-        var second = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
+        log = logBase + ".1";
+        var second = runs[1];
         Success(second);
         Assert.Equal("scope-tool: cache=hit digest=" + Path.GetFileName(entry)[..12], CacheLine(second.Stdout));
         Assert.Empty(BuildVectors(log));
@@ -31,12 +33,8 @@ public sealed class WorkerBuildScopeToolCacheTests
         Assert.Equal(ScopeLine(first.Stdout), ScopeLine(second.Stdout));
         Assert.True(first.Stdout.IndexOf(miss, StringComparison.Ordinal) < first.Stdout.IndexOf(ScopeLine(first.Stdout), StringComparison.Ordinal));
 
-        var dll = Path.Combine(entry, "WorkerBuildScopeTool.dll");
-        var bytes = File.ReadAllBytes(dll);
-        bytes[0] ^= 0xff;
-        File.WriteAllBytes(dll, bytes);
-        File.Delete(log);
-        var repaired = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
+        log = logBase + ".2";
+        var repaired = runs[2];
         Success(repaired);
         Assert.Equal(Digest(miss), Digest(CacheLine(repaired.Stdout)));
         Assert.Contains("cache=miss", CacheLine(repaired.Stdout));
@@ -44,8 +42,8 @@ public sealed class WorkerBuildScopeToolCacheTests
         Assert.Equal(2, ScopeVectors(log).Length);
         WorkerBuildScopeToolCacheFixture.ValidEntry(entry);
         Assert.Single(Directory.GetDirectories(fixture.Cache));
-        File.Delete(log);
-        var afterRepair = WorkerBuildScopeToolCacheFixture.Run(fixture.Helper(work, "stub", log));
+        log = logBase + ".3";
+        var afterRepair = runs[3];
         Success(afterRepair);
         Assert.Equal(CacheLine(second.Stdout), CacheLine(afterRepair.Stdout));
         Assert.Empty(BuildVectors(log));

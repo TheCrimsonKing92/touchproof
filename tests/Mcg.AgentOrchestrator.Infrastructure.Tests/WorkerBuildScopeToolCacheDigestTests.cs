@@ -39,7 +39,9 @@ public sealed class WorkerBuildScopeToolCacheDigestTests
         var cases = Path.Combine(fixture.Parent, "cases.json");
         File.WriteAllText(cases, JsonSerializer.Serialize(Cases));
         var driver = Path.Combine(fixture.Parent, "resolve.ps1");
-        // One owned process exercises every mutation and its restored control.
+        // One owned process exercises every mutation against the same baseline.
+        // Restore between cases, then resolve the restored control once at the end:
+        // nineteen identical cache hits would only repeat native Git startup work.
         // Only the external dotnet command is stubbed; digest and cache decisions
         // use the real script, git index and working tree for every case.
         File.WriteAllText(driver, """
@@ -89,17 +91,18 @@ public sealed class WorkerBuildScopeToolCacheDigestTests
                     }
                     elseif ($null -eq $previous) { [IO.File]::Delete($target) }
                     else { [IO.File]::WriteAllBytes($target, [byte[]]$previous) }
-                    $restored = Resolve-Fixture
                     [pscustomobject]@{
                         Relative = $case.Relative; Operation = $case.Operation
                         Line = $mutated.Line; Failure = $mutated.Failure; Builds = $builds; EntryCount = $entryCount
-                        RestoredLine = $restored.Line; RestoredFailure = $restored.Failure; RestoredBuilds = (Build-Count)
                     }
                 }
             )
+            [IO.File]::Delete($env:CACHE_VECTOR_LOG)
+            $restored = Resolve-Fixture
             [pscustomobject]@{
                 Digest = $manifest.sourceDigest; BaselineLine = $baseline.Line; BaselineBuilds = $baselineBuilds
                 ControlLine = $control.Line; ControlFailure = $control.Failure; ControlBuilds = $controlBuilds; Cases = $results
+                RestoredLine = $restored.Line; RestoredFailure = $restored.Failure; RestoredBuilds = (Build-Count)
             } | ConvertTo-Json -Depth 6 -Compress
             exit 0
             """);
@@ -142,10 +145,10 @@ public sealed class WorkerBuildScopeToolCacheDigestTests
                 Assert.Equal(0, row.GetProperty("Builds").GetInt32());
             }
             Assert.Equal(1, row.GetProperty("EntryCount").GetInt32()); // failed builds publish nothing
-            Assert.Equal(hit, row.GetProperty("RestoredLine").GetString());
-            Assert.Equal(JsonValueKind.Null, row.GetProperty("RestoredFailure").ValueKind);
-            Assert.Equal(row.GetProperty("Builds").GetInt32(), row.GetProperty("RestoredBuilds").GetInt32());
         }
+        Assert.Equal(hit, root.GetProperty("RestoredLine").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("RestoredFailure").ValueKind);
+        Assert.Equal(0, root.GetProperty("RestoredBuilds").GetInt32());
         WorkerBuildScopeToolCacheFixture.ValidEntry(Assert.Single(Directory.GetDirectories(fixture.Cache)));
     }
 }
