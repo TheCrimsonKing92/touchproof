@@ -17,8 +17,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private readonly OwnerConsoleLastGood<string, OwnerConsoleGoalDialog.Content> _goalLastGood = new();
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
-    private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());
-    private OwnerConsoleBellTiers _bellTiers = OwnerConsoleBellTiers.All;
+    private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new(),
+        () => sound?.Settings.Current ?? notifications ?? new());
+    private readonly OwnerConsoleBellCommand _bell = new(sound);
+    private OwnerConsoleBellTiers EffectiveBellTiers => _bell.Tiers;
+    internal OwnerConsoleSoundCommand? Sound => sound;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     private OwnerDecisionWorkflow? _decisionWorkflow;
     private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
@@ -29,11 +32,14 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         _epicDetail.LoadAsync(window, detailId, cancellationToken);
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
-    internal bool BellEnabled { get { lock (_notificationGate) return _bellTiers != OwnerConsoleBellTiers.None; } }
-    internal string BellStatusText { get { lock (_notificationGate) return _bellTiers.StatusText; } }
+    internal bool BellEnabled { get { lock (_notificationGate) return EffectiveBellTiers != OwnerConsoleBellTiers.None; } }
+    internal string BellStatusText { get { lock (_notificationGate) return EffectiveBellTiers.StatusText; } }
     internal bool QuitRequested { get; private set; }
     private string? _requestedEpicId;
     private string? _requestedGateGoalId;
+    private bool _settingsRequested;
+    internal bool TakeSettingsRequested()
+    { var requested = _settingsRequested; _settingsRequested = false; return requested; }
     internal string? TakeRequestedEpicId()
     { var id = _requestedEpicId; _requestedEpicId = null; return id; }
     internal string? TakeRequestedGateGoalId()
@@ -71,7 +77,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         IReadOnlyList<OwnerConsoleNotificationTier> tiers;
         lock (_notificationGate)
         {
-            tiers = _notifications.Detect(Model, model, clock.GetUtcNow(), _bellTiers);
+            tiers = _notifications.Detect(Model, model, clock.GetUtcNow(), EffectiveBellTiers);
             var oldIndex = SelectedIndex;
             Model = model;
             if (!model.Decisions.Any(item => item.Id == SelectedDecisionId))
@@ -189,6 +195,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
+        if (_settingsRequested) return;
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
         if (fleetModel is not null) { await dialogs.ShowFleetAsync(_fleetKeys, fleetModel, OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth)); return; }
         if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
@@ -225,26 +232,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     if (sound is null) output.WriteLine("sound unavailable in this session");
                     else sound.Run(line, output);
                     break;
+                case OwnerConsoleBindings.SettingsCommand:
+                    if (parts.Length != 1) output.WriteLine("usage: settings");
+                    else if (sound is null) output.WriteLine("settings unavailable in this session");
+                    else _settingsRequested = true;
+                    break;
                 case "bell":
-                    var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
-                    if (arguments.Length == 1 && arguments[0] is "on" or "off")
-                    {
-                        lock (_notificationGate) _bellTiers = arguments[0] == "on" ? OwnerConsoleBellTiers.All : OwnerConsoleBellTiers.None;
-                        output.WriteLine($"bell {arguments[0]}");
-                    }
-                    else if (arguments.Length == 2 && arguments[0] is "calm" or "attention" or "alarm" &&
-                        arguments[1] is "on" or "off")
-                    {
-                        var tier = arguments[0] switch
-                        {
-                            "calm" => OwnerConsoleNotificationTier.Calm,
-                            "attention" => OwnerConsoleNotificationTier.Attention,
-                            _ => OwnerConsoleNotificationTier.Alarm
-                        };
-                        lock (_notificationGate) _bellTiers = _bellTiers.With(tier, arguments[1] == "on");
-                        output.WriteLine($"bell {arguments[0]} {arguments[1]}");
-                    }
-                    else output.WriteLine("usage: bell on|off | bell <calm|attention|alarm> on|off");
+                    lock (_notificationGate) _bell.Run(parts.Skip(1).ToArray(), output);
                     break;
                 case var verb when verb == OwnerConsoleBindings.Goal.Command:
                     if (parts.Length != 2) { output.WriteLine("usage: " + OwnerConsoleBindings.Goal.Usage); break; }
