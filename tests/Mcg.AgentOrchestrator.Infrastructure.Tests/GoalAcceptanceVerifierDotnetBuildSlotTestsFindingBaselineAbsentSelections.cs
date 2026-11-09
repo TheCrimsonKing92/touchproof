@@ -123,8 +123,10 @@ internal sealed class FindingBaselineProbeFixture : IDisposable
             : "public sealed class PreExistingProbeTests { [Xunit.Fact] public void ExistingBehavior() => Xunit.Assert.False(Feature.Enabled); }");
         if (zeroBaselineTests)
         {
+            // Keep the whole requested baseline batch at zero execution, including the
+            // unchanged outside-scope probe that must fail on the candidate.
             File.WriteAllText(Path.Combine(project, "OutsideProbeTests.cs"),
-                "public sealed class OutsideProbeTests { [Xunit.Fact] public void OutsideBehavior() => Xunit.Assert.False(Feature.Enabled); }");
+                "public sealed class OutsideProbeTests { [Xunit.Fact(Skip = \"Baseline probe deliberately executes no tests\", SkipType = typeof(Feature), SkipUnless = nameof(Feature.Enabled))] public void OutsideBehavior() => Xunit.Assert.False(Feature.Enabled); }");
         }
         Git(root, "init", "-b", "main");
         Git(root, "config", "user.email", "finding-baseline@example.invalid");
