@@ -5,7 +5,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record ConductorGroupedGateOutcome(string Verdict, string ReceiptId);
+internal sealed record ConductorGroupedGateOutcome(string Verdict, string? ReceiptId)
+{
+    internal string? Detail { get; init; }
+}
 
 internal static class ConductorGroupedGateAttemptHost
 {
@@ -52,12 +55,7 @@ internal static class ConductorGroupedGateAttemptHost
                     optOutExecutionThrottling ?? ProcessExecutionThrottlingOptOut.TrySet);
                 var outcome = gateBody(attempt);
                 File.WriteAllText(attempt.ResultPath,
-                    outcome is null
-                        ? JsonSerializer.Serialize(new { attempt.IdentityValue, Status = "completed" })
-                        : JsonSerializer.Serialize(new
-                        {
-                            attempt.IdentityValue, Status = "completed", outcome.Verdict, outcome.ReceiptId
-                        }));
+                    GroupedGateChildResultDocument.Serialize(attempt.IdentityValue, outcome));
                 File.WriteAllText(attempt.ExitCodePath, "0");
             }
         }

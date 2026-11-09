@@ -89,8 +89,8 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
                 Assert.Equal(originalIdentity.Value, result.RootElement.GetProperty("IdentityValue").GetString());
                 if (infrastructureFailure)
                 {
-                    Assert.False(result.RootElement.TryGetProperty("Verdict", out _));
-                    Assert.False(result.RootElement.TryGetProperty("ReceiptId", out _));
+                    Assert.Equal("infrastructure-failure", result.RootElement.GetProperty("Verdict").GetString());
+                    Assert.Equal(saved.ReceiptId, result.RootElement.GetProperty("ReceiptId").GetString());
                 }
                 else
                 {

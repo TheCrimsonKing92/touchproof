@@ -68,6 +68,8 @@ public sealed record GoalScopeCollisionReport(
     IReadOnlyList<ScopeCollision> Collisions,
     IReadOnlyList<ScopeEvidenceGapNote> EvidenceGaps)
 {
+    public IReadOnlyList<string> IntakeWarnings { get; init; } = [];
+
     public IReadOnlyList<string> ConflictingGoalIds { get; } = Collisions
         .Select(collision => collision.GoalId)
         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -96,13 +98,17 @@ internal static class GoalScopeCollisionAdvisor
         IReadOnlyCollection<Goal> goals,
         string? excludedSourceBacklogItemId = null,
         IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null,
-        string? repositoryRoot = null)
+        string? repositoryRoot = null,
+        GoalRepositoryDeclaration? repositories = null)
     {
         var gaps = new List<ScopeEvidenceGapNote>();
+        var warnings = new List<string>();
         var proposedScopes = GoalFileScopeInference.FromTextParts(
             proposedText,
             MaximumTextCharacters,
-            out var proposedTextTruncated);
+            out var proposedTextTruncated,
+            repositories?.Repositories,
+            warnings);
         if (proposedTextTruncated)
         {
             gaps.Add(new ScopeEvidenceGapNote(
@@ -113,8 +119,9 @@ internal static class GoalScopeCollisionAdvisor
 
         if (repositoryRoot is not null)
         {
-            proposedScopes = BriefScopeSectionSelector.KeepResolvable(
-                string.Join('\n', proposedText), proposedScopes, repositoryRoot);
+            proposedScopes = repositories is null
+                ? BriefScopeSectionSelector.KeepResolvable(string.Join('\n', proposedText), proposedScopes, repositoryRoot)
+                : RepositoryScopeResolution.KeepResolvable(string.Join('\n', proposedText), proposedScopes, repositoryRoot, repositories);
         }
 
         AddProposedEvidenceGap(proposedScopes, gaps);
@@ -149,6 +156,8 @@ internal static class GoalScopeCollisionAdvisor
             {
                 foreach (var candidateScope in candidateScopes)
                 {
+                    if (!proposedScope.RepositoryKey.Equals(candidateScope.RepositoryKey, StringComparison.Ordinal))
+                        continue;
                     var overlap = RepositoryPathOverlap.Classify(proposedScope.Path, candidateScope.Path);
                     if (overlap == PathOverlapKind.None)
                     {
@@ -196,7 +205,7 @@ internal static class GoalScopeCollisionAdvisor
             0,
             verdict,
             orderedCollisions,
-            gaps.ToArray());
+            gaps.ToArray()) { IntakeWarnings = warnings.ToArray() };
     }
 
     internal static IReadOnlyList<Goal> SelectComparisonCandidates(

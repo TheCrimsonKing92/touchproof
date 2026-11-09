@@ -159,11 +159,10 @@ public sealed class MultiRepositoryLandingRepairTests
     {
         using var f = FailedTuple();
         var integration = f.Repositories.Crosswalk.Git("rev-parse", "main");
-        var branch = Git(f.SecondaryWorktree, "symbolic-ref", "--short", "HEAD");
         var interrupted = 0;
         using (LandingExecutor.UseGitRunner((root, args) =>
         {
-            if (args.SequenceEqual(new[] { "rev-parse", "refs/heads/" + branch }))
+            if (args.SequenceEqual(new[] { "rev-parse", "HEAD" }))
             {
                 interrupted++;
                 File.WriteAllText(Path.Combine(f.SecondaryWorktree, "later.txt"), "preserve this candidate work\n");
