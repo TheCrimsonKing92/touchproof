@@ -16,7 +16,7 @@ public sealed class WorktreeTreeDigestLaunchCountTests
         if (shape == "dirty") File.WriteAllText(Path.Combine(fixture.Repo, "tracked.txt"), "dirty\n");
         if (shape == "discovery-decline")
         {
-            File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[commit]\ngpgSign = false\n");
+            File.AppendAllText(Path.Combine(fixture.Repo, ".git", "config"), "\n[gc]\nreflogExpire = never\n");
             Assert.False(GitRevisionReader.TryLocateRefStore(fixture.Repo, fixture.ReadEnvironment, out _, out _));
         }
         // Exercise the public-to-the-assembly convenience overload as well as the detailed overload.

@@ -49,6 +49,7 @@ public sealed class AdmissionFactsRefReaderTests(ITestOutputHelper output) : Con
         fixture.Git("config", "user.name", "Admission Reader");
         fixture.Git("config", "core.autocrlf", "false");
         fixture.Git("config", "commit.gpgSign", "false");
+        fixture.Git("config", "gc.reflogExpire", "never");
         // This is intentionally outside the general resolver's proof-of-git-success contract.
         Assert.False(GitRefFileResolver.TryResolve(fixture.Repo, "HEAD", out _));
         var repo = fixture.Repo;
