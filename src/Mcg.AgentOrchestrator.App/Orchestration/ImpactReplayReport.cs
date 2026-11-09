@@ -8,4 +8,6 @@ internal sealed record ImpactReplayReport(
     IReadOnlyList<ImpactReplayDiagnostic> UnreplayableAttempts,
     IReadOnlyList<string> CleanupErrors,
     int AttemptsGainingChangedTestClasses = 0,
-    ImpactReplayUnmappedTestClasses? UnmappedTestClasses = null);
+    ImpactReplayUnmappedTestClasses? UnmappedTestClasses = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ImpactReplayMeasurement? Measurement = null);

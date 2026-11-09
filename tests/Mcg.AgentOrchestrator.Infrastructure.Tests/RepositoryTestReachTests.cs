@@ -93,7 +93,7 @@ public sealed class RepositoryTestReachTests
 
     private static object ReadRaw(string root, bool? propagate) => Reader.Invoke(null,
         [root, new[] { RepositoryFixture.Source }, true, Type.Missing, Type.Missing, Type.Missing,
-            propagate.HasValue ? propagate.Value : Type.Missing])!;
+            propagate.HasValue ? propagate.Value : Type.Missing, Type.Missing])!;
 
     private static string ReaderOutcome(string root)
     {

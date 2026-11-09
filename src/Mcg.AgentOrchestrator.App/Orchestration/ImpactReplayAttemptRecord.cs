@@ -20,7 +20,16 @@ internal sealed record ImpactReplayAttemptRecord(
     IReadOnlyList<ImpactReplayLaneOutcome> LaneOutcomes,
     IReadOnlyList<ImpactReplayFailingClass> FailingClasses,
     bool MissCheckComplete,
-    IReadOnlyList<string> EvidenceWarnings)
+    IReadOnlyList<string> EvidenceWarnings,
+    int ChangedSourceFileCount = 0,
+    IReadOnlyList<ImpactReplayBalancedClass>? BalancedClasses = null,
+    IReadOnlyList<ImpactReplayLaneOutcome>? BalancedLaneOutcomes = null,
+    double PoolSecondsSaved = 0,
+    double NamedLaneObservedSecondsSaved = 0,
+    double ObservedInfrastructureSeconds = 0,
+    bool DurationCoverageComplete = true,
+    IReadOnlyList<ImpactReplayUnresolvedFailure>? UnresolvedFailures = null,
+    IReadOnlyList<string>? OutOfInfrastructureTestFiles = null)
 {
     public double ShareOfLanesSkipped => RanLanes.Count == 0 ? 0 : (double)SkippedLanes.Count / RanLanes.Count;
 }
