@@ -37,7 +37,7 @@ internal sealed class OwnerConsoleProjectsSettingsTab(OrchestratorProjectRegistr
         try
         {
             var directory = project.ResolveWorkspace().OrchestratorDirectory;
-            if (!File.Exists(Path.Combine(directory, "conductor-policy.json"))) return "unreadable";
+            if (!OwnerConsoleBoardSource.Exists(Path.Combine(directory, "conductor-policy.json"))) return "unreadable";
             return ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(directory))
                 .AdoptedBuildPushEnabled ? "on" : "off";
         }
