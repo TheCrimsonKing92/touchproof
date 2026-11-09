@@ -30,7 +30,8 @@ public enum ReverseDependencyDegradationKind
     Unreadable,
     FrontierSymbolBound,
     AmbiguousDeclaration,
-    SelectedTestClassBound
+    SelectedTestClassBound,
+    ChangedFileUnmapped
 }
 
 public sealed record RepositoryTestImpactDegradation(ReverseDependencyDegradationKind Kind, string Reason);

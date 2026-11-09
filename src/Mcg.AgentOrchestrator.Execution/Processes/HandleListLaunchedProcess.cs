@@ -149,6 +149,7 @@ internal sealed class HandleListLaunchedProcess : IDisposable
             }
             else created = Create();
             handle = new SafeProcessHandle(created.ProcessHandle, ownsHandle: true);
+            LaunchLockChildCpuTracker.Track(handle);
             using var thread = new SafeFileHandle(created.ThreadHandle, ownsHandle: true);
             id = created.ProcessId;
             createdObserver?.Invoke(this);

@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateTestObligationEvaluator
 {
-    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded }
+    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded, AllSkipped }
 
     internal sealed record RenameScope(string RepositoryDirectory, string IntegrationBranch);
 
@@ -19,8 +19,10 @@ internal static class GateTestObligationEvaluator
         IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
         IReadOnlyList<string>? ClosestIdentities = null,
         IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null,
-        string? PendingDetail = null)
+        string? PendingDetail = null, IReadOnlyList<string>? AllSkippedSelectors = null)
     {
+        internal string AllSkippedProvenance => GateTestObligationAllSkippedGrade.Provenance(this);
+
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rename.OldClass} new={rename.NewClass} old_path={rename.OldPath} new_path={rename.NewPath} " +
@@ -182,11 +184,12 @@ internal static class GateTestObligationEvaluator
 
             // Pending check evidence is not an unmatched test selector. Failures and
             // unmatched row selectors still use the existing grading and precedence.
-            newest = Grade(obligation, source.Id, evidence.Where(item => !pending.Contains(item.Selector)).ToArray());
+            newest = GateTestObligationAllSkippedGrade.Grade(obligation, source,
+                evidence.Where(item => !pending.Contains(item.Selector)).ToArray(), orchestratorDirectory, declared.Applies);
             if (newest.Outcome == Outcome.SelectorNotFound && declared.Applies)
                 newest = newest with { ClosestIdentities = DeclaredTestClosestIdentities.Find(newest.Selectors, declared.Rows) };
-            if (pending.Count > 0 && newest.Outcome == Outcome.Satisfied)
-                newest = new(obligation, Outcome.Pending, obligation.Selectors.Where(pending.Contains).ToArray(), source.Id);
+            if (pending.Count > 0 && newest.Outcome is Outcome.Satisfied or Outcome.AllSkipped)
+                newest = newest with { Outcome = Outcome.Pending, Selectors = obligation.Selectors.Where(pending.Contains).ToArray() };
         }
         return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
     }

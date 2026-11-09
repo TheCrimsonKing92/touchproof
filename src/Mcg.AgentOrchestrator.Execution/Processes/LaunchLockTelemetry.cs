@@ -142,6 +142,12 @@ internal sealed class LaunchLockAttribution
 
     internal void SetProvider(Func<string?>? value) => Volatile.Write(ref provider, value);
 
+    internal string? CaptureCpuClass()
+    {
+        try { return Volatile.Read(ref provider)?.Invoke(); }
+        catch { return null; }
+    }
+
     internal void Record(LaunchLockEntryPoint entry, long createTicks)
         => RecordCore(entry, createTicks, capture: false);
 
@@ -262,7 +268,11 @@ internal static class LaunchLockTelemetry
             foreach (var line in LaunchLockSiteFormatter.FormatBySite(classes, attribution.SiteSnapshot(), processId))
                 yield return line;
             if (ReferenceEquals(attribution, Attribution) && attribution.IsActive)
+            {
+                LaunchLockChildCpuTracker.Live.FlushExited();
+                foreach (var line in LaunchLockClassCpuLedger.Live.FormatCpuByClass(processId)) yield return line;
                 yield return GitAncestryMemo.FormatSummary(processId);
+            }
         }
     }
 

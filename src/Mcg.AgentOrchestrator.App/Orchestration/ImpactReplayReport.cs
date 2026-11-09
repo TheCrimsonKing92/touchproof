@@ -10,4 +10,6 @@ internal sealed record ImpactReplayReport(
     int AttemptsGainingChangedTestClasses = 0,
     ImpactReplayUnmappedTestClasses? UnmappedTestClasses = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    ImpactReplayMeasurement? Measurement = null);
+    ImpactReplayMeasurement? Measurement = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ImpactReplaySourceGuardReport? SourceReadingGuards = null);

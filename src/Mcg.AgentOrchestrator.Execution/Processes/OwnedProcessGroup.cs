@@ -903,6 +903,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             // Inheritable duplicates are already closed here, before the comparatively slow
             // Process.GetProcessById full-table enumeration below.
             var nativeProcess = new SafeFileHandle(processInformation.ProcessHandle, ownsHandle: true);
+            LaunchLockChildCpuTracker.Track(nativeProcess);
             var initialThread = new SafeFileHandle(processInformation.ThreadHandle, ownsHandle: true);
             try
             {

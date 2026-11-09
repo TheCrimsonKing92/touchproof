@@ -100,8 +100,11 @@ internal static partial class ProcessTreeGuiSuppression
             finally
             {
                 if (entryPoint is { } entry)
+                {
+                    LaunchLockChildCpuTracker.MarkUnavailable();
                     LaunchLockTelemetry.Record(entry, waitTicks,
                         onDispose is null ? 0 : holdEnded - acquiredTimestamp, childCreateTicks);
+                }
             }
         }
     }
@@ -203,7 +206,8 @@ internal static partial class ProcessTreeGuiSuppression
         CreateWithLaunchLock(() => Process.Start(startInfo), startInfo.UseShellExecute, entry, access, lockContended);
 
     internal static bool StartWithLaunchLock(Process process) =>
-        CreateWithLaunchLock(process.Start, process.StartInfo.UseShellExecute, LaunchLockEntryPoint.Start, null, null);
+        CreateWithLaunchLock(() => LaunchLockChildCpuTracker.TrackStarted(process.Start(), process),
+            process.StartInfo.UseShellExecute, LaunchLockEntryPoint.Start, null, null);
 
     private static T CreateWithLaunchLock<T>(Func<T> create, bool shellExecute, LaunchLockEntryPoint entry,
         ErrorModeAccess? access, Action? lockContended)
@@ -219,7 +223,7 @@ internal static partial class ProcessTreeGuiSuppression
             Monitor.Enter(WindowsLaunchLock);
         }
         var acquired = Stopwatch.GetTimestamp();
-        try { return create(); }
+        try { return LaunchLockChildCpuTracker.TrackCreated(create()); }
         finally
         {
             var holdEnded = Stopwatch.GetTimestamp();

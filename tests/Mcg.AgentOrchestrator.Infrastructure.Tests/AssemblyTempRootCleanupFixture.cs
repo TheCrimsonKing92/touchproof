@@ -14,11 +14,13 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     private readonly Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader;
     private readonly IDisposable? sharedReaders;
     private readonly LaunchLockAttribution? attribution;
+    private readonly LaunchLockInProcessCpuSampler? cpuSampler;
 
     public AssemblyTempRootCleanupFixture()
         : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null,
             sharedReaders: ResolveSharedGitReaders(), attribution: InstallLaunchAttribution())
     {
+        cpuSampler = LaunchLockInProcessCpuSampler.StartLive();
     }
 
     internal AssemblyTempRootCleanupFixture(
@@ -65,9 +67,7 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     {
         try
         {
-            foreach (var line in LaunchLockTelemetry.FormatTeardownLines(
-                         LaunchLockTelemetry.Process.Snapshot(), attribution, Environment.ProcessId))
-                (diagnostics ?? Console.Error).WriteLine(line);
+            cpuSampler?.StopAndFlush();
             try
             {
                 sharedReaders?.Dispose();
@@ -84,6 +84,9 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
                     // Preserve the root-release outcome even if diagnostics fail.
                 }
             }
+            foreach (var line in LaunchLockTelemetry.FormatTeardownLines(
+                         LaunchLockTelemetry.Process.Snapshot(), attribution, Environment.ProcessId))
+                (diagnostics ?? Console.Error).WriteLine(line);
             var outcome = releaseOwnedRoot();
             if (outcome?.Status == TempRootDeleteStatus.Failed)
             {
