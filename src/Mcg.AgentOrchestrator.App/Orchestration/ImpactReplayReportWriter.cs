@@ -126,6 +126,7 @@ internal static class ImpactReplayReportWriter
             foreach (var item in unmapped.TopClasses)
                 text.AppendLine($"| {Cell(item.Class)} | {Cell(item.Reason)} | {item.Attempts} | {Cell(string.Join(", ", item.FullNames))} |");
         }
+        report.SourceReadingGuards?.AppendTo(text);
         return text.ToString();
     }
 

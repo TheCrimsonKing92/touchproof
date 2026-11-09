@@ -44,6 +44,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFindingBaselineRou
         var dualArm = await fixture.RunAsync(zeroBaselineTests
             ? "Core.Tests: AddedProbeTests; Core.Tests: PreExistingProbeTests; Core.Tests: OutsideProbeTests"
             : "Core.Tests: AddedProbeTests; Core.Tests: PreExistingProbeTests");
+        if (zeroBaselineTests)
+        {
+            var baseline = Assert.Single(dualArm.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline);
+            Assert.Contains(baseline.Checks, check => check.ExecutedTestCount == 0);
+            Assert.DoesNotContain(baseline.Checks, check => check.ExecutedTestCount > 0);
+            Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, baseline.Disposition);
+            var candidate = Assert.Single(dualArm.Arms!, arm => arm.Arm == FindingEvidenceArm.Candidate);
+            Assert.Contains(candidate.Checks.SelectMany(check => check.FailingTestIdentities ?? []), identity =>
+                identity.Contains("OutsideProbeTests.OutsideBehavior", StringComparison.Ordinal));
+        }
         var candidateOnly = dualArm with
         {
             Arms = dualArm.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray()

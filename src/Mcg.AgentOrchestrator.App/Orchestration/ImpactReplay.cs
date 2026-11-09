@@ -18,6 +18,9 @@ internal static class ImpactReplay
         var records = new List<ImpactReplayAttemptRecord>();
         var unmappedClasses = new List<ImpactReplayUnmappedTestClasses.Occurrence>();
         var gainedAttempts = 0;
+        var history = ImpactReplayHistoricalFlakeClassifier.Load(orchestratorDirectory, skipped);
+        var guardClasses = new SortedSet<string>(StringComparer.Ordinal);
+        var guardHelpersPresent = false;
         IReadOnlyList<AcceptanceLaneFlakeRow> flakeRows;
         try
         {
@@ -55,6 +58,14 @@ internal static class ImpactReplay
                         Path.GetFileName(project.Replace('\\', '/')).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase))
                     .Select(check => check.Name).ToArray();
                 var classes = AcceptanceTestClassSourceScanner.Scan(checkout);
+                var testSources = new ImpactReplayTestSourceIndex(LaneTestSourceRootResolver.SourceFiles(checkout,
+                    LaneTestSourceRootResolver.Resolve(checkout)));
+                var guards = SourceReadingGuardTestClasses.Read(testSources, classes);
+                if (guards is not null)
+                {
+                    guardHelpersPresent = true;
+                    guardClasses.UnionWith(guards.Classes);
+                }
                 var lanes = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, classes);
                 var poolNames = ImpactReplayBalancedPool.LaneNames(settings.BalancedLanePool);
                 var evidence = ImpactReplayTrxEvidence.Read(attempt, lanes, checkNames, classes, poolNames);
@@ -76,6 +87,7 @@ internal static class ImpactReplay
                     : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
                         maximumChangedSourceFiles: maxChangedSourceFiles ?? 5);
                 var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
+                selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards);
                 var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
                 var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
                 var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
@@ -109,6 +121,8 @@ internal static class ImpactReplay
                         ? !resolved || selectedFullNames.Contains(failure.ClassName) || !classes.Any(c => c.FullName == failure.ClassName)
                         : selectedLanes.Contains(failure.Lane) }).ToArray(),
                     evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), checkNames, classes, flakeRows);
+                failures = ImpactReplayHistoricalFlakeClassifier.Classify(failures,
+                    evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), classes, history);
                 var pool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, resolved);
                 double observedNamed = 0, savedNamed = 0;
                 var durationComplete = pool.Complete;
@@ -159,7 +173,8 @@ internal static class ImpactReplay
         return new(floor is null ? "default" : "override", floorNames.ToArray(), records, skipped, unreplayable, cleanupErrors, gainedAttempts,
             ImpactReplayUnmappedTestClasses.Aggregate(unmappedClasses),
             maxChangedSourceFiles is not null || records.Any(r => r.BalancedLaneOutcomes?.Count > 0)
-                ? ImpactReplayMeasurement.Create(maxChangedSourceFiles ?? 5, records) : null);
+                ? ImpactReplayMeasurement.Create(maxChangedSourceFiles ?? 5, records) : null,
+            guardHelpersPresent ? new ImpactReplaySourceGuardReport(guardClasses.ToArray()) : null);
     }
 
     private static bool IsDefaultFloor(string name) =>

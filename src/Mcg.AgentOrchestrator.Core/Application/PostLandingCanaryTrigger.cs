@@ -21,6 +21,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/VstestOutputCompletenessProbe",
             // Selection coverage is reached through the verifier's telemetry collaborator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
+            // Observed skipped-selection coverage is reached through the verifier and its inspector.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceAllSkipped",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
             // Rust evidence planning is reached through the focused request resolver.
@@ -173,6 +175,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoTestJsonGateReceipt",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceBuildLockRemediation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HeavyFixtureGitLaunchBoundCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandEnvironmentInputs",

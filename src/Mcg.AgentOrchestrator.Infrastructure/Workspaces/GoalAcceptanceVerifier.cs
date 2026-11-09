@@ -46,7 +46,8 @@ public sealed partial record AcceptanceCheckResult(
     DateTimeOffset? ChildProcessStartedAt = null,
     IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null,
-    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null);
+    AcceptanceBaselineSourceAbsence? BaselineSourceAbsence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<FocusedEvidenceAllSkippedSelection>? AllSkippedSelections = null);
 
 public sealed record AcceptanceBaselineSourceAbsence(string BaselineSha, string Selector);
 
@@ -308,11 +309,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal TimeProvider WaitTimeProvider => _timeProvider;
     private AcceptanceLaneWaitCollector? LaneWaitCollector => _executionContext?.GetLaneWaitCollector(_timeProvider);
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
+    private GoalAcceptanceBuildLockRemediation BuildLockRemediation => new(this, _testOverrides, _timeProvider);
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
     private readonly bool _requiresTestTelemetryReceipt;
     internal static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(5), DefaultProgressInterval = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan DefaultTransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(75), DefaultTransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(250);
-    private const int DefaultTransientNoHolderBuildLockMaxRetryCycles = 2;
     internal static readonly TimeSpan CaptureDrainTimeout = TimeSpan.FromSeconds(12);
     internal const int CappedOutputPreviewBytes = 64 * 1024;
     // A failed partition reruns once as a probe; Retried=true records the probe without changing its verdict.
@@ -2577,15 +2577,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var selectionCoverage = check.IsFocusedEvidenceSelection && executedTestCount != 0
             ? GoalAcceptanceVerifierTestTelemetry.InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
             : FocusedEvidenceSelectionCoverage.Empty;
-        var uncoveredSelections = selectionCoverage.UncoveredSelections;
         var unreadableReceipts = selectionCoverage.UnreadableReceiptPaths;
-        var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection &&
-            (executedTestCount == 0 || uncoveredSelections.Count > 0 || unreadableReceipts.Count > 0);
-        var policyFailure = zeroTestApparatusFailure
-            ? unreadableReceipts.Count > 0
-                ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
-                : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
-            : null;
+        var selectionDecision = FocusedEvidenceAllSkippedSelectionDecision.Decide(
+            check.Name, check.IsFocusedEvidenceSelection, executedTestCount, selectionCoverage);
+        var policyFailure = selectionDecision.PolicyFailure;
+        var zeroTestApparatusFailure = policyFailure is not null;
         var completionDecision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
             result,
             trxEvidence,
@@ -2599,13 +2595,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             telemetry.Paths,
             _executionContext?.ResultsPrefix);
         AcceptanceLaunchLockSummary.Preserve(result.Output, result.Stderr, telemetry.Paths[0], AcceptanceAttemptResultsPrefix);
-        var apparatusDetail = unreadableReceipts.Count > 0
-            ? $"'{check.Name}' could not read test receipt(s): {string.Join(", ", unreadableReceipts)}."
-            : executedTestCount == 0
-            ? $"'{check.Name}' executed 0 tests."
-            : $"'{check.Name}' had selection(s) matching 0 tests: {string.Join(", ", uncoveredSelections)}.";
         var outputTail = zeroTestApparatusFailure
-            ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
+            ? $"Focused evidence selection apparatus failure: {selectionDecision.ApparatusDetail}"
             : passed
                 ? null
                 : AcceptanceMtpFailureOutput.BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
@@ -2640,7 +2631,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 _invocationContext?.Ordinal ?? 0),
             ChildProcessId: result.ChildProcessId,
-            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), false);
+            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling,
+            AllSkippedSelections: selectionCoverage.AllSkippedSelections is { Count: > 0 }
+                ? selectionCoverage.AllSkippedSelections : null)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2783,7 +2776,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (IsBuildLockFailure(result, environment, check, out var attribution))
             {
-                (result, lockRemediationApplied) = await RemediateBuildLockAndRetryAsync(
+                (result, lockRemediationApplied) = await BuildLockRemediation.RemediateBuildLockAndRetryAsync(
                     arguments,
                     worktreePath,
                     check,
@@ -2874,7 +2867,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
             var attribution = AttributeBuildLock(lockedPath, environment.ArtifactsPath, "acceptance-check", check.Name);
-            var (result, _) = await RemediateBuildLockAndRetryAsync(
+            var (result, _) = await BuildLockRemediation.RemediateBuildLockAndRetryAsync(
                 arguments,
                 worktreePath,
                 check,
@@ -2983,292 +2976,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             output.Contains("MSB3491", StringComparison.OrdinalIgnoreCase)) &&
         output.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<(CommandResult Result, bool Remediated)> RemediateBuildLockAndRetryAsync(
-        string[] arguments,
-        string worktreePath,
-        AcceptanceManifestCheck check,
-        GoalId? goalId,
-        int? stableSlotIndex,
-        DotnetBuildEnvironmentLease? stableSlotLease,
-        DotnetBuildEnvironmentLease? recoveryLease,
-        bool compilerLockRemediationRequired,
-        DotnetBuildEnvironment currentEnvironment,
-        string attemptName,
-        BuildLockAttribution attribution,
-        Action<DotnetBuildEnvironment> reacquireLease,
-        CancellationToken cancellationToken,
-        TimeSpan commandTimeout)
-    {
-        if (compilerLockRemediationRequired)
-        {
-            recoveryLease?.MarkCompilerLockRemediationRequired();
-            stableSlotLease?.ReleaseExecutionLock();
-        }
-        if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
-        {
-            return await RetryTransientNoHolderBuildLockAsync(
-                arguments,
-                worktreePath,
-                check,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                currentEnvironment,
-                attribution,
-                reacquireLease,
-                cancellationToken, commandTimeout).ConfigureAwait(false);
-        }
-
-        var retryEnvironment = currentEnvironment;
-        reacquireLease(retryEnvironment);
-        CommandResult? retry = null;
-        BuildLockAttribution? retryAttribution = null;
-        try
-        {
-            retry = await RunManagedDotnetCommandAsync(
-                check,
-                arguments,
-                retryEnvironment,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                commandTimeout,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsBuildArtifactIoException(ex))
-        {
-            var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            retryAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-retry", check.Name);
-        }
-
-        if (retry is not null &&
-            !IsBuildLockFailure(retry, retryEnvironment, check, out retryAttribution))
-        {
-            return (retry, true);
-        }
-
-        retryAttribution ??= attribution;
-        if (IsTransientNoHolderBuildArtifactLock(retryAttribution, retryEnvironment))
-        {
-            return await RetryTransientNoHolderBuildLockAsync(
-                arguments,
-                worktreePath,
-                check,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                retryEnvironment,
-                retryAttribution,
-                reacquireLease,
-                cancellationToken, commandTimeout).ConfigureAwait(false);
-        }
-
-        var killed = false;
-        foreach (var holder in attribution.Holders
-            .Concat(retryAttribution.Holders)
-            .Where(holder =>
-                holder.IsOrchestratorOwned &&
-                holder.ProcessId.HasValue &&
-                holder.ProcessId.Value != Environment.ProcessId)
-            .DistinctBy(holder => holder.ProcessId!.Value))
-        {
-            killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));
-        }
-
-        if (!killed)
-        {
-            throw new BuildLockBlockedException(retryAttribution);
-        }
-
-        var killRetryEnvironment = currentEnvironment;
-        reacquireLease(killRetryEnvironment);
-        CommandResult killRetry;
-        try
-        {
-            killRetry = await RunManagedDotnetCommandAsync(
-                check,
-                arguments,
-                killRetryEnvironment,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                commandTimeout,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsBuildArtifactIoException(ex))
-        {
-            var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, killRetryEnvironment.ArtifactsPath, "acceptance-kill-retry", check.Name));
-        }
-
-        if (IsBuildLockFailure(
-            killRetry,
-            killRetryEnvironment,
-            check,
-            out var killRetryAttribution))
-        {
-            throw new BuildLockBlockedException(killRetryAttribution);
-        }
-
-        return (killRetry, true);
-    }
-
-    private async Task<(CommandResult Result, bool Remediated)> RetryTransientNoHolderBuildLockAsync(
-        string[] arguments,
-        string worktreePath,
-        AcceptanceManifestCheck check,
-        GoalId? goalId,
-        int? stableSlotIndex,
-        DotnetBuildEnvironmentLease? stableSlotLease,
-        DotnetBuildEnvironment currentEnvironment,
-        BuildLockAttribution attribution,
-        Action<DotnetBuildEnvironment> reacquireLease,
-        CancellationToken cancellationToken,
-        TimeSpan commandTimeout)
-    {
-        var retryEnvironment = currentEnvironment;
-        var cycleAttribution = attribution;
-        var maxRetryCycles = Math.Max(
-            1,
-            _testOverrides.TransientNoHolderBuildLockMaxRetryCycles ?? DefaultTransientNoHolderBuildLockMaxRetryCycles);
-        for (var cycle = 1; cycle <= maxRetryCycles; cycle++)
-        {
-            var wait = await WaitForBuildArtifactWriteAccessAsync(
-                cycleAttribution.Path,
-                _testOverrides.TransientNoHolderBuildLockWaitWindow ?? DefaultTransientNoHolderBuildLockWaitWindow,
-                _testOverrides.TransientNoHolderBuildLockPollInterval ?? DefaultTransientNoHolderBuildLockPollInterval,
-                _timeProvider,
-                cancellationToken).ConfigureAwait(false);
-            EmitTransientNoHolderBuildLockWaitReceipt(cycleAttribution, wait, cycle, maxRetryCycles);
-            if (!wait.Released)
-            {
-                var exhaustedAttribution = AttributeBuildLock(
-                    cycleAttribution.Path,
-                    retryEnvironment.ArtifactsPath,
-                    "acceptance-transient-exhaustion",
-                    check.Name);
-                EmitTransientNoHolderBuildLockRetryReceipt(
-                    check,
-                    exhaustedAttribution,
-                    cycle,
-                    maxRetryCycles,
-                    "wait-exhausted",
-                    exitCode: null,
-                    timedOut: false,
-                    buildLock: true);
-                throw new BuildLockBlockedException(exhaustedAttribution);
-            }
-
-            reacquireLease(retryEnvironment);
-            CommandResult retry;
-            try
-            {
-                retry = await RunManagedDotnetCommandAsync(
-                    check,
-                    arguments,
-                    retryEnvironment,
-                    worktreePath,
-                    goalId,
-                    stableSlotIndex,
-                    commandTimeout,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsBuildArtifactIoException(ex))
-            {
-                var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-                var exceptionAttribution = AttributeBuildLock(lockedPath, retryEnvironment.ArtifactsPath, "acceptance-transient-retry", check.Name);
-                EmitTransientNoHolderBuildLockRetryReceipt(
-                    check,
-                    exceptionAttribution,
-                    cycle,
-                    maxRetryCycles,
-                    "io-exception",
-                    exitCode: null,
-                    timedOut: false,
-                    buildLock: true);
-                if (cycle < maxRetryCycles && IsTransientNoHolderBuildArtifactLock(exceptionAttribution, retryEnvironment))
-                {
-                    cycleAttribution = exceptionAttribution;
-                    continue;
-                }
-
-                var exhaustedAttribution = AttributeBuildLock(
-                    exceptionAttribution.Path,
-                    retryEnvironment.ArtifactsPath,
-                    "acceptance-transient-exhaustion",
-                    check.Name);
-                throw new BuildLockBlockedException(exhaustedAttribution);
-            }
-
-            if (!IsBuildLockFailure(retry, retryEnvironment, check, out var retryAttribution))
-            {
-                EmitTransientNoHolderBuildLockRetryReceipt(
-                    check,
-                    cycleAttribution,
-                    cycle,
-                    maxRetryCycles,
-                    "completed",
-                    retry.ExitCode,
-                    retry.TimedOut,
-                    buildLock: false);
-                return (retry, true);
-            }
-
-            var finalAttribution = cycle == maxRetryCycles
-                ? AttributeBuildLock(
-                    retryAttribution.Path,
-                    retryEnvironment.ArtifactsPath,
-                    "acceptance-transient-exhaustion",
-                    check.Name)
-                : retryAttribution;
-            EmitTransientNoHolderBuildLockRetryReceipt(
-                check,
-                finalAttribution,
-                cycle,
-                maxRetryCycles,
-                "blocked",
-                retry.ExitCode,
-                retry.TimedOut,
-                buildLock: true);
-            if (cycle < maxRetryCycles && IsTransientNoHolderBuildArtifactLock(retryAttribution, retryEnvironment))
-            {
-                cycleAttribution = retryAttribution;
-                continue;
-            }
-
-            throw new BuildLockBlockedException(finalAttribution);
-        }
-
-        throw new BuildLockBlockedException(cycleAttribution);
-    }
-
-    private static Task<TransientBuildLockWaitResult> WaitForBuildArtifactWriteAccessAsync(
-        string path,
-        TimeSpan waitWindow,
-        TimeSpan pollInterval,
-        TimeProvider timeProvider,
-        CancellationToken cancellationToken) =>
-        GoalAcceptanceVerifierBuildArtifactLock.WaitForBuildArtifactWriteAccessAsync(path, waitWindow, pollInterval, timeProvider, cancellationToken);
-
-    private static void EmitTransientNoHolderBuildLockWaitReceipt(
-        BuildLockAttribution attribution,
-        TransientBuildLockWaitResult wait,
-        int cycle,
-        int maxCycles) =>
-        GoalAcceptanceVerifierBuildArtifactLock.EmitTransientNoHolderBuildLockWaitReceipt(attribution, wait, cycle, maxCycles);
-
-    private static void EmitTransientNoHolderBuildLockRetryReceipt(
-        AcceptanceManifestCheck check,
-        BuildLockAttribution attribution,
-        int cycle,
-        int maxCycles,
-        string verdict,
-        int? exitCode,
-        bool timedOut,
-        bool buildLock) =>
-        GoalAcceptanceVerifierBuildArtifactLock.EmitTransientNoHolderBuildLockRetryReceipt(check, attribution, cycle, maxCycles, verdict, exitCode, timedOut, buildLock);
-
-    private async Task<CommandResult> RunManagedDotnetCommandAsync(
+    internal async Task<CommandResult> RunManagedDotnetCommandAsync(
         AcceptanceManifestCheck check,
         string[] arguments,
         DotnetBuildEnvironment environment,
@@ -3290,25 +2998,22 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static bool IsBuildArtifactIoException(Exception ex) =>
+    internal static bool IsBuildArtifactIoException(Exception ex) =>
         GoalAcceptanceVerifierBuildArtifactLock.IsBuildArtifactIoException(ex);
 
-    private BuildLockAttribution AttributeBuildLock(
+    internal BuildLockAttribution AttributeBuildLock(
         string path,
         string? ownershipHint,
         string? phase,
         string? operation) =>
         GoalAcceptanceVerifierBuildArtifactLock.AttributeBuildLock(path, ownershipHint, phase, operation, _timeProvider);
 
-    private bool IsBuildLockFailure(
+    internal bool IsBuildLockFailure(
         CommandResult result,
         DotnetBuildEnvironment environment,
         AcceptanceManifestCheck check,
         out BuildLockAttribution attribution) =>
         GoalAcceptanceVerifierBuildArtifactLock.IsBuildLockFailure(result, environment, check, out attribution, _timeProvider, _storageRoot, this);
-
-    private static bool IsTransientNoHolderBuildArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
-        GoalAcceptanceVerifierBuildArtifactLock.IsTransientNoHolderBuildArtifactLock(attribution, environment);
 
     internal static bool DotnetTestRunReportsCompleted(string output) =>
         Regex.IsMatch(
@@ -3364,7 +3069,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string? TryExtractPathFromException(Exception ex)
+    internal static string? TryExtractPathFromException(Exception ex)
     {
         for (var current = ex; current is not null; current = current.InnerException!)
         {
@@ -4198,7 +3903,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal sealed record FocusedEvidenceSelectionCoverage(
         IReadOnlyList<string> UncoveredSelections,
-        IReadOnlyList<string> UnreadableReceiptPaths)
+        IReadOnlyList<string> UnreadableReceiptPaths,
+        IReadOnlyList<FocusedEvidenceAllSkippedSelection>? AllSkippedSelections = null)
     {
         public static FocusedEvidenceSelectionCoverage Empty { get; } = new([], []);
     }

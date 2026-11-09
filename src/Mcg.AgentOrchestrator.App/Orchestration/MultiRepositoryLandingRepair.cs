@@ -38,7 +38,8 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                 var root = key == "default" ? workspace.ExecutionDirectory : goal.Repositories.CheckoutRoots[key];
                 var branch = key == "default" ? GoalWorktrees.BranchName(goal.Id)
                     : GoalRepositoryWorktreeLayout.BranchName(goal.Id, key);
-                var tip = Git(root, "rev-parse", "--verify", "refs/heads/" + branch);
+                var tip = MultiRepositoryBranchTipReader.Read(root, branch,
+                    () => Git(root, "rev-parse", "--verify", "refs/heads/" + branch));
                 var integration = new MultiRepositoryIntegrationBases(workspace, registry).Resolve(key);
                 if (branch == integration.Branch)
                     return Refuse("repository-unavailable", key + ": candidate is the integration branch.");
@@ -105,7 +106,8 @@ internal sealed class MultiRepositoryLandingRepair(OrchestratorWorkspace workspa
                 }
 
                 // Recheck immediately before advancing the candidate. No force, reset, or stash.
-                var current = Git(repository.Root, "rev-parse", "refs/heads/" + repository.Branch);
+                var current = MultiRepositoryBranchTipReader.Read(repository.Root, repository.Branch,
+                    () => Git(repository.Root, "rev-parse", "refs/heads/" + repository.Branch));
                 if (current != progress.StartingTip)
                     return Refuse("repair-conflict", repository.Key + ": candidate changed before publication.");
                 var checkout = FindCheckout(repository.Root, repository.Branch);

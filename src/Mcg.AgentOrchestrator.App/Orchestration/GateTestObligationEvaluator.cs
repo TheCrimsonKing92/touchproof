@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateTestObligationEvaluator
 {
-    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded }
+    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived, TraitExcluded, AllSkipped }
 
     internal sealed record RenameScope(string RepositoryDirectory, string IntegrationBranch);
 
@@ -18,8 +18,11 @@ internal static class GateTestObligationEvaluator
         CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
         IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
         IReadOnlyList<string>? ClosestIdentities = null,
-        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null)
+        IReadOnlyList<GateTestObligationTraitExclusionFollow.TraitExclusion>? TraitExclusions = null,
+        string? PendingDetail = null, IReadOnlyList<string>? AllSkippedSelectors = null)
     {
+        internal string AllSkippedProvenance => GateTestObligationAllSkippedGrade.Provenance(this);
+
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rename.OldClass} new={rename.NewClass} old_path={rename.OldPath} new_path={rename.NewPath} " +
@@ -47,7 +50,8 @@ internal static class GateTestObligationEvaluator
 
     internal static IReadOnlyList<Result> Evaluate(
         Goal goal, string orchestratorDirectory, string? candidateSha, RenameScope? renameScope = null,
-        IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null)
+        IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null,
+        Func<string?>? currentRepositoryTuple = null)
     {
         var obligations = goal.GateTestObligations
             .Where(obligation => obligation.BriefVersion == goal.AuthoritativeBrief.Version).ToArray();
@@ -72,6 +76,12 @@ internal static class GateTestObligationEvaluator
                 return new Result(obligation, Outcome.Waived, obligation.Selectors, null, waiver.WaiverReason);
             var effective = answeredRequests is null ? obligation :
                 AnsweredSelectorRebinding.ApplySelectorEdits(goal, obligation, answeredRequests);
+            if (!GateTestObligationRepositoryKey.IsHome(obligation.RepositoryKey))
+            {
+                var keyed = RepositoryGateTestObligationSources.Read(goal,
+                    GateTestObligationRepositoryKey.Resolve(obligation.RepositoryKey), orchestratorDirectory, currentRepositoryTuple);
+                return EvaluateObligation(effective, keyed.Sources, orchestratorDirectory) with { PendingDetail = keyed.PendingDetail };
+            }
             var original = EvaluateObligation(effective, sources, orchestratorDirectory);
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
@@ -174,11 +184,12 @@ internal static class GateTestObligationEvaluator
 
             // Pending check evidence is not an unmatched test selector. Failures and
             // unmatched row selectors still use the existing grading and precedence.
-            newest = Grade(obligation, source.Id, evidence.Where(item => !pending.Contains(item.Selector)).ToArray());
+            newest = GateTestObligationAllSkippedGrade.Grade(obligation, source,
+                evidence.Where(item => !pending.Contains(item.Selector)).ToArray(), orchestratorDirectory, declared.Applies);
             if (newest.Outcome == Outcome.SelectorNotFound && declared.Applies)
                 newest = newest with { ClosestIdentities = DeclaredTestClosestIdentities.Find(newest.Selectors, declared.Rows) };
-            if (pending.Count > 0 && newest.Outcome == Outcome.Satisfied)
-                newest = new(obligation, Outcome.Pending, obligation.Selectors.Where(pending.Contains).ToArray(), source.Id);
+            if (pending.Count > 0 && newest.Outcome is Outcome.Satisfied or Outcome.AllSkipped)
+                newest = newest with { Outcome = Outcome.Pending, Selectors = obligation.Selectors.Where(pending.Contains).ToArray() };
         }
         return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
     }

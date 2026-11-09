@@ -12,6 +12,7 @@
     <Content Include="..\TestData\Fixtures\activity-detail-dispatch-rejected.json" Link="TestData\Fixtures\activity-detail-dispatch-rejected.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\AssemblyTempRedirect.cs" Link="AssemblyTempRedirect.cs" />
     <Compile Include="..\AssemblyTempRootCleanupFixture.cs" Link="AssemblyTempRootCleanupFixture.cs" />
+    <Compile Include="..\AssemblyTestClassCpuActivity.cs" Link="AssemblyTestClassCpuActivity.cs" />
     <Compile Include="..\AssemblyTempRootCleanupHolderDiagnostics.cs" Link="AssemblyTempRootCleanupHolderDiagnostics.cs" />
     <Compile Include="..\InfrastructureTestSupport.cs" Link="InfrastructureTestSupport.cs" />
     <Compile Include="..\InfrastructureTestSupportGitCommit.cs" Link="InfrastructureTestSupportGitCommit.cs" />
