@@ -530,15 +530,15 @@ internal sealed class GitRevisionReader : IDisposable
             if (key.Length == 0 || !char.IsAsciiLetter(key[0]) ||
                 !key.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')) return false;
             key = key.ToLowerInvariant();
+            var isBoolean = value.Length == 0 || value is "0" or "1" ||
+                value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("off", StringComparison.OrdinalIgnoreCase);
             if (section == "core")
             {
-                var isBoolean = value.Length == 0 || value is "0" or "1" ||
-                    value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("on", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("off", StringComparison.OrdinalIgnoreCase);
                 // Git interprets config before answering rev-parse. Only confirm settings whose
                 // values we validate; unknown keys (even in other sections) retain its probe.
                 var supported = key switch
@@ -546,6 +546,8 @@ internal sealed class GitRevisionReader : IDisposable
                     "repositoryformatversion" => value is "0" or "1",
                     "bare" => value.Equals("false", StringComparison.OrdinalIgnoreCase),
                     "filemode" or "symlinks" or "ignorecase" => isBoolean,
+                    "autocrlf" => isBoolean || value == "input",
+                    "longpaths" => isBoolean,
                     "logallrefupdates" => isBoolean || value.Equals("always", StringComparison.OrdinalIgnoreCase),
                     _ => false
                 };
@@ -561,6 +563,15 @@ internal sealed class GitRevisionReader : IDisposable
                 }
                 else if (!(key == "worktreeconfig" && (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                     value.Equals("false", StringComparison.OrdinalIgnoreCase)))) return false;
+            }
+            else if (section == "commit")
+            {
+                if (key != "gpgsign" || !isBoolean) return false;
+            }
+            else if (section == "gc")
+            {
+                if (key != "auto" || value.Length == 0 || !value.All(char.IsAsciiDigit) ||
+                    !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _)) return false;
             }
             // Literal identity strings do not affect repository discovery or ref interpretation.
             // The syntax checks above still reject escapes, quoted values and malformed config;
