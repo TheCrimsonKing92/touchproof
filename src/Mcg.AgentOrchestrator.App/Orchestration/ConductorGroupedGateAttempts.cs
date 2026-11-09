@@ -681,7 +681,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 $"members={train?.Members ?? string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
                 $"identity={train?.Identity ?? attempt.IdentityValue} owner={attempt.OwnerProcessId} reason={attempt.Detail} " +
                 childResult.Text + (childResult.Completed ? $" verdict={childResult.Verdict}" : "") +
-                (childResult.Receipt is { } receipt ? $" receipt={receipt}" : "") + (train?.EjectedSuffix ?? ""));
+                (childResult.Receipt is { } receipt ? $" receipt={receipt}" : "") + (train?.EjectedSuffix ?? "") +
+                (childResult.Detail is { } detail ? $" detail={GroupedGateChildCompletionText.RenderDetail(detail)}" : ""));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
     }
@@ -705,16 +706,16 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         }
     }
 
-    private static (string Text, bool Completed, string Verdict, string? Receipt) DescribeChildResult(string path)
+    private static (string Text, bool Completed, string Verdict, string? Receipt, string? Detail) DescribeChildResult(string path)
     {
-        if (!File.Exists(path)) return ("result=none", false, "unknown", null);
+        if (!File.Exists(path)) return ("result=none", false, "unknown", null, null);
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var root = document.RootElement;
             if (!root.TryGetProperty("Status", out var status) || status.ValueKind != JsonValueKind.String ||
                 string.IsNullOrWhiteSpace(status.GetString()))
-                return ("result=unreadable error=missing Status", false, "unknown", null);
+                return ("result=unreadable error=missing Status", false, "unknown", null, null);
             var error = root.TryGetProperty("Error", out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString() : null;
             var text = $"result={FirstLine(status.GetString()!)}" +
@@ -724,20 +725,19 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             if (completed && root.TryGetProperty("Verdict", out var recordedVerdict) &&
                 recordedVerdict.ValueKind == JsonValueKind.String)
             {
-                var recordedValue = recordedVerdict.GetString();
-                if (string.Equals(recordedValue, "passed", StringComparison.OrdinalIgnoreCase)) verdict = "passed";
-                else if (string.Equals(recordedValue, "failed", StringComparison.OrdinalIgnoreCase)) verdict = "failed";
-                else if (recordedValue == CohortStableSlotAcquisitionRounds.DeferredVerdict) verdict = recordedValue;
+                verdict = GroupedGateChildCompletionText.RecognizeVerdict(recordedVerdict.GetString());
             }
             var receipt = completed && root.TryGetProperty("ReceiptId", out var recordedReceipt) &&
                 recordedReceipt.ValueKind == JsonValueKind.String
                 ? recordedReceipt.GetString() : null;
-            return (text, completed, verdict, string.IsNullOrEmpty(receipt) ? null : FirstLine(receipt));
+            var detail = completed && root.TryGetProperty("Detail", out var recordedDetail) &&
+                recordedDetail.ValueKind == JsonValueKind.String ? recordedDetail.GetString() : null;
+            return (text, completed, verdict, string.IsNullOrEmpty(receipt) ? null : FirstLine(receipt), detail);
         }
         catch (Exception exception) when (exception is JsonException or IOException or
             UnauthorizedAccessException or InvalidOperationException)
         {
-            return ($"result=unreadable error={FirstLine(exception.Message)}", false, "unknown", null);
+            return ($"result=unreadable error={FirstLine(exception.Message)}", false, "unknown", null, null);
         }
     }
 
