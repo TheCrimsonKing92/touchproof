@@ -89,11 +89,21 @@ public sealed class MultiRepositoryTupleLandingPinnedTupleTests
     {
         using var fixture = new MultiRepositoryAcceptanceGateFixture();
         var (kernel, goal, receipt) = Prepare(fixture);
+        // Outside a tuple landing, admissibility resolves the default registry rather than the
+        // explicit fixture registry used by Prepare and the tuple landing's preflight.
+        var candidate = GoalRepositoryCandidateIdentity.Compute(goal, fixture.Repositories.Workspace);
+        Assert.NotNull(candidate.Identity);
+        Assert.NotNull(candidate.Identity.RepositoryTupleCanonical);
+        receipt = receipt with { TupleCanonical = candidate.Identity.RepositoryTupleCanonical };
+        fixture.Gate.Store.Write(receipt, goal.Repositories!.Repositories);
         Assert.Null(HomeLandingAdmissibility.Evaluate(kernel, goal, fixture.Repositories.Workspace));
 
         fixture.Repositories.Crosswalk.Git("merge", "--ff-only", GoalRepositoryWorktreeLayout.BranchName(goal.Id, "crosswalk"));
 
-        Assert.NotEqual(receipt.TupleCanonical, fixture.Tuple().Canonical);
+        var advancedCandidate = GoalRepositoryCandidateIdentity.Compute(goal, fixture.Repositories.Workspace);
+        Assert.NotNull(advancedCandidate.Identity);
+        Assert.NotNull(advancedCandidate.Identity.RepositoryTupleCanonical);
+        Assert.NotEqual(receipt.TupleCanonical, advancedCandidate.Identity.RepositoryTupleCanonical);
         Assert.Null(MultiRepositoryLandingTuplePin.For(goal.Id));
         var refusal = HomeLandingAdmissibility.Evaluate(kernel, goal, fixture.Repositories.Workspace);
         Assert.NotNull(refusal);
