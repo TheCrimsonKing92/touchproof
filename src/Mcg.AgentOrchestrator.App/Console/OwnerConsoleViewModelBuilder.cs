@@ -11,7 +11,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     Func<DateTimeOffset?>? latestTick = null,
     Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null,
     OwnerConsoleRefreshGoalSnapshots? snapshots = null,
-    Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null)
+    Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null,
+    Func<string?>? decisionsMarker = null)
 {
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
@@ -24,6 +25,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     private readonly OwnerNeedsYouLedger _attention = new();
     private readonly Dictionary<string, bool> _previousHolds = new();
     private readonly List<OwnerConductEvent> _observed = [];
+    private readonly OwnerConsoleDecisionCache _decisions = new();
+    private readonly OwnerConsoleDecisionMarker _decisionMarker = new(decisionsMarker);
 
     internal async Task<OwnerConsoleViewModel> BuildAsync(OwnerConsoleViewInputs inputs,
         CancellationToken cancellationToken = default)
@@ -35,9 +38,9 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     }
 
     internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool force = false)
     {
-        var read = await OwnerDecisionReader.ReadAsync(questions, cancellationToken);
+        var read = await _decisions.ReadAsync(questions, _decisionMarker.Read(), force, cancellationToken);
         var snapshot = read.Snapshot;
         var decisions = read.Entries.Zip(snapshot.Live, (question, source) =>
         {
@@ -60,6 +63,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
 
     internal async Task<OwnerConsoleViewModel> BuildBoardAsync(CancellationToken cancellationToken = default)
     {
+        _decisionMarker.BeforeBoard();
         var metadata = await state.ListGoalBoardRowsAsync(
             new(RecentTerminalTitleRows, TitlePrefixChars, BacklogIntakePlanner.TargetScopeHeadingLine), cancellationToken);
         _titles.Merge(metadata);
@@ -71,6 +75,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 (IsActive(status) || status is GoalStatus.Failed or GoalStatus.Parked &&
                     (!DateTimeOffset.TryParse(item.UpdatedAt, out var updated) || now - updated <= TimeSpan.FromHours(24))))
             .Select(item => new GoalId(item.Id)).ToArray();
+        snapshots?.Observe(metadata.Where(item => ids.Any(id => id.Value == item.Id)).ToArray());
         var board = ImmutableArray.CreateBuilder<OwnerConsoleBoardRow>();
         if (ids.Length > 0)
         {
@@ -144,6 +149,9 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         return model with { Board = rows, Decisions = decisions,
             Status = model.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } };
     }
+
+    internal OwnerConsoleViewModel WithPanes(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs) =>
+        OwnerConsolePaneRefresh.Apply(model, inputs, clock, _titles.Titles, gateProgress, latestTick, liveness, gateMotion);
 
     internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs,
         IReadOnlyDictionary<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null)

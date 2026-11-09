@@ -44,7 +44,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         {
             try
             {
-                var (rows, hidden) = await LoadBoundedAsync(builder.ReadDecisionsAsync, "questions", token);
+                var (rows, hidden) = await LoadBoundedAsync(step => builder.ReadDecisionsAsync(step), "questions", token);
                 Update(current =>
                 {
                     var updated = builder.WithDecisions(current, rows, hidden) with { DecisionsState = null };
