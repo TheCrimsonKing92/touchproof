@@ -25,7 +25,8 @@ internal static class OwnerConsoleFullScreenComposer
         OwnerConsoleLoopOptions? options, OwnerConsoleInputDiagnostics? diagnostics,
         OwnerConsoleDecisionsPane decisionsPane, OwnerConsoleActivityPane activityPane, OwnerConsoleBoardPane board,
         Label notice, Label status, Label hints, Label epicHint, OwnerStatusPresenter statusPresenter,
-        OwnerConsoleRenderState state, Dictionary<string, string> working, OwnerConsoleBoardCollapse collapse)
+        OwnerConsoleRenderState state, Dictionary<string, string> working, OwnerConsoleBoardCollapse collapse,
+        OwnerConsoleBoardSource? boardSource = null)
     {
         var noticeStrip = new OwnerConsoleNoticeStrip(clock);
         var refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
@@ -51,8 +52,11 @@ internal static class OwnerConsoleFullScreenComposer
         epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
-        var settingsView = new OwnerConsoleSettingsView(controller.Sound is { } sound
-            ? [new OwnerConsoleAlertsSettingsTab(sound)] : []);
+        var settingsTabs = new List<IOwnerConsoleSettingsTab>();
+        if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
+        if (boardSource?.Registry is { } registry)
+            settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
+        var settingsView = new OwnerConsoleSettingsView(settingsTabs);
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
     }
 
