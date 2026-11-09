@@ -94,7 +94,8 @@ public sealed class MultiRepositoryTupleLandingPinnedTupleTests
         var candidate = GoalRepositoryCandidateIdentity.Compute(goal, fixture.Repositories.Workspace);
         Assert.NotNull(candidate.Identity);
         Assert.NotNull(candidate.Identity.RepositoryTupleCanonical);
-        receipt = receipt with { TupleCanonical = candidate.Identity.RepositoryTupleCanonical };
+        receipt = new MultiRepositoryAcceptanceReceipt(receipt.GoalId, candidate.Identity.RepositoryTupleCanonical,
+            receipt.Outcomes, receipt.RecordedAt, receipt.IntegrationBases);
         fixture.Gate.Store.Write(receipt, goal.Repositories!.Repositories);
         Assert.Null(HomeLandingAdmissibility.Evaluate(kernel, goal, fixture.Repositories.Workspace));
 
