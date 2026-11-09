@@ -71,11 +71,12 @@ public sealed class GitCommitLaunchCountSeededRepositoryTemplateTests
             }
 
             using (var launches = InfrastructureTestSupport.CountGitProbeLaunches())
+            using (var answers = InfrastructureTestSupport.CountGitProbeRefFileAnswers())
             {
                 var exception = Assert.Throws<InvalidOperationException>(() =>
                     InfrastructureTestSupport.RunGitWithCommitPostcondition(clean, ["commit", "-m", "Empty"]));
                 Assert.Contains("nothing to commit", exception.Message, StringComparison.Ordinal);
-                Assert.Equal(2, launches.Count);
+                Assert.Equal(2, launches.Count + answers.Count);
             }
         });
     }

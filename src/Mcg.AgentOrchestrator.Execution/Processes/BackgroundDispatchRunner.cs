@@ -1625,10 +1625,10 @@ public sealed partial class BackgroundDispatchRunner
                     }
                 }
             }
-
             var repositoryCommitFailures = CommitRepositoryWorktreeEdits(goal, task, shouldCommitDirtyWorktree,
                 decisionStandardOutput, decisionStandardError, _worktreeCommitter);
-
+            var changeEvidence = GoalRepositoryChangeEvidence.Collect(goal, task, task.LastDispatch!.DispatchedAt, _worktreeCommitter)
+                .CombineWithHome(processRecord.WorkingDirectory, worktreeEvidence);
             if (task.RequiredRole == AgentRole.Developer && exitCode == 0 &&
                 InScopeIgnoredFileCheck.Evaluate(processRecord.WorkingDirectory, goal, task) is { Diagnostic.Length: > 0 } inScopeIgnored)
             {
@@ -1696,7 +1696,7 @@ public sealed partial class BackgroundDispatchRunner
                     ((roleStillRequiresChangeEvidence && !allowsNoChangeCompletion) ||
                       (!verificationRecognized &&
                        !allowsNoChangeCompletion)) &&
-                    !worktreeEvidence.HasRelevantCommitAfterDispatch;
+                    !changeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
                 {
@@ -1709,11 +1709,11 @@ public sealed partial class BackgroundDispatchRunner
                                 standardErrorDiagnostic ?? string.Empty,
                                 DispatchRejectionDiagnosticMarker.Format(
                                     verificationRecognized,
-                                    worktreeEvidence.CommitsAfterDispatch,
-                                    worktreeEvidence.ChangedPathsSummary)),
+                                    changeEvidence.CommitsAfterDispatch,
+                                    changeEvidence.ChangedPathsSummary)),
                             "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
                             $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                            $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}."),
+                            $"commits_after_dispatch={changeEvidence.CommitsAfterDispatch}; changed_paths={changeEvidence.ChangedPathsSummary}."),
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing));
                 }
             }

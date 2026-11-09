@@ -158,7 +158,8 @@ internal static class OwnerConsoleFullScreenHost
                     notifications: settings.Current,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument), sound: sound,
-                    conductorPolicyPath: Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"), workspace: workspace);
+                    conductorPolicyPath: Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"), workspace: workspace,
+                    agentsSettings: new(workspace.AgentCatalogPath, workspace.ModelFunctionCatalogPath, workspace.WorkerProfilePath));
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);

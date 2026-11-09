@@ -100,6 +100,13 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null,
     IReadOnlyDictionary<string, string?>? verificationEnvironment = null)
 {
+    if (GitProbeRefFileFastPath.TryAnswer(workingDirectory, arguments,
+            GitProbeSeamScope.Value is not null || startProcess is not null ||
+            commandEnvironment is not null || verificationEnvironment is not null ||
+            inheritedEnvironment is not null || beforeOwnedCaptureRead is not null ||
+            beforeOwnedExitObservation is not null, out var answer))
+        return answer;
+
     RecordGitProbeLaunch();
     var seam = GitProbeSeamScope.Value;
     inheritedEnvironment ??= seam?.InheritedEnvironment;

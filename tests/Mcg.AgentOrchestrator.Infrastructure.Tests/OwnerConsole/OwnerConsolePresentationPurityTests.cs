@@ -16,6 +16,8 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerActivityEvidenceReader.cs",
         ConsolePath + "OwnerAnswerIntentSubmitter.cs",
         ConsolePath + "OwnerConsoleAdapters.cs",
+        // Owns catalog reads and atomic saves, not presentation.
+        ConsolePath + "OwnerConsoleAgentsSettingsStore.cs",
         ConsolePath + "OwnerConsoleBoardComposer.cs",
         ConsolePath + "OwnerConsoleBoardSource.cs",
         ConsolePath + "OwnerConsoleEvidenceAttemptProgressReader.cs",
@@ -43,6 +45,8 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerGoalChangeSummaryQuery.cs",
         ConsolePath + "OwnerGoalLifecycleTail.cs",
         ConsolePath + "OwnerGoalSummarySectionReader.cs",
+        // Reads bounded worker artifacts from retained output or their file paths.
+        ConsolePath + "OwnerGoalVerifiedSectionReader.cs",
         ConsolePath + "OwnerJointGateFailureEvidence.cs",
         ConsolePath + "OwnerLandingsQuery.cs",
         ConsolePath + "OwnerQuestionReadModel.cs",
