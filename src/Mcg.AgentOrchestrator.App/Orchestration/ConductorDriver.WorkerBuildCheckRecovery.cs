@@ -20,7 +20,7 @@ internal sealed partial class ConductorDriver
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
         FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)
     {
-        var hold = WorkerBuildEvidenceRecoveryHold.Decide(goal, state, decision.Identity);
+        var hold = WorkerBuildEvidenceRecoveryHold.Decide(goal, state, decision.Identity, CompletionBuildRelaunchRecoveryQualification.ForWorkspace(_cohortKernel ?? _conductorTickKernel, _cohortWorkspace, _executionDirectory, _utcNow));
         if (hold is null) return null;
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))

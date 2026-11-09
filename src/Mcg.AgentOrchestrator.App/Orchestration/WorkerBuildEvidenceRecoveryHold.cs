@@ -8,9 +8,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class WorkerBuildEvidenceRecoveryHold
 {
     internal static ConductorAdvanceOutcome.Held? Decide(
-        Goal goal, GoalLifecycleState state, FailedGoalRecoveryIdentity identity)
+        Goal goal, GoalLifecycleState state, FailedGoalRecoveryIdentity identity,
+        CompletionBuildRelaunchRecoveryQualification.Context? relaunchRecovery = null)
     {
-        var task = goal.Tasks.FirstOrDefault(candidate => candidate.Status == WorkTaskStatus.Failed &&
+        var recovery = CompletionBuildRelaunchRecoveryQualification.Evaluate(goal, state, relaunchRecovery);
+        if (recovery is { Handled: true }) return recovery.Hold;
+        var task = recovery?.ExhaustedTask ?? goal.Tasks.FirstOrDefault(candidate => candidate.Status == WorkTaskStatus.Failed &&
             candidate.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
             candidate.LastVerification is { } verification &&
             (verification.OrchestratorFailureReason is "completion-build-coordinator-unavailable" or "worker-build-authority-rejected" ||
