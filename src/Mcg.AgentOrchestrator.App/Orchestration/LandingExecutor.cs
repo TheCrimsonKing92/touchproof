@@ -1057,6 +1057,16 @@ internal static partial class LandingExecutor
 
     private static string? TryResolveBranch(string executionDirectory, string branch)
     {
+        if (GitRefFileResolver.TryResolve(executionDirectory, $"refs/heads/{branch}", out var revision))
+        {
+            return revision;
+        }
+
+        if (GitRevisionReader.TryConfirmBranchAbsent(executionDirectory, branch))
+        {
+            return null;
+        }
+
         var result = RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output)
             ? result.Output.Trim()
@@ -1139,6 +1149,11 @@ internal static partial class LandingExecutor
 
     private static string ResolveRef(string executionDirectory, string reference)
     {
+        if (!reference.StartsWith('-') && GitRefFileResolver.TryResolve(executionDirectory, reference, out var revision))
+        {
+            return revision;
+        }
+
         var result = RunGit(executionDirectory, "rev-parse", reference);
         if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
         {
@@ -1150,6 +1165,16 @@ internal static partial class LandingExecutor
 
     private static bool BranchExists(string executionDirectory, string branch)
     {
+        if (GitRefFileResolver.TryResolve(executionDirectory, $"refs/heads/{branch}", out _))
+        {
+            return true;
+        }
+
+        if (GitRevisionReader.TryConfirmBranchAbsent(executionDirectory, branch))
+        {
+            return false;
+        }
+
         return RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}").ExitCode == 0;
     }
 

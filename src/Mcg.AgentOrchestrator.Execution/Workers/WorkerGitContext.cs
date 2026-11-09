@@ -49,8 +49,20 @@ internal sealed class WorkerGitContext
             return [];
         }
 
+        var statusSucceeded = TryRunGit(workingDirectory, ["status", "--short"], out var statusOutput,
+            requireComplete: true);
+        var diffOutput = string.Empty;
+        var diffSucceeded = statusSucceeded && WorkerGitStatusChangeReader.TryDeriveDiffNameOnly(
+            workingDirectory, statusOutput, out diffOutput);
+        if (!diffSucceeded)
+        {
+            // Preserve the original command order and independent failure handling on decline.
+            diffSucceeded = TryRunGit(workingDirectory, ["diff", "--name-only", "HEAD", "--"], out diffOutput);
+            statusSucceeded = TryRunGit(workingDirectory, ["status", "--short"], out statusOutput);
+        }
+
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (TryRunGit(workingDirectory, ["diff", "--name-only", "HEAD", "--"], out var diffOutput))
+        if (diffSucceeded)
         {
             foreach (var line in SplitGitOutput(diffOutput))
             {
@@ -58,7 +70,7 @@ internal sealed class WorkerGitContext
             }
         }
 
-        if (TryRunGit(workingDirectory, ["status", "--short"], out var statusOutput))
+        if (statusSucceeded)
         {
             foreach (var line in SplitGitOutput(statusOutput))
             {
@@ -715,11 +727,12 @@ internal sealed class WorkerGitContext
         return lines.Count == 0 ? ["- clean"] : lines;
     }
 
-    private static bool TryRunGit(string workingDirectory, string[] arguments, out string output)
+    private static bool TryRunGit(string workingDirectory, string[] arguments, out string output,
+        bool requireComplete = false)
     {
         var result = GitCli.Run(workingDirectory, arguments);
         output = result.Output;
-        return result.Succeeded;
+        return result.Succeeded && (!requireComplete || (result.ProcessStarted && !result.DrainTimedOut));
     }
 }
 
