@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -9,7 +8,10 @@ internal static class ExperimentReplayCorpusImporter
 {
     internal sealed record Round(string Project, string GoalId, string TaskId, DateTimeOffset DispatchAt,
         DateTimeOffset CompletedAt, string? BaseCommit, string? CandidateCommit, string? ObservedMain,
-        ExperimentReplaySource Source);
+        ExperimentReplaySource Source)
+    {
+        internal string? LinkageUnavailableReason { get; init; }
+    }
     internal sealed record Gate(string GoalId, string CandidateCommit, string ObservedMain,
         ExperimentReplayGate Evidence, string? TaskId = null, DateTimeOffset? DispatchedAt = null,
         ExperimentReplaySource? DispatchLinkSource = null);
@@ -40,7 +42,7 @@ internal static class ExperimentReplayCorpusImporter
                     .Select(g => g.Evidence with { Sources = g.Evidence.Sources.Append(g.DispatchLinkSource!).ToArray() })
                     .OrderBy(g => g.StartedAt).ThenBy(g => g.AttemptId, StringComparer.Ordinal).ToArray()
                 : [];
-            if (linked.Length == 0) reasons.Add("no exact-linked subsequent solo gate");
+            if (linked.Length == 0) reasons.Add(round.LinkageUnavailableReason ?? "no exact-linked subsequent solo gate");
             if (linked.Any(g => g.Outcome == "unknown")) reasons.Add("gate outcome unavailable");
             var id = ExperimentReplayStore.Hash($"{round.Project}/{round.GoalId}/{round.TaskId}/{round.DispatchAt:O}");
             return new ExperimentReplayCase(id, round.Project, round.GoalId, round.TaskId, round.DispatchAt,
@@ -57,36 +59,42 @@ internal static class ExperimentReplayCorpusImporter
         var rounds = new List<Round>();
         var diagnostics = new List<string>();
         var evidenceDirectory = Path.Combine(workspace.OrchestratorDirectory, "experiment-replay", "evidence");
-        foreach (var goal in kernel.Goals)
+        // Bound the population before serializing/copying any source. Ledger supplies timing, never gate linkage.
+        var population = kernel.Goals.SelectMany(goal => WorkerRoundLedger.FromGoal(goal)
+                .Where(r => r.Role == AgentRole.Developer && r.EndedAt is { } end && end <= cutoff && end >= cutoff.AddDays(-30))
+                .Select(round => (Goal: goal, Round: round)))
+            .OrderByDescending(row => row.Round.EndedAt).ThenBy(row => row.Round.TaskId, StringComparer.Ordinal)
+            .ThenBy(row => row.Round.DispatchedAt).Take(100);
+        foreach (var (goal, round) in population)
         {
-            foreach (var round in WorkerRoundLedger.FromGoal(goal).Where(r => r.Role == AgentRole.Developer && r.EndedAt is not null))
-            {
-                var task = goal.Tasks.Single(t => t.Id.Value == round.TaskId);
-                var dispatch = task.DispatchHistory.Where(d => d.DispatchedAt == round.DispatchedAt).ToArray();
-                if (dispatch.Length != 1) { diagnostics.Add($"{round.TaskId}/{round.DispatchedAt:O}: ambiguous dispatch record"); continue; }
-                var record = dispatch[0];
-                // Ledger supplies inventory timing only. It never supplies gate linkage.
-                var raw = JsonSerializer.Serialize(new { round, dispatch = record }, ExperimentReplayStore.Json);
-                var source = ExperimentReplayEvidence.Write(evidenceDirectory, raw, ".json");
-                var mainReceipt = record.PreDispatchIntegrationReceipt;
-                var main = mainReceipt is not null && mainReceipt.GoalId == goal.Id && mainReceipt.TaskId == task.Id &&
-                    mainReceipt.ResultingCandidateSha == record.BaseCommit ? mainReceipt.IntegratedMainSha : null;
-                rounds.Add(new(workspace.ProjectName, goal.Id.Value, task.Id.Value, round.DispatchedAt,
-                    round.EndedAt!.Value, record.BaseCommit, record.ResultCommit, main, source));
-            }
+            token.ThrowIfCancellationRequested();
+            var task = goal.Tasks.Single(t => t.Id.Value == round.TaskId);
+            var dispatch = task.DispatchHistory.Where(d => d.DispatchedAt == round.DispatchedAt).ToArray();
+            var record = dispatch.Length == 1 ? dispatch[0] : null;
+            if (record is null) diagnostics.Add($"{round.TaskId}/{round.DispatchedAt:O}: ambiguous dispatch record");
+            var raw = JsonSerializer.Serialize(new { round, dispatch }, ExperimentReplayStore.Json);
+            var source = ExperimentReplayEvidence.Write(evidenceDirectory, raw, ".json");
+            var mainReceipt = record?.PreDispatchIntegrationReceipt;
+            var main = mainReceipt is not null && mainReceipt.GoalId == goal.Id && mainReceipt.TaskId == task.Id &&
+                mainReceipt.ResultingCandidateSha == record?.BaseCommit ? mainReceipt.IntegratedMainSha : null;
+            rounds.Add(new(workspace.ProjectName, goal.Id.Value, task.Id.Value, round.DispatchedAt,
+                round.EndedAt!.Value, record?.BaseCommit, record?.ResultCommit, main, source));
         }
         var skipped = new List<ImpactReplayDiagnostic>();
-        var retained = ImpactReplayAttemptSource.Read(workspace.OrchestratorDirectory, cutoff.AddDays(-30), skipped);
+        var filter = new ExperimentReplayImportGateFilter(rounds, cutoff, diagnostics, token);
+        var retained = ImpactReplayAttemptSource.Read(workspace.OrchestratorDirectory, cutoff.AddDays(-30), skipped,
+            filter.Include, rounds.Select(r => r.GoalId).Distinct(StringComparer.Ordinal).ToArray());
         diagnostics.AddRange(skipped.Select(s => $"{s.Source}: {s.Reason}"));
-        var gates = ReadGates(retained, evidenceDirectory, diagnostics, token);
-        var cases = Map(rounds, gates, cutoff);
+        var gates = ReadGates(retained, evidenceDirectory, diagnostics, token, filter.Links);
+        var cases = Map(rounds.Select(filter.Annotate), gates, cutoff);
         var added = cases.Count(store.Import);
         return new(cases.Count, added, cases.Count(c => c.Replayability == "replayable"), cases, diagnostics,
             ExperimentReplayStore.Hash(JsonSerializer.Serialize(cases, ExperimentReplayStore.Json)));
     }
 
     internal static IReadOnlyList<Gate> ReadGates(IReadOnlyList<ImpactReplayStoredAttempt> retained,
-        string evidenceDirectory, List<string> diagnostics, CancellationToken token)
+        string evidenceDirectory, List<string> diagnostics, CancellationToken token,
+        IReadOnlyDictionary<string, AcceptanceDeveloperRoundLink>? links = null)
     {
         var gates = new List<Gate>();
         foreach (var gate in retained)
@@ -96,10 +104,17 @@ internal static class ExperimentReplayCorpusImporter
             {
                 // Source reader validates paired receipts; retain both bytes, not only its filtered projection.
                 var metadata = gate.MetadataPath ?? throw new InvalidDataException("Validated gate source path unavailable.");
+                var link = links is not null && links.TryGetValue(metadata, out var recorded) ? recorded : null;
+                if (links is not null && (link is null || link.GoalId != gate.GoalId ||
+                    link.CandidateCommit != gate.BranchHeadSha || link.ObservedMain != gate.MainHeadSha))
+                    throw new InvalidDataException("Gate result identity disagrees with admitted dispatch linkage.");
                 var resultPath = metadata[..^".attempt.json".Length] + ".result.json";
                 var result = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllText(resultPath), ExperimentReplayStore.Json)!;
                 var sources = new List<ExperimentReplaySource>
                 { ExperimentReplayEvidence.Copy(evidenceDirectory, metadata), ExperimentReplayEvidence.Copy(evidenceDirectory, resultPath) };
+                if (link is not null && JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                    File.ReadAllText(sources[0].Identity), ExperimentReplayStore.Json)?.DeveloperRoundLink != link)
+                    throw new InvalidDataException("Gate dispatch linkage changed after metadata preflight.");
                 var failures = new SortedSet<string>(StringComparer.Ordinal);
                 var hasResults = false;
                 var complete = gate.TestResultPaths.Count > 0;
@@ -118,10 +133,10 @@ internal static class ExperimentReplayCorpusImporter
                 var outcome = ClassifyOutcome(result.Acceptance?.Passed, result.FaultKind is not null || fatal,
                     complete && hasResults, failures.Count);
                 gates.Add(new(gate.GoalId, gate.BranchHeadSha, gate.MainHeadSha,
-                    new(gate.AttemptId, gate.StartedAt, outcome, failures.ToArray(), sources)));
-                // Retained solo gate receipts do not name a Developer task/dispatch. Preserve inventory,
-                // but never promote tuple equality to exact linkage for replay/catch scoring.
-                diagnostics.Add($"{gate.AttemptId}: authoritative task/dispatch linkage was not recorded");
+                    new(gate.AttemptId, gate.StartedAt, outcome, failures.ToArray(), sources),
+                    link?.TaskId, link?.DispatchedAt, link is null ? null : sources[0]));
+                // Legacy callers may inventory unlinked gates, but cannot promote tuple equality to dispatch proof.
+                if (link is null) diagnostics.Add($"{gate.AttemptId}: authoritative task/dispatch linkage was not recorded");
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or JsonException or System.Xml.XmlException)
             { diagnostics.Add($"{gate.AttemptId}: retained evidence unreadable: {ex.Message}"); }

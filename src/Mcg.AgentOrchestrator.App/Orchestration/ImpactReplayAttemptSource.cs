@@ -8,12 +8,16 @@ internal static class ImpactReplayAttemptSource
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     internal static IReadOnlyList<ImpactReplayStoredAttempt> Read(string orchestratorDirectory,
-        DateTimeOffset? since, List<ImpactReplayDiagnostic> skipped)
+        DateTimeOffset? since, List<ImpactReplayDiagnostic> skipped,
+        Func<ConductorParallelAcceptanceAttempt, string, bool>? includeAttempt = null,
+        IReadOnlyCollection<string>? goalIds = null)
     {
         var directory = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
         if (!Directory.Exists(directory)) return [];
         var attempts = new List<ImpactReplayStoredAttempt>();
-        foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json", SearchOption.AllDirectories)
+        string[] directories = goalIds is null ? [directory] : goalIds.Select(id => Path.Combine(directory, id))
+            .Where(Directory.Exists).ToArray();
+        foreach (var path in directories.SelectMany(root => Directory.EnumerateFiles(root, "*.attempt.json", SearchOption.AllDirectories))
                      .Order(StringComparer.Ordinal))
         {
             try
@@ -22,6 +26,8 @@ internal static class ImpactReplayAttemptSource
                     ?? throw new InvalidDataException("Null attempt receipt.");
                 if (since is { } start && attempt.StartedAt < start) continue;
                 if (attempt.Kind != "gate") { Skip("Not a solo gate attempt."); continue; }
+                // Replay import can reject unsupported provenance using metadata alone, before opening results/TRX.
+                if (includeAttempt is not null && !includeAttempt(attempt, path)) continue;
                 var resultPath = path[..^".attempt.json".Length] + ".result.json";
                 var result = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllText(resultPath), Json)
                     ?? throw new InvalidDataException("Null result receipt.");
