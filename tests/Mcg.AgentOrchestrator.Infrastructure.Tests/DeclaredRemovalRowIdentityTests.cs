@@ -198,6 +198,174 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         Assert.Contains("disposition=integration-stale", coverage.Summary);
     }
 
+    [Theory]
+    [InlineData(false, false, 2)]
+    [InlineData(true, false, 0)]
+    [InlineData(true, true, 2)]
+    public async Task Compare_CachedBaselineOrigin_CharacterizesRowCredit(
+        bool relocate, bool explicitIdentity, int expectedCredit)
+    {
+        // Characterization before correction: path-derived UIDs from A cannot be proved
+        // using B's arguments. The explicit identity control changes only that identity basis.
+        var evaluation = await CompareCachedAsync(relocate, explicitIdentity);
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+
+        Assert.Equal(expectedCredit == 2, coverage.Passed);
+        AssertCredit(coverage, expectedCredit);
+        Assert.Equal(new TestCoverageCountComparison(25, 27 - expectedCredit, 27,
+            expectedCredit, expectedCredit == 0), coverage.CountComparison);
+        Assert.Equal(25, coverage.ExecutedTests.Count);
+        Assert.Contains(Survivor, coverage.ExecutedTests);
+        foreach (var group in Rows(true, false, true).GroupBy(row => row.DisplayName))
+            Assert.Equal(12, coverage.ExecutedTests.Count(test => test == group.Key));
+        Assert.Empty(coverage.EmptyPartitions);
+        if (expectedCredit == 0)
+            Assert.Equal("cross-generation-count:candidate=25,minimum=27,main=27,deleted=0",
+                Assert.Single(coverage.MissingTests));
+        else
+            Assert.Empty(coverage.MissingTests);
+    }
+
+    [Theory]
+    [InlineData(false, false, 2)]
+    [InlineData(true, false, 0)]
+    [InlineData(true, true, 2)]
+    public async Task Compare_CachedBaseline_MissingSurvivorStillFails(
+        bool relocate, bool explicitIdentity, int expectedCredit)
+    {
+        var evaluation = await CompareCachedAsync(relocate, explicitIdentity, omitCollisionReceipt: true);
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+
+        Assert.False(coverage.Passed);
+        AssertCredit(coverage, expectedCredit);
+        Assert.Equal(24, coverage.ExecutedTests.Count);
+        Assert.Contains(Survivor, coverage.ExecutedTests);
+        Assert.Contains(DisplayName(PathPrefix + Files[0], true, false), coverage.MissingTests);
+        Assert.Equal(expectedCredit == 0 ? 2 : 1, coverage.MissingTests.Count);
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("stale")]
+    public async Task Compare_InvalidBaselineCache_RejectsEntryAndDiscoveryFailure(string fault)
+    {
+        var evaluation = await CompareCachedAsync(relocate: true, explicitIdentity: false, cacheFault: fault);
+
+        Assert.Equal(0, evaluation.CandidateDiscovery.ExitCode);
+        Assert.Equal(1, evaluation.BaselineDiscovery!.ExitCode);
+        Assert.Equal("fresh baseline discovery failed", evaluation.BaselineDiscovery.Output);
+        Assert.Null(evaluation.Coverage);
+    }
+
+    private async Task<AcceptanceStructuralCoverageEvaluation> CompareCachedAsync(
+        bool relocate, bool explicitIdentity, bool omitCollisionReceipt = false, string? cacheFault = null)
+    {
+        var mainRoot = Path.Combine(_root, "main");
+        var candidateRoot = Path.Combine(_root, "candidate");
+        Directory.CreateDirectory(mainRoot);
+        Directory.CreateDirectory(candidateRoot);
+        File.WriteAllText(Path.Combine(mainRoot, SourceFile), Source(false, false));
+        File.WriteAllText(Path.Combine(candidateRoot, SourceFile), Source(false, true));
+        // One source generation and manifest for both cache requests; only artifacts move.
+        var manifestPath = Path.Combine(mainRoot, "acceptance-manifest.json");
+        File.WriteAllText(manifestPath, "{\"testProjects\":[\"Fixture.csproj\"]}");
+        string SourceDigest() => MainBaselineDiscoveryCache.Hash(
+            File.ReadAllText(Path.Combine(mainRoot, SourceFile)) + File.ReadAllText(manifestPath));
+        var digest = SourceDigest();
+        var outputA = Path.Combine(_root, "outputA");
+        var outputB = relocate ? Path.Combine(_root, "outputB") : outputA;
+        var assemblyA = Path.Combine(outputA, "Fixture.dll");
+        var assemblyB = Path.Combine(outputB, "Fixture.dll");
+        var candidateAssembly = Path.Combine(candidateRoot, "Fixture.dll");
+        const string assemblyIdentity = "fixture-explicit-assembly-identity";
+        foreach (var assembly in new[] { assemblyA, assemblyB }.Distinct())
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+            if (explicitIdentity) File.WriteAllText(Path.ChangeExtension(assembly, ".uniqueid"), assemblyIdentity);
+            else Assert.False(File.Exists(Path.ChangeExtension(assembly, ".uniqueid")));
+        }
+        string[] Arguments(string assembly) => ["dotnet", assembly, "--list-tests", "json"];
+        var argumentsA = Arguments(assemblyA);
+        var argumentsB = Arguments(assemblyB);
+        var main = Rows(true, false, false, assemblyA, explicitIdentity ? assemblyIdentity : null);
+        var candidate = Rows(true, false, true, candidateAssembly);
+        var clock = new CacheClock();
+        var cache = new MainBaselineDiscoveryCache(Path.Combine(_root, "cache"), clock: clock);
+        var keyA = MainBaselineDiscoveryCache.CreateKey(digest, mainRoot, "Fixture.csproj", "Debug", argumentsA, outputA);
+        var trustedDiscovery = new GoalAcceptanceVerifier.CommandResult(0, Discovery(main, mainRoot));
+        cache.TryWrite(keyA, trustedDiscovery);
+        Assert.Equal(trustedDiscovery, cache.TryRead(keyA));
+        var keyB = MainBaselineDiscoveryCache.CreateKey(SourceDigest(), mainRoot, "Fixture.csproj", "Debug", argumentsB, outputB);
+        Assert.Equal(digest, SourceDigest());
+        Assert.Equal(keyA, keyB);
+        if (cacheFault == "malformed")
+            File.WriteAllText(Path.Combine(_root, "cache", keyA.EntryName + ".json"), "{");
+        if (cacheFault == "stale") clock.Now += TimeSpan.FromDays(8);
+        var cached = cache.TryRead(keyB);
+        if (cacheFault is null)
+        {
+            Assert.NotNull(cached);
+            Assert.Equal(Discovery(main, mainRoot), cached.Output);
+        }
+        else Assert.Null(cached);
+
+        var trx = Path.Combine(candidateRoot, "cached-results.trx");
+        string[] executed = [Survivor, .. candidate.Skip(omitCollisionReceipt ? 1 : 0).Select(row => row.DisplayName)];
+        new XDocument(new XElement("TestRun", new XElement("Results", executed.Select((test, index) =>
+            new XElement("UnitTestResult", new XAttribute("testId", index), new XAttribute("testName", test),
+                new XAttribute("outcome", "Passed")))))).Save(trx);
+        var calls = new List<string>();
+        var evaluator = new AcceptanceStructuralCoverageEvaluator((arguments, directory, _, _) =>
+        {
+            calls.Add(directory);
+            if (directory == candidateRoot)
+            {
+                Assert.Equal(Arguments(candidateAssembly), arguments);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, Discovery(candidate, candidateRoot)));
+            }
+            Assert.Equal(mainRoot, directory);
+            Assert.Equal(argumentsB, arguments);
+            Assert.NotNull(cacheFault); // A hit must bypass fresh baseline discovery entirely.
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "fresh baseline discovery failed"));
+        });
+        var request = new AcceptanceStructuralCoverageRequest(
+            Arguments(candidateAssembly), candidateRoot, TimeSpan.FromMinutes(1), false,
+            () => [new TestPartitionCoverage("fixture", true, [trx])], () => [], null, [Declaration],
+            _ => Task.FromResult<AcceptanceStructuralCoverageBaseline?>(
+                new(argumentsB, mainRoot, mainRoot, false, false, CachedDiscovery: cached)));
+        var prepared = await evaluator.PrepareAsync(request, CancellationToken.None);
+        if (cacheFault is null)
+        {
+            Assert.Equal(argumentsB, prepared.BaselineDiscoveryArguments);
+            var snapshot = Assert.IsType<TestDiscoverySnapshot>(prepared.BaselineSnapshot);
+            Assert.Equal(27, snapshot.Rows!.Count);
+            Assert.Equal(27, snapshot.Rows.Select(row => row.Uid).Distinct().Count());
+            var candidateSnapshot = TestCoverageInvariant.ParseDiscovery(Discovery(candidate, candidateRoot), false, candidateRoot);
+            var proof = SourceConfirmedTheoryRowRemovals.Resolve(snapshot, candidateSnapshot,
+                mainRoot, candidateRoot, [Declaration], argumentsB, Arguments(candidateAssembly));
+            if (relocate && !explicitIdentity) Assert.Empty(proof);
+            else
+            {
+                var removedPath = PathPrefix + RemovedFile;
+                var expected = new[] { removedPath, removedPath.Replace('/', '\\').ToUpperInvariant() }
+                    .Select(path => FrameworkUid(assemblyA, path, explicitIdentity ? assemblyIdentity : null)).ToArray();
+                Assert.Equal(expected.Order(StringComparer.Ordinal),
+                    proof[Declaration].Select(index => snapshot.Rows[index].Uid).Order(StringComparer.Ordinal));
+                Assert.Equal(24, snapshot.Rows.Skip(1).Count(row => !expected.Contains(row.Uid)));
+            }
+        }
+        var result = await evaluator.CompareAsync(request, prepared, CancellationToken.None);
+        Assert.Equal(cacheFault is null ? new[] { candidateRoot } : new[] { candidateRoot, mainRoot }, calls);
+        Assert.Equal(digest, SourceDigest());
+        return result;
+    }
+
+    private sealed class CacheClock : TimeProvider
+    {
+        internal DateTimeOffset Now = new(2100, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     private async Task<TestCoverageInvariantResult> CompareAsync(
         bool truncated, bool customName, bool removeFollower = true, bool omitCollisionReceipt = false,
         string? fault = null)
@@ -316,13 +484,14 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         return Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
     }
 
-    private static Row[] Rows(bool truncated, bool customName, bool removeFollower, string? assemblyPath = null) =>
+    private static Row[] Rows(bool truncated, bool customName, bool removeFollower, string? assemblyPath = null,
+        string? assemblyIdentity = null) =>
         Files.Where(file => !removeFollower || file != RemovedFile)
             .SelectMany(file => new[] { false, true }.Select(upper =>
             {
                 var path = PathPrefix + file;
                 if (upper) path = path.Replace('/', '\\').ToUpperInvariant();
-                return new Row(assemblyPath is null ? $"fixture:{file}:{upper}" : FrameworkUid(assemblyPath, path),
+                return new Row(assemblyPath is null ? $"fixture:{file}:{upper}" : FrameworkUid(assemblyPath, path, assemblyIdentity),
                     DisplayName(path, truncated, customName));
             })).ToArray();
 
@@ -386,13 +555,13 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
 
     private sealed record Row(string Uid, string DisplayName);
 
-    private static string FrameworkUid(string assemblyPath, string argument)
+    private static string FrameworkUid(string assemblyPath, string argument, string? assemblyIdentity = null)
     {
         using var typeIdentity = new Xunit.Sdk.UniqueIDGenerator();
         typeIdentity.Add("Fixture");
         typeIdentity.Add("AdmissionRows");
         var collection = Xunit.Sdk.UniqueIDGenerator.ForTestCollection(
-            Xunit.Sdk.UniqueIDGenerator.ForAssembly(assemblyPath, null),
+            assemblyIdentity ?? Xunit.Sdk.UniqueIDGenerator.ForAssembly(assemblyPath, null),
             $"Test collection for AdmissionRows (id: {typeIdentity.Compute()})", null);
         var type = Xunit.Sdk.UniqueIDGenerator.ForTestClass(collection, "AdmissionRows");
         var method = Xunit.Sdk.UniqueIDGenerator.ForTestMethod(type, Method)!;
