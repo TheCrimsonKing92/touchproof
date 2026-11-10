@@ -74,6 +74,9 @@ public sealed class ConductorJudgePanelHostTests
         try { await h.Complete(next); }
         finally { next.Stop(); }
         Assert.Equal(PanelCaseTerminal.Completed, h.Store.Get(item.Id)!.Terminal);
+        Assert.Equal(PanelJudgmentOutcome.Partial, h.Store.Judgment(item.Id).Outcome);
+        Assert.Contains("conductor-stop", h.Store.Get(item.Id)!.Reason);
+
         Assert.Equal(1, h.Sol.Calls);
         Assert.Equal(1, h.Sonnet.Calls);
     }
@@ -90,6 +93,9 @@ public sealed class ConductorJudgePanelHostTests
         h.Time.UtcNow += ConductorJudgePanelBudgets.ClaimExpiry + TimeSpan.FromSeconds(1);
         await h.Complete();
         Assert.Equal(PanelCaseTerminal.Completed, h.Store.Get(item.Id)!.Terminal);
+        Assert.Equal(PanelJudgmentOutcome.Partial, h.Store.Judgment(item.Id).Outcome);
+        Assert.Contains("claim-expired", h.Store.Get(item.Id)!.Reason);
+
         Assert.Equal(PanelJudgeOutcome.Valid, h.Store.Results(item.Id).Single(result => result.Judge == "sol").Outcome);
         var missing = h.Store.Results(item.Id).Single(result => result.Judge == "sonnet");
         Assert.Equal(PanelJudgeOutcome.TimedOut, missing.Outcome);

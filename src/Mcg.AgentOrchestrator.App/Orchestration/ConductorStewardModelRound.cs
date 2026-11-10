@@ -17,20 +17,26 @@ internal sealed class ClaudeConductorStewardModelRound(
     Func<string, string, bool>? pathExists = null,
     Func<Guid>? newSessionId = null,
     ConductorLessonSelector? lessons = null,
-    ModelFunctionCatalog? catalog = null) : IConductorStewardModelRound
+    ModelFunctionCatalog? catalog = null,
+    Func<string, bool>? launcherAvailable = null,
+    Func<ModelFunctionCatalog>? catalogLoader = null) : IConductorStewardModelRound, IConductorModelBindingRefresh
 {
+    private readonly ConductorModelBindingSnapshot _bindings = new(catalog, catalogLoader);
+    public void RefreshBindings() => _bindings.RefreshBindings();
+
     private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync =
         runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
     private readonly IConductorStewardTrackedFileLister _files = files ?? new GitConductorStewardTrackedFileLister();
     private readonly Func<string, string, bool> _pathExists = pathExists ?? ConductorStewardEvidenceBundle.PathExists;
     private readonly Func<Guid> _newSessionId = newSessionId ?? Guid.NewGuid;
 
-    public string? ModelAlias => ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorSteward).Alias;
+    public string? ModelAlias => ConductorRoundModelResolver.Resolve(_bindings.Current, ModelFunctionPurposes.ConductorSteward).Alias;
 
     public async Task<string> DispatchAsync(
         ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken)
     {
-        var model = ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorSteward);
+        var snapshot = _bindings.Current;
+        var model = ConductorRoundModelResolver.Resolve(snapshot, ModelFunctionPurposes.ConductorSteward);
         var sessionId = _newSessionId().ToString("D");
         if (!model.IsValid)
         {
@@ -63,28 +69,25 @@ internal sealed class ClaudeConductorStewardModelRound(
             Current refined acceptance criteria:
             {string.Join(Environment.NewLine, trigger.AcceptanceCriteria.Select((criterion, index) => $"{index + 1}. {criterion}"))}
             """;
-        WorkerProcessRunResult result;
-        try
-        {
-            result = await _runProcessAsync(
-                new WorkerProcessRunRequest($"claude {model.ModelArguments} --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
-                    workingDirectory, TimeSpan.FromMinutes(4), prompt), cancellationToken);
-            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias,
-                selected?.LessonIds ?? Array.Empty<string>());
-        }
-        catch (Exception ex)
-        {
-            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias,
-                selected?.LessonIds ?? Array.Empty<string>());
-            throw;
-        }
-        if (result.ExitCode != 0)
-            throw new ConductorModelRoundException($"Steward model exited {result.ExitCode}: {result.StandardError}", model.Alias);
-        return result.StandardOutput;
+        var execution = await ConductorSubscriptionRoundExecutor.RunAsync(snapshot,
+            ModelFunctionPurposes.ConductorSteward, "steward", prompt, workingDirectory, TimeSpan.FromMinutes(4),
+            selectedModel => $"claude {selectedModel.ModelArguments} --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
+            _runProcessAsync,
+            ConductorSubscriptionRoundExecutor.StewardFailure,
+            cancellationToken, launcherAvailable, reserveFallback: () => true,
+            receipt: invocation =>
+            {
+                WriteReceipt(trigger, sessionId, invocation.Result?.ExitCode, invocation.Result?.StandardOutput,
+                    invocation.Result?.StandardError, invocation.Failure, invocation.Model.Alias,
+                    selected?.LessonIds ?? Array.Empty<string>(), invocation);
+                return null;
+            });
+        return execution.RequireAnswer();
     }
 
     private void WriteReceipt(ConductorStewardTrigger trigger, string sessionId, int? exitCode,
-        string? stdout, string? stderr, string? failure, string? model, IReadOnlyList<string> lessonIds)
+        string? stdout, string? stderr, string? failure, string? model, IReadOnlyList<string> lessonIds,
+        ConductorSubscriptionInvocation? invocation = null)
     {
         Directory.CreateDirectory(receiptDirectory);
         var path = Path.Combine(receiptDirectory, $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}.json");
@@ -98,7 +101,8 @@ internal sealed class ClaudeConductorStewardModelRound(
             stderr,
             failure,
             model,
-            lessonIds = lessonIds.ToArray()
+            lessonIds = lessonIds.ToArray(),
+            invocation
         }));
     }
 }
