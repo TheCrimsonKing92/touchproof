@@ -237,7 +237,8 @@ public sealed partial class TaskSpec
                     LastExecution.MaxOutputTokens,
                     LastExecution.PromptCharacterCount,
                     LastExecution.Usage?.CachedInputTokens,
-                    LastExecution.AuthoritativeOutput, LastExecution.PlannerEvidenceBriefVersion),
+                    LastExecution.AuthoritativeOutput, LastExecution.PlannerEvidenceBriefVersion,
+                    LastExecution.PlannerEvidenceCriteriaVersionHash),
             LastVerification is null
                 ? null
                 : new TaskVerificationSnapshot(
@@ -428,7 +429,8 @@ public sealed partial class TaskSpec
                 snapshot.LastExecution.PromptCharacterCount,
                 snapshot.LastExecution.AuthoritativeOutput,
                 OutputIsAuthoritative: snapshot.LastExecution.AuthoritativeOutput is not null,
-                PlannerEvidenceBriefVersion: snapshot.LastExecution.PlannerEvidenceBriefVersion));
+                PlannerEvidenceBriefVersion: snapshot.LastExecution.PlannerEvidenceBriefVersion,
+                PlannerEvidenceCriteriaVersionHash: snapshot.LastExecution.PlannerEvidenceCriteriaVersionHash));
         }
 
         if (snapshot.VerificationHistory is { Count: > 0 })
@@ -1368,7 +1370,8 @@ public sealed partial class TaskSpec
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
-        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation);
+        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
+        dispatch.PlannerEvidenceCriteriaVersionHash);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1412,7 +1415,8 @@ public sealed partial class TaskSpec
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
-        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation);
+        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation,
+        dispatch.PlannerEvidenceCriteriaVersionHash);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

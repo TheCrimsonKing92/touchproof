@@ -456,6 +456,37 @@ public sealed class Goal
         ValidateRepairedCriterionEvidenceObligationTargets();
     }
 
+    internal (PlannerOperatorEvidenceProblem Problem, string Detail)? DescribeOperatorEvidenceOwnershipProblem(int criterionIndex)
+    {
+        var version = AuthoritativeRefinedSpecVersion!;
+        var matches = _criterionEvidenceObligations.Where(item =>
+            item.CriterionVersion == version.Version && item.CriterionIndex == criterionIndex &&
+            item.State != CriterionEvidenceState.Repaired).ToArray();
+        if (matches.Length == 0)
+            return (PlannerOperatorEvidenceProblem.MissingOwnership,
+                $"Missing authoritative Operator declaration for {CriterionEvidenceObligation.DescribeCriterion(version.Version, criterionIndex)}.");
+        var declarations = string.Join(", ", matches.Select(item =>
+            $"{item.Id} owner={item.Owner} state={item.State} scope='{item.RequiredScope}' phase={item.Phase} provenance='{item.Provenance}'"));
+        if (matches.Length != 1 || matches[0].Owner != CriterionEvidenceOwner.Operator ||
+            !IsValidCriterionEvidenceObligation(matches[0]) || !HasCurrentPlannerExecutionAuthority(matches[0]))
+            return (PlannerOperatorEvidenceProblem.ConflictingOwnership,
+                $"Expected one valid current Operator obligation; found: {declarations}.");
+        // Explicit operator mappings are an existing authorized ownership repair.
+        // Otherwise retain unresolved disagreement in the refined declarations.
+        if (matches[0].Provenance.StartsWith("operator mapping by ", StringComparison.Ordinal)) return null;
+        var criterion = version.Spec.AcceptanceCriteria[criterionIndex].Trim();
+        var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+        var operatorDeclarations = version.Spec.OperatorOwnedAcceptanceCriteria.Count(item => item.Trim() == criterion);
+        var acceptanceDeclarations = version.Spec.AcceptanceGateOwnedAcceptanceCriteria.Count(item => item.Trim() == criterion);
+        if (operatorDeclarations > 1 || acceptanceDeclarations > 0 ||
+            marker.ConflictingDeclaredOwner is not null)
+            return (PlannerOperatorEvidenceProblem.ConflictingOwnership,
+                $"{declarations}; OperatorOwnedAcceptanceCriteria entries={operatorDeclarations}; " +
+                $"AcceptanceGateOwnedAcceptanceCriteria entries={acceptanceDeclarations}; " +
+                $"conflicting explicit owner marker='{marker.ConflictingDeclaredOwner}'.");
+        return null;
+    }
+
     private bool IsValidCriterionEvidenceObligation(CriterionEvidenceObligation? obligation)
     {
         if (obligation is null) return false;

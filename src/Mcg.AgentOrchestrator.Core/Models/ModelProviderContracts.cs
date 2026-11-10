@@ -37,7 +37,8 @@ public sealed record TaskExecutionRecord(
     int? PromptCharacterCount = null,
     string? FullOutput = null,
     bool OutputIsAuthoritative = true,
-    int? PlannerEvidenceBriefVersion = null)
+    int? PlannerEvidenceBriefVersion = null,
+    string? PlannerEvidenceCriteriaVersionHash = null)
 {
     public string? AuthoritativeOutput { get; init; } = FullOutput ?? (OutputIsAuthoritative ? Output : null);
 
@@ -347,7 +348,9 @@ public sealed record TaskDispatchRecord(
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
     int WorkerBuildProtocolVersion = 0,
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
-    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null)
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
+    // Host-captured dispatch input, never reconstructed from completion-time criteria.
+    string? PlannerEvidenceCriteriaVersionHash = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

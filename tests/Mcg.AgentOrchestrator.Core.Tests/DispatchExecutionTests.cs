@@ -2,6 +2,46 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DispatchExecutionTests
 {
+    // Parallel-safe: private in-memory kernel and clock, with no process or shared state.
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Developer)]
+    public void RecordTaskDispatch_ChangedCriteria_StampsOnlyPlannerFromCurrentAuthority(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Record criteria identity", role);
+        var goal = kernel.CreateGoal("Record criteria identity", [task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["Original criterion"], VerificationClass.TestVerifiable, [], []));
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var originalHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal);
+        var dispatch = new TaskDispatchRecord("local", "plan", "C:\\repo", clock.UtcNow,
+            PlannerEvidenceCriteriaVersionHash: "caller-supplied-identity");
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        var originalStamp = role == AgentRole.Planner ? originalHash : null;
+        Assert.Equal(dispatch with { PlannerEvidenceCriteriaVersionHash = originalStamp }, task.LastDispatch);
+        Assert.Equal("caller-supplied-identity", dispatch.PlannerEvidenceCriteriaVersionHash);
+        Assert.Equal(originalStamp, Assert.Single(task.DispatchHistory).PlannerEvidenceCriteriaVersionHash);
+
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["Changed criterion"], VerificationClass.TestVerifiable, [], []));
+        var currentHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal);
+        Assert.NotEqual(originalHash, currentHash);
+        var next = dispatch with { DispatchedAt = clock.UtcNow.AddMinutes(1) };
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, next, allowPendingRecordedDispatchRefresh: true);
+
+        var currentStamp = role == AgentRole.Planner ? currentHash : null;
+        Assert.Equal(next with { PlannerEvidenceCriteriaVersionHash = currentStamp }, task.LastDispatch);
+        Assert.Equal("caller-supplied-identity", next.PlannerEvidenceCriteriaVersionHash);
+        Assert.Collection(task.DispatchHistory,
+            first => Assert.Equal(originalStamp, first.PlannerEvidenceCriteriaVersionHash),
+            second => Assert.Equal(currentStamp, second.PlannerEvidenceCriteriaVersionHash));
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskDispatch_records_instruction_and_timeline_event")]
     public void RecordTaskDispatchRecordsInstructionAndTimelineEvent()
 {
