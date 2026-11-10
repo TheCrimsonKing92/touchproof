@@ -78,7 +78,7 @@ Check: nothing on a human surface is hand-maintained text that restates state th
 
 A console I avoid opening because it's slow is a console I don't use ("The initial console launch is seeming quite slow"). Load what's needed for the first screen and fetch the rest on demand, with the loading state from principle 4.
 
-Check: measure time to first usable screen against the live board, and report it in the goal's evidence when a change touches startup or loading.
+Check: apply the canonical [console responsiveness contract](operator-runbook.md#console-responsiveness) to startup/loading and subsequent console interactions. Measure time to first usable screen against the live board, and report it in the goal's evidence when a change touches startup or loading, with actual interactive measurements owned by Operator. The loading state from principle 4 must also meet that contract's useful-response requirements for unavoidable delays.
 
 ## How to use this
 
