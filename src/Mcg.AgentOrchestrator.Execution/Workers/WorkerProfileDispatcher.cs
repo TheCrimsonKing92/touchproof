@@ -1932,13 +1932,8 @@ public static partial class WorkerProfileDispatcher
             observedSources?.Add(new SemanticSourceObservation(source, identity.Value));
         }
 
-        var projectedObjective = CurrentSpecificationProjection.ProjectObjective(goal.Objective, goal.RefinedSpec);
-        var objectiveChanged = !projectedObjective.Equals(goal.Objective, StringComparison.Ordinal);
-        AddSource(WorkerContextSemanticSource.GoalObjective, "goal/objective.md", ContextArtifactKind.TaskObjective,
-            Encoding.UTF8.GetBytes(goal.Objective), deliveryMode: objectiveChanged ? ContextDeliveryMode.OnDemandFile : null);
-        if (objectiveChanged)
-            AddSource(WorkerContextSemanticSource.GoalObjective, "goal/current-objective.md", ContextArtifactKind.TaskObjective,
-                Encoding.UTF8.GetBytes(projectedObjective));
+        var objectiveChanged = WorkerSpecificationArtifacts.AddObjective(goal,
+            (source, identity, kind, bytes, mode) => AddSource(source, identity, kind, bytes, deliveryMode: mode));
         AddSource(WorkerContextSemanticSource.TaskDescription, "task/description.md", ContextArtifactKind.RoleOutputContract, Encoding.UTF8.GetBytes(task.Description));
         AddSource(
             WorkerContextSemanticSource.TaskMetadata,
@@ -1961,27 +1956,8 @@ public static partial class WorkerProfileDispatcher
             "task/criterion-retry-feedback.json",
             ContextArtifactKind.AcceptanceCriteria,
             JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback));
-        if (goal.RefinedSpec is { } refinedSpec)
-        {
-            var sourceBytes = CurrentSpecificationProjection.SourceBytes(refinedSpec);
-            var projectedBytes = CurrentSpecificationProjection.Project(refinedSpec);
-            var projectionChanged = !sourceBytes.AsSpan().SequenceEqual(projectedBytes);
-            AddSource(
-                WorkerContextSemanticSource.RefinedSpec,
-                "goal/refined-spec.json",
-                ContextArtifactKind.AcceptanceCriteria,
-                sourceBytes,
-                deliveryMode: projectionChanged ? ContextDeliveryMode.OnDemandFile : null);
-            if (projectionChanged)
-                AddSource(WorkerContextSemanticSource.RefinedSpec, "goal/current-specification.json", ContextArtifactKind.AcceptanceCriteria,
-                    projectedBytes);
-        }
-        // Actual stored versions and supersession relationships, never reconstructed history.
-        if (objectiveChanged || goal.BriefVersions.Count > 1 || goal.RefinedSpecVersions.Count > 1 ||
-            artifacts.Any(artifact => artifact.Identity.Value == "goal/current-specification.json"))
-            AddSource(WorkerContextSemanticSource.RefinedSpec, "goal/specification-history.json", ContextArtifactKind.RegisteredContext,
-                JsonSerializer.SerializeToUtf8Bytes(new { goal.BriefVersions, goal.RefinedSpecVersions }),
-                deliveryMode: ContextDeliveryMode.OnDemandFile);
+        WorkerSpecificationArtifacts.AddSpecification(goal, objectiveChanged,
+            (source, identity, kind, bytes, mode) => AddSource(source, identity, kind, bytes, deliveryMode: mode));
         if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
         {
             AddSource(
