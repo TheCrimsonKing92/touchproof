@@ -68,6 +68,52 @@ public sealed class ExperimentReplayExecutionTests
     }
 
     [Theory]
+    [InlineData("cancelled", "incomplete", 1, "inconclusive; operator review required")]
+    [InlineData("timed-out", "incomplete", 1, "inconclusive; operator review required")]
+    [InlineData("passed", "complete", 2, "descriptive-complete; no winner or deployment claim")]
+    public async Task Runner_ReferenceOutcome_RetainsReceiptAndControlsContinuation(
+        string referenceState, string runState, int referenceCount, string decision)
+    {
+        using var fixture = new ExperimentReplayTestData();
+        var store = fixture.Store();
+        var registration = Registration();
+        registration = registration with
+        {
+            Cases = registration.Cases.Select((item, index) => index < 2 ? item with
+            {
+                Gates = [new("gate-" + index, Now, "test-failed", ["ExampleTests.Failure"], [])]
+            } : item).ToArray()
+        };
+        store.Register(registration);
+        var host = new Host { ReferenceState = referenceState };
+        var run = await ExperimentReplayRunner.RunAsync(store, registration, fixture.Root, host, default);
+
+        Assert.Equal(runState, run.State);
+        Assert.Equal(run, store.Run(run.Id));
+        var executions = store.Executions(run.Id);
+        var references = executions.Where(e => e.Slot.Stage == "reference").ToArray();
+        Assert.Equal(referenceCount, host.ReferenceCalls);
+        Assert.Equal(referenceCount, references.Length);
+        Assert.Equal(ExperimentReplaySchedule.Create(registration).Count + referenceCount, executions.Count);
+        var receipt = references[0];
+        Assert.Equal(registration.Cases[0].Id, receipt.Slot.CaseId);
+        Assert.Equal(referenceState, receipt.State);
+        Assert.Equal(receipt.Reason, run.Reason);
+        Assert.Equal(100, receipt.Resources!.CpuMilliseconds);
+        Assert.Equal(1024, receipt.Resources.PeakMemoryBytes);
+        Assert.Equal(50, receipt.Resources.WallMilliseconds);
+        Assert.Equal(1, receipt.Resources.LaunchesByExecutable["dotnet"]);
+        Assert.Equal("job-object/live", receipt.Resources.AccountingSource);
+        Assert.Contains(new ExperimentReplaySource("reference-receipt", "hash"), receipt.Sources);
+        Assert.Equal(20, host.Prepared);
+        Assert.Equal(host.Prepared, host.Cleaned);
+        var report = ExperimentReplayReportWriter.Create(registration, store.Run(run.Id), executions);
+        Assert.Equal("passed", report.Calibration.State);
+        Assert.Equal(20, report.ValidCases);
+        Assert.Equal(decision, report.Decision);
+    }
+
+    [Theory]
     [InlineData("toolchain", "cancelled")]
     [InlineData("toolchain", "timed-out")]
     [InlineData("prerequisites", "cancelled")]
@@ -235,6 +281,8 @@ public sealed class ExperimentReplayExecutionTests
     {
         internal int Prepared, Cleaned, MaximumConcurrent;
         internal bool Invalid, Cancel;
+        internal string ReferenceState = "passed";
+        internal int ReferenceCalls;
         internal ExperimentReplayProcess.Result? PreparationResult;
         private int _active;
         public Task<ExperimentReplayRunner.Prepared> PrepareAsync(ExperimentReplayCase item, string artifacts, CancellationToken token)
@@ -250,6 +298,13 @@ public sealed class ExperimentReplayExecutionTests
             MaximumConcurrent = Math.Max(MaximumConcurrent, ++_active);
             var execution = Execution(slot) with { RunId = run.Id, Resources = Invalid ? null : Execution(slot).Resources,
                 State = Cancel ? "cancelled" : "passed" };
+            if (slot.Stage == "reference")
+            {
+                ReferenceCalls++;
+                execution = execution with { State = ReferenceState,
+                    Reason = ReferenceState == "passed" ? null : "reference " + ReferenceState,
+                    Sources = [new("reference-receipt", "hash")] };
+            }
             _active--;
             return Task.FromResult(execution);
         }

@@ -107,11 +107,14 @@ internal sealed class ExperimentReplayRunner
                 // Reproduce historical red labels independently after selection measurements.
                 foreach (var item in registration.Cases.Where(c => c.Gates.Any(g => g.Outcome == "test-failed")))
                 {
+                    deadline.Token.ThrowIfCancellationRequested();
                     var slot = new ExperimentReplaySlot(schedule.Count + executions.Count, item.Id, "reference", 0, "B", false);
                     var reference = await host.ExecuteAsync(registration, run, slot, prepared[item.Id],
                         Path.Combine(root, run.Id, item.Id, "reference"), deadline.Token);
                     store.Record(reference);
                     executions.Add(reference);
+                    if (reference.State is "cancelled" or "timed-out")
+                    { state = "incomplete"; reason = reference.Reason; break; }
                 }
             }
         }
