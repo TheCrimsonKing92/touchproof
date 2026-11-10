@@ -9,39 +9,110 @@ public sealed record ProviderBudgetHoldSchedule(
     string LastProbeOutcome)
 {
     public DateTimeOffset? LastProbeAt { get; init; }
+    public string? ResetIntentId { get; init; }
+    public ProviderFailureKind LastActionableFailure { get; init; }
+    public DateTimeOffset? LastActionableFailureAt { get; init; }
 }
 
 /// <summary>A schedule is a projection of binding history; admission notes reserve one real task dispatch.</summary>
 public static class ProviderBudgetHoldSchedules
 {
-    public sealed record ProbeMarker(string BindingKey, DateTimeOffset Due, int Attempt, string ResetSource);
-    public sealed record ResetMarker(string BindingKey, DateTimeOffset ResetAt, string IntentId);
+    public sealed record ProbeMarker(string BindingKey, DateTimeOffset Due, int Attempt, string ResetSource)
+    {
+        public string? ResetIntentId { get; init; }
+        public DateTimeOffset? HoldPlacedAt { get; init; }
+    }
+    public sealed record ResetMarker(string BindingKey, DateTimeOffset ResetAt, string IntentId)
+    {
+        public DateTimeOffset? IssuedAt { get; init; }
+    }
+    public sealed record ResetGeneration(ResetMarker Marker, DateTimeOffset AppliedAt);
     public sealed record StandaloneResult(string BindingKey, DateTimeOffset PlacedAt, DateTimeOffset Due,
-        int Attempt, DateTimeOffset StartedAt, string Outcome, string Reason);
+        int Attempt, DateTimeOffset StartedAt, string Outcome, string Reason)
+    {
+        public string? ResetIntentId { get; init; }
+        public ProviderFailureKind FailureKind => ClassifyOutcome(Outcome);
+    }
+
+    public static ProviderFailureKind ClassifyOutcome(string outcome) => outcome switch
+    {
+        "authentication-required" => ProviderFailureKind.AuthenticationRequired,
+        "exhausted" => ProviderFailureKind.BudgetExhausted,
+        _ => ProviderFailureKind.Unknown
+    };
+
+    // The persisted intent is the generation authority. Replayed notes cannot refresh it.
+    public static ResetGeneration? LatestReset(IEnumerable<Goal> goals, string bindingKey,
+        DateTimeOffset? asOf = null, ProgressEvent? beforeEvent = null) =>
+        goals.SelectMany(goal => beforeEvent is null || goal.Id != beforeEvent.GoalId
+            ? goal.Timeline : goal.Timeline.TakeWhile(evt => evt != beforeEvent))
+            .Where(evt => (asOf is null || evt.OccurredAt <= asOf) &&
+                TryParseReset(evt, out var reset) && SameBinding(reset.BindingKey, bindingKey))
+            .Select(evt => { TryParseReset(evt, out var reset); return new ResetGeneration(reset, evt.OccurredAt); })
+            .GroupBy(reset => reset.Marker.IntentId, StringComparer.Ordinal)
+            .Select(group => group.MinBy(reset => reset.AppliedAt)!)
+            .OrderBy(reset => reset.Marker.IssuedAt ?? reset.AppliedAt).ThenBy(reset => reset.AppliedAt).LastOrDefault();
+
+    public static bool IsApplicable(StandaloneResult result, ResetGeneration? reset) =>
+        reset is null ? result.ResetIntentId is null :
+        result.StartedAt >= reset.AppliedAt && result.StartedAt >= reset.Marker.ResetAt &&
+        (result.ResetIntentId == reset.Marker.IntentId || result.ResetIntentId is null && result.StartedAt > reset.AppliedAt);
+
+    public static bool IsCurrentDispatch(IEnumerable<Goal> goals, string bindingKey, TaskSpec task,
+        TaskDispatchRecord dispatch, DateTimeOffset? asOf = null)
+    {
+        var all = goals.ToArray();
+        var reset = LatestReset(all, bindingKey, asOf);
+        var marker = all.SelectMany(goal => goal.Timeline).Where(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
+                TryParseProbe(evt, out var probe) && SameBinding(probe.BindingKey, bindingKey))
+            .OrderBy(evt => evt.OccurredAt).LastOrDefault();
+        ProbeMarker? parsed = marker is not null && TryParseProbe(marker, out var found) ? found : null;
+        if (parsed?.HoldPlacedAt is { } placed && all.SelectMany(goal => goal.Tasks).Any(owner =>
+                owner.VerificationHistory.Any(verification => verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                    verification.CompletedAt > placed && (asOf is null || verification.CompletedAt <= asOf) &&
+                    SubscriptionLimitEvidence.FindDispatchForVerification(owner, verification) is { } observed &&
+                    IsBinding(observed, bindingKey) && (owner != task || observed != dispatch)))) return false;
+        if (reset is null) return parsed?.ResetIntentId is null;
+        if (dispatch.DispatchedAt < reset.AppliedAt || dispatch.DispatchedAt < reset.Marker.ResetAt) return false;
+        return parsed is null || parsed.ResetIntentId == reset.Marker.IntentId ||
+            parsed.ResetIntentId is null && marker!.OccurredAt > reset.AppliedAt;
+    }
+
+    public static bool IsStaleProbeResult(IEnumerable<Goal> goals, string bindingKey, TaskSpec task,
+        TaskDispatchRecord dispatch, DateTimeOffset completedAt)
+    {
+        var all = goals.ToArray();
+        return all.SelectMany(goal => goal.Timeline).Any(evt => evt.TaskId == task.Id &&
+                evt.OccurredAt <= dispatch.DispatchedAt && TryParseProbe(evt, out var marker) && SameBinding(marker.BindingKey, bindingKey)) &&
+            !IsCurrentDispatch(all, bindingKey, task, dispatch, completedAt);
+    }
 
     public static string FormatStandaloneResult(StandaloneResult result) =>
-        $"PROVIDER_BUDGET_CHECK binding={Uri.EscapeDataString(result.BindingKey)} placed_at={FormatInstant(result.PlacedAt)} due={FormatInstant(result.Due)} attempt={result.Attempt} started_at={FormatInstant(result.StartedAt)} outcome={result.Outcome} reason={Uri.EscapeDataString(result.Reason)}";
+        $"PROVIDER_BUDGET_CHECK binding={Uri.EscapeDataString(result.BindingKey)} placed_at={FormatInstant(result.PlacedAt)} due={FormatInstant(result.Due)} attempt={result.Attempt} started_at={FormatInstant(result.StartedAt)} outcome={result.Outcome} reason={Uri.EscapeDataString(result.Reason)}" +
+        (result.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "");
 
     public static bool TryParseStandaloneResult(ProgressEvent evt, out StandaloneResult result)
     {
         result = null!;
         if (evt.Kind != ProgressKind.TaskNote || !evt.Message.StartsWith("PROVIDER_BUDGET_CHECK ", StringComparison.Ordinal)) return false;
         var fields = evt.Message.Split(' ');
-        if (fields.Length != 8) return false;
+        if (fields.Length is not (8 or 9)) return false;
         string Value(int index, string key) => fields[index].StartsWith(key + "=", StringComparison.Ordinal)
             ? fields[index][(key.Length + 1)..] : "";
         if (!TryParseInstant(Value(2, "placed_at"), out var placed) || !TryParseInstant(Value(3, "due"), out var due) ||
             !int.TryParse(Value(4, "attempt"), out var attempt) || attempt < 1 ||
             !TryParseInstant(Value(5, "started_at"), out var started) || started < due || started < placed ||
-            evt.OccurredAt < started || Value(6, "outcome") is not ("available" or "exhausted" or "failed") ||
+            evt.OccurredAt < started || Value(6, "outcome") is not ("available" or "exhausted" or "failed" or "authentication-required") ||
+            fields.Length == 9 && Value(8, "reset_intent").Length == 0 ||
             Value(1, "binding").Length == 0) return false;
         result = new(Uri.UnescapeDataString(Value(1, "binding")), placed, due, attempt, started,
-            Value(6, "outcome"), Uri.UnescapeDataString(Value(7, "reason")));
+            Value(6, "outcome"), Uri.UnescapeDataString(Value(7, "reason")))
+            { ResetIntentId = fields.Length == 9 ? Uri.UnescapeDataString(Value(8, "reset_intent")) : null };
         return true;
     }
 
     private static readonly Regex ProbePattern = new(
-        @"\APROVIDER_BUDGET_PROBE binding=(?<binding>.+) due=(?<at>\S+) attempt=(?<attempt>\d+) reset_source=(?<source>operator|parsed|backoff)\z",
+        @"\APROVIDER_BUDGET_PROBE binding=(?<binding>.+) due=(?<at>\S+) attempt=(?<attempt>\d+) reset_source=(?<source>operator|parsed|backoff)(?: reset_intent=(?<intent>\S+))?(?: placed_at=(?<placed>\S+))?\z",
         RegexOptions.CultureInvariant);
     private static readonly Regex ResetPattern = new(
         @"\APROVIDER_BUDGET_RESET binding=(?<binding>.+) reset_at=(?<at>\S+) source=operator intent=(?<intent>\S+)\z",
@@ -55,7 +126,9 @@ public static class ProviderBudgetHoldSchedules
 
     public static string FormatInstant(DateTimeOffset instant) => instant.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
     public static string FormatProbe(ProbeMarker marker) =>
-        $"PROVIDER_BUDGET_PROBE binding={marker.BindingKey} due={FormatInstant(marker.Due)} attempt={marker.Attempt} reset_source={marker.ResetSource}";
+        $"PROVIDER_BUDGET_PROBE binding={marker.BindingKey} due={FormatInstant(marker.Due)} attempt={marker.Attempt} reset_source={marker.ResetSource}" +
+        (marker.ResetIntentId is { } intent ? $" reset_intent={Uri.EscapeDataString(intent)}" : "") +
+        (marker.HoldPlacedAt is { } placed ? $" placed_at={FormatInstant(placed)}" : "");
     public static string FormatReset(ResetMarker marker) =>
         $"PROVIDER_BUDGET_RESET binding={marker.BindingKey} reset_at={FormatInstant(marker.ResetAt)} source=operator intent={marker.IntentId}";
 
@@ -66,7 +139,12 @@ public static class ProviderBudgetHoldSchedules
         var match = ProbePattern.Match(evt.Message);
         if (!match.Success || !TryParseInstant(match.Groups["at"].Value, out var at) ||
             !int.TryParse(match.Groups["attempt"].Value, out var attempt) || attempt < 1) return false;
-        marker = new(match.Groups["binding"].Value, at, attempt, match.Groups["source"].Value);
+        if (match.Groups["placed"].Success && !TryParseInstant(match.Groups["placed"].Value, out _)) return false;
+        marker = new(match.Groups["binding"].Value, at, attempt, match.Groups["source"].Value)
+        {
+            ResetIntentId = match.Groups["intent"].Success ? Uri.UnescapeDataString(match.Groups["intent"].Value) : null,
+            HoldPlacedAt = match.Groups["placed"].Success ? DateTimeOffset.Parse(match.Groups["placed"].Value, CultureInfo.InvariantCulture) : null
+        };
         return true;
     }
 
@@ -76,7 +154,8 @@ public static class ProviderBudgetHoldSchedules
         if (evt.Kind != ProgressKind.TaskNote) return false;
         var match = ResetPattern.Match(evt.Message);
         if (!match.Success || !TryParseInstant(match.Groups["at"].Value, out var at)) return false;
-        marker = new(match.Groups["binding"].Value, at, match.Groups["intent"].Value);
+        marker = new(match.Groups["binding"].Value, at, match.Groups["intent"].Value)
+            { IssuedAt = evt.OperatorIntentCreatedAt };
         return true;
     }
 
@@ -157,41 +236,56 @@ public static class ProviderBudgetHoldSchedules
             .Select(dispatch => (Task: task, Dispatch: dispatch))).ToArray();
         var observations = tasks.SelectMany(task => task.VerificationHistory.Select(verification =>
             (Task: task, Verification: verification, Dispatch: SubscriptionLimitEvidence.FindDispatchForVerification(task, verification))))
-            .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, hold.BindingKey)).ToArray();
+            .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, hold.BindingKey) &&
+                !IsStaleProbeResult(all, hold.BindingKey, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
         var exhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted)
             .MaxBy(item => item.Verification.CompletedAt).Verification
             ?? throw new InvalidOperationException("A budget hold requires an exhaustion verification on its binding.");
         var recoveryAt = tasks.Where(task => task.LatestProviderBudgetRecoveryAt is not null)
             .Where(task => task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= task.LatestProviderBudgetRecoveryAt) is { } dispatch && IsBinding(dispatch, hold.BindingKey))
             .Select(task => task.LatestProviderBudgetRecoveryAt!.Value)
-            .Concat(observations.Where(item => item.Verification.Succeeded).Select(item => item.Verification.CompletedAt))
+            .Concat(observations.Where(item => item.Verification.Succeeded &&
+                IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!)).Select(item => item.Verification.CompletedAt))
             .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        var k = Math.Max(1, observations.Count(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt > recoveryAt));
         var notes = all.SelectMany(goal => goal.Timeline.Select((evt, index) => (Goal: goal, Event: evt, Index: index))).ToArray();
-        var standalone = notes.Where(item => item.Goal.Id == hold.SourceGoalId && item.Event.TaskId == hold.SourceTaskId &&
-            TryParseStandaloneResult(item.Event, out var result) && SameBinding(result.BindingKey, hold.BindingKey) &&
-            result.PlacedAt == hold.PlacedAt).OrderBy(item => item.Event.OccurredAt).ToArray();
+        var reset = LatestReset(all, hold.BindingKey);
+        var firstExhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+            item.Verification.CompletedAt > recoveryAt).Min(item => item.Verification.CompletedAt);
+        if (reset?.AppliedAt < firstExhaustion) reset = null;
+        var standaloneHistory = notes.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
+            SameBinding(result.BindingKey, hold.BindingKey) && result.PlacedAt >= firstExhaustion &&
+            observations.Any(observation => observation.Task.Id == item.Event.TaskId &&
+                observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                observation.Verification.CompletedAt == result.PlacedAt) &&
+            IsApplicable(result, LatestReset(all, hold.BindingKey, item.Event.OccurredAt, item.Event)))
+            .OrderBy(item => item.Event.OccurredAt).ToArray();
+        var standalone = standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
+            IsApplicable(result, reset)).ToArray();
         var probes = notes.Where(item => TryParseProbe(item.Event, out var marker) && SameBinding(marker.BindingKey, hold.BindingKey))
             .OrderBy(item => item.Event.OccurredAt).ToArray();
         var latestProbe = probes.LastOrDefault();
-        var completedProbes = probes.Select(probe =>
+        var probeResults = probes.Select(probe =>
             {
                 var task = probe.Goal.Tasks.FirstOrDefault(task => task.Id == probe.Event.TaskId);
                 var dispatch = task?.DispatchHistory.FirstOrDefault(dispatch => IsBinding(dispatch, hold.BindingKey) && dispatch.DispatchedAt >= probe.Event.OccurredAt);
-                return dispatch is null ? null : observations.FirstOrDefault(item => item.Task == task && item.Dispatch == dispatch).Verification;
+                return observations.FirstOrDefault(item => item.Task == task && item.Dispatch == dispatch);
             })
-            .Where(verification => verification is not null && verification.CompletedAt > exhaustion.CompletedAt)
+            .Where(item => item.Verification is not null).Distinct().ToArray();
+        var completedProbes = probeResults.Where(item => IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!))
+            .Select(item => item.Verification)
+            .Where(verification => verification is not null && verification.CompletedAt > (reset is null ? exhaustion.CompletedAt : firstExhaustion) &&
+                (reset is null || verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted))
             .Select(verification => verification!).Distinct().ToArray();
-        var attempt = k + completedProbes.Length + standalone.Length;
-        var reset = notes.Where(item => item.Event.OccurredAt > exhaustion.CompletedAt &&
-                TryParseReset(item.Event, out var marker) && SameBinding(marker.BindingKey, hold.BindingKey))
-            .OrderBy(item => item.Event.OccurredAt).LastOrDefault();
+        var k = observations.Count(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+            item.Verification.CompletedAt > recoveryAt && (reset is null ||
+                item.Dispatch!.DispatchedAt >= reset.AppliedAt && item.Dispatch.DispatchedAt >= reset.Marker.ResetAt &&
+                IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch)));
+        var attempt = (reset is null ? Math.Max(1, k) : 1 + k) + completedProbes.Length + standalone.Length;
         DateTimeOffset? resetAt = null;
         var source = "backoff";
-        if (reset.Event is not null && TryParseReset(reset.Event, out var resetMarker))
+        if (reset is not null)
         {
-            resetAt = resetMarker.ResetAt;
+            resetAt = reset.Marker.ResetAt;
             source = "operator";
         }
         else if (TryGetResetAt(exhaustion, out var parsed))
@@ -201,13 +295,15 @@ public static class ProviderBudgetHoldSchedules
         }
         var latestCompletion = completedProbes.Select(verification => verification.CompletedAt)
             .Concat(standalone.Select(item => item.Event.OccurredAt)).Append(exhaustion.CompletedAt).Max();
-        var next = completedProbes.Length == 0 && standalone.Length == 0 && resetAt is { } known ? known :
+        var next = completedProbes.Length == 0 && standalone.Length == 0 && (reset is null || k == 0) && resetAt is { } known ? known :
             latestCompletion.AddMinutes(Math.Min(30 * Math.Pow(2, Math.Min(attempt - 1, 4)), 360)).ToUniversalTime();
         var inFlight = latestProbe.Event is not null && dispatches.Any(item => item.Dispatch.DispatchedAt >= latestProbe.Event.OccurredAt &&
-            !observations.Any(observation => observation.Task == item.Task && observation.Dispatch == item.Dispatch));
+            !item.Task.VerificationHistory.Any(verification =>
+                SubscriptionLimitEvidence.FindDispatchForVerification(item.Task, verification) == item.Dispatch));
         GoalId? admittedGoal = null;
         TaskId? admittedTask = null;
         if (latestProbe.Event is { } probeEvent && TryParseProbe(probeEvent, out var probeMarker) && probeMarker.Due == next &&
+            probeMarker.ResetIntentId == reset?.Marker.IntentId &&
             !dispatches.Any(item => item.Dispatch.DispatchedAt >= probeEvent.OccurredAt) &&
             !latestProbe.Goal.IsTerminal &&
             latestProbe.Goal.Tasks.Any(task => task.Id == probeEvent.TaskId && task.Status == WorkTaskStatus.Assigned && task.AssignedAgentId is not null) &&
@@ -218,20 +314,32 @@ public static class ProviderBudgetHoldSchedules
             admittedGoal = latestProbe.Goal.Id;
             admittedTask = probeEvent.TaskId;
         }
-        var lastOutcome = "none";
-        if (inFlight) lastOutcome = "running";
-        else if (latestProbe.Event is { } latestEvent)
-        {
-            var latestDispatch = dispatches.Where(item => item.Task.Id == latestEvent.TaskId && item.Dispatch.DispatchedAt >= latestEvent.OccurredAt)
-                .OrderBy(item => item.Dispatch.DispatchedAt).FirstOrDefault();
-            var result = observations.FirstOrDefault(item => item.Task == latestDispatch.Task && item.Dispatch == latestDispatch.Dispatch).Verification;
-            if (result is not null) lastOutcome = result.ProviderFailureKind == ProviderFailureKind.BudgetExhausted ? "exhausted" : "inconclusive";
-        }
-        if (!inFlight && standalone.LastOrDefault().Event is { } lastCheck &&
-            lastCheck.OccurredAt >= latestCompletion && TryParseStandaloneResult(lastCheck, out var check))
-            lastOutcome = check.Outcome == "failed" ? "inconclusive" : check.Outcome;
+        var diagnosticChecks = probeResults.Select(item =>
+            (At: item.Verification.CompletedAt, Outcome: item.Verification.ProviderFailureKind switch
+            {
+                ProviderFailureKind.BudgetExhausted => "exhausted",
+                ProviderFailureKind.AuthenticationRequired => "authentication-required",
+                _ => "inconclusive"
+            })).Concat(standaloneHistory.Select(item =>
+            {
+                TryParseStandaloneResult(item.Event, out var check);
+                return (At: item.Event.OccurredAt, Outcome: check.Outcome == "failed" ? "inconclusive" : check.Outcome);
+            })).OrderBy(item => item.At).ToArray();
+        var lastOutcome = inFlight ? "running" : diagnosticChecks.LastOrDefault().Outcome ?? "none";
+        var actionable = observations.Where(item => item.Verification.ProviderFailureKind is
+                ProviderFailureKind.BudgetExhausted or ProviderFailureKind.AuthenticationRequired)
+            .Select(item => (At: item.Verification.CompletedAt, Kind: item.Verification.ProviderFailureKind))
+            .Concat(standaloneHistory.Select(item =>
+            {
+                TryParseStandaloneResult(item.Event, out var result);
+                return (At: item.Event.OccurredAt, Kind: result.FailureKind);
+            }).Where(item => item.Kind != ProviderFailureKind.Unknown)).MaxBy(item => item.At);
         return new(hold, attempt, resetAt, source, next, inFlight, admittedGoal, admittedTask, lastOutcome)
-            { LastProbeAt = latestCompletion };
+        {
+            LastProbeAt = diagnosticChecks.Length > 0 ? diagnosticChecks[^1].At : exhaustion.CompletedAt,
+            ResetIntentId = reset?.Marker.IntentId,
+            LastActionableFailure = actionable.Kind, LastActionableFailureAt = actionable.At
+        };
     }
 
     private static bool SameBinding(string left, string right) => left.Equals(right, StringComparison.OrdinalIgnoreCase);

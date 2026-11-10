@@ -46,13 +46,13 @@ internal sealed class ConductorProviderHoldWatch
                 {
                     var schedule = row.Schedule;
                     _writer.Append("provider-hold-placed", hold.SourceGoalId.Value,
-                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")} binding={binding}", timestamp: now);
+                        $"PROVIDER_HOLD_PLACED source={Prefix(hold.SourceGoalId.Value)}/{Prefix(hold.SourceTaskId.Value)} placed_at={Instant(hold.PlacedAt)} next_probe={(schedule is null ? "unavailable" : Instant(schedule.NextProbeAt))} reset_source={schedule?.ResetSource ?? "unavailable"} attempt={(schedule?.Attempt ?? 0).ToString(CultureInfo.InvariantCulture)}{(row.OverdueSince is { } overdue ? $" state=probe-overdue due={Instant(overdue)}" : "")}{DiagnosisField(row)} binding={binding}", timestamp: now);
                     _announced[binding] = new(hold.SourceGoalId.Value, hold.SourceTaskId.Value, hold.PlacedAt);
                 }
                 AnnounceProbe(scope, binding, now);
                 if (row.OverdueSince is { } due && _overdue.Add((binding.ToUpperInvariant(), due)))
                     _writer.Append("provider-hold-overdue", hold.SourceGoalId.Value,
-                        $"PROVIDER_HOLD_OVERDUE due={Instant(due)} balance=unverified binding={binding}", timestamp: now);
+                        $"PROVIDER_HOLD_OVERDUE due={Instant(due)} balance=unverified{DiagnosisField(row)} binding={binding}", timestamp: now);
             }
         }
         catch (Exception error)
@@ -107,6 +107,9 @@ internal sealed class ConductorProviderHoldWatch
 
     private static bool TryInstant(string? text, out DateTimeOffset instant) =>
         DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out instant);
+    private static string DiagnosisField(ProviderUsageHoldRow row) =>
+        row.Schedule is { LastProbeOutcome: "none", ResetIntentId: null } && row.OverdueSince is null ? "" : row.Diagnosis is { } diagnosis
+        ? $" diagnosis={Uri.EscapeDataString(diagnosis)}" : "";
     private static string Instant(DateTimeOffset instant) => ProviderBudgetHoldSchedules.FormatInstant(instant);
     private static string Prefix(string id) => id[..Math.Min(8, id.Length)];
 }

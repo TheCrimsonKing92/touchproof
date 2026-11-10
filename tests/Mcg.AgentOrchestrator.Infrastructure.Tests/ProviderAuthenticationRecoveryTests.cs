@@ -1,0 +1,98 @@
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+// Parallel-safe: private database/workspace, injected time and process responses; no credentials.
+public sealed class ProviderAuthenticationRecoveryTests
+{
+    [Fact]
+    public async Task AuthenticationThenUnknownThenAvailable_PersistsTruthfulLifecycle()
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("failed");
+        fixture.Kernel.CancelGoal(fixture.Source.Id, "Retain the exhausted source for recovery.");
+        var kernel = new AgentOrchestratorKernel(fixture.Clock);
+        kernel.ProviderHoldHistory.Retain(fixture.Source, kernel.Goals);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel, TestContext.Current.CancellationToken);
+        var recorder = new ProviderResetRetainedSourceRecorder(() => repository);
+        var responses = new Queue<WorkerProcessRunResult>([
+            new(1, "", "No auth credentials for cli-chat-proxy\nNot signed in", false),
+            new(1, "", "connection refused", false),
+            new(0, "AVAILABLE", "", false)]);
+        var calls = 0;
+        var adapter = new ProviderHoldAvailabilityProbe(WorkerProfileCatalog.Default(), (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(responses.Dequeue());
+        });
+        var prober = new ProviderHoldStandaloneProbe(adapter, fixture.Writer, fixture.Preflight,
+            recorder.RecordCheck, () => fixture.Clock.UtcNow);
+        fixture.Clock.UtcNow = fixture.Due;
+        prober.ObserveTick(kernel, fixture.Clock.UtcNow);
+        var authAt = fixture.Clock.UtcNow;
+        var row = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        Assert.Equal("authentication-required", row.Schedule!.LastProbeOutcome);
+        Assert.Equal(ProviderFailureKind.AuthenticationRequired, row.Schedule.LastActionableFailure);
+        Assert.Equal(authAt, row.Schedule.LastActionableFailureAt);
+        Assert.Equal(fixture.Source.Tasks.Single().LastVerification!.CompletedAt, row.Hold.PlacedAt);
+        var stored = await repository.LoadAsync(TestContext.Current.CancellationToken);
+        var persisted = Assert.Single(ProviderUsageHoldView.Read(stored.ProviderHoldScope, fixture.Clock.UtcNow));
+        Assert.Equal(row.Schedule, persisted.Schedule);
+        var check = Assert.Single(stored.ProviderHoldScope.SelectMany(goal => goal.Timeline)
+            .Where(evt => ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _)));
+        Assert.True(ProviderBudgetHoldSchedules.TryParseStandaloneResult(check, out var result));
+        Assert.Equal(ProviderFailureKind.AuthenticationRequired, result.FailureKind);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(fixture.Events().Last(), out var phrase, out _, out _, out var action));
+        Assert.Contains("sign-in required", phrase);
+        Assert.Contains("Sign in", action);
+
+        fixture.Clock.UtcNow = row.Schedule.NextProbeAt;
+        prober.ObserveTick(kernel, fixture.Clock.UtcNow);
+        row = Assert.Single(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        Assert.Equal("inconclusive", row.Schedule!.LastProbeOutcome);
+        Assert.Equal(authAt, row.Schedule.LastActionableFailureAt);
+        Assert.Equal(fixture.Clock.UtcNow, row.Schedule.LastProbeAt);
+        var status = ProviderUsageHoldView.FormatStatusLine(row);
+        Assert.Contains("last confirmed: authentication-required", status);
+        Assert.Contains("age 3600s", status);
+        Assert.Contains("historical exhaustion:", status);
+        Assert.Contains("recovery: sign in", status);
+        Assert.True(OwnerProviderHoldNarration.TryNarrate(fixture.Events().Last(), out phrase, out var reason, out _, out _));
+        Assert.Contains("sign-in required", phrase);
+        Assert.Contains("latest check: inconclusive", reason);
+        var console = OwnerFleetDiagram.Render(OwnerFleetViewModelBuilder.Build(
+            RemoteExecutorReport.Build([], [], []), true, TimeZoneInfo.Utc, providerHolds: [row]), 160);
+        Assert.Contains("authentication-required", console);
+        Assert.Contains("historical exhaustion:", console);
+        Assert.DoesNotContain("has no usage balance left", console);
+
+        fixture.Clock.UtcNow = row.Schedule.NextProbeAt;
+        prober.ObserveTick(kernel, fixture.Clock.UtcNow);
+        Assert.Empty(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        Assert.Empty(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, fixture.Clock.UtcNow));
+        var recovered = await repository.LoadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(GoalStatus.Cancelled, recovered.GetGoal(fixture.Source.Id).Status);
+        Assert.Equal(3, calls);
+        Assert.Empty(responses);
+    }
+
+    [Theory]
+    [InlineData("No auth credentials for cli-chat-proxy", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("Not signed in", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("Error: invalid API key", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("Error: credentials have expired", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("{\"error\":{\"message\":\"401 Unauthorized\"}}", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("403 Forbidden", ProviderFailureKind.Unknown)]
+    [InlineData("Permission denied: C:\\credentials", ProviderFailureKind.Unknown)]
+    [InlineData("The test expects Not signed in", ProviderFailureKind.Unknown)]
+    [InlineData("WORKER_RESULT:\nNot signed in\nEND_WORKER_RESULT", ProviderFailureKind.Unknown)]
+    [InlineData("API error (status 402 Payment Required): Grok Build usage balance exhausted", ProviderFailureKind.BudgetExhausted)]
+    public void Adapter_UsesAuthoritativeFailureEvidence(string stderr, ProviderFailureKind expected)
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+        Assert.Equal(expected, provider.ParseOutcome(new(1, "", stderr)));
+        Assert.Equal(ProviderFailureKind.Unknown, provider.ParseOutcome(new(0, "AVAILABLE", stderr)));
+    }
+}

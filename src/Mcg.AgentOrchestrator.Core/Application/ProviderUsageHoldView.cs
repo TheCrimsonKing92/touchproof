@@ -4,6 +4,7 @@ public sealed record ProviderUsageHoldRow(ProviderBudgetExhaustionHold Hold, Pro
 {
     public DateTimeOffset? OverdueSince { get; init; }
     public DateTimeOffset? LastObservedAt { get; init; }
+    public string? Diagnosis { get; init; }
 }
 
 /// <summary>Only the canonical inputs consumed by the existing binding classifier and scheduler.</summary>
@@ -67,18 +68,32 @@ public static class ProviderUsageHoldView
             {
                 OverdueSince = schedule is { ProbeInFlight: false, AdmittedTaskId: null } && now >= schedule.NextProbeAt
                     ? schedule.NextProbeAt : null,
-                LastObservedAt = schedule?.LastProbeAt ?? pair.Value.PlacedAt
+                LastObservedAt = schedule?.LastProbeAt ?? pair.Value.PlacedAt,
+                Diagnosis = schedule is null ? null : FormatDiagnosis(pair.Value, schedule, now)
             };
         }).ToArray();
     }
 
     public static string FormatStatusLine(ProviderUsageHoldRow row)
     {
-        var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}";
+        var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}" +
+            (row.Diagnosis is { } diagnosis ? $" | {diagnosis}" : "");
         if (row.OverdueSince is { } due && row.Schedule is { } overdue)
             return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source}";
         return row.Schedule is { } schedule
             ? $"  {row.Hold.BindingKey} | attempt={schedule.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} | reset_source={schedule.ResetSource} | last_probe={schedule.LastProbeOutcome} | {source}"
             : $"  {row.Hold.BindingKey} | schedule=unavailable | {source}";
+    }
+
+    public static string FormatDiagnosis(ProviderBudgetExhaustionHold hold, ProviderBudgetHoldSchedule schedule, DateTimeOffset now)
+    {
+        var failure = schedule.LastActionableFailure == ProviderFailureKind.AuthenticationRequired
+            ? "authentication-required" : "exhausted";
+        var at = schedule.LastActionableFailureAt ?? hold.PlacedAt;
+        var age = Math.Max(0, (long)(now - at).TotalSeconds);
+        return $"latest check: {schedule.LastProbeOutcome} at {ProviderBudgetHoldSchedules.FormatInstant(schedule.LastProbeAt ?? hold.PlacedAt)}; " +
+            $"last confirmed: {failure} at {ProviderBudgetHoldSchedules.FormatInstant(at)} (age {age}s); " +
+            (failure == "authentication-required" ? $"recovery: sign in to {hold.ProviderName}, then wait for a successful same-binding availability check; " : "balance remains unverified until a successful availability check; ") +
+            $"historical exhaustion: {ProviderBudgetHoldSchedules.FormatInstant(hold.PlacedAt)} ({hold.EvidenceReceipt})";
     }
 }

@@ -45,7 +45,8 @@ internal static class OwnerFleetDiagram
                 hold.OverdueSince is null ? $"last probe: {hold.LastProbe ?? "none"}"
                     : $"balance unverified since {Stamp(hold.LastObservedAt ?? hold.PlacedAt)}",
                 $"held since: {Stamp(hold.PlacedAt)}",
-                $"source: {hold.Source}"
+                $"source: {hold.Source}",
+                ..(hold.Diagnosis is { } diagnosis ? new[] { diagnosis } : [])
             ], true);
         }
         foreach (var executor in model.Executors)

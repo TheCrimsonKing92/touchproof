@@ -286,7 +286,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec RecordTaskNote(
         GoalId goalId, TaskId taskId, string message,
-        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator, DateTimeOffset? operatorIntentCreatedAt = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -297,7 +297,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage, correctionSource);
-        Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
+        Append(goal, taskId, ProgressKind.TaskNote, noteMessage, operatorIntentCreatedAt: operatorIntentCreatedAt);
         return task;
     }
 

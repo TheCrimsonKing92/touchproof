@@ -123,6 +123,8 @@ public static class ProviderLimitSignals
                     var observedBinding = BuildProviderBindingKey(
                         dispatch.ProviderName ?? dispatch.WorkerName,
                         dispatch.ClaudeCredentialSourceDirectory);
+                    if (ProviderBudgetHoldSchedules.IsStaleProbeResult(goalList, observedBinding.Key,
+                            task, dispatch, verification.CompletedAt)) continue;
                     observations.Add((
                         goal,
                         task,
@@ -136,17 +138,23 @@ public static class ProviderLimitSignals
         var latestAvailabilityAt = observations
             .Where(observation =>
                 observation.Binding.Equals(requestedBinding) &&
-                observation.Verification.Succeeded)
+                observation.Verification.Succeeded &&
+                IsCurrentAvailability(observation.Task, observation.Verification))
             .Select(observation => (DateTimeOffset?)observation.Verification.CompletedAt)
             .Max();
         var checkedAvailabilityAt = goalList.SelectMany(goal => goal.Timeline.Select(evt => (Goal: goal, Event: evt)))
             .Where(item => ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check) &&
                 check.Outcome == "available" && check.BindingKey.Equals(requestedBinding.Key, StringComparison.OrdinalIgnoreCase) &&
+                ProviderBudgetHoldSchedules.IsApplicable(check, ProviderBudgetHoldSchedules.LatestReset(goalList, requestedBinding.Key)) &&
                 observations.Any(observation => observation.Goal == item.Goal && observation.Task.Id == item.Event.TaskId &&
                     observation.Binding.Equals(requestedBinding) && observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
                     observation.Verification.CompletedAt == check.PlacedAt))
             .Select(item => { ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check); return (DateTimeOffset?)check.StartedAt; })
             .Max();
+
+        bool IsCurrentAvailability(TaskSpec task, TaskVerificationRecord verification) =>
+            FindDispatchForVerification(task, verification) is { } dispatch &&
+            ProviderBudgetHoldSchedules.IsCurrentDispatch(goalList, requestedBinding.Key, task, dispatch);
 
         foreach (var observation in observations)
         {

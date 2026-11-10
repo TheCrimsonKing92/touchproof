@@ -21,6 +21,11 @@ internal static class ProviderUsageHoldJson
         admittedGoalId = row.Schedule?.AdmittedGoalId?.Value,
         admittedTaskId = row.Schedule?.AdmittedTaskId?.Value,
         lastProbe = row.Schedule?.LastProbeOutcome is { } outcome && outcome != "none" ? outcome : null,
+        lastProbeAt = row.Schedule?.LastProbeAt,
+        lastActionableFailure = row.Schedule?.LastActionableFailure.ToString(),
+        lastActionableFailureAt = row.Schedule?.LastActionableFailureAt,
+        diagnosis = row.Diagnosis,
+        resetIntentId = row.Schedule?.ResetIntentId,
         resetCommand = $"provider-reset {row.Hold.BindingKey} <ISO-8601 instant> --text-file <path>"
     };
 }

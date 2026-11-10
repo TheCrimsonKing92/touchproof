@@ -80,7 +80,9 @@ public sealed class ProviderBudgetHoldScheduleTests
         Assert.Equal(Start.AddDays(3), schedule.ResetAt);
         Assert.Equal(schedule.ResetAt, schedule.NextProbeAt);
         fixture.Exhaust(fixture.NewGoal(), Start.AddMinutes(3));
-        Assert.Equal("backoff", fixture.Schedule().ResetSource);
+        // This later failure was before the future due boundary, so it cannot postpone it.
+        Assert.Equal("operator", fixture.Schedule().ResetSource);
+        Assert.Equal(Start.AddDays(3), fixture.Schedule().NextProbeAt);
     }
 
     [Fact]
