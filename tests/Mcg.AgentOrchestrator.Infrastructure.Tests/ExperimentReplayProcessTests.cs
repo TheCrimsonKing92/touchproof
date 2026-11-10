@@ -315,10 +315,11 @@ public sealed class ExperimentReplayProcessTests
     private static string PowerShell => Path.Combine(Environment.SystemDirectory,
         "WindowsPowerShell", "v1.0", "powershell.exe");
 
-    // Match the runner root's pipe contract for the nested launch as well. No stream
-    // depends on an ambient console, and output drains start before the child waits.
+    // Inherit the root's console instead of requesting a separate windowless console
+    // (and an extra conhost job member) for each nested child. Keep any new window
+    // hidden, redirect every stream, and start output drains before the child waits.
     private static string StartChildScript(string command, bool shortLived = false) =>
-        $"$i = [Diagnostics.ProcessStartInfo]::new('{(shortLived ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : PowerShell)}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; " +
+        $"$i = [Diagnostics.ProcessStartInfo]::new('{(shortLived ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : PowerShell)}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $false; $i.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden; " +
         "$i.RedirectStandardInput = $true; $i.RedirectStandardOutput = $true; $i.RedirectStandardError = $true; " +
         $"$i.Arguments = '{(shortLived ? "/d /c exit 0" : "-NoProfile -NonInteractive -EncodedCommand " + Encode(command))}'; $p = [Diagnostics.Process]::Start($i); " +
         "$p.StandardInput.Close(); $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync(); ";
