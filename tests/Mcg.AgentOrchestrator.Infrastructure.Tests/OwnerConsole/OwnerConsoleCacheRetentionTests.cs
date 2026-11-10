@@ -39,10 +39,20 @@ public sealed class OwnerConsoleCacheRetentionTests
         Assert.Equal(0, f.Builder.Retained.Holds);
         Assert.InRange(f.Builder.Retained.Goals, 0, 100);
         Assert.Equal(100, f.Builder.Retained.Titles);
+        var boardAfterRemoval = await f.Builder.BuildBoardAsync();
+        var history = f.Builder.WithActivity(boardAfterRemoval, new(f.Clock.Now, f.Clock.Now, [], 0));
+        Assert.Equal(OwnerConsoleViewModelBuilder.MaxActivityItems, history.Activity.Length);
+        Assert.All(history.Activity, item => Assert.Equal("owner-question-resolved", item.Kind));
+
+        // A later event must remain visible alongside the bounded resolution history.
+        f.Clock.Now = f.Clock.Now.AddSeconds(1);
         var now = f.Clock.GetUtcNow();
-        var activity = f.Builder.WithActivity(await f.Builder.BuildBoardAsync(), new(now, now,
+        var activity = f.Builder.WithActivity(boardAfterRemoval, new(now, now,
             [new(now, "goal-lifecycle", "goal-0129", "TaskDispatched role=Developer")], 0));
-        Assert.Equal("Title 129", Assert.Single(activity.Activity).GoalTitle);
+        Assert.Equal(OwnerConsoleViewModelBuilder.MaxActivityItems, activity.Activity.Length);
+        var dispatched = Assert.Single(activity.Activity, item => item.Kind == "goal-lifecycle");
+        Assert.Equal("goal-0129", dispatched.GoalId);
+        Assert.Equal("Title 129", dispatched.GoalTitle);
     }
 
     [Fact]
