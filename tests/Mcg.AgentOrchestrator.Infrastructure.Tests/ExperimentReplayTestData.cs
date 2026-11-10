@@ -23,5 +23,5 @@ internal sealed class ExperimentReplayTestData : IDisposable
         ExperimentReplayStore.Setup(path);
         return new(path);
     }
-    public void Dispose() => _directory.Delete(recursive: true);
+    public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
 }
