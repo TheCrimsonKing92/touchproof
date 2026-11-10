@@ -25,7 +25,15 @@ internal static class ExperimentReplayProcess
     }
 
     internal sealed record Result(int? ExitCode, string State, string? Reason, string Priority, string PowerThrottling,
-        ExperimentReplayResources? Resources, string StdoutPath, string StderrPath);
+        ExperimentReplayResources? Resources, string StdoutPath, string StderrPath)
+    {
+        public ExitMembership? ExitInspection { get; init; }
+    }
+
+    internal sealed record MemberIdentity(int ProcessId, DateTimeOffset StartedAt, string ExecutablePath);
+    internal sealed record ExitMembership(int RootProcessId, DateTime RootStartedAtUtc,
+        IReadOnlyList<int> ReportedProcessIds, IReadOnlyList<MemberIdentity> LiveDescendants,
+        IReadOnlyList<int> UnverifiedProcessIds);
 
     internal static async Task<Result> RunAsync(string executable, IReadOnlyList<string> arguments, string directory,
         string artifacts, TimeSpan timeout, CancellationToken cancellationToken)
@@ -69,6 +77,7 @@ internal static class ExperimentReplayProcess
         var state = "exited";
         string? reason = null;
         int? exit = null;
+        ExitMembership? exitInspection = null;
         try
         {
             while (!process.HasExited)
@@ -79,8 +88,16 @@ internal static class ExperimentReplayProcess
             }
             exit = OwnedProcessGroup.ReadProcessExitCode(processHandle);
             Observe(group, observations);
-            if (group.TryGetActiveProcessIds(out var active) && active.Count > 0)
-            { state = "apparatus-failed"; reason = "Procedure exited with live descendants."; }
+            if (!group.TryGetActiveProcessIds(out var active))
+            { state = "apparatus-failed"; reason = "Job membership unavailable after procedure exit."; }
+            else
+            {
+                exitInspection = InspectExitedJob(group, process, active);
+                if (exitInspection.UnverifiedProcessIds.Count > 0)
+                { state = "apparatus-failed"; reason = "Job member liveness unavailable after procedure exit."; }
+                else if (exitInspection.LiveDescendants.Count > 0)
+                { state = "apparatus-failed"; reason = "Procedure exited with live descendants."; }
+            }
         }
         catch (OperationCanceledException)
         { state = cancellationToken.IsCancellationRequested ? "cancelled" : "timed-out"; reason = state; }
@@ -109,7 +126,41 @@ internal static class ExperimentReplayProcess
         { state = "apparatus-failed"; reason = resources is null ? "Job accounting unavailable." : "Executable launch attribution incomplete."; }
         if (!priorityValid) { state = "apparatus-failed"; reason = "Observed descendant exceeded registered below-normal priority."; }
         return new(exit, state, reason, scheduling.PriorityClass ?? "unknown",
-            $"control={scheduling.ControlMask};state={scheduling.StateMask};unavailable={scheduling.UnavailableReason}", resources, stdout, stderr);
+            $"control={scheduling.ControlMask};state={scheduling.StateMask};unavailable={scheduling.UnavailableReason}", resources, stdout, stderr)
+        { ExitInspection = exitInspection };
+    }
+
+    internal static ExitMembership InspectExitedJob(OwnedProcessGroup group, Process root, IReadOnlyList<int> reportedIds)
+    {
+        if (!root.HasExited) throw new InvalidOperationException("Exit inspection requires an exited procedure root.");
+        var live = new List<MemberIdentity>();
+        var unverified = new List<int>();
+        foreach (var id in reportedIds)
+        {
+            // The retained root process/handle pins this identity through cleanup. Job PID
+            // lists can still include it after exit; membership alone is not liveness.
+            if (id == root.Id) continue;
+            try
+            {
+                using var member = Process.GetProcessById(id);
+                var handle = member.SafeHandle;
+                if (!group.Contains(handle) || member.HasExited) continue;
+                var identity = WindowsNativeProcessInspection.ReadLifecycleIdentity(id, handle);
+                if (identity is { Status: ProcessInspectionStatus.Available, StartedAt: { } start, ExecutablePath: { Length: > 0 } path })
+                {
+                    // Bind membership, identity and liveness to the same held handle,
+                    // including a final check after reading identity (PIDs can be reused).
+                    if (group.Contains(handle) && !member.HasExited)
+                        live.Add(new(id, start, path));
+                }
+                else if (identity.Status is not (ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled))
+                    unverified.Add(id);
+            }
+            catch (ArgumentException) { } // This listed process no longer exists.
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            { unverified.Add(id); }
+        }
+        return new(root.Id, root.StartTime.ToUniversalTime(), reportedIds.ToArray(), live, unverified);
     }
 
     private static void Observe(OwnedProcessGroup group, IDictionary<(int, long), (string Image, bool BelowNormal)> observations)
