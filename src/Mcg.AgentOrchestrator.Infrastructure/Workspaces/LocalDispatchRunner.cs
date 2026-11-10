@@ -18,6 +18,7 @@ public sealed class LocalDispatchRunner
         CancellationToken cancellationToken = default)
     {
         var task = kernel.GetTask(goalId, taskId);
+        kernel.EnsurePlannerOperatorEvidenceReady(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to execute.");
 

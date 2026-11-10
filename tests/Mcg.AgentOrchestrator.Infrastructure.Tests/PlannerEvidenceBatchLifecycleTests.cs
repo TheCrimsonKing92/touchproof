@@ -303,11 +303,20 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         var history = Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id));
         f.Kernel.SubmitHumanInput(history.Id, "retrieved historical receipt");
         Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
+        var discrepancy = Assert.Single(f.Kernel.GetPlannerOperatorEvidenceConsistencyHold(f.Goal.Id)!.Discrepancies);
+        Assert.Equal(2, discrepancy.Source.CriterionIndex);
+        Assert.Equal(PlannerOperatorEvidenceProblem.MissingOwnership, discrepancy.Problem);
+        // This ready-for-acceptance scenario needs an explicit ownership decision,
+        // independent of both the prospective request and native failure attribution.
+        var candidate = new string('a', 40);
+        var ownership = f.Kernel.MapCriterionEvidenceOwner(f.Goal.Id, 1,
+            f.Goal.AuthoritativeRefinedSpecVersion!.Version, CriterionEvidenceOwner.Operator,
+            "operator", "live behavior observation", expectedCandidateSha: candidate);
+        Assert.Null(f.Kernel.GetPlannerOperatorEvidenceConsistencyHold(f.Goal.Id));
         ConductorDriverTests.PassVerification(f.Kernel, f.Goal, f.Kernel.GetTask(f.Goal.Id, f.DeveloperId));
         Assert.Equal(GoalStatus.Verified, f.Goal.Status);
         Assert.True(f.Kernel.BeginGoalAcceptanceVerification(f.Goal.Id, "controlled native attempt"));
         const string check = "infrastructure tests";
-        var candidate = new string('a', 40);
         var main = new string('b', 40);
         var attributions = new[] { new AcceptanceCheckAttribution(check, AcceptanceFailureOrigin.Introduced,
             "candidate executed RED; baseline unavailable") };
@@ -334,6 +343,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         var before = f.Kernel.ExportSnapshot();
         var requests = JsonSerializer.Serialize(before.HumanInputRequests);
         var obligations = JsonSerializer.Serialize(Assert.Single(before.Goals).GateTestObligations);
+        var criterionObligations = JsonSerializer.Serialize(f.Goal.CriterionEvidenceObligations);
         await f.Reload();
         var failure = f.Goal.LatestAcceptanceFailure!;
         Assert.Equal(occurrence, failure.OccurredAt);
@@ -342,6 +352,11 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         Assert.Equal(attributions, failure.CheckAttributions);
         Assert.Equal("baseline not executed", failure.BaselineAttestation);
         Assert.Equal(JsonSerializer.Serialize(pending), JsonSerializer.Serialize(failure.AttributionPending));
+        Assert.Null(f.Kernel.GetPlannerOperatorEvidenceConsistencyHold(f.Goal.Id));
+        Assert.Equal(criterionObligations, JsonSerializer.Serialize(f.Goal.CriterionEvidenceObligations));
+        var outstanding = Assert.Single(f.Goal.GetLandingPrerequisiteObligations(candidate), item => item.Id == ownership.Id);
+        Assert.Equal(CriterionEvidenceOwner.Operator, outstanding.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, outstanding.State);
         Assert.Equal(requests, JsonSerializer.Serialize(f.Kernel.ExportSnapshot().HumanInputRequests));
         Assert.Equal(obligations, JsonSerializer.Serialize(Assert.Single(f.Kernel.ExportSnapshot().Goals).GateTestObligations));
 
@@ -361,6 +376,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         Assert.Equal("live-check", op.PlannerIdentity!.EvidenceKey);
         Assert.Single(f.Goal.GateTestObligations);
         Assert.Equal(requests, JsonSerializer.Serialize(f.Kernel.ExportSnapshot().HumanInputRequests));
+        Assert.Equal(criterionObligations, JsonSerializer.Serialize(f.Goal.CriterionEvidenceObligations));
         var brief = f.Kernel.BuildTaskBrief(f.Goal.Id, f.DeveloperId).Content;
         Assert.Contains("owner=operator", brief);
         Assert.Contains("AlphaTests", brief);

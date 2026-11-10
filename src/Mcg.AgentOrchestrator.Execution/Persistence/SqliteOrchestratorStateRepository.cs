@@ -2298,6 +2298,23 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         var obligationMerge = GoalSnapshotObligationMerge.Merge(
             baseline.CriterionEvidenceObligations, stored.CriterionEvidenceObligations, current.CriterionEvidenceObligations);
+        // The hold is derived from this exact authority/accepted round. Do not
+        // publish a stale discrepancy (or clearance) over a concurrent repair.
+        var operatorConsistencyChanged = baseline.CurrentHold != current.CurrentHold &&
+            (baseline.CurrentHold?.State == PlannerOperatorEvidenceConsistencyHold.State ||
+             current.CurrentHold?.State == PlannerOperatorEvidenceConsistencyHold.State);
+        if (operatorConsistencyChanged &&
+            (ConductLoopGoalStatus.IsTerminal((stored.ParkedLifecycleStatus ?? stored.Status).ToString()) ||
+             !string.Equals(JsonSerializer.Serialize(baseline.BriefVersions), JsonSerializer.Serialize(stored.BriefVersions), StringComparison.Ordinal) ||
+             !string.Equals(JsonSerializer.Serialize(baseline.RefinedSpecVersions), JsonSerializer.Serialize(stored.RefinedSpecVersions), StringComparison.Ordinal) ||
+             !string.Equals(JsonSerializer.Serialize(baseline.CriterionEvidenceObligations), JsonSerializer.Serialize(stored.CriterionEvidenceObligations), StringComparison.Ordinal) ||
+             baseline.Tasks.Where(task => task.RequiredRole == AgentRole.Planner).Any(task =>
+                 !string.Equals(JsonSerializer.Serialize(task), JsonSerializer.Serialize(stored.Tasks.SingleOrDefault(saved => saved.Id == task.Id)), StringComparison.Ordinal))))
+        {
+            merged = stored;
+            reason = "Planner operator evidence consistency has changed stored authority or lifecycle; reload and revalidate the complete goal.";
+            return false;
+        }
         var plannerProjectionChanged = (current.CriterionEvidenceObligations ?? []).Any(item =>
             item.PlannerSources is { Count: > 0 } && !string.Equals(
                 JsonSerializer.Serialize(item.PlannerSources),

@@ -5,6 +5,7 @@ public sealed partial class AgentOrchestratorKernel
     private readonly Dictionary<GoalId, Goal> _goals = [];
     private readonly Dictionary<HumanInputRequestId, HumanInputRequest> _humanInputRequests = [];
     private readonly object _humanInputRequestLock = new();
+    internal object PlannerEvidenceRequestLock => _humanInputRequestLock;
     private readonly HashSet<GoalId> _knownCompletedDependencyGoals = [];
     private readonly Dictionary<GoalId, string> _knownDependencyGoalStatuses = [];
     private readonly IClock _clock;
