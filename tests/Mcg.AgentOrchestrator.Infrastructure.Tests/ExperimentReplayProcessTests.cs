@@ -9,6 +9,92 @@ public sealed class ExperimentReplayProcessTests
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
 
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds,
+        Skip = "Requires Windows job accounting.", SkipUnless = nameof(IsWindows))]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_ChildBurst_ReconcilesObservedCountsAndResidual(bool loseChildren)
+    {
+        using var fixture = new ExperimentReplayTestData();
+        SafeFileHandle? independent = null;
+        try
+        {
+            using var observation = ExperimentReplayProcess.ObserveForTests((group, _, _) =>
+            {
+                if (independent is null) Assert.True(group.TryDuplicateAccountingHandle(out independent));
+            }, image => !loseChildren || image.Equals(PowerShell, StringComparison.OrdinalIgnoreCase));
+            // Known, bounded native child workload. No wait or assertion depends on catching a polling window.
+            var script = "for ($j = 0; $j -lt 8; $j++) { " + StartChildScript("exit 0", shortLived: true) +
+                "$p.WaitForExit(); [void]$out.GetAwaiter().GetResult(); [void]$err.GetAwaiter().GetResult(); " +
+                "if ($p.ExitCode -ne 0) { throw 'child failed' }; $p.Dispose(); } exit 0";
+            var result = await ExperimentReplayProcess.RunAsync(PowerShell,
+                ["-NoProfile", "-NonInteractive", "-EncodedCommand", Encode(script)], fixture.Root,
+                Path.Combine(fixture.Root, "burst"), TestHangGuard.HangSafetyBound, default);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("exited", result.State);
+            var resources = Assert.IsType<ExperimentReplayResources>(result.Resources);
+            Assert.True(resources.AggregateAccountingValid, LaunchDiagnostics(result));
+            Assert.True(resources.AccountingEvidence!.Complete);
+            Assert.Equal(9u, resources.TotalProcesses); // Root plus exactly eight children, including already-exited children.
+            Assert.Equal(9L, resources.ObservedProcesses + resources.UnattributedProcesses!.Value);
+            Assert.NotNull(independent);
+            Assert.True(OwnedProcessGroup.WaitForJobExit(independent, TestHangGuard.HangSafetyBound));
+            Assert.True(OwnedProcessGroup.TryGetTotalProcesses(independent, out var total));
+            Assert.Equal(total, resources.TotalProcesses);
+            Assert.True(OwnedProcessGroup.TryReadAccounting(independent, out var ledger));
+            Assert.Equal(ledger.CpuMilliseconds, resources.CpuMilliseconds);
+            Assert.Equal(ledger.PeakMemoryBytes, resources.PeakMemoryBytes);
+            Assert.Equal(10, resources.ObservationEvidence!.IntervalMilliseconds);
+            Assert.Equal("pid+creation-time", resources.ObservationEvidence.IdentityKey);
+            Assert.Equal("held-handle-job-membership", resources.ObservationEvidence.MembershipCheck);
+            if (loseChildren)
+            {
+                Assert.Equal(1, resources.ObservedProcesses);
+                Assert.Equal(8, resources.UnattributedProcesses);
+                Assert.False(resources.LaunchAttributionComplete);
+                Assert.False(resources.ExecutableComparisonsValid);
+                Assert.False(resources.AllChildPrioritiesVerified);
+                Assert.Contains("All-child below-normal priority unverified", result.Reason);
+                Assert.Single(resources.LaunchesByExecutable);
+            }
+        }
+        finally { independent?.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData("assignment")]
+    [InlineData("breakaway")]
+    [InlineData("handle")]
+    [InlineData("cleanup")]
+    [InlineData("accounting")]
+    [InlineData("total")]
+    [InlineData("negative-residual")]
+    [InlineData("negative-count")]
+    [InlineData("missing-ledger")]
+    public void AccountingFailure_BrokenEvidence_FailsClosed(string defect)
+    {
+        var resources = ExperimentReplayTestData.Execution(new(0, "case", "AA", 0, "A", false)).Resources!;
+        Assert.Null(ExperimentReplayProcess.AccountingFailure(resources));
+        var evidence = resources.AccountingEvidence!;
+        resources = defect switch
+        {
+            "assignment" => resources with { AccountingEvidence = evidence with { SuspendedRootAssignedBeforeResume = false } },
+            "breakaway" => resources with { AccountingEvidence = evidence with { BreakawayDisallowed = false } },
+            "handle" => resources with { AccountingEvidence = evidence with { RetainedHandle = false } },
+            "cleanup" => resources with { AccountingEvidence = evidence with { EmptyJobConfirmed = false } },
+            "accounting" => resources with { AccountingEvidence = evidence with { FinalAccountingRead = false } },
+            "total" => resources with { AccountingEvidence = evidence with { TotalProcessesRead = false } },
+            "negative-residual" => resources with { LaunchesByExecutable = new Dictionary<string, int> { ["dotnet"] = 2 } },
+            "negative-count" => resources with { LaunchesByExecutable = new Dictionary<string, int> { ["dotnet"] = -1 } },
+            "missing-ledger" => null,
+            _ => throw new InvalidOperationException(defect)
+        };
+        Assert.NotNull(ExperimentReplayProcess.AccountingFailure(resources));
+        Assert.False(resources?.AggregateAccountingValid ?? false);
+        Assert.False(resources?.ExecutableComparisonsValid ?? false);
+    }
+
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds,
         Skip = "Requires Windows job accounting.", SkipUnless = nameof(IsWindows))]
     public async Task RunAsync_ExitZero_RetainsFinalAccounting()
@@ -213,6 +299,10 @@ public sealed class ExperimentReplayProcessTests
     {
         var resources = Assert.IsType<ExperimentReplayResources>(result.Resources);
         Assert.True(resources.LaunchAttributionComplete);
+        Assert.True(resources.AggregateAccountingValid);
+        Assert.True(resources.AllChildPrioritiesVerified);
+        Assert.True(resources.ExecutableComparisonsValid);
+        Assert.Equal(0, resources.UnattributedProcesses);
         Assert.True((uint)count == resources.TotalProcesses, LaunchDiagnostics(result));
         Assert.Equal((uint)count, resources.TotalProcesses);
         Assert.Equal(count, Assert.Single(resources.LaunchesByExecutable).Value);
@@ -227,10 +317,10 @@ public sealed class ExperimentReplayProcessTests
 
     // Match the runner root's pipe contract for the nested launch as well. No stream
     // depends on an ambient console, and output drains start before the child waits.
-    private static string StartChildScript(string command) =>
-        $"$i = [Diagnostics.ProcessStartInfo]::new('{PowerShell}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; " +
+    private static string StartChildScript(string command, bool shortLived = false) =>
+        $"$i = [Diagnostics.ProcessStartInfo]::new('{(shortLived ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : PowerShell)}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; " +
         "$i.RedirectStandardInput = $true; $i.RedirectStandardOutput = $true; $i.RedirectStandardError = $true; " +
-        $"$i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {Encode(command)}'; $p = [Diagnostics.Process]::Start($i); " +
+        $"$i.Arguments = '{(shortLived ? "/d /c exit 0" : "-NoProfile -NonInteractive -EncodedCommand " + Encode(command))}'; $p = [Diagnostics.Process]::Start($i); " +
         "$p.StandardInput.Close(); $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync(); ";
 
     private static string LaunchDiagnostics(ExperimentReplayProcess.Result result) =>

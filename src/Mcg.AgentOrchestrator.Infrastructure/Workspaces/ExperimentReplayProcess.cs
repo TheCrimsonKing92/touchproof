@@ -6,16 +6,20 @@ using Microsoft.Win32.SafeHandles;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Uses the same owned job/accounting implementation as acceptance. Sampling never claims
-// completeness: the job's lifetime process count must agree with the observed identities.
+// completeness: exact job totals and observed executable lower bounds have separate validity.
 internal static class ExperimentReplayProcess
 {
     // Scoped observation lets contract tests synchronize with actual job membership, not elapsed time.
-    private static readonly AsyncLocal<Action<OwnedProcessGroup, SafeFileHandle, int>?> Observation = new();
+    private const int ObservationIntervalMilliseconds = 10;
+    private sealed record ObservationHook(Action<OwnedProcessGroup, SafeFileHandle, int> Observer,
+        Func<string, bool>? IncludeExecutable);
+    private static readonly AsyncLocal<ObservationHook?> Observation = new();
 
-    internal static IDisposable ObserveForTests(Action<OwnedProcessGroup, SafeFileHandle, int> observer)
+    internal static IDisposable ObserveForTests(Action<OwnedProcessGroup, SafeFileHandle, int> observer,
+        Func<string, bool>? includeExecutable = null)
     {
         var previous = Observation.Value;
-        Observation.Value = observer;
+        Observation.Value = new(observer, includeExecutable);
         return new ObservationScope(() => Observation.Value = previous);
     }
 
@@ -53,6 +57,9 @@ internal static class ExperimentReplayProcess
         info.Environment["TMP"] = temp;
         var elapsed = Stopwatch.StartNew();
         using var pending = OwnedProcessGroup.StartSuspendedContainedRedirected(info);
+        // This launcher assigns a no-breakaway job before returning the suspended root.
+        var assignedBeforeResume = pending.Group.Contains(pending.Process.SafeHandle);
+        if (!assignedBeforeResume) throw new InvalidOperationException("Suspended replay root is outside its contained job.");
         pending.Process.PriorityClass = ProcessPriorityClass.BelowNormal;
         var scheduling = ProcessSchedulingProbe.Read(pending.Process.Id);
         if (!scheduling.IsBelowNormal) throw new InvalidOperationException("Below-normal replay priority could not be established.");
@@ -70,7 +77,7 @@ internal static class ExperimentReplayProcess
         using var error = started.StandardError;
         // Cleanup disposes the group. Keep a non-inherited observer alive until FINAL
         // accounting has been read after termination and the empty-job confirmation.
-        group.TryDuplicateAccountingHandle(out var accountingObserver);
+        var retained = group.TryDuplicateAccountingHandle(out var accountingObserver);
         using var retainedAccounting = accountingObserver;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
@@ -78,13 +85,14 @@ internal static class ExperimentReplayProcess
         string? reason = null;
         int? exit = null;
         ExitMembership? exitInspection = null;
+        var emptyConfirmed = false;
         try
         {
             while (!process.HasExited)
             {
                 Observe(group, observations);
-                Observation.Value?.Invoke(group, retainedAccounting, observations.Count);
-                await Task.Delay(10, deadline.Token).ConfigureAwait(false);
+                Observation.Value?.Observer.Invoke(group, retainedAccounting, observations.Count);
+                await Task.Delay(ObservationIntervalMilliseconds, deadline.Token).ConfigureAwait(false);
             }
             exit = OwnedProcessGroup.ReadProcessExitCode(processHandle);
             Observe(group, observations);
@@ -103,12 +111,14 @@ internal static class ExperimentReplayProcess
         { state = cancellationToken.IsCancellationRequested ? "cancelled" : "timed-out"; reason = state; }
         finally
         {
-            if (!group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(30)))
+            emptyConfirmed = group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(30));
+            if (!emptyConfirmed)
             { state = "apparatus-failed"; reason = "Owned process cleanup did not confirm an empty job."; }
         }
         await Task.WhenAll(outputTask, errorTask).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
         elapsed.Stop();
-        var counted = OwnedProcessGroup.TryGetTotalProcesses(retainedAccounting, out var total);
+        uint total = 0;
+        var counted = emptyConfirmed && OwnedProcessGroup.TryGetTotalProcesses(retainedAccounting, out total);
         var complete = counted && total == observations.Count;
         var priorityValid = observations.Values.All(o => o.BelowNormal);
         var launches = observations.Values.GroupBy(p => p.Image, StringComparer.OrdinalIgnoreCase)
@@ -119,16 +129,26 @@ internal static class ExperimentReplayProcess
             try { executableIdentities[image] = ExperimentReplayStore.Source(image).Sha256 + ":" + FileVersionInfo.GetVersionInfo(image).FileVersion; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { complete = false; }
         }
-        var resources = OwnedProcessGroup.TryReadAccounting(retainedAccounting, out var accounting)
+        var accountingRead = OwnedProcessGroup.TryReadAccounting(retainedAccounting, out var accounting);
+        var evidence = new ExperimentReplayAccountingEvidence(assignedBeforeResume, true, retained, emptyConfirmed,
+            emptyConfirmed && accountingRead, counted);
+        var resources = accountingRead
             ? new ExperimentReplayResources(accounting.CpuMilliseconds, accounting.PeakMemoryBytes,
-                elapsed.Elapsed.TotalMilliseconds, launches, "job-object/" + accounting.AccountingSource, complete, total, executableIdentities) : null;
-        if (resources is null || !complete)
-        { state = "apparatus-failed"; reason = resources is null ? "Job accounting unavailable." : "Executable launch attribution incomplete."; }
+                elapsed.Elapsed.TotalMilliseconds, launches, "job-object/" + accounting.AccountingSource, complete, total, executableIdentities,
+                evidence, new(ObservationIntervalMilliseconds, "pid+creation-time", "held-handle-job-membership", scheduling.IsBelowNormal, priorityValid)) : null;
+        var accountingFailure = AccountingFailure(resources);
+        if (accountingFailure is not null && state != "apparatus-failed")
+        { state = "apparatus-failed"; reason = accountingFailure; }
         if (!priorityValid) { state = "apparatus-failed"; reason = "Observed descendant exceeded registered below-normal priority."; }
+        if (state == "exited" && resources?.AllChildPrioritiesVerified != true)
+            reason = "All-child below-normal priority unverified; root-applied policy and observed member priorities only.";
         return new(exit, state, reason, scheduling.PriorityClass ?? "unknown",
             $"control={scheduling.ControlMask};state={scheduling.StateMask};unavailable={scheduling.UnavailableReason}", resources, stdout, stderr)
         { ExitInspection = exitInspection };
     }
+
+    internal static string? AccountingFailure(ExperimentReplayResources? resources) => resources is null
+        ? "Job accounting unavailable." : resources.AggregateAccountingValid ? null : "Job accounting evidence unavailable or contradictory.";
 
     internal static ExitMembership InspectExitedJob(OwnedProcessGroup group, Process root, IReadOnlyList<int> reportedIds)
     {
@@ -176,6 +196,8 @@ internal static class ExperimentReplayProcess
                 if (identity is { Status: ProcessInspectionStatus.Available, StartedAt: { } start, ExecutablePath: { Length: > 0 } path })
                 {
                     var below = process.PriorityClass is ProcessPriorityClass.BelowNormal or ProcessPriorityClass.Idle;
+                    if (!group.Contains(process.SafeHandle)) continue;
+                    if (Observation.Value?.IncludeExecutable is { } include && !include(path)) continue;
                     var key = (id, start.UtcTicks);
                     if (observations.TryGetValue(key, out var old)) below &= old.BelowNormal;
                     observations[key] = (path, below);

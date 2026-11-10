@@ -15,7 +15,10 @@ internal sealed class ExperimentReplayTestData : IDisposable
         Enumerable.Range(0, 20).Select(Case).ToArray(), new("value-bound", "hash"));
     internal static ExperimentReplayExecution Execution(ExperimentReplaySlot slot, long cpu = 100, string state = "passed") =>
         new($"execution-{slot.Ordinal}", "run", slot, state, null, "host", "runtime", "toolchain", "BelowNormal", "fixed", Now,
-            new(cpu, 1024, 50, new Dictionary<string, int> { ["dotnet"] = 1 }, "job-object/live", true, 1),
+            new(cpu, 1024, 50, new Dictionary<string, int> { ["dotnet"] = 1 }, "job-object/live", true, 1,
+                new Dictionary<string, string> { ["dotnet"] = "hash:version" },
+                new(true, true, true, true, true, true),
+                new(10, "pid+creation-time", "held-handle-job-membership", true, true)),
             new(slot.Stage == "AA" ? "B" : slot.Arm, ["ExampleTests"], ["Example.Tests.csproj"], "resolved", []), [], []);
     internal ExperimentReplayStore Store()
     {

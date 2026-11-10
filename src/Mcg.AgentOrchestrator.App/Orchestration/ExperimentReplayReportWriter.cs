@@ -11,7 +11,12 @@ internal static class ExperimentReplayReportWriter
         string Decision, int RegisteredCases, int ValidCases, int ConfirmedCatchDenominator,
         int ACaught, int BCaught, double AnalyticBaselineCpuMilliseconds,
         ExperimentReplayCalibration Calibration, ExperimentReplayInterval? BMinusA,
-        IReadOnlyList<CaseResult> Cases, IReadOnlyList<ExperimentReplayExecution> Executions, IReadOnlyList<ExperimentReplayFault> Injected);
+        IReadOnlyList<CaseResult> Cases, IReadOnlyList<ExperimentReplayExecution> Executions, IReadOnlyList<ExperimentReplayFault> Injected)
+    {
+        public bool ExecutableComparisonsAllowed => Executions.Count > 0 &&
+            Executions.Concat(Injected.SelectMany(fault => fault.Executions))
+                .All(e => e.Resources?.ExecutableComparisonsValid == true);
+    }
 
     internal static Report Create(ExperimentReplayRegistration registration, ExperimentReplayRun run,
         IReadOnlyList<ExperimentReplayExecution> executions, IReadOnlyList<ExperimentReplayFault>? injected = null)
@@ -62,7 +67,7 @@ internal static class ExperimentReplayReportWriter
             ? ExperimentReplayStatistics.Bootstrap(validRows.Select(r => r.Difference!.Value).ToArray(), registration.Seed, "case mean over 3 repetitions") : null;
         var decision = run.State == "complete" && calibration.State == "passed" && validRows.Length == 20
             ? "descriptive-complete; no winner or deployment claim" : "inconclusive; operator review required";
-        return new(1, registration, run, decision, registration.Cases.Count, validRows.Length,
+        return new(2, registration, run, decision, registration.Cases.Count, validRows.Length,
             rows.Sum(r => r.ConfirmedDefects.Count), rows.Sum(r => r.ACatches.Count), rows.Sum(r => r.BCatches.Count),
             0, calibration, difference, rows, executions, injected ?? []);
     }
@@ -73,6 +78,10 @@ internal static class ExperimentReplayReportWriter
         output.WriteLine($"Experiment replay {report.Run.Id}: {report.Decision}");
         output.WriteLine($"Calibration: {report.Calibration.State}; {report.Calibration.Reason}");
         output.WriteLine($"Cases: {report.ValidCases}/{report.RegisteredCases}; analytic no-test CPU: 0 ms.");
+        output.WriteLine($"Aggregate job accounting valid: {report.Executions.Count(e => e.Resources?.AggregateAccountingValid == true)}/{report.Executions.Count}; " +
+            $"all-child priority verified: {report.Executions.Count(e => e.Resources?.AllChildPrioritiesVerified == true)}/{report.Executions.Count}.");
+        output.WriteLine(report.ExecutableComparisonsAllowed ? "Executable comparisons: attribution complete."
+            : "Executable comparisons: unavailable; incomplete observed counts are lower bounds, not cross-arm comparisons.");
         if (report.BMinusA is { } interval)
             output.WriteLine($"B-A CPU ms: {interval.Estimate:F2}; 95% case-bootstrap [{interval.Lower:F2}, {interval.Upper:F2}].");
         foreach (var item in report.Cases)

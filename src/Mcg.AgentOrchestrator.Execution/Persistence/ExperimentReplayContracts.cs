@@ -21,10 +21,40 @@ public sealed record ExperimentReplaySlot(int Ordinal, string CaseId, string Sta
     string Arm, bool Warmup);
 public sealed record ExperimentReplaySelection(string Arm, IReadOnlyList<string> Classes,
     IReadOnlyList<string> Projects, string Outcome, IReadOnlyList<string> Diagnostics);
+// These are completed accounting steps, not requested policy or executable observations.
+public sealed record ExperimentReplayAccountingEvidence(bool SuspendedRootAssignedBeforeResume,
+    bool BreakawayDisallowed, bool RetainedHandle, bool EmptyJobConfirmed,
+    bool FinalAccountingRead, bool TotalProcessesRead)
+{
+    public bool Complete => SuspendedRootAssignedBeforeResume && BreakawayDisallowed && RetainedHandle &&
+        EmptyJobConfirmed && FinalAccountingRead && TotalProcessesRead;
+}
+public sealed record ExperimentReplayObservationEvidence(int IntervalMilliseconds, string IdentityKey,
+    string MembershipCheck, bool RootBelowNormal, bool ObservedMembersBelowNormal);
 public sealed record ExperimentReplayResources(long CpuMilliseconds, long PeakMemoryBytes, double WallMilliseconds,
     IReadOnlyDictionary<string, int> LaunchesByExecutable, string AccountingSource,
     bool LaunchAttributionComplete, uint TotalProcesses,
-    IReadOnlyDictionary<string, string>? ExecutableIdentities = null);
+    IReadOnlyDictionary<string, string>? ExecutableIdentities = null,
+    ExperimentReplayAccountingEvidence? AccountingEvidence = null,
+    ExperimentReplayObservationEvidence? ObservationEvidence = null)
+{
+    public long ObservedProcesses => LaunchesByExecutable.Values.Sum(value => (long)value);
+    public long? UnattributedProcesses => AccountingEvidence?.TotalProcessesRead == true &&
+        LaunchesByExecutable.Values.All(value => value >= 0) && ObservedProcesses <= TotalProcesses
+            ? TotalProcesses - ObservedProcesses : null;
+    public bool AggregateAccountingValid => AccountingEvidence?.Complete == true && TotalProcesses > 0 &&
+        UnattributedProcesses is >= 0 && CpuMilliseconds >= 0 && PeakMemoryBytes > 0 &&
+        double.IsFinite(WallMilliseconds) && WallMilliseconds >= 0 &&
+        AccountingSource.StartsWith("job-object/", StringComparison.Ordinal);
+    // No executable-level comparison is permitted with incomplete attribution on either side.
+    public bool ExecutableComparisonsValid => AggregateAccountingValid && LaunchAttributionComplete &&
+        UnattributedProcesses == 0 && ExecutableIdentities is not null &&
+        LaunchesByExecutable.Keys.All(key => ExecutableIdentities.TryGetValue(key, out var identity) && !string.IsNullOrWhiteSpace(identity));
+    // The current seam applies priority to the root and observes children; it does not enforce a job-wide limit.
+    public string SchedulingPolicy => "root-applied-below-normal; child-priority=observed-only";
+    public bool AllChildPrioritiesVerified => AggregateAccountingValid && UnattributedProcesses == 0 &&
+        ObservationEvidence is { RootBelowNormal: true, ObservedMembersBelowNormal: true };
+}
 public sealed record ExperimentReplayExecution(string Id, string RunId, ExperimentReplaySlot Slot,
     string State, string? Reason, string HostIdentity, string RuntimeIdentity, string ToolchainIdentity,
     string Priority, string PowerThrottling, DateTimeOffset StartedAt,

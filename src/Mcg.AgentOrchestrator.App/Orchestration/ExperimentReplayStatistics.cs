@@ -47,7 +47,10 @@ internal static class ExperimentReplayStatistics
     }
 
     internal static bool Valid(ExperimentReplayExecution e) => e.State is "passed" or "test-failed" &&
-        e.Resources is { LaunchAttributionComplete: true, CpuMilliseconds: >= 0, PeakMemoryBytes: > 0 } &&
+        e.Resources is { CpuMilliseconds: >= 0, PeakMemoryBytes: > 0 } &&
+        // Preserve the strict legacy verdict for old receipts; absent new evidence grants no new validity.
+        (e.Resources.AccountingEvidence is null ? e.Resources.LaunchAttributionComplete :
+            e.Resources.AggregateAccountingValid && e.Resources.AllChildPrioritiesVerified) &&
         e.Resources.AccountingSource.StartsWith("job-object/", StringComparison.Ordinal) &&
         e.Selection is { Classes.Count: > 0 } && e.Priority == "BelowNormal";
 }
