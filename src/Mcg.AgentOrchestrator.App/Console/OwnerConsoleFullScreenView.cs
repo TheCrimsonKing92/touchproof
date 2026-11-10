@@ -226,9 +226,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
         _selection.Select(index, refresh, direction, allowHeader);
-
     internal void RenderPreview() => _previewPane.Render();
-
     public bool RefuseSelectedBoardRow() => _selection.Refuse();
 
     internal void Invoke(Action action)
