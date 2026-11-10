@@ -133,6 +133,9 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
+            IntegrationScopeOwner = kernel => new ConductorConflictIntegration(kernel, workspace.ExecutionDirectory,
+                workspace.IntegrationBranch, (g, t, n, k, c) => throw new InvalidOperationException("Intent application cannot retry integration."),
+                _ => throw new InvalidOperationException("Intent application cannot dispatch integration.")),
             GateCancellation = new(solo, grouped, events),
             LandingRepair = new(workspace, OrchestratorProjectRegistry.CreateDefault()),
             ReopenedMemberGateAbandonment = new(grouped, events),
@@ -261,7 +264,7 @@ internal sealed partial class OperatorIntentCoordinator
             var legacyApplied = !typedApplied && goal.Timeline.Any(item =>
                 item.OperatorIntentApplied is null &&
                 item.Message.Contains(marker, StringComparison.Ordinal));
-            if (typedApplied || legacyApplied)
+            if ((typedApplied || legacyApplied) && intent.Verb != OperatorIntentVerbs.IntegrationScope)
             {
                 var recordedBlocker = goal.Timeline.LastOrDefault(item =>
                     item.OperatorIntentApplied is { BlockedBy: not null } applied &&
@@ -494,6 +497,9 @@ internal sealed partial class OperatorIntentCoordinator
         ValidateCompletedDutyIntent(goal, intent);
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.IntegrationScope:
+                ApplyIntegrationScope(kernel, goal, intent);
+                return;
             case OperatorIntentVerbs.TaskGraphRepair:
                 var plan = Deserialize<TaskGraphRepairOperatorIntentPayload>(intent);
                 if (_store is SqliteOperatorIntentStore sqlite)

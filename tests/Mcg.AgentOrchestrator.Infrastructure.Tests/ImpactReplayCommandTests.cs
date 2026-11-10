@@ -87,7 +87,7 @@ public sealed class ImpactReplayCommandTests
 
         Assert.Single(report.Attempts);
         Assert.Equal(before, fixture.StateSnapshot());
-        Assert.Equal(new[] { "impact-replay.json", "impact-replay.md" },
+        Assert.Equal(new[] { "impact-replay.checkpoint.db", "impact-replay.json", "impact-replay.md" },
             Directory.GetFiles(fixture.OutputDirectory).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal(worktreesBefore, fixture.Git("worktree", "list", "--porcelain"));
         Assert.True(Directory.Exists(fixture.CheckoutParent));

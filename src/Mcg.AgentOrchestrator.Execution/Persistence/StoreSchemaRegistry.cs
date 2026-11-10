@@ -3,8 +3,8 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Inventory entries describe owning store schemas. A null version means setup conversion
-// is deferred to a later slice; it does not assert that the existing store's schema is version zero.
+// Inventory entries describe owning store schemas. A null version means the store does not
+// use StoreSchemaVersions setup; it does not assert that its schema is unversioned or version zero.
 public sealed record StoreSchemaEntry(
     string StoreName, string SourceFile, string Database, string Family, int? CurrentVersion);
 
@@ -116,6 +116,8 @@ public static class StoreSchemaRegistry
         BoardFill,
         ProgressiveReviewGlanceCircuit,
         ProgressiveReviewSteering,
+        // CLI-owned output artifact, independently versioned with PRAGMA user_version.
+        new("impact-replay-checkpoint", Conductor + "ImpactReplayCheckpointStore.cs", "impact-replay.checkpoint.db", "report-artifact", null),
         new("reconcile-sweep-remediation", Persistence + "ReconcileSweepRemediationStore.cs", "state.db", "review", null),
         new("orchestrator-state", Persistence + "SqliteOrchestratorStateRepository.cs", "state.db", "review", null),
         new("state-history", Persistence + "StateDbMigrations.cs", "state.db", "state-history", null),

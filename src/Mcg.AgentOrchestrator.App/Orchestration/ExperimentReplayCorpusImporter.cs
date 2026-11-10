@@ -83,7 +83,7 @@ internal static class ExperimentReplayCorpusImporter
         var skipped = new List<ImpactReplayDiagnostic>();
         var filter = new ExperimentReplayImportGateFilter(rounds, cutoff, diagnostics, token);
         var retained = ImpactReplayAttemptSource.Read(workspace.OrchestratorDirectory, cutoff.AddDays(-30), skipped,
-            filter.Include, rounds.Select(r => r.GoalId).Distinct(StringComparer.Ordinal).ToArray());
+            includeAttempt: filter.Include, goalIds: rounds.Select(r => r.GoalId).Distinct(StringComparer.Ordinal).ToArray());
         diagnostics.AddRange(skipped.Select(s => $"{s.Source}: {s.Reason}"));
         var gates = ReadGates(retained, evidenceDirectory, diagnostics, token, filter.Links);
         var cases = Map(rounds.Select(filter.Annotate), gates, cutoff);

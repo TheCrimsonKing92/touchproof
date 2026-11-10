@@ -1,5 +1,15 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Integration scope authorization
+
+`integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]`
+
+The local human operator submits this typed intent for one open conductor conflict-integration round. Read its round ID and full heads from the integration journal or pending scope requirement. `approve` requires exact repository-relative files, `original-only` confirms scope without adding paths, and `revoke` names an approval intent ID. Paths cannot be directories, globs, repository metadata or traversal. Additional approvals accumulate separately from original conflicts.
+
+Submission acknowledges queued intake. Inspect the returned intent until Applied or Rejected; only application records authority. Reuse the same idempotency key for redelivery of the same request. Prose answers do not grant file authority. A scope clarification without typed confirmation blocks dispatch and provides one command with the exact round identities.
+
+Authority survives restart and retries within the same open round. Terminal or replacement rounds require new approval, even with identical heads. Revocation blocks future admissions; an admitted attempt settles with its captured exact scope. Approval grants no acceptance or landing permission. Merge parents, clean worktree, build and compare-and-swap restore checks still apply.
+
 ## Fleet conduct-tail sources
 
 `project event-sources` exports home and every registered authoritative workspace as a complete conduct-tail source list. It accepts no project filter or output options and ignores the selected project. Aliases share one record: home is canonical when aliased, otherwise the stable registration order (OrdinalIgnoreCase then Ordinal) chooses the label. Different authoritative state stores remain distinct even when their repository roots match. Final labels sort ordinally; home has no special first position.
@@ -534,6 +544,42 @@ Escalations are recorded in the local operator inbox: run `operator-inbox` to in
 `executor-set-enabled <existing-executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]` queues an authenticated workspace intent. The boolean accepts exactly `true` or `false`, case-insensitive. The response identifies the persisted intent and its current disposition; submission is not application. Poll `operator-intent-status <intent-id>` for `Applied` or `Rejected` after the conductor tick. Application requires Mutate authority, rejects steward assurance, rechecks that the executor exists, and uses the existing backed-up, audited atomic settings writer. Conflicting idempotency-key reuse rejects without mutation.
 
 The setting is the executor's JSON `enabled` member in the existing host `remote-lane-executors.json`; absent means enabled. Disabled executors remain configured, addressable by this command and `executor-set-slots`, and visible in `remote-executors` (JSON `admissionEnabled`, text `admission` row) and the Fleet view. Historical-only hosts have no configured admission value. No status query probes a disabled host. See [admission timing and runtime scope](operator-runbook.md#executor-admission).
+
+### Impact replay progress and checkpoints
+
+`impact-replay --limit 2 --out <directory>` retains the existing stdout summary and report names.
+Flushed JSON progress goes to stderr: startup, loading, selection, checkout, source/impact analysis,
+evidence reading, case completion and cleanup. Each event includes run/attempt identity, UTC time,
+monotonic phase/run elapsed seconds, last-progress elapsed seconds and independent input/case counters.
+Unknown input totals are null. Requested limit still counts replayable plus unreplayable attempts;
+skipped inputs do not consume it. Abandoned selections remain replayable.
+
+A labelled heartbeat during a long phase is emitted at most once per 30 seconds. It updates observation
+time, without advancing completed counts or last-progress time. It proves neither progress nor correctness.
+Cancellation is cooperative between synchronous operations; the current operation may finish first.
+
+The explicitly chosen output directory owns `impact-replay.checkpoint.db` alongside `impact-replay.json`
+and `impact-replay.md`. This versioned SQLite report artifact retains immutable run configuration,
+runtime/source identity, completed case outcomes/diagnostics, and owned checkout cleanup state. Each case
+commits atomically before cleanup and before the next case. Repeated invocations add new run identities;
+they never resume a run. One writer owns an output directory via a transient OS file lease (`.db.writer.lock`, removed on
+close/process exit), while independent readers remain available.
+The operator retains/deletes the directory as a report bundle; no automatic sweep adopts arbitrary output
+paths, and no durable replay state belongs in scratch directories.
+
+`impact-replay --status --checkpoint-file <directory>/impact-replay.checkpoint.db` opens an existing
+checkpoint read-only and prints all run identities, counters, errors and cleanup records as JSON.
+Missing, corrupt or unsupported databases fail without creation or repair. Stored `Running` or
+`Finalizing` displays as `incomplete/unknown`, even with a stale observation timestamp; staleness does not
+establish a crash cause or completion. Inspect the last timestamp and monotonic last-progress separately.
+A completed checkpoint means reports reconciled and were published and owned checkouts were cleaned;
+it is not a safety verdict. Reports name their run/checkpoint, whose state is authoritative for completion.
+Failed/cancelled runs retain previously committed cases. If checkpoint persistence fails, the command
+fails visibly and reports unconfirmed durability together with the original and cleanup errors.
+
+Before landing, Operator uses a small candidate replay to observe flushed stderr and query committed
+cases while it is still running, then reconciles final counts/classifications with the reports. A fast
+finished run alone does not supply the required in-flight observation.
 
 ## Recorded-round experiments
 
