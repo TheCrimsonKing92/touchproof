@@ -50,6 +50,9 @@ internal static class OwnerConsoleFullScreenHost
         OwnerConsoleActivityLoader? activityLoader = null;
         Task? fill = null;
         OwnerRefreshCoordinator? refresh = null;
+        SqliteStoreChangeObservation? stateChanges = null;
+        SqliteStoreChangeObservation? questionChanges = null;
+        SqliteStoreChangeObservation? portfolioChanges = null;
         using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
         using var backoff = new OwnerConsoleLoopBackoff(clock,
             rate => GuiApplication.MaximumIterationsPerSecond = (ushort)rate, GuiApplication.MaximumIterationsPerSecond);
@@ -74,14 +77,25 @@ internal static class OwnerConsoleFullScreenHost
         }
         try
         {
-            IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
-                ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
+            IOrchestratorStateQueries state = new EmptyOwnerConsoleStateQueries(workspace.SqliteStatePath);
+            stateChanges = new(workspace.SqliteStatePath);
+            questionChanges = new(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db"));
+            portfolioChanges = new(workspace.PortfolioStorePath);
+            string? QuestionVersion()
+            {
+                var stateVersion = stateChanges.Observe();
+                var questionVersion = questionChanges.Observe();
+                return stateVersion is not null && questionVersion is not null ? stateVersion + "/" + questionVersion : null;
+            }
             var refreshFilter = new OwnerConsoleEventRefreshFilter();
             var snapshots = new OwnerConsoleRefreshGoalSnapshots(state);
-            IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(state, workspace.OrchestratorDirectory, snapshots));
+            // The inner SQLite snapshot is reusable; onboarding files/registry remain conservatively read.
+            // Do not join a board generation whose state token may predate a question read.
+            IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(
+                state, workspace.OrchestratorDirectory, changeMarker: QuestionVersion));
             if (boardSource is not null)
                 questions = new OnboardingQuestionSource(questions, boardSource.InScopeProjects, clock,
-                    () => coalescer?.Request(null, OwnerConsoleRefreshScope.All));
+                    () => coalescer?.Request(null, OwnerConsoleRefreshScope.All), boardSource.HasLandedAsync);
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateEvidenceStore(new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory).Observe, clock);
@@ -109,8 +123,7 @@ internal static class OwnerConsoleFullScreenHost
                         $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}");
                     return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
-                }, decisionsMarker: boardSource is null ? OwnerConsoleStoreFingerprint.For(workspace.SqliteStatePath,
-                    Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")) : null);
+                }, boardMarker: stateChanges.Observe, epicMarker: portfolioChanges.Observe);
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
                 activityLoader.ReadNew, new OwnerConsoleLandedTodayScan(workspace.GoalLifecycleEventsDirectory, clock).Current,
@@ -239,7 +252,19 @@ internal static class OwnerConsoleFullScreenHost
                 catch (TimeoutException) { }
             }
             view?.Dispose();
-            refresh?.Dispose();
+            var pending = Task.WhenAll(new[] { reader, fill, periodicRefresh, streamRefresh, coalescer?.Completion }
+                .OfType<Task>());
+            void DisposeReads()
+            {
+                refresh?.Dispose();
+                boardSource?.Dispose();
+                stateChanges?.Dispose();
+                questionChanges?.Dispose();
+                portfolioChanges?.Dispose();
+            }
+            if (pending.IsCompleted) DisposeReads();
+            else _ = pending.ContinueWith(completed => { _ = completed.Exception; DisposeReads(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 }

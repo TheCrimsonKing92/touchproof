@@ -103,8 +103,8 @@ internal sealed class OwnerRefreshCoordinator(TimeProvider clock, CancellationTo
         CancellationToken stepToken)
     {
         using var goalLoads = snapshots.BeginRefresh(reuseUnchanged: true);
-        var board = TrackBoard(await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken)));
-        if (boardSource is not null) board = await boardSource.ComposeAsync(board, stepToken);
+        var board = TrackBoard(await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken, forceDecisions)));
+        if (boardSource is not null) board = await boardSource.ComposeAsync(board, stepToken, forceDecisions);
         foreach (var lifecycle in timings.Time("lifecycle-tail", () => readLifecycle(BoardIds, scope).ToArray()))
             OwnerConsoleStartupActivity.Append(_recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
         var programHealth = OwnerConsoleProgramHealthNotice.Current(_recent);

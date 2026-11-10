@@ -4,6 +4,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class SerializedOwnerQuestionSource(IOwnerQuestionSource source) : IOwnerQuestionSource
 {
     private readonly SemaphoreSlim _read = new(1, 1);
+    public void Invalidate() => source.Invalidate();
 
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
         (await ReadAsync(cancellationToken)).Live;

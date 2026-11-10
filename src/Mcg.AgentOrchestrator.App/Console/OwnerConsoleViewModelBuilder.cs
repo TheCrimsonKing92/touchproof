@@ -12,7 +12,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null,
     OwnerConsoleRefreshGoalSnapshots? snapshots = null,
     Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null,
-    Func<string?>? decisionsMarker = null)
+    Func<string?>? decisionsMarker = null, Func<string?>? boardMarker = null,
+    Func<string?>? epicMarker = null)
 {
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
@@ -27,6 +28,17 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     private readonly List<OwnerConductEvent> _observed = [];
     private readonly OwnerConsoleDecisionCache _decisions = new();
     private readonly OwnerConsoleDecisionMarker _decisionMarker = new(decisionsMarker);
+    private string? _boardVersion;
+    private IReadOnlyList<GoalSummary>? _metadata;
+    private IReadOnlyCollection<Goal>? _boardGoals;
+    private (Goal Goal, OwnerConsoleBoardSortKey Key, string Title)[]? _ranked;
+    private string? _epicVersion;
+    private string[] _epicIds = [];
+    private IReadOnlyDictionary<string, string>? _epicTitles;
+    private OwnerDecisionRead? _projectedRead;
+    private ImmutableArray<OwnerConsoleDecision> _projectedDecisions;
+    private int _nextNumber;
+    internal (int Goals, int Roles, int Numbers, int Holds) Retained => (_goals.Count, _roles.Count, _numbers.Count, _previousHolds.Count);
 
     internal async Task<OwnerConsoleViewModel> BuildAsync(OwnerConsoleViewInputs inputs,
         CancellationToken cancellationToken = default)
@@ -40,12 +52,15 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
         CancellationToken cancellationToken, bool force = false)
     {
-        var read = await _decisions.ReadAsync(questions, _decisionMarker.Read(), force, cancellationToken);
+        if (force) questions.Invalidate();
+        var read = await _decisions.ReadAsync(questions, _decisionMarker.Read(), force, cancellationToken, _decisionMarker.Read);
         var snapshot = read.Snapshot;
-        var decisions = read.Entries.Zip(snapshot.Live, (question, source) =>
+        var unchanged = _projectedRead is { } previous && previous.Entries.SequenceEqual(read.Entries) &&
+            previous.Snapshot.Live.SequenceEqual(snapshot.Live);
+        var decisions = unchanged ? _projectedDecisions : read.Entries.Zip(snapshot.Live, (question, source) =>
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
-                _numbers.Add(question.ItemId, number = _numbers.Count + 1);
+                _numbers.Add(question.ItemId, number = ++_nextNumber);
             var label = question.Kind == OwnerQuestionKind.Onboarding &&
                 OnboardingQuestionSource.TryIdentify(question.ItemId, out var project, out _, out _)
                 ? project : question.GoalPrefix;
@@ -54,6 +69,10 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 question.Confidence, question.ProposedDefault,
                 question.RaisedAt, source.CanAnswer);
         }).ToImmutableArray();
+        _projectedRead = read;
+        _projectedDecisions = decisions;
+        var liveIds = snapshot.Live.Select(question => question.ItemId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in _numbers.Keys.Where(id => !liveIds.Contains(id)).ToArray()) _numbers.Remove(id);
         lock (_observationGate)
         {
             _attention.Observe(snapshot.Live, clock.GetUtcNow());
@@ -61,12 +80,20 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         return (decisions, snapshot.Hidden.Count);
     }
 
-    internal async Task<OwnerConsoleViewModel> BuildBoardAsync(CancellationToken cancellationToken = default)
+    internal async Task<OwnerConsoleViewModel> BuildBoardAsync(CancellationToken cancellationToken = default, bool force = false)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         _decisionMarker.BeforeBoard();
-        var metadata = await state.ListGoalBoardRowsAsync(
+        var version = boardMarker?.Invoke();
+        var reuse = !force && version is not null && version == _boardVersion && _metadata is not null && _boardGoals is not null;
+        if (!reuse)
+        {
+            _boardVersion = null;
+            if (boardMarker is not null) snapshots?.Invalidate();
+        }
+        var metadata = reuse ? _metadata! : await state.ListGoalBoardRowsAsync(
             new(RecentTerminalTitleRows, TitlePrefixChars, BacklogIntakePlanner.TargetScopeHeadingLine), cancellationToken);
-        _titles.Merge(metadata);
+        if (!reuse) { _titles.Merge(metadata, force: boardMarker is not null); _titles.Retain(metadata.Select(row => row.Id)); }
         var now = clock.GetUtcNow();
         OwnerConsoleGateProgress? gate = null;
         try { gate = gateProgress?.Invoke(_titles.Titles); }
@@ -79,34 +106,52 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         var board = ImmutableArray.CreateBuilder<OwnerConsoleBoardRow>();
         if (ids.Length > 0)
         {
-            var loaded = snapshots is null ? (await state.LoadGoalsAsync(ids, cancellationToken)).Goals :
+            var loaded = reuse ? _boardGoals! : snapshots is null ? (await state.LoadGoalsAsync(ids, cancellationToken)).Goals :
                 (await snapshots.LoadAsync(ids, cancellationToken)).Goals;
-            // Retain roles for the tail's final read after a goal leaves the board.
-            var roles = new Dictionary<string, AgentRole>(_roles);
-            foreach (var task in loaded.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
-                roles[task.Id.Value] = task.RequiredRole;
-            _roles = roles;
-            var goals = new Dictionary<string, Goal>(_goals);
-            foreach (var goal in loaded) goals[goal.Id.Value] = goal;
-            _goals = goals;
-            lock (_observationGate)
+            if (!reuse)
             {
-                foreach (var goal in loaded)
+                // Retain roles for the tail's final read after a goal leaves the board.
+                var goals = loaded.Concat(_goals.Values).DistinctBy(goal => goal.Id.Value)
+                    .Take(loaded.Count + MaxActivityItems).ToDictionary(goal => goal.Id.Value);
+                var roles = new Dictionary<string, AgentRole>();
+                foreach (var task in goals.Values.SelectMany(goal => goal.Tasks))
+                    roles[task.Id.Value] = task.RequiredRole;
+                _roles = roles;
+                _goals = goals;
+                lock (_observationGate)
                 {
-                    var hasHold = goal.CurrentHold is not null;
-                    if (_previousHolds.GetValueOrDefault(goal.Id.Value) && !hasHold)
-                        Observe(new(clock.GetUtcNow(), "owner-hold-cleared", goal.Id.Value, ""));
-                    _previousHolds[goal.Id.Value] = hasHold;
+                    foreach (var goal in loaded)
+                    {
+                        var hasHold = goal.CurrentHold is not null;
+                        if (_previousHolds.GetValueOrDefault(goal.Id.Value) && !hasHold)
+                            Observe(new(clock.GetUtcNow(), "owner-hold-cleared", goal.Id.Value, ""));
+                        _previousHolds[goal.Id.Value] = hasHold;
+                    }
                 }
             }
-            var ranked = loaded.Where(goal => ids.Contains(goal.Id))
-                .Select(goal => (Goal: goal, Key: OwnerConsoleBoardSortKey.For(goal)))
+            foreach (var id in _previousHolds.Keys.Where(id => !ids.Any(goal => goal.Value == id)).ToArray())
+                _previousHolds.Remove(id);
+            var rankedSource = reuse && _ranked is not null ? _ranked : loaded
+                .Select(goal => (Goal: goal, Key: OwnerConsoleBoardSortKey.For(goal), Title: OwnerGoalTitle.Full(goal.Objective)))
+                .OrderBy(item => item.Key).ToArray();
+            var ranked = rankedSource.Where(item => ids.Contains(item.Goal.Id))
                 .Where(item => IsActive(item.Goal.Status) || item.Key.Rank == OwnerConsoleAttention.RecentTerminal &&
-                    item.Key.Since is { } at && now - at <= TimeSpan.FromHours(24)).OrderBy(item => item.Key).ToArray();
-            var epicTitles = ranked.Length == 0 ? new Dictionary<string, string>() :
-                await epics.GetTitlesAsync(ranked.Select(item => item.Goal.Id.Value).ToArray(), cancellationToken);
+                    item.Key.Since is { } at && now - at <= TimeSpan.FromHours(24)).ToArray();
+            var epicIds = ranked.Select(item => item.Goal.Id.Value).ToArray();
+            var epicVersion = epicMarker?.Invoke();
+            var reuseEpics = !force && epicVersion is not null && epicVersion == _epicVersion &&
+                _epicTitles is not null && _epicIds.SequenceEqual(epicIds);
+            if (!reuseEpics) _epicVersion = null;
+            var epicTitles = reuseEpics ? _epicTitles! :
+                epicIds.Length == 0 ? new Dictionary<string, string>() : await epics.GetTitlesAsync(epicIds, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _epicVersion = epics.CanReuse && epicVersion is not null && epicVersion == epicMarker?.Invoke() ? epicVersion : null;
+            _epicIds = epicIds;
+            _epicTitles = epicTitles;
+            _boardGoals = loaded;
+            _ranked = rankedSource;
             var queuePosition = 0;
-            foreach (var (goal, key) in ranked)
+            foreach (var (goal, key, title) in ranked)
             {
                 var stage = OwnerConsoleStageDescriber.Describe(goal, key,
                     key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? queuePosition + 1 : null,
@@ -119,7 +164,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
                 var row = new OwnerConsoleBoardRow(Prefix(goal.Id.Value), epicTitles.GetValueOrDefault(goal.Id.Value, ""),
-                    OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
+                    title, goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
                     key.Rank == OwnerConsoleAttention.RecentTerminal, OwnerConsolePriorityText.Column(goal),
                     OwnerConsolePriorityText.Warning(goal, []))
@@ -128,6 +173,16 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     board.Add(row with { Stage = line, StageWithoutQuestion = line });
             }
         }
+        else
+        {
+            _boardGoals = []; _ranked = []; _previousHolds.Clear();
+            _goals = _goals.Values.Take(MaxActivityItems).ToDictionary(goal => goal.Id.Value);
+            _roles = _goals.Values.SelectMany(goal => goal.Tasks).DistinctBy(task => task.Id.Value)
+                .ToDictionary(task => task.Id.Value, task => task.RequiredRole);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        _metadata = metadata;
+        _boardVersion = version is not null && version == boardMarker?.Invoke() ? version : null;
         DateTimeOffset? tick = null;
         try { tick = latestTick?.Invoke(); }
         catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }

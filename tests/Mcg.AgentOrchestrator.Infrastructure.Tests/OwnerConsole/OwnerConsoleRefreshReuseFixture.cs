@@ -7,6 +7,7 @@ using Terminal.Gui.App;
 internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
 {
     internal readonly OwnerConsoleTestClock Clock = new();
+    internal readonly string Root = Directory.CreateTempSubdirectory("owner-read-reuse-").FullName;
     internal readonly OwnerConsoleHarness Harness;
     internal readonly Query State;
     internal readonly Questions Source = new();
@@ -23,10 +24,13 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
     internal int TickReads;
     internal int ScanReads;
     internal int ScanCount;
+    internal int EpicReads;
+    internal string? BoardMarker = "state:1";
+    internal string? EpicMarker = "portfolio:1";
     private IApplication? _app;
     private OwnerConsoleFullScreenView? _view;
 
-    internal OwnerConsoleRefreshReuseFixture(bool marker = true)
+    internal OwnerConsoleRefreshReuseFixture(bool marker = true, bool boardReuse = false)
     {
         Harness = new(Clock);
         Harness.AddGoal("11111111", "First", AgentRole.Developer);
@@ -41,8 +45,9 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
         State = new(Harness.Kernel);
         Snapshots = new(State);
         Timings = new(Clock);
-        Builder = new(State, Source, Harness.Liveness, new Epics(), Clock, snapshots: Snapshots,
+        Builder = new(State, Source, Harness.Liveness, new Epics(() => EpicReads++), Clock, snapshots: Snapshots,
             decisionsMarker: marker ? () => Marker : null,
+            boardMarker: boardReuse ? () => BoardMarker : null, epicMarker: boardReuse ? () => EpicMarker : null,
             latestTick: () => { TickReads++; return Clock.Now; },
             gateProgress: _ => { GateReads++; return null; });
     }
@@ -60,7 +65,7 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
             line => TimingLine = line, action => action(), (_, action) => action(), () => _view);
     }
 
-    public void Dispose() { Refresh?.Dispose(); _view?.Dispose(); _app?.Dispose(); }
+    public void Dispose() { Refresh?.Dispose(); _view?.Dispose(); _app?.Dispose(); SharedTestSupport.RemoveTempDirectory(Root); }
 
     internal sealed class Query(AgentOrchestratorKernel kernel) : IOrchestratorStateQueries
     {
@@ -68,8 +73,18 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
         internal readonly Dictionary<string, int> Loads = new();
         internal readonly HashSet<string> Visible = new(["11111111", "22222222"]);
         internal int Boards;
+        internal int RequestReads;
+        internal readonly List<GoalBoardRowQuery> Queries = [];
         internal bool FailLoad;
         internal Func<Task>? BeforeLoad;
+        internal Func<Task>? AfterLoad;
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(CancellationToken token = default)
+        { RequestReads++; return Task.FromResult<IReadOnlyList<HumanInputRequestSnapshot>>([]); }
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> ids, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
+        public async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(GoalBoardRowQuery query, CancellationToken token = default)
+        { Queries.Add(query); return await ListGoalMetadataAsync(token); }
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
         {
             Boards++;
@@ -83,6 +98,7 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
             foreach (var id in ids) Loads[id.Value] = Loads.GetValueOrDefault(id.Value) + 1;
             var selected = ids.Select(id => id.Value).ToHashSet();
             var snapshot = kernel.ExportSnapshot();
+            if (AfterLoad is not null) await AfterLoad();
             return AgentOrchestratorKernel.FromSnapshot(snapshot with
             {
                 Goals = snapshot.Goals.Where(goal => selected.Contains(goal.Id)).ToArray(),
@@ -103,9 +119,11 @@ internal sealed class OwnerConsoleRefreshReuseFixture : IDisposable
             return Task.FromResult<IReadOnlyList<OwnerQuestion>>(Items.ToArray());
         }
     }
-    private sealed class Epics : IOwnerGoalEpicLookup
+    private sealed class Epics(Action read) : IOwnerGoalEpicLookup
     {
         public Task<string> GetTitleAsync(string id, CancellationToken token) => Task.FromResult("");
+        public Task<IReadOnlyDictionary<string, string>> GetTitlesAsync(IReadOnlyCollection<string> ids, CancellationToken token)
+        { read(); return Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>()); }
     }
     private sealed class Dialogs : IOwnerConsoleDialogs
     {

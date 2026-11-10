@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // One read-only membership snapshot per board build; never creates or migrates the store.
 internal sealed class PortfolioGoalEpicTitleReader(string path)
 {
+    internal bool Succeeded { get; private set; }
     internal async Task<IReadOnlyDictionary<string, string>> ReadAsync(
         IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken)
     {
@@ -25,6 +26,7 @@ internal sealed class PortfolioGoalEpicTitleReader(string path)
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
                 if (requested.Contains(reader.GetString(0))) titles[reader.GetString(0)] = reader.GetString(1);
+            Succeeded = true;
             return titles;
         }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)

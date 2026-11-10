@@ -11,6 +11,19 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
     private long _storeLoadedGoals;
     internal long StoreLoadedGoals => Interlocked.Read(ref _storeLoadedGoals);
 
+    internal void Invalidate()
+    {
+        lock (_sync)
+        {
+            _cache.Clear();
+            if (_current is not { } generation) return;
+            generation.Revision++;
+            generation.Versions = new(StringComparer.Ordinal);
+            generation.Requested.Clear();
+            generation.Batches.Clear();
+        }
+    }
+
     internal IDisposable BeginRefresh(bool reuseUnchanged = false)
     {
         var generation = new Generation(reuseUnchanged);
@@ -51,11 +64,13 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
         Batch[]? batches = null;
         Generation? owner = null;
         IReadOnlyDictionary<string, string>? versions = null;
+        long revision = 0;
         lock (_sync)
         {
             if (_current is { } generation)
             {
                 owner = generation;
+                revision = generation.Revision;
                 var missing = ordered.Where(id => !generation.Requested.Contains(id.Value)).ToArray();
                 if (missing.Length > 0)
                 {
@@ -76,14 +91,14 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
 
         // Reserve before leaving the lock. Joiners share success, failure or cancellation,
         // and completion belongs to these batches even if a newer generation has begun.
-        if (reserved is not null) _ = PopulateAsync(reserved, owner!, versions!, cancellationToken);
+        if (reserved is not null) _ = PopulateAsync(reserved, owner!, versions!, revision, cancellationToken);
         var loaded = await Task.WhenAll(batches.Select(batch => batch.Completion.Task))
             .WaitAsync(cancellationToken).ConfigureAwait(false);
         return Select(loaded.SelectMany(batch => batch.Goals), loaded.SelectMany(batch => batch.Requests), requested);
     }
 
     private async Task PopulateAsync(Batch batch, Generation generation,
-        IReadOnlyDictionary<string, string> versions, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, string> versions, long revision, CancellationToken cancellationToken)
     {
         try
         {
@@ -92,7 +107,8 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
             cancellationToken.ThrowIfCancellationRequested();
             var loaded = Select(kernel.Goals, kernel.HumanInputRequests, batch.Ids);
             lock (_sync)
-                if (generation.Reuse && ReferenceEquals(_current, generation)) _cache.Store(loaded, versions);
+                if (generation.Reuse && ReferenceEquals(_current, generation) && generation.Revision == revision)
+                    _cache.Store(loaded, versions);
             batch.Completion.SetResult(loaded);
         }
         catch (OperationCanceledException ex) { batch.Completion.SetCanceled(ex.CancellationToken); }
@@ -107,6 +123,7 @@ internal sealed class OwnerConsoleRefreshGoalSnapshots(IOrchestratorStateQueries
 
     private sealed class Generation(bool reuse)
     {
+        internal long Revision;
         internal bool Reuse { get; } = reuse;
         internal Dictionary<string, string> Versions = new(StringComparer.Ordinal);
         internal readonly HashSet<string> Requested = new(StringComparer.Ordinal);

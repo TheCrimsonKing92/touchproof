@@ -22,6 +22,7 @@ internal interface IConductEventSource : IAsyncDisposable
 
 internal interface IOwnerQuestionSource
 {
+    void Invalidate() { }
     Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken);
 
     async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>

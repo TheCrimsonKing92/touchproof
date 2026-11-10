@@ -9,18 +9,17 @@ internal static class OwnerConsoleBoardComposer
     internal static async Task<OwnerConsoleViewModel> ComposeAsync(string launchProject,
         OwnerConsoleProjectScope scope, Func<IReadOnlyList<OwnerConsoleBoardProject>> catalog,
         TimeProvider clock, OwnerConsoleBoardProject? launchWorkspace, OwnerConsoleViewModel own,
-        CancellationToken token)
+        CancellationToken token, Func<OwnerConsoleBoardProject, OwnerConsoleBoardSource.ProjectReads> reads, bool force)
     {
         var rows = new List<OwnerConsoleBoardRow>();
         var resolved = new List<string>();
         OwnerConsoleBoardProject[] projects = [];
-        var stores = new Dictionary<string, SqliteOrchestratorStateRepository>(StringComparer.OrdinalIgnoreCase);
         var onboarding = new Dictionary<string, ProjectOnboardingState>(StringComparer.OrdinalIgnoreCase);
         try
         {
             projects = OwnerConsoleBoardSource.Ordered(catalog()).ToArray();
             await ReadProjectRowsAsync(launchProject, scope, clock, launchWorkspace, own, token,
-                rows, resolved, projects, stores, onboarding);
+                rows, resolved, projects, onboarding, reads, force);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -40,7 +39,7 @@ internal static class OwnerConsoleBoardComposer
                     .Where(name => resolved.Contains(name, StringComparer.OrdinalIgnoreCase)))
                 .Concat(resolved).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             sectionRows = await ComposeSectionsAsync(launchProject, clock, launchWorkspace, token,
-                rows, projects, stores, onboarding, sectionOrder);
+                rows, projects, onboarding, sectionOrder, reads, force);
         }
         return own with
         {
@@ -55,8 +54,8 @@ internal static class OwnerConsoleBoardComposer
     private static async Task ReadProjectRowsAsync(string launchProject, OwnerConsoleProjectScope scope,
         TimeProvider clock, OwnerConsoleBoardProject? launchWorkspace, OwnerConsoleViewModel own,
         CancellationToken token, List<OwnerConsoleBoardRow> rows, List<string> resolved,
-        OwnerConsoleBoardProject[] projects, Dictionary<string, SqliteOrchestratorStateRepository> stores,
-        Dictionary<string, ProjectOnboardingState> onboarding)
+        OwnerConsoleBoardProject[] projects, Dictionary<string, ProjectOnboardingState> onboarding,
+        Func<OwnerConsoleBoardProject, OwnerConsoleBoardSource.ProjectReads> reads, bool force)
     {
         foreach (var name in scope.IsAll ? projects.Select(project => project.Name) : scope.Names)
         {
@@ -68,7 +67,7 @@ internal static class OwnerConsoleBoardComposer
                 if (project?.Error is { } error) throw new IOException(error);
                 if (project is not null && !name.Equals("home", StringComparison.OrdinalIgnoreCase))
                 {
-                    var goalLanded = await ProjectOnboardingCompletion.HasLandedGoalAsync(project.StatePath, token);
+                    var goalLanded = (await reads(project).MetadataAsync(token, force)).Any(goal => goal.PromotionFact is not null);
                     onboarding[name] = ProjectOnboardingStateReader.Read(name, project.OrchestratorDirectory ??
                         Path.GetDirectoryName(project.PortfolioPath)!, project.ConductEventsLogPath,
                         project.DeliveryAnswered, project.UseLearnedBranch, goalLanded);
@@ -86,12 +85,8 @@ internal static class OwnerConsoleBoardComposer
                     rows.AddRange(own.Board.Select(row => row with { Project = name }));
                 else
                 {
-                    var state = SqliteOrchestratorStateRepository.OpenReadOnly(project!.StatePath);
-                    var builder = new OwnerConsoleViewModelBuilder(state, new NoQuestions(), new NoLiveness(),
-                        new ReadOnlyEpics(project.PortfolioPath), clock);
-                    var model = await builder.BuildBoardAsync(token);
+                    var model = await reads(project!).Builder.BuildBoardAsync(token, force);
                     rows.AddRange(model.Board.Select(row => row with { Project = name, IsForeign = true }));
-                    stores[name] = state;
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -105,8 +100,8 @@ internal static class OwnerConsoleBoardComposer
     private static async Task<ImmutableArray<OwnerConsoleBoardRow>> ComposeSectionsAsync(string launchProject,
         TimeProvider clock, OwnerConsoleBoardProject? launchWorkspace, CancellationToken token,
         List<OwnerConsoleBoardRow> rows, OwnerConsoleBoardProject[] projects,
-        Dictionary<string, SqliteOrchestratorStateRepository> stores,
-        Dictionary<string, ProjectOnboardingState> onboarding, IReadOnlyList<string> sectionOrder)
+        Dictionary<string, ProjectOnboardingState> onboarding, IReadOnlyList<string> sectionOrder,
+        Func<OwnerConsoleBoardProject, OwnerConsoleBoardSource.ProjectReads> reads, bool force)
     {
         var sections = new List<OwnerConsoleBoardSection>();
         var now = clock.GetUtcNow();
@@ -122,10 +117,8 @@ internal static class OwnerConsoleBoardComposer
             {
                 var project = FindProject(projects, name, launchProject, launchWorkspace) ?? throw new IOException("state database was not found");
                 DateTimeOffset? landed = null;
-                if (!stores.TryGetValue(name, out var state) && OwnerConsoleBoardSource.Exists(project.StatePath))
-                    state = SqliteOrchestratorStateRepository.OpenReadOnly(project.StatePath);
-                if (state is not null)
-                    landed = (await state.ListGoalMetadataAsync(token)).Select(goal => goal.PromotionFact?.PromotedAt).Max();
+                if (OwnerConsoleBoardSource.Exists(project.StatePath))
+                    landed = (await reads(project).MetadataAsync(token, force)).Select(goal => goal.PromotionFact?.PromotedAt).Max();
                 var live = new ConductorLeaseLiveness(project.OrchestratorDirectory ??
                     Path.GetDirectoryName(project.PortfolioPath)!).IsRunning();
                 sections.Add(OwnerConsoleBoardSection.Create(name, projectRows.OrderBy(row => row.SortKey)
@@ -143,18 +136,4 @@ internal static class OwnerConsoleBoardComposer
         projects.FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ??
         (name.Equals(launchProject, StringComparison.OrdinalIgnoreCase) ? launchWorkspace : null);
 
-    private sealed class NoQuestions : IOwnerQuestionSource
-    {
-        public Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<OwnerQuestion>>([]);
-    }
-    private sealed class NoLiveness : IConductorLiveness { public bool IsRunning() => false; }
-    private sealed class ReadOnlyEpics(string path) : IOwnerGoalEpicLookup
-    {
-        public async Task<string> GetTitleAsync(string goalId, CancellationToken cancellationToken)
-        {
-            try { return (await PortfolioStore.OpenReadOnly(path).GetGoalMembershipAsync(goalId, cancellationToken))?.EpicTitle ?? ""; }
-            catch (Exception ex) when (ex is not OperationCanceledException) { return ""; }
-        }
-    }
 }

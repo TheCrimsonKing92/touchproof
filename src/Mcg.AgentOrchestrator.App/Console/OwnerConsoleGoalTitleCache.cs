@@ -12,13 +12,20 @@ internal sealed class OwnerConsoleGoalTitleCache(Func<string?, string>? title = 
 
     internal IReadOnlyDictionary<string, string> Titles => _titles;
 
-    internal void Merge(IReadOnlyList<GoalSummary> rows)
+    internal void Retain(IEnumerable<string> ids)
+    {
+        var live = ids.ToHashSet(StringComparer.Ordinal);
+        _entries = _entries.RemoveRange(_entries.Keys.Where(id => !live.Contains(id)));
+        _titles = _titles.RemoveRange(_titles.Keys.Where(id => !live.Contains(id)));
+    }
+
+    internal void Merge(IReadOnlyList<GoalSummary> rows, bool force = false)
     {
         var entries = _entries;
         var titles = _titles;
         foreach (var row in rows)
         {
-            if (entries.TryGetValue(row.Id, out var entry) && entry.UpdatedAt == row.UpdatedAt) continue;
+            if (!force && entries.TryGetValue(row.Id, out var entry) && entry.UpdatedAt == row.UpdatedAt) continue;
             var value = _title(row.Objective);
             entries = entries.SetItem(row.Id, (value, row.UpdatedAt));
             titles = titles.SetItem(row.Id, value);

@@ -6,16 +6,41 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory,
-    OwnerConsoleRefreshGoalSnapshots? snapshots = null) : IOwnerQuestionSource
+    OwnerConsoleRefreshGoalSnapshots? snapshots = null, Func<string?>? changeMarker = null) : IOwnerQuestionSource
 {
     private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
+    private OwnerQuestionSnapshot? _snapshot;
+    private string? _version;
+    private long _revision;
+
+    public void Invalidate() => Interlocked.Increment(ref _revision);
+    private long _acceptedRevision = -1;
 
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
         (await ReadAsync(cancellationToken)).Live;
 
-    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>
-        await ReadAsync(await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
+    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var revision = Interlocked.Read(ref _revision);
+        var version = changeMarker?.Invoke();
+        if (version is not null && version == _version && revision == _acceptedRevision && _snapshot is not null)
+            return _snapshot;
+        _version = null;
+        _snapshot = null;
+        // UpdatedAt alone cannot validate request rows or a write retaining its timestamp.
+        if (changeMarker is not null) { _terminalHolds.Clear(); _terminalUpdatedAt.Clear(); }
+        var snapshot = await ReadAsync(await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (version is not null && version == changeMarker?.Invoke() && revision == Interlocked.Read(ref _revision))
+        {
+            _snapshot = snapshot;
+            _version = version;
+            _acceptedRevision = revision;
+        }
+        return snapshot;
+    }
 
     internal async Task<OwnerQuestionSnapshot> ReadAsync(
         IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)
