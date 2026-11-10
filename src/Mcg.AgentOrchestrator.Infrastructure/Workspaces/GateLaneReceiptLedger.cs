@@ -13,8 +13,10 @@ internal static class GateLaneReceiptLedger
     internal static GateLaneSlowdownDiff.GateLaneSlowdownResult? Record(
         string worktreePath, string? goalId, string laneName, AcceptanceCheckResult result,
         TimeSpan wall, DateTimeOffset now, Action<string, string>? appender = null,
-        AcceptanceHostTestSettings.Binding? testSettings = null, GateLaneOfferOutcome? offer = null)
+        AcceptanceHostTestSettings.Binding? testSettings = null, GateLaneOfferOutcome? offer = null,
+        string? treeRevision = null, BuildReceiptLedger? buildLedger = null)
     {
+        ManagedRebuildReceipt.Record(buildLedger, worktreePath, goalId, laneName, result, wall, now, treeRevision);
         GateLaneSlowdownDiff.GateLaneSlowdownResult? slowdown = null;
         string? unavailable = null;
         LaneTestDurationSnapshot? snapshot = null;

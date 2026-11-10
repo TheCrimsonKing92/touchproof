@@ -1,0 +1,44 @@
+using System;
+using System.Runtime.InteropServices;
+
+// Add-Type source template. No limits and no kill-on-close: accounting only.
+public static class BuildReceiptCpuMeter
+{
+    private static IntPtr job;
+    private static bool initialized;
+    public static long ReadMilliseconds()
+    {
+        if (!initialized)
+        {
+            initialized = true;
+            job = CreateJobObject(IntPtr.Zero, null);
+            if (job != IntPtr.Zero && !AssignProcessToJobObject(job, GetCurrentProcess()))
+            {
+                CloseHandle(job);
+                job = IntPtr.Zero;
+            }
+        }
+        if (job == IntPtr.Zero) return -1;
+        Accounting value;
+        if (!QueryInformationJobObject(job, 1, out value, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero)) return -1;
+        return (value.UserTime + value.KernelTime) / 10000;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Accounting
+    {
+        public long UserTime, KernelTime, PeriodUserTime, PeriodKernelTime;
+        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+    [DllImport("kernel32.dll")]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        out Accounting value, uint size, IntPtr returnedLength);
+}

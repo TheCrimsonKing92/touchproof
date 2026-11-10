@@ -15,7 +15,7 @@ if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand
 // workspace, or state setup so the detached worker process stays minimal and self-contained.
 if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
 {
-    return DispatchProcessHost.Run(args[1], reference => new WorkerBuildRequestHost(reference), DispatchJobExecutionQos.Start,
+    return DispatchProcessHost.Run(args[1], reference => new WorkerBuildRequestHost(reference, buildLedger: BuildReceiptLedger.Default), DispatchJobExecutionQos.Start,
         GitPathQuery.QueryCommonDirectory);
 }
 
