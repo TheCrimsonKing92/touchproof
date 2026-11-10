@@ -13,6 +13,166 @@ public sealed class ConflictIntegrationScopeWorkflowTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task AnsweredEndedAttempt_RecapturesOnlyApprovedScope(bool approved)
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var git = fixture.Base.GitFixture;
+        var task = fixture.Base.Developer;
+        Assert.True(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var retryAt = task.LatestRetryAt;
+        var process = StartAttempt(fixture);
+        var question = fixture.Kernel.RequestHumanInput(fixture.Goal.Id, task.Id, "May I edit the adjacent seam?");
+        fixture.Kernel.RecordTaskProcessRefreshed(fixture.Goal.Id, task.Id,
+            process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 0 }, null);
+        Git(git.Worktree, "merge", "--abort");
+        var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput, question.Id.Value,
+            fixture.Goal.Id.Value, "Approved: edit src/Other.cs", OperatorActorKind.Human);
+        var answer = fixture.Intent() with { Verb = OperatorIntentVerbs.Answer,
+            PayloadJson = JsonSerializer.Serialize(payload, OperatorIntentJson.Options) };
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(answer)).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(retryAt, task.LatestRetryAt);
+        var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot());
+        Assert.False(fixture.Reload(restarted).IntegrateMainBeforeDeveloperDispatch(restarted.GetGoal(fixture.Goal.Id)).CanDispatch);
+
+        var developerStarts = 0;
+        var testerStarts = 0;
+        var escalations = new List<string>();
+        string? candidate = null;
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(Git(git.Worktree, "rev-parse", "HEAD").Trim()),
+            dispatchAndStart: _ =>
+            {
+                if (task.Status == WorkTaskStatus.Assigned)
+                {
+                    developerStarts++;
+                    Assert.True(ConductorConflictIntegrationMarker.Admits(task, git.Worktree));
+                    candidate = fixture.Base.Resolve(outside: true);
+                    PassVerification(fixture.Kernel, fixture.Goal, task, hasCommittedChanges: true);
+                }
+                else testerStarts++;
+                return DispatchStartOutcome.Started();
+            }, writeEscalation: (_, _, reason) => escalations.Add(reason), executionDirectory: git.Repository);
+        driver.ConfigureDeveloperCompletionStructuralPreflightRetry(fixture.Kernel, fixture.Reload());
+        driver.OverrideDeveloperCompletionStructuralPreflightForTests(_ => new(false, "fixture structural check"), TimeSpan.FromSeconds(30));
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        // Before the fix the old admission bypasses ScopeRequired and starts another worker.
+        Assert.Equal(0, developerStarts);
+        var requirement = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        git.AssertRestored();
+        var approval = fixture.Intent(paths: approved ? ["src/Other.cs"] : ["src/Unused.cs"]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
+        Assert.True(requirement.IsCompleted);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        Assert.Equal(1, developerStarts);
+        if (approved)
+        {
+            Assert.Empty(escalations);
+            Assert.Equal(1, testerStarts);
+            Assert.Equal(candidate, Git(git.Worktree, "rev-parse", "HEAD").Trim());
+            Assert.Equal(GoalOperationStatus.Completed, fixture.Base.Entry.Status);
+            using var journal = JsonDocument.Parse(fixture.Base.Entry.Detail!);
+            var admission = journal.RootElement.GetProperty("Admission");
+            Assert.Equal(task.DispatchHistory.Count, admission.GetProperty("DispatchOrdinal").GetInt32());
+            Assert.Equal(new[] { approval.Id }, admission.GetProperty("ApprovalIds").EnumerateArray().Select(item => item.GetString()));
+            Assert.Null(fixture.Reload().Validate(fixture.Goal));
+        }
+        else
+        {
+            Assert.Contains("src/Other.cs", Assert.Single(escalations));
+            Assert.Equal(0, testerStarts);
+            git.AssertRestored();
+        }
+    }
+
+    [Fact]
+    public async Task AdmittedRetryWithMovedMain_RetiresRevokedScopeWait()
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var git = fixture.Base.GitFixture;
+        var approval = fixture.Intent();
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
+        Assert.True(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var process = StartAttempt(fixture);
+        fixture.Kernel.RecordTaskProcessRefreshed(fixture.Goal.Id, fixture.Base.Developer.Id,
+            process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 0 }, null);
+        Git(git.Worktree, "merge", "--abort");
+        fixture.Kernel.RetryTaskAutomatically(fixture.Goal.Id, fixture.Base.Developer.Id, "Retry ended integration",
+            RetryCause.MainDriftConflict, authoritativeRetryFeedback: true);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(fixture.Intent(
+            IntegrationScopeAction.Revoke, approvalId: approval.Id))).Status);
+        Assert.False(fixture.Reload().IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var requirement = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        File.WriteAllText(Path.Combine(git.Repository, "src/MainLater.cs"), "later main\n");
+        Commit(git.Repository, "Advance main after an admitted attempt ended");
+        var starts = 0;
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); },
+            executionDirectory: git.Repository);
+        driver.ConfigureDeveloperCompletionStructuralPreflightRetry(fixture.Kernel, fixture.Reload());
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        // Before the fix Admitted remains true and the obsolete requirement never resolves.
+        Assert.True(requirement.IsCompleted);
+        Assert.Contains("no path authority transferred", requirement.Answer);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, requirement.AuthoritativeAnswer!.Origin);
+        Assert.Equal(GoalOperationStatus.Failed, fixture.Base.Entry.Status);
+        Assert.NotEqual(GoalStatus.WaitingForHuman, fixture.Goal.Status);
+        Assert.Equal(0, starts);
+        git.AssertRestored();
+        fixture.Reload().ApplyScope(fixture.Goal, approval);
+        Assert.Equal(GoalOperationStatus.Failed, fixture.Base.Entry.Status);
+        Assert.Throws<InvalidOperationException>(() => fixture.Reload().ApplyScope(fixture.Goal, fixture.Intent()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActiveAttempt_MainDriftAndRevocationPreserveCapturedScope(bool legacy)
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var git = fixture.Base.GitFixture;
+        var approval = fixture.Intent();
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
+        Assert.True(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        StartAttempt(fixture);
+        if (legacy)
+        {
+            var detail = System.Text.Json.Nodes.JsonNode.Parse(fixture.Base.Entry.Detail!)!;
+            detail["Admission"]!.AsObject().Remove("DispatchOrdinal");
+            GoalOperationJournal.Begin(git.Repository, fixture.Goal,
+                ConductorConflictIntegration.OperationName, detail.ToJsonString());
+        }
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(fixture.Intent(
+            IntegrationScopeAction.Revoke, approvalId: approval.Id))).Status);
+        File.WriteAllText(Path.Combine(git.Repository, "src/MainLater.cs"), "later main\n");
+        Commit(git.Repository, "Advance main during the admitted attempt");
+        var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot());
+        var goal = restarted.GetGoal(fixture.Goal.Id);
+        var owner = fixture.Reload(restarted);
+        Assert.False(owner.TryRecord(goal).Started);
+        Assert.Equal(GoalOperationStatus.Begin, fixture.Base.Entry.Status);
+        var candidate = fixture.Base.Resolve(outside: true);
+        Assert.Null(owner.Validate(goal));
+        Assert.Equal(candidate, Git(git.Worktree, "rev-parse", "HEAD").Trim());
+        Assert.Equal(GoalOperationStatus.Completed, fixture.Base.Entry.Status);
+    }
+
+    private static TaskProcessRecord StartAttempt(IntegrationScopeFixture fixture)
+    {
+        var task = fixture.Base.Developer;
+        var worktree = fixture.Base.GitFixture.Worktree;
+        DispatchTask(fixture.Kernel, fixture.Goal, task, workingDirectory: worktree);
+        var process = new TaskProcessRecord(12345, "test.exe", worktree, Path.Combine(worktree, "out.log"),
+            Path.Combine(worktree, "err.log"), Path.Combine(worktree, "exit.txt"), task.LastDispatch!.DispatchedAt, null, null);
+        fixture.Kernel.RecordTaskProcessStarted(fixture.Goal.Id, task.Id, process);
+        return process;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task CliApprovalThroughDriverValidation_RetainsOnlyAuthorizedCandidate(bool approved)
     {
         using var fixture = new IntegrationScopeFixture();

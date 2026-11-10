@@ -79,7 +79,7 @@ internal sealed partial class ConductorConflictIntegration(
         if (round is not null && task?.Id.Value == round.DeveloperTaskId && worktree is not null &&
             ReadRef(worktree, "HEAD") == round.OriginalHead && ReadRef(worktree, integrationBranch) == round.MainSha)
         {
-            var captured = round.Admitted && round.Admission?.RetryAt == task.LatestRetryAt;
+            var captured = IsCurrentAdmission(round, task);
             if (!captured && NeedsScopeDecision(goal, round, task))
                 return RequireScope(goal, round);
             if (!captured && round.RetryAt != task.LatestRetryAt && task.PendingRetryCause == RetryCause.MainDriftConflict && HasScopeDecision(round))
@@ -195,10 +195,11 @@ internal sealed partial class ConductorConflictIntegration(
 
     private DeveloperBranchIntegrationResult Admit(Goal goal, TaskSpec task, string worktree, Round round)
     {
-        var admission = round.Admission?.RetryAt == task.LatestRetryAt ? round.Admission :
+        var admission = IsCurrentAdmission(round, task) ? round.Admission! :
             new AdmissionScope(goal.Id.Value, round.RoundId, round.OriginalHead, round.MainSha, task.LatestRetryAt,
                 ActiveApprovals(round).Select(item => item.IntentId).ToArray(),
-                ActiveApprovals(round).SelectMany(item => item.Request.Paths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+                ActiveApprovals(round).SelectMany(item => item.Request.Paths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                task.DispatchHistory.Count + 1);
         round = round with { Admitted = true, Admission = admission };
         Save(goal, round, GoalOperationStatus.Begin);
         if (admission.Paths.Length > 0)
@@ -235,7 +236,8 @@ internal sealed partial class ConductorConflictIntegration(
         if (round is null) return null;
         var head = ReadRef(worktree, "refs/heads/" + GoalWorktrees.BranchName(goal.Id));
         if (!OwnsHead(worktree, round, head)) Retire(goal, round, head ?? "missing", site);
-        else if (!round.Admitted && ReadRef(worktree, integrationBranch) != round.MainSha)
+        else if (ReadRef(worktree, integrationBranch) != round.MainSha &&
+            !IsCurrentAdmission(round, goal.Tasks.Single(item => item.Id.Value == round.DeveloperTaskId)))
             Save(goal, round, GoalOperationStatus.Failed);
         else return round;
         ConductorConflictIntegrationMarker.Remove(worktree);

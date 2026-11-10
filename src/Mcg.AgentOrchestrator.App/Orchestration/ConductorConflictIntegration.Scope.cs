@@ -11,7 +11,24 @@ internal sealed partial class ConductorConflictIntegration
     private sealed record ScopeDecision(string IntentId, string IdempotencyKey, string PayloadJson, IntegrationScopeAuthorization Request,
         string Actor, string Channel, string AuthenticationAssurance, DateTimeOffset RequestedAt, DateTimeOffset AppliedAt);
     private sealed record AdmissionScope(string GoalId, string? RoundId, string OriginalHead, string MainSha,
-        DateTimeOffset? RetryAt, string[] ApprovalIds, string[] Paths);
+        DateTimeOffset? RetryAt, string[] ApprovalIds, string[] Paths, int? DispatchOrdinal = null);
+
+    private static bool IsCurrentAdmission(Round round, TaskSpec task)
+    {
+        if (!round.Admitted || round.Admission is not { } admission ||
+            admission.RetryAt != task.LatestRetryAt) return false;
+        // Older snapshots may settle an already running/completed attempt, but cannot
+        // authorize redispatch after it returns to Assigned without an attempt binding.
+        if (admission.DispatchOrdinal is not { } ordinal)
+            return task.Status is WorkTaskStatus.Running or WorkTaskStatus.Completed ||
+                (task.Status == WorkTaskStatus.WaitingForHuman && task.LastProcess is { IsRunning: true });
+        // Admission precedes dispatch preparation. The task's durable, append-only history
+        // identifies that next attempt even when an answered question leaves RetryAt unchanged.
+        // An ended attempt returned to Assigned needs a fresh snapshot; an active attempt
+        // (or its result awaiting settlement) retains its captured authority.
+        return ordinal > 0 && (task.DispatchHistory.Count == ordinal - 1 ||
+            (task.DispatchHistory.Count == ordinal && task.Status != WorkTaskStatus.Assigned));
+    }
 
     internal void ApplyScope(Goal goal, OperatorIntentRecord intent)
     {
