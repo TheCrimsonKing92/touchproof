@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: fake provider processes; the ledger and conduct log are unique to each harness.
 public sealed class ConductorPanelProviderAvailabilityTests
 {
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
     internal static ModelFunctionCatalog Catalog(string first = "claude-cli", string second = "codex-cli") => new([
         ConductorRoundModelResolverTests.Binding(ModelFunctionPurposes.PanelJudgeSol) with { Subscription = new(first, "first-model") },
         ConductorRoundModelResolverTests.Binding(ModelFunctionPurposes.PanelJudgeSonnet) with { Subscription = new(second, "second-model") }
@@ -80,7 +82,7 @@ public sealed class ConductorPanelProviderAvailabilityTests
         Assert.Contains("judgment=skipped", File.ReadAllText(h.ConductPath));
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("auth", "claude-cli")]
     [InlineData("usage", "claude-cli")]

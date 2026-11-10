@@ -5,7 +5,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: instance-scoped snapshots, fake loaders/processes and uniquely owned ledgers.
 public sealed class ConductorModelBindingSnapshotTests
 {
-    [Theory(Timeout = 30000)]
+    private const int CrossTickHangFailsafeMilliseconds = 30_000;
+
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
@@ -60,7 +62,7 @@ public sealed class ConductorModelBindingSnapshotTests
         finally { authorHost.Stop(); stewardHost.Stop(); }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Queued_work_keeps_dispatch_tick_snapshot_after_next_tick_refresh()
     {
@@ -84,7 +86,7 @@ public sealed class ConductorModelBindingSnapshotTests
         Assert.Equal(2, loads);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
     [InlineData(true)]
@@ -138,7 +140,7 @@ public sealed class ConductorModelBindingSnapshotTests
         Assert.Equal(2, loads); // No launch or fallback reloads inside a tick.
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = CrossTickHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Panel_refresh_preserves_active_receipts_and_swaps_providers_next_case()
     {
