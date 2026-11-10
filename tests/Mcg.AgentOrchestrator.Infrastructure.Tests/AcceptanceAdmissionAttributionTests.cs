@@ -28,7 +28,7 @@ public sealed class AcceptanceAdmissionAttributionTests(ITestOutputHelper output
         var line = RunFixture(new FixtureTimeProvider(), () => TimeSpan.Zero);
         var expected = new[]
         {
-            "attempt-census", "attempt-reconcile", "grouped-admission-prep", "merge-train", "pair-cohort", "solo-admission",
+            "attempt-census", "attempt-reconcile", "grouped-admission-prep", "candidate-supersession", "merge-train", "pair-cohort", "solo-admission",
             "activation-probe-record", "priority-order", "hold-cohort-members", "hold-lone-ready",
             "priority-guard", "deferral-summary", "admission-pre-batch", "begin-tick"
         };
