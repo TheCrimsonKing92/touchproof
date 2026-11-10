@@ -47,6 +47,7 @@ public sealed class OwnerConsolePresentationPurityTests
         ConsolePath + "OwnerGoalSummarySectionReader.cs",
         // Reads bounded worker artifacts from retained output or their file paths.
         ConsolePath + "OwnerGoalVerifiedSectionReader.cs",
+        ConsolePath + "OwnerJointGateEvidenceStore.cs",
         ConsolePath + "OwnerJointGateFailureEvidence.cs",
         ConsolePath + "OwnerLandingsQuery.cs",
         ConsolePath + "OwnerQuestionReadModel.cs",
