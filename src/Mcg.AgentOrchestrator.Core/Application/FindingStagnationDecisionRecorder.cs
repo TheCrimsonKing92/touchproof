@@ -24,8 +24,9 @@ public static class FindingStagnationDecisionRecorder
             recordDuplicateSuppression: false);
 
     /// <summary>Operator resets supersede the wait while retaining the original decision as history.</summary>
-    public static void ReconcileResets(AgentOrchestratorKernel kernel, Goal goal)
+    public static void ReconcileResets(AgentOrchestratorKernel? kernel, Goal goal)
     {
+        if (kernel is null || goal.IsTerminal || goal.Status == GoalStatus.Parked) return;
         foreach (var request in kernel.HumanInputRequests.Where(request => request.GoalId == goal.Id &&
                 !request.IsCompleted && request.Kind == HumanWaitKind.RecoveryChoice &&
                 FindingStagnationDecision.ReadStableId(goal.Id, request.QuestionFingerprint) is { } stableId &&
