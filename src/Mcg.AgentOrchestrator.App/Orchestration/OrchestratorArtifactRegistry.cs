@@ -73,6 +73,8 @@ internal static class OrchestratorArtifactRegistry
         Source("acceptance-lane-durations.jsonl", "Infrastructure/Workspaces/AcceptanceLaneDurationStore.cs"),
         Source("gate-lane-time.jsonl", "Infrastructure/Workspaces/GateLaneTimeLedger.cs"),
         Source("gate-lane-receipts.jsonl", "Infrastructure/Workspaces/GateLaneReceiptLedger.cs"),
+        Source("build-receipts.jsonl", "Infrastructure/Workspaces/BuildReceiptLedger.cs",
+            note: "External host state or common Git metadata/.orchestrator owns build telemetry; gate-stats builds also reads historical host rows. Append-only; no sweep covers this class."),
         Source("gate-lane-test-baselines.json", "Infrastructure/Workspaces/GateLaneBaselineStore.cs"),
         Source("gate-lane-slowdowns.jsonl", "Infrastructure/Workspaces/GateLaneSlowdownDiff.cs"),
         Source("host-health.jsonl", "Infrastructure/Workspaces/GateHostHealthLedger.cs"),

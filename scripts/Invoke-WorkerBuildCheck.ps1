@@ -15,6 +15,15 @@ if (Test-Path -LiteralPath (Join-Path (Get-Location).Path '.orchestrator-context
     exit $LASTEXITCODE
 }
 Import-Module (Join-Path $PSScriptRoot "WorkerBuildReceipt.psm1") -Force
+$buildReceiptModuleLoaded = $false
+try {
+    Import-Module (Join-Path $PSScriptRoot "BuildReceiptLedger.psm1") -Force -ErrorAction Stop
+    $buildReceiptModuleLoaded = $true
+}
+catch {
+    try { [Console]::Error.WriteLine('warning: build receipt ledger unavailable: module could not be loaded') }
+    catch { }
+}
 . (Join-Path $PSScriptRoot 'WorkerBuildScopeToolCache.ps1')
 
 function ConvertTo-SafePathSegment {
@@ -397,6 +406,7 @@ $receiptPath = Join-Path $artifactsPath "worker-build-receipt.json"
 $treeDigest = $null
 $scope = $null
 $projectResults = [System.Collections.Generic.List[object]]::new()
+$buildReceiptMeter = $null
 $receiptWarning = $null
 $runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
 $holderLabel = "worker-build-check:goal-${safeGoalPrefix}:run-$runId"
@@ -515,6 +525,7 @@ try {
         $traversalLogPath = Join-Path $runLogRoot 'traversal-output.txt'
         $buildArguments = $plan.Invocations[0]
         $fileLoggerArguments = @('-fl', "-flp:LogFile=$traversalLogPath;Verbosity=normal;Encoding=UTF-8;Append=false")
+        if ($buildReceiptModuleLoaded) { $buildReceiptMeter = Start-BuildReceiptMeter }
         $traversalOutput = @(& dotnet @buildArguments @fileLoggerArguments 2>&1)
         $traversalExitCode = $LASTEXITCODE
         try {
@@ -548,6 +559,7 @@ try {
             "-flp:LogFile=$logPath;Verbosity=normal;Encoding=UTF-8;Append=false"
         )
         if ($plan.Mode -eq 'direct') {
+            if ($buildReceiptModuleLoaded -and $null -eq $buildReceiptMeter) { $buildReceiptMeter = Start-BuildReceiptMeter }
             $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments @fileLoggerArguments 2>&1)
             $projectExitCode = $LASTEXITCODE
         }
@@ -605,6 +617,7 @@ catch {
     $apparatusFailure = $_.Exception.Message
 }
 finally {
+    if ($null -ne $buildReceiptMeter) { Stop-BuildReceiptMeter -Meter $buildReceiptMeter }
     # Publish the actual output identity while slot custody still protects this build.
     if ($lockHeld) {
         $receiptWarning = $null
@@ -669,6 +682,9 @@ finally {
                 $receiptWarning = "warning: worker build receipt unavailable: could not write receipt"
             }
         }
+    }
+    if ($lockHeld -and $null -ne $buildReceiptMeter) {
+        Write-BuildReceipt -Root $repositoryRoot -GoalPrefix $safeGoalPrefix -Tree $treeDigest -Projects @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ }) -Meter $buildReceiptMeter
     }
     if ($lockHeld -or $lockWaitTimedOut) {
         try {

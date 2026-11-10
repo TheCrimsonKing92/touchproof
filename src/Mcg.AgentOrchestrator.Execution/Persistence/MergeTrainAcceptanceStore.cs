@@ -98,6 +98,7 @@ public sealed class MergeTrainAcceptanceStore
                 """;
             command.ExecuteNonQuery();
             EnsureMemberIndex(connection, transaction);
+            MergeTrainMemberRecheckStoreSetup.EnsureSchema(connection, transaction);
             if (state != StoreSchemaState.Current)
                 StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.MergeTrainAcceptance);
             transaction.Commit();
