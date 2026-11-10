@@ -20,6 +20,33 @@ public sealed class MainBaselineDiscoveryCacheTests
     }
 
     [Xunit.Fact]
+    public void AssemblyOrigin_RoundTripsAndHashProtectsIdentity()
+    {
+        using var fixture = new Fixture();
+        var result = new GoalAcceptanceVerifier.CommandResult(0, "Sample.Tests.Passes");
+        fixture.Cache.TryWrite(fixture.Key, result,
+            new Dictionary<string, string> { ["Sample.Tests"] = "discovery-origin-identity" });
+
+        Assert.Equal(result, fixture.Cache.TryRead(fixture.Key, out var identities));
+        Assert.Equal("discovery-origin-identity", Assert.Single(identities!).Value);
+        fixture.Rewrite(entry => entry["Payload"]!["AssemblyIdentities"]!["Sample.Tests"] = "changed", false);
+        Assert.Null(fixture.Cache.TryRead(fixture.Key, out identities));
+        Assert.Null(identities);
+    }
+
+    [Xunit.Fact]
+    public void LegacyEntry_WithoutOrigin_RemainsReadableWithoutInventingIdentity()
+    {
+        using var fixture = new Fixture();
+        fixture.Write();
+        var entry = JsonNode.Parse(File.ReadAllText(fixture.Path))!;
+        Assert.Null(entry["Payload"]!["AssemblyIdentities"]);
+
+        Assert.NotNull(fixture.Cache.TryRead(fixture.Key, out var identities));
+        Assert.Null(identities);
+    }
+
+    [Xunit.Fact]
     public void KeyStripsBothSwitchAndEmbeddedAssemblyArtifactsPaths()
     {
         using var fixture = new Fixture();

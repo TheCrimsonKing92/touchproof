@@ -37,7 +37,13 @@ internal sealed record TestCoverageIdentityMismatch(
 
 internal sealed record TestDiscoverySnapshot(
     IReadOnlyList<string> Tests,
-    IReadOnlyDictionary<string, string>? SourceFilesByTest);
+    IReadOnlyDictionary<string, string>? SourceFilesByTest,
+    IReadOnlyList<TestDiscoveryRow>? Rows = null);
+
+// Discovery UIDs are opaque and case-sensitive. Display text is not a row identifier.
+internal sealed record TestDiscoveryRow(
+    string? Uid, string DisplayName, string? SourceFile,
+    string? AssemblyName, string? ClassName, string? MethodName, bool IsSingleStringArgument);
 
 internal sealed record TestExecutionRecord(IReadOnlySet<string> Identities);
 
@@ -174,6 +180,7 @@ internal static class TestCoverageInvariant
             }
 
             var tests = new List<string>();
+            var rows = new List<TestDiscoveryRow>();
             var sourceFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ambiguousSourceFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var discoveredTest in discoveredTests.EnumerateArray())
@@ -190,6 +197,19 @@ internal static class TestCoverageInvariant
                 }
 
                 tests.Add(identity);
+                string? rowSource = null;
+                if (discoveredTest.TryGetProperty("location", out var rowLocation) &&
+                    rowLocation.TryGetProperty("file", out var rowFile))
+                    rowSource = NormalizeSourcePath(rowFile.GetString(), repositoryRoot);
+                discoveredTest.TryGetProperty("type", out var rowType);
+                rows.Add(new TestDiscoveryRow(
+                    ReadString(discoveredTest, "uid"), identity, rowSource,
+                    ReadString(rowType, "assemblyFullName"), ReadString(rowType, "typeName"),
+                    ReadString(rowType, "methodName"),
+                    rowType.ValueKind == JsonValueKind.Object &&
+                    rowType.TryGetProperty("parameterTypeFullNames", out var parameters) &&
+                    parameters.ValueKind == JsonValueKind.Array && parameters.GetArrayLength() == 1 &&
+                    parameters[0].ValueKind == JsonValueKind.String && parameters[0].GetString() == "System.String"));
                 if (ambiguousSourceFiles.Contains(identity) ||
                     !discoveredTest.TryGetProperty("location", out var location) ||
                     !location.TryGetProperty("file", out var fileElement))
@@ -214,13 +234,17 @@ internal static class TestCoverageInvariant
                 sourceFiles[identity] = sourceFile;
             }
 
-            return new TestDiscoverySnapshot(tests, sourceFiles);
+            return new TestDiscoverySnapshot(tests, sourceFiles, rows);
         }
         catch (JsonException exception)
         {
             throw new InvalidDataException("Structured test discovery JSON could not be parsed.", exception);
         }
     }
+
+    private static string? ReadString(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) &&
+        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     public static IReadOnlySet<string> ReadCompletedTests(IEnumerable<string> trxPaths) =>
         ReadTestRecords(trxPaths, passedOnly: true)
@@ -300,7 +324,8 @@ internal static class TestCoverageInvariant
         string? currentAttemptId = null,
         IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null,
         IReadOnlyList<string>? sanctionedRemovedTests = null,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? declaredRemovalDisplayNames = null)
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? declaredRemovalDisplayNames = null,
+        IReadOnlyDictionary<string, IReadOnlyList<int>>? sourceConfirmedRemovedRows = null)
     {
         if (candidateDiscoveredTests.Count == 0)
         {
@@ -375,7 +400,14 @@ internal static class TestCoverageInvariant
                 .ToArray();
             // A deleted file reduces the floor only when a qualified discovered identity or
             // structured source location attributes the test to that exact file.
-            var creditedMainTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var mainRows = mainDiscoveredTests.ToArray();
+            var creditedMainRows = new HashSet<int>();
+            void CreditNames(IEnumerable<string> names)
+            {
+                var creditedNames = names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                for (var index = 0; index < mainRows.Length; index++)
+                    if (creditedNames.Contains(mainRows[index])) creditedMainRows.Add(index);
+            }
             var unattributedDeletedFiles = new List<(string Source, string File)>();
             if (mainDiscoveredTestSourceFiles is not null)
             {
@@ -389,7 +421,7 @@ internal static class TestCoverageInvariant
                     var attributedTestCount = attributedTests.Length;
                     if (attributedTestCount > 0)
                     {
-                        creditedMainTests.UnionWith(attributedTests);
+                        CreditNames(attributedTests);
                     }
                     else
                     {
@@ -399,7 +431,7 @@ internal static class TestCoverageInvariant
             }
             else
             {
-                creditedMainTests.UnionWith(mainDiscoveredTests.Where(mainTest =>
+                CreditNames(mainDiscoveredTests.Where(mainTest =>
                     deletedTestFilesByClass.Any(deletedTestFile =>
                         IdentityBelongsToDeletedTestFile(mainTest, deletedTestFile.ClassName!))));
                 unattributedDeletedFiles.AddRange(deletedTestFilesByClass
@@ -415,15 +447,20 @@ internal static class TestCoverageInvariant
             {
                 IReadOnlyList<string>? displayNames = null;
                 declaredRemovalDisplayNames?.TryGetValue(declaredIdentity, out displayNames);
-                var corroboratedTests = mainDiscoveredTests
-                    .Where(mainTest =>
+                var corroboratedRows = Enumerable.Range(0, mainRows.Length)
+                    .Where(index =>
+                    {
+                        var mainTest = mainRows[index];
+                        return
                         (DeclaredIdentityMatchesDiscoveredTest(mainTest, declaredIdentity) ||
                             MatchesResolvedDisplayName(mainTest, displayNames)) &&
-                        !candidateDiscoveredTests.Any(candidateTest => IdentitiesMatch(mainTest, candidateTest)))
-                    .ToArray();
-                creditedMainTests.UnionWith(corroboratedTests);
+                        !candidateDiscoveredTests.Any(candidateTest => IdentitiesMatch(mainTest, candidateTest));
+                    }).ToHashSet();
+                if (sourceConfirmedRemovedRows?.TryGetValue(declaredIdentity, out var removedRows) == true)
+                    corroboratedRows.UnionWith(removedRows.Where(index => index >= 0 && index < mainRows.Length));
+                creditedMainRows.UnionWith(corroboratedRows);
                 attributionReceipts.Add(
-                    $"cross-generation-attribution:source=declared-test-removal,identity={declaredIdentity},status={(corroboratedTests.Length > 0 ? "corroborated" : "unmatched")},credit={corroboratedTests.Length}");
+                    $"cross-generation-attribution:source=declared-test-removal,identity={declaredIdentity},status={(corroboratedRows.Count > 0 ? "corroborated" : "unmatched")},credit={corroboratedRows.Count}");
             }
 
             foreach (var unattributedDeletedFile in unattributedDeletedFiles)
@@ -431,7 +468,7 @@ internal static class TestCoverageInvariant
                 attributionReceipts.Add(
                     $"cross-generation-attribution:source={unattributedDeletedFile.Source},file={unattributedDeletedFile.File},status=unattributed,fallback=none,credit=0");
             }
-            var deletedMainTestCount = mainDiscoveredTests.Count(creditedMainTests.Contains);
+            var deletedMainTestCount = creditedMainRows.Count;
             var minimumCandidateCount = Math.Max(
                 0,
                 mainDiscoveredTests.Count - deletedMainTestCount);
