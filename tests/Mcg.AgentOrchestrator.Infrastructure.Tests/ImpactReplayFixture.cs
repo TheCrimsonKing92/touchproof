@@ -256,13 +256,14 @@ internal sealed class ImpactReplayFixture : IDisposable
         document.Save(path);
     }
 
-    public (ImpactReplayReport Report, string Markdown) Run(bool allowSkippedInputs = false, string[]? extraArguments = null)
+    public (ImpactReplayReport Report, string Markdown) Run(bool allowSkippedInputs = false, string[]? extraArguments = null,
+        ImpactReplayExecutionSource? source = null)
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
         var exit = CliImpactReplayCommand.Run(
             ["impact-replay", "--since", "2026-10-01", "--limit", "100", "--out", OutputDirectory, .. extraArguments ?? []],
-            _root, StateDirectory, CheckoutParent, output, error);
+            _root, StateDirectory, CheckoutParent, output, error, source: source);
         Assert.True(exit == 0, $"exit={exit}; stdout={output}; stderr={error}");
         var progress = error.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => JsonSerializer.Deserialize<ImpactReplayRunProgress>(line, ImpactReplayCheckpointStore.Json)!).ToArray();
