@@ -8,11 +8,37 @@ internal static class ImpactReplaySelectionAugmentation
     internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
         IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards)
+        => Apply(selection, changedFiles, sources, classes, guards, out _);
+
+    internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
+        IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
+        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses = null)
     {
-        var mapped = ChangedFileTestClassPathMapper.Read(changedFiles, sources, classes);
+        var changed = changedFiles.ToArray();
+        declaredGuards = ImpactReplayDeclaredGuardSelection.Read(changed, sources, classes);
+        var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes);
         if (mapped.Outcome != ReverseDependencySelectionOutcome.Resolved) return mapped;
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved) return selection;
-        return selection with { TestClassNames = selection.TestClassNames.Concat(mapped.TestClassNames)
-            .Concat(guards?.Classes ?? []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() };
+        if (declaredGuards.DegradationReason is { } reason)
+            return ReverseDependencyTestSelection.Unreadable(reason, selection.CacheReceipt, selection.Headroom);
+        var names = selection.TestClassNames.Concat(mapped.TestClassNames).Concat(guards?.Classes ?? [])
+            .Concat(declaredGuards.Selections.Select(item => item.ClassName)).Concat(additionalClasses ?? [])
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        // Count distinct runnable identities; a reverse-dependency short name and a declared full
+        // name can denote the same class. Never truncate required guards to fit a focused filter.
+        var count = names.SelectMany(name =>
+        {
+            var matches = classes.Where(item => name.Contains('.') || name.Contains('+')
+                    ? item.FullName == name : item.FullName.Split('.', '+').Last() == name)
+                .Select(item => item.FullName).ToArray();
+            return matches.Length == 0 ? [name] : matches;
+        }).Distinct(StringComparer.Ordinal).Count();
+        var cap = selection.Headroom?.SelectedTestClassCap ?? ReverseDependencyTestImpactReader.MaximumSelectedTestClasses;
+        var headroom = selection.Headroom is { } prior ? prior with { SelectedTestClassCount = count } : null;
+        if (count > cap)
+            return ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.SelectedTestClassBound,
+                $"Augmented replay selection exceeded the {cap}-test-class bound.", selection.CacheReceipt, headroom);
+        return selection with { TestClassNames = names, Headroom = headroom };
     }
 }

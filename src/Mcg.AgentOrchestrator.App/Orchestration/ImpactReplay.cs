@@ -58,8 +58,9 @@ internal static class ImpactReplay
                         Path.GetFileName(project.Replace('\\', '/')).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase))
                     .Select(check => check.Name).ToArray();
                 var classes = AcceptanceTestClassSourceScanner.Scan(checkout);
+                var routing = new ImpactReplayChangedSourceRouting(checkout);
                 var testSources = new ImpactReplayTestSourceIndex(LaneTestSourceRootResolver.SourceFiles(checkout,
-                    LaneTestSourceRootResolver.Resolve(checkout)));
+                    LaneTestSourceRootResolver.Resolve(checkout)), routing.TestProjects, checkout);
                 var guards = SourceReadingGuardTestClasses.Read(testSources, classes);
                 if (guards is not null)
                 {
@@ -77,7 +78,6 @@ internal static class ImpactReplay
                 var attemptFloor = lanes.Where(lane => floor is null ? IsDefaultFloor(lane.Name) : floor.Contains(lane.Name, StringComparer.Ordinal))
                     .Select(lane => lane.Name).Order(StringComparer.Ordinal).ToArray();
                 floorNames.UnionWith(attemptFloor);
-                var routing = new ImpactReplayChangedSourceRouting(checkout);
                 var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var changedTests = changedSources.Where(routing.IsTestSource).ToArray();
@@ -87,7 +87,8 @@ internal static class ImpactReplay
                     : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
                         maximumChangedSourceFiles: maxChangedSourceFiles ?? 5);
                 var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
-                selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards);
+                selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards,
+                    out var declaredGuards, augmented.QualifiedClasses);
                 var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
                 var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
                 var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
@@ -158,7 +159,8 @@ internal static class ImpactReplay
                     ClassLevelNonFloorTestSeconds: classLevel.NonFloorTestSeconds,
                     ClassLevelUnavailableReason: classLevel.UnavailableReason,
                     ClassLevelCpuSecondsSaved: classLevel.CpuSecondsSaved,
-                    ClassLevelCpuUnavailableReason: classLevel.CpuUnavailableReason));
+                    ClassLevelCpuUnavailableReason: classLevel.CpuUnavailableReason,
+                    DeclaredGuards: declaredGuards));
                 unmappedClasses.AddRange(attemptUnmappedClasses);
                 if (augmented.Gained) gainedAttempts++;
             }
