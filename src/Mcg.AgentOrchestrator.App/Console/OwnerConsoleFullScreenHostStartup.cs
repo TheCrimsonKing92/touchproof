@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal static partial class OwnerConsoleFullScreenHost
+internal static class OwnerConsoleFullScreenHostStartup
 {
     // Eager history/model helper retained for callers that need a complete snapshot.
     // Production progressive startup uses OwnerConsoleStartupLoader.FillAsync.
@@ -19,12 +19,12 @@ internal static partial class OwnerConsoleFullScreenHost
     internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
         string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null, OwnerConsoleBoardSource? boardSource = null)
     {
-        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null, owners, boardSource);
+        if (inputTracePath is null) return await OwnerConsoleFullScreenHost.RunCoreAsync(workspace, cancellationToken, null, owners, boardSource);
         try
         {
             using var destination = OwnerConsoleInputTraceOptions.OpenDestination(inputTracePath);
             var diagnostics = new OwnerConsoleInputDiagnostics();
-            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics, owners, boardSource);
+            var result = await OwnerConsoleFullScreenHost.RunCoreAsync(workspace, cancellationToken, diagnostics, owners, boardSource);
             // RunCoreAsync has disposed the application and restored the terminal before export.
             diagnostics.Export(destination);
             return result;

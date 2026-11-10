@@ -24,6 +24,19 @@ Shutdown cancels producers before capturing their actual read completions: the i
 
 Acceptance regression selectors: `OwnerConsoleReadDrainTests`, `OwnerConsoleScreenOperationTests`, `OwnerRefreshCoordinatorTests`, plus existing `OwnerConsoleBoardFirstStartupTests` and `OwnerConsoleCacheRetentionTests`. The new tests use held cancellation-ignoring reads and virtual deadlines, assert no disposal before release and exactly one after release, observe late failures, and hold synchronous disposal past the UI bound. Negative controls remain Acceptance-owned: omit the underlying read from the drain to fail the retained-resource assertions; capture reads before producers to fail the late-registration case; execute disposal inline to fail the gated slow-disposal case; allow canceled admission to fail its source-call assertion. No worker test execution is claimed.
 
+### Board-source ownership audit
+
+`OwnerConsoleBoardSource` retains nonpooled store observers after reads. Consumers borrow it; its creator closes it after the last read, before workspace removal. The constructor/factory consumers are:
+
+| Construction site | Owner and release point |
+| --- | --- |
+| `OwnerConsoleVerb.RunAsync` | Full-screen host; existing producer/read drain completes before observer disposal, including late canceled reads. View/coordinator only borrow it. |
+| `OwnerConsoleBoardSectionTests.Scene` | Scene; refresh and preview reads are awaited, then scene closes view, application and source before `Projects` teardown. Regression checks a held project store becomes exclusively openable. |
+| `OwnerConsoleProjectScopeBoardTests.Scene` | Scene; existing view/application/source disposal after awaited refresh, before `Projects` teardown. |
+| `ProjectOnboardingCompletionTests`, `OnboardingQuestionResolutionTests` | Method-scoped source, declared after fixture; awaited reads finish before source and then fixture disposal. |
+| `OwnerConsoleProjectsSettingsTabTests.Projects.Source` / `Tab` | Projects fixture tracks every factory-created source, including implicit `Tab` sources, and disposes them before its temp root. Direct full-screen source has a method scope ending before fixtures. |
+| `OwnerConsoleCacheRetentionTests`, `OwnerConsoleOnboardingBoardTests` | Existing method-scoped sources; awaited compositions finish before source disposal and root teardown. |
+
 ## Workspace reads
 
 | Source | Scope | Console read location and provenance |

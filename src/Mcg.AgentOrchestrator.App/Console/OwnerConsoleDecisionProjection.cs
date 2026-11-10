@@ -3,13 +3,22 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerConsoleViewModelBuilder
+// Owns decision numbering and the reusable display projection for one builder.
+internal sealed class OwnerConsoleDecisionProjection
 {
-    internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
-        CancellationToken cancellationToken, bool force = false)
+    private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly OwnerConsoleDecisionCache _decisions = new();
+    private OwnerDecisionRead? _projectedRead;
+    private ImmutableArray<OwnerConsoleDecision> _projectedDecisions;
+    private int _nextNumber;
+    internal int RetainedNumbers => _numbers.Count;
+
+    internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadAsync(
+        IOwnerQuestionSource questions, OwnerConsoleDecisionMarker marker, CancellationToken cancellationToken,
+        bool force, Action<IReadOnlyList<OwnerQuestion>> observe)
     {
         if (force) questions.Invalidate();
-        var read = await _decisions.ReadAsync(questions, _decisionMarker.Read(), force, cancellationToken, _decisionMarker.Read);
+        var read = await _decisions.ReadAsync(questions, marker.Read(), force, cancellationToken, marker.Read);
         var snapshot = read.Snapshot;
         var unchanged = _projectedRead is { } previous && previous.Entries.SequenceEqual(read.Entries) &&
             previous.Snapshot.Live.SequenceEqual(snapshot.Live);
@@ -29,14 +38,11 @@ internal sealed partial class OwnerConsoleViewModelBuilder
         _projectedDecisions = decisions;
         var liveIds = snapshot.Live.Select(question => question.ItemId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var id in _numbers.Keys.Where(id => !liveIds.Contains(id)).ToArray()) _numbers.Remove(id);
-        lock (_observationGate)
-        {
-            _attention.Observe(snapshot.Live, clock.GetUtcNow());
-        }
+        observe(snapshot.Live);
         return (decisions, snapshot.Hidden.Count);
     }
 
-    internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,
+    internal static OwnerConsoleViewModel Apply(OwnerConsoleViewModel model,
         ImmutableArray<OwnerConsoleDecision> decisions, int hidden)
     {
         var questionGoals = decisions.Where(item => item.Kind != OwnerQuestionKind.PassedGateHold)
@@ -51,5 +57,11 @@ internal sealed partial class OwnerConsoleViewModelBuilder
             .ThenBy(row => row.Project, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray();
         return model with { Board = rows, Decisions = decisions,
             Status = model.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } };
+    }
+
+    private static string Summary(string text)
+    {
+        var line = text.Split(['\r', '\n'], 2)[0];
+        return string.Join(" ", line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 }

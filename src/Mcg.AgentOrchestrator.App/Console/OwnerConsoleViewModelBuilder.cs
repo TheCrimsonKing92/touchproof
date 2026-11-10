@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries state,
+internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries state,
     IOwnerQuestionSource questions, IConductorLiveness liveness, IOwnerGoalEpicLookup epics, TimeProvider clock,
     Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null,
     Func<DateTimeOffset?>? latestTick = null,
@@ -18,7 +18,6 @@ internal sealed partial class OwnerConsoleViewModelBuilder(IOrchestratorStateQue
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
     internal const int TitlePrefixChars = 1024;
-    private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private readonly OwnerConsoleGoalTitleCache _titles = new();
     private IReadOnlyDictionary<string, AgentRole> _roles = new Dictionary<string, AgentRole>();
     private IReadOnlyDictionary<string, Goal> _goals = new Dictionary<string, Goal>();
@@ -26,7 +25,7 @@ internal sealed partial class OwnerConsoleViewModelBuilder(IOrchestratorStateQue
     private readonly OwnerNeedsYouLedger _attention = new();
     private readonly Dictionary<string, bool> _previousHolds = new();
     private readonly List<OwnerConductEvent> _observed = [];
-    private readonly OwnerConsoleDecisionCache _decisions = new();
+    private readonly OwnerConsoleDecisionProjection _decisionProjection = new();
     private readonly OwnerConsoleDecisionMarker _decisionMarker = new(decisionsMarker);
     private string? _boardVersion;
     private IReadOnlyList<GoalSummary>? _metadata;
@@ -35,10 +34,19 @@ internal sealed partial class OwnerConsoleViewModelBuilder(IOrchestratorStateQue
     private string? _epicVersion;
     private string[] _epicIds = [];
     private IReadOnlyDictionary<string, string>? _epicTitles;
-    private OwnerDecisionRead? _projectedRead;
-    private ImmutableArray<OwnerConsoleDecision> _projectedDecisions;
-    private int _nextNumber;
-    internal (int Goals, int Roles, int Numbers, int Holds) Retained => (_goals.Count, _roles.Count, _numbers.Count, _previousHolds.Count);
+    internal (int Goals, int Roles, int Numbers, int Holds) Retained =>
+        (_goals.Count, _roles.Count, _decisionProjection.RetainedNumbers, _previousHolds.Count);
+
+    internal Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
+        CancellationToken cancellationToken, bool force = false) =>
+        _decisionProjection.ReadAsync(questions, _decisionMarker, cancellationToken, force, live =>
+        {
+            lock (_observationGate) _attention.Observe(live, clock.GetUtcNow());
+        });
+
+    internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,
+        ImmutableArray<OwnerConsoleDecision> decisions, int hidden) =>
+        OwnerConsoleDecisionProjection.Apply(model, decisions, hidden);
 
     internal async Task<OwnerConsoleViewModel> BuildAsync(OwnerConsoleViewInputs inputs,
         CancellationToken cancellationToken = default)
@@ -203,11 +211,4 @@ internal sealed partial class OwnerConsoleViewModelBuilder(IOrchestratorStateQue
 
     private static bool IsActive(GoalStatus status) => status is not
         (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded);
-
-    private static string Summary(string text)
-    {
-        var line = text.Split(['\r', '\n'], 2)[0];
-        line = string.Join(" ", line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return line;
-    }
 }

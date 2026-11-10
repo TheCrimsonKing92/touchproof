@@ -6,9 +6,18 @@ using GuiApplication = Terminal.Gui.App.Application;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal static partial class OwnerConsoleFullScreenHost
+internal static class OwnerConsoleFullScreenHost
 {
-    private static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+    internal static Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null, OwnerConsoleBoardSource? boardSource = null) =>
+        OwnerConsoleFullScreenHostStartup.RunAsync(workspace, cancellationToken, inputTracePath, owners, boardSource);
+
+    internal static Task<(OwnerConsoleViewModel Model, List<OwnerConductEvent> Recent)> BuildInitialViewModelAsync(
+        OwnerConsoleViewModelBuilder builder, string conductLogPath, DateTimeOffset opened,
+        DateTimeOffset? last, CancellationToken token) =>
+        OwnerConsoleFullScreenHostStartup.BuildInitialViewModelAsync(builder, conductLogPath, opened, last, token);
+
+    internal static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
         OwnerConsoleInputDiagnostics? diagnostics, OwnerConsoleHostRowOwner? owners, OwnerConsoleBoardSource? boardSource)
     {
         var clock = TimeProvider.System;

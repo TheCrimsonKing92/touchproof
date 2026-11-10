@@ -253,7 +253,7 @@ public sealed class OwnerConsoleProjectsSettingsTabTests
         using var context = new Projects();
         using var settings = new OwnerConsoleSettingsTestContext();
         if (kind == "registry") context.Register("alpha", "release", true);
-        var source = kind == "none" ? null : kind == "direct"
+        using var source = kind == "none" ? null : kind == "direct"
             ? new OwnerConsoleBoardSource("home", OwnerConsoleProjectScope.All, () => [], settings.Clock)
             : context.Source();
         using IApplication app = Application.Create();
@@ -296,6 +296,7 @@ public sealed class OwnerConsoleProjectsSettingsTabTests
         internal string Root { get; } = SharedTestSupport.CreateTempDirectory();
         internal OrchestratorProjectRegistry Registry { get; }
         private readonly OrchestratorWorkspace _home;
+        private readonly List<OwnerConsoleBoardSource> _sources = [];
 
         internal Projects()
         {
@@ -314,8 +315,12 @@ public sealed class OwnerConsoleProjectsSettingsTabTests
             return workspace;
         }
 
-        internal OwnerConsoleBoardSource Source() =>
-            OwnerConsoleBoardSource.FromRegistry(_home, _home.RootDirectory, Registry, TimeProvider.System);
+        internal OwnerConsoleBoardSource Source()
+        {
+            var source = OwnerConsoleBoardSource.FromRegistry(_home, _home.RootDirectory, Registry, TimeProvider.System);
+            _sources.Add(source);
+            return source;
+        }
 
         internal OwnerConsoleProjectsSettingsTab Tab(OwnerConsoleBoardSource? source = null) =>
             new(Registry, (source ?? Source()).HandleScope);
@@ -330,6 +335,10 @@ public sealed class OwnerConsoleProjectsSettingsTabTests
                 (ConductorAutonomyPolicy.Conservative with { AdoptedBuildPushEnabled = push }).ToJson());
         }
 
-        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
+        public void Dispose()
+        {
+            foreach (var source in _sources) source.Dispose();
+            SharedTestSupport.RemoveTempDirectory(Root);
+        }
     }
 }

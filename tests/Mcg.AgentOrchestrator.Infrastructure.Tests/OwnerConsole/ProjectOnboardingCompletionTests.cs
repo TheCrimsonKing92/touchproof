@@ -21,7 +21,7 @@ public sealed class ProjectOnboardingCompletionTests
         _ = StateDbMigrations.EnsureUpToDate(project.SqliteStatePath);
         await new SqliteOrchestratorStateRepository(project.SqliteStatePath)
             .SaveAsync(harness.Kernel, token);
-        var boardSource = new OwnerConsoleBoardSource("established", OwnerConsoleProjectScope.All,
+        using var boardSource = new OwnerConsoleBoardSource("established", OwnerConsoleProjectScope.All,
             () => [OnboardingConsoleFixture.Describe(project), OnboardingConsoleFixture.Describe(control)],
             fixture.Clock);
         var questions = new OnboardingQuestionSource(harness.Questions,
