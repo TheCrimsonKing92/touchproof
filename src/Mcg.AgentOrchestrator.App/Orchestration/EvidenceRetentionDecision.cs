@@ -42,7 +42,8 @@ internal enum EvidenceOwnershipSource
 {
     Declared,
     InferredFromName,
-    Unresolved
+    Unresolved,
+    InferredFromDirectory
 }
 
 internal enum EvidenceEligibility

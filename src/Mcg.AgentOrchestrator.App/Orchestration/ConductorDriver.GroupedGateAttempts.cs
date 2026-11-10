@@ -311,7 +311,7 @@ internal sealed partial class ConductorDriver
             var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
                 CancellationToken.None, null, outerAttemptId: attempt.AttemptId);
-            return receipt is null ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
+            return CohortChildOutcome.From(receipt, slotsBusyDeferred: receipt is null, attempt.IdentityValue);
         }
         else if (attempt.Kind == "train")
         {
