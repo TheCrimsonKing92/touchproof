@@ -32,6 +32,10 @@ public sealed class ImpactReplayUnchangedBaselineTests
 
         var expectedLines = new List<string>
         {
+            $"Run: {report.Run!.RunId}",
+            $"Checkpoint: {report.Run.CheckpointPath}",
+            "Consult the checkpoint for completion state. Partial runs are not safety verdicts.",
+            "",
             "Floor source: default",
             "Default floor policy: Process spawning*, Isolated process spawning*, Chaos gate, Remainder merge train and ratchet.",
             "Floor lanes: Chaos gate",
