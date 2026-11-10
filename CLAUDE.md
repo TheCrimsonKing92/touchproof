@@ -18,6 +18,8 @@ Shared anchors:
 - operating-the-goal-loop
 - safety
 - evidence
+Shared external anchors:
+- [token-efficiency](docs/operator-runbook.md#token-efficiency)
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
 
 Attention is scarce. Preserve it.
@@ -27,6 +29,7 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 > **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
+> **Token efficiency for every harness and role:** Follow the shared [token-efficiency contract](docs/operator-runbook.md#token-efficiency).
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
 > **Writing acceptance criteria?** Assign each criterion to a capable evidence owner using the shared [`role-capability-matrix`](docs/role-capability-matrix.md) before creating the goal.
 > **Writing a brief, retry feedback, or a clarification answer — especially a second correction to the same worker?** Use [`worker-guidance-discipline`](docs/worker-guidance-discipline.md). A prohibition invites variants and an adjective invites interpretation; give a decision procedure the worker can run on its own output, or point at an exemplar already in the repo.
