@@ -29,6 +29,10 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
 
         var legacyLines = new[]
         {
+            $"Run: {report.Run!.RunId}",
+            $"Checkpoint: {report.Run.CheckpointPath}",
+            "Consult the checkpoint for completion state. Partial runs are not safety verdicts.",
+            "",
             "Floor source: default",
             "Default floor policy: Process spawning*, Isolated process spawning*, Chaos gate, Remainder merge train and ratchet.",
             "Floor lanes: Chaos gate",
@@ -78,7 +82,8 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
         Assert.Empty(diagnostics.Occurrences);
         var json = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json")))!.AsObject();
         Assert.Equal(new[] { "attempts", "attemptsGainingChangedTestClasses", "cleanupErrors", "floorLanes", "floorSource",
-            "skippedInputs", "unmappedTestClasses", "unreplayableAttempts" }, json.Select(item => item.Key).Order(StringComparer.Ordinal));
+            "run", "skippedInputs", "unmappedTestClasses", "unreplayableAttempts" }, json.Select(item => item.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(report.Run!.RunId, json["run"]!["runId"]!.GetValue<string>());
         Assert.Equal(0, json["unmappedTestClasses"]!["countsByReason"]!["not-scanned"]!.GetValue<int>());
         Assert.Equal(0, json["unmappedTestClasses"]!["countsByReason"]!["no-lane"]!.GetValue<int>());
         Assert.Equal(0, json["unmappedTestClasses"]!["countsByReason"]!["ambiguous"]!.GetValue<int>());

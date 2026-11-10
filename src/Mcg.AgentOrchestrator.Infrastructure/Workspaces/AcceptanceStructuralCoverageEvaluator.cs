@@ -7,7 +7,8 @@ internal sealed record AcceptanceStructuralCoverageBaseline(
     bool BareTestList,
     bool LockRemediationApplied,
     GoalAcceptanceVerifier.CommandResult? CachedDiscovery = null,
-    MainBaselineDiscoveryCacheWrite? CacheWrite = null);
+    MainBaselineDiscoveryCacheWrite? CacheWrite = null,
+    IReadOnlyDictionary<string, string>? CachedAssemblyIdentities = null);
 
 internal sealed record AcceptanceStructuralCoverageRequest(
     string[] CandidateDiscoveryArguments,
@@ -35,7 +36,10 @@ internal sealed record AcceptanceStructuralCoveragePrepared(
     Exception? BaselineDiscoveryIoException,
     TestDiscoverySnapshot? BaselineSnapshot,
     bool BaselineLockRemediationApplied,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? DeclaredRemovalDisplayNames = null);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? DeclaredRemovalDisplayNames = null,
+    string? BaselineRepositoryRoot = null,
+    IReadOnlyList<string>? BaselineDiscoveryArguments = null,
+    IReadOnlyDictionary<string, string>? BaselineAssemblyIdentities = null);
 
 internal sealed class AcceptanceStructuralCoverageEvaluator
 {
@@ -135,7 +139,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                 baselineDiscovery.Output,
                 baseline.BareTestList,
                 baseline.RepositoryRoot);
-            baseline.CacheWrite?.Publish(baselineDiscovery);
+            baseline.CacheWrite?.Publish(baselineDiscovery, baseline.DiscoveryArguments);
         }
 
         return new AcceptanceStructuralCoveragePrepared(
@@ -147,7 +151,10 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             MainTestDisplayNameResolver.ResolveAll(
                 baseline?.RepositoryRoot,
                 baselineSnapshot?.SourceFilesByTest?.Values ?? [],
-                request.SanctionedRemovedTests));
+                request.SanctionedRemovedTests),
+            baseline?.RepositoryRoot,
+            baseline?.DiscoveryArguments,
+            baseline?.CachedAssemblyIdentities);
     }
 
     internal async Task<(GoalAcceptanceVerifier.CommandResult? Discovery, Exception? IoException,
@@ -160,7 +167,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                 timeout, cancellationToken).ConfigureAwait(false);
             if (discovery.TimedOut || discovery.ExitCode != 0) return (discovery, null, null);
             var snapshot = TestCoverageInvariant.ParseDiscovery(discovery.Output, baseline.BareTestList, baseline.RepositoryRoot);
-            baseline.CacheWrite?.Publish(discovery);
+            baseline.CacheWrite?.Publish(discovery, baseline.DiscoveryArguments);
             return (discovery, null, snapshot);
         }
         catch (Exception error) when (_isBaselineDiscoveryIoException(error))
@@ -187,7 +194,8 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
         var partitions = request.ResolvePartitions();
         var candidateSnapshot = TestCoverageInvariant.ParseDiscovery(
             candidateDiscovery.Output,
-            request.BareTestList);
+            request.BareTestList,
+            request.CandidateWorktreePath);
         var deletedTestFiles = request.ResolveDeletedTestFiles();
         var coverage = TestCoverageInvariant.Evaluate(
             candidateSnapshot.Tests,
@@ -197,7 +205,11 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             request.CurrentAttemptId,
             baselineSnapshot?.SourceFilesByTest,
             request.SanctionedRemovedTests,
-            prepared.DeclaredRemovalDisplayNames);
+            prepared.DeclaredRemovalDisplayNames,
+            SourceConfirmedTheoryRowRemovals.Resolve(baselineSnapshot, candidateSnapshot,
+                prepared.BaselineRepositoryRoot, request.CandidateWorktreePath, request.SanctionedRemovedTests,
+                prepared.BaselineDiscoveryArguments, request.CandidateDiscoveryArguments,
+                prepared.BaselineAssemblyIdentities));
         if (coverage.CountComparison?.IsShortfall == true &&
             coverage.EmptyPartitions.Count == 0 &&
             coverage.MissingTests.Count == 1 &&
@@ -241,7 +253,12 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                             : MainTestDisplayNameResolver.ResolveAll(
                                 contained.Baseline?.RepositoryRoot,
                                 containedSnapshot.SourceFilesByTest?.Values ?? [],
-                                request.SanctionedRemovedTests));
+                                request.SanctionedRemovedTests),
+                        SourceConfirmedTheoryRowRemovals.Resolve(containedSnapshot, candidateSnapshot,
+                            contained.UseObservedBaseline ? prepared.BaselineRepositoryRoot : contained.Baseline?.RepositoryRoot,
+                            request.CandidateWorktreePath, request.SanctionedRemovedTests,
+                            contained.UseObservedBaseline ? prepared.BaselineDiscoveryArguments : contained.Baseline?.DiscoveryArguments,
+                            request.CandidateDiscoveryArguments));
                     var disposition = coverage.Passed ? "integration-stale" : "coverage-shortfall";
                     var receipt =
                         $"cross-generation-staleness:contained={ShortSha(contained.ContainedMainSha)},observed-main={ShortSha(contained.ObservedMainSha)},candidate={candidateSnapshot.Tests.Count},contained-minimum={coverage.CountComparison?.MinimumCandidateCount ?? containedSnapshot.Tests.Count},observed-main-count={observedMainCount},disposition={disposition}";
