@@ -20,6 +20,38 @@ public sealed class ExperimentReplaySelectionTests
     }
 
     [Fact]
+    public void Union_OutsideLaneRoot_SelectsImpactAndDeclaredGuards()
+    {
+        using var fixture = new ExperimentReplayTestData();
+        CreateProject(fixture.Root);
+        // CreateProject declares only Infrastructure.Tests as a lane source root.
+        var project = Path.Combine(fixture.Root, "tests", "Mcg.AgentOrchestrator.Core.Tests");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Core.Tests.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+        File.WriteAllText(Path.Combine(project, "TopologyTests.cs"),
+            "namespace Examples; [LiveTreeStructural] public class TopologyTests { [Xunit.Fact] public void Test() {} }");
+        File.WriteAllText(Path.Combine(project, "MembershipTests.cs"),
+            "namespace Examples; [TestAssemblyMembership] public class MembershipTests { [Xunit.Fact] public void Test() {} }");
+        File.WriteAllText(Path.Combine(project, "AssetTests.cs"),
+            "namespace Examples; public class AssetTests { [Xunit.Fact] public void Test() { System.IO.File.ReadAllText(\"Fixtures/input.txt\"); } }");
+        File.WriteAllText(Path.Combine(project, "UnrelatedTests.cs"),
+            "namespace Examples; public class UnrelatedTests { [Xunit.Fact] public void Test() {} }");
+
+        var changed = new[] { "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChangedTests.cs", "Fixtures/input.txt" };
+        var a = ExperimentReplaySelectionReader.Select(fixture.Root, changed, "A");
+        var b = ExperimentReplaySelectionReader.Select(fixture.Root, changed, "B");
+
+        Assert.Equal(new[] { "Examples.ChangedTests" }, a.Classes);
+        Assert.Equal("resolved", b.Outcome);
+        Assert.Equal(new[] { "Examples.AssetTests", "Examples.ChangedTests", "Examples.FloorTests",
+            "Examples.MembershipTests", "Examples.TopologyTests" }, b.Classes);
+        Assert.DoesNotContain("Examples.UnrelatedTests", b.Classes);
+        Assert.Empty(b.Diagnostics);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", b.Projects);
+    }
+
+    [Fact]
     public void DeletedClass_UsesConservativeInventoryInsteadOfEmptySuccess()
     {
         using var fixture = new ExperimentReplayTestData();

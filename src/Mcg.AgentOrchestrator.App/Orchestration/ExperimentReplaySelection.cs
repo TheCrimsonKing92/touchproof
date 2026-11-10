@@ -42,9 +42,13 @@ internal static class ExperimentReplaySelectionReader
             var production = changedSources.Except(changedTests, StringComparer.OrdinalIgnoreCase).ToArray();
             var impact = production.Length == 0 && changedTests.Length > 0 ? ReverseDependencyTestSelection.Resolved([])
                 : ReverseDependencyTestImpactReader.Read(checkout, production, bypassCache: true, maximumChangedSourceFiles: 20);
-            var sources = new ImpactReplayTestSourceIndex(LaneTestSourceRootResolver.SourceFiles(checkout, LaneTestSourceRootResolver.Resolve(checkout)));
+            // Descriptors span every routed test project, including projects outside lane roots.
+            var sourceFiles = LaneTestSourceRootResolver.SourceFiles(checkout, LaneTestSourceRootResolver.Resolve(checkout))
+                .Concat(routing.TestProjects.SelectMany(p => p.Sources).Where(File.Exists));
+            var sources = new ImpactReplayTestSourceIndex(sourceFiles, routing.TestProjects, checkout);
             var guards = SourceReadingGuardTestClasses.Read(sources, descriptors);
-            impact = ImpactReplaySelectionAugmentation.Apply(impact, changedFiles, sources, descriptors, guards);
+            impact = ImpactReplaySelectionAugmentation.Apply(impact, changedFiles, sources, descriptors, guards,
+                out _, changed.QualifiedClasses);
             fallback |= impact.Outcome != ReverseDependencySelectionOutcome.Resolved;
             if (impact.Reason is { } diagnostic) diagnostics.Add(diagnostic);
             foreach (var selector in impact.TestClassNames)
