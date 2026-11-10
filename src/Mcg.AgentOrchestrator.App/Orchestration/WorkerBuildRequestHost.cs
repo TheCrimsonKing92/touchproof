@@ -18,13 +18,14 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     private readonly TimeSpan? _executionQosInterval;
     private readonly Func<string, ProcessStartInfo, ProcessStartInfo>? _launchOverride;
     private readonly WorkerBuildStructuralPreflight _structural;
+    private readonly BuildReceiptLedger? _buildLedger;
     private readonly List<object> _unresolved = [];
 
     internal WorkerBuildRequestHost(WorkerBuildHostReference reference, TimeProvider? time = null,
         TimeSpan? budget = null, Action<WorkerBuildInvocation>? observe = null, DotnetBuildStorageRoot? storageRoot = null,
         Func<int, uint, uint, bool>? executionQosSetter = null, TimeSpan? executionQosInterval = null,
         Func<string, ProcessStartInfo, ProcessStartInfo>? launchOverride = null,
-        Func<DeveloperCompletionStructuralFindings>? structuralEvaluator = null)
+        Func<DeveloperCompletionStructuralFindings>? structuralEvaluator = null, BuildReceiptLedger? buildLedger = null)
     {
         _reference = reference;
         _operations = new(reference.StatePath, reference.ExecutionDirectory);
@@ -37,6 +38,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         _executionQosInterval = executionQosInterval;
         _launchOverride = launchOverride;
         _structural = new(reference, structuralEvaluator, _time);
+        _buildLedger = buildLedger;
         _storageRoot = storageRoot ?? (reference.StorageRoot is { } root
             ? new DotnetBuildStorageRoot(root) : DotnetBuildStorageLayout.CaptureStorageRoot());
         if (reference.Admission is not { } admission || admission.GoalId != reference.GoalId ||
@@ -99,6 +101,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var stop = queueStop;
         var stopCause = StopCause.LifetimeEnded;
         var exits = new List<int?>();
+        var buildReceipt = _buildLedger is null ? null : new WorkerBuildReceiptObservation(_buildLedger);
         var terminalSafe = true;
         var policyDigest = "unavailable";
         string? policyError = null;
@@ -202,6 +205,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     while (!child.WaitForOwnedExit(TimeSpan.FromMilliseconds(100))) CheckCurrent(validateCandidate: false);
                     var exit = child.TryReadOwnedExitCode() ?? throw new InvalidOperationException("Owned compiler exit was not observed.");
                     exits[^1] = exit;
+                    buildReceipt?.Capture(child.Group);
                     if (!child.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10)))
                         throw new InvalidOperationException("Owned compiler descendants did not become terminal.");
                     terminalSafe = true;
@@ -242,6 +246,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         finally
         {
             qos?.Dispose();
+            buildReceipt?.Record(invocation);
             if (terminalSafe)
             {
                 child?.Dispose();
@@ -321,6 +326,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             qos?.Dispose();
             if (child is null) return;
             var groupTerminal = child.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10));
+            buildReceipt?.Capture(child.Group);
             if (!child.WaitForOwnedExit(TimeSpan.FromSeconds(10)) || !groupTerminal)
                 throw new InvalidOperationException("Owned compiler termination is unconfirmed; custody retained.");
             terminalSafe = true;
