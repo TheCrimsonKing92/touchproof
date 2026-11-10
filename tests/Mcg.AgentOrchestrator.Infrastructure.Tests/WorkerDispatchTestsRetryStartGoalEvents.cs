@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -33,6 +34,10 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
             ProviderName: "OpenAI", ModelName: "gpt-6-sol", RetryContextFingerprint: fingerprint,
             PaidRoute: PaidRouteClassification.Paid, AssignedAgentId: agent.Id.Value);
         kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
+        Assert.Equal(EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
+            task.LastDispatch!.PlannerEvidenceCriteriaVersionHash);
+        // Freeze the host-enriched record before testing that a refused launch leaves it intact.
+        var recordedDispatch = JsonSerializer.Serialize(task.LastDispatch);
         var oldReceipt = kernel.RecordPreparedRetryAdmission(goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
             at, reservationOwnerId: "owner", reservationLeaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1)).Receipt;
         // A fake launcher keeps the global real-worker safety rewrite from hiding the
@@ -65,7 +70,7 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
                 refreshBeforeStart: false, runner: runner, sandboxOptions: DisabledSandbox);
             Assert.Equal(0, launches);
             Assert.Single(result.StartRefusals);
-            Assert.Equal(oldDispatch, task.LastDispatch);
+            Assert.Equal(recordedDispatch, JsonSerializer.Serialize(task.LastDispatch));
         }
         Assert.Contains(oldReceipt, kernel.GetTask(goal.Id, task.Id).RetryAdmissionHistory);
         Assert.Equal("gpt-6-sol", oldDispatch.ModelName);
