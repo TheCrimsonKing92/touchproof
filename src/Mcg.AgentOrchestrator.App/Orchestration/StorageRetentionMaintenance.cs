@@ -15,7 +15,8 @@ internal sealed record StorageRetentionGoal(
     GoalStatus Status,
     IReadOnlyDictionary<string, WorkTaskStatus> TaskStatuses,
     IReadOnlyCollection<string>? PromptPaths = null,
-    bool IsStoreStandIn = false)
+    bool IsStoreStandIn = false,
+    DateTimeOffset? TerminalAt = null)
 {
     public bool IsTerminal => Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
@@ -31,7 +32,9 @@ internal sealed record StorageRetentionGoal(
             snapshot.Id,
             snapshot.Status,
             snapshot.Tasks.ToDictionary(task => task.Id, task => task.Status, StringComparer.OrdinalIgnoreCase),
-            promptPaths);
+            promptPaths,
+            TerminalAt: TerminalGoalEvidenceAging.ResolveTerminalAt(snapshot.Status,
+                snapshot.Timeline.Select(item => item.OccurredAt), snapshot.TerminatedAt));
     }
 }
 
@@ -82,7 +85,9 @@ internal static partial class StorageRetentionMaintenance
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(path => Path.GetFullPath(path!))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray()))
+                .ToArray(),
+            TerminalAt: TerminalGoalEvidenceAging.ResolveTerminalAt(goal.Status,
+                goal.Timeline.Select(item => item.OccurredAt), goal.MetadataTerminatedAt)))
             .ToArray();
         return Run(
             workspace.LogDirectory,
@@ -225,6 +230,7 @@ internal static partial class StorageRetentionMaintenance
                 SweepWorkerArtifacts(logDirectory, goals, now, decisions);
                 SweepOperatorLogs(logDirectory, now, reclaim, decisions);
                 ConductorDiagnosticDumpRetention.Sweep(logDirectory, now, decisions);
+                RelaunchBuildCacheRetention.Sweep(RelaunchBuildCacheIdentity.Parent, executionDirectory, now, decisions);
                 LogDirectoryFamilyRetention.Sweep(logDirectory, goals, now, reclaim.ProtectedOperatorLogPaths, decisions);
                 LandedMergeTrainEvidenceRetention.Sweep(orchestratorDirectory, goals, now, decisions);
                 MergeTrainEvidenceRetention.Sweep(orchestratorDirectory, goals, now, decisions);
@@ -795,6 +801,7 @@ internal static partial class StorageRetentionMaintenance
                 }
             }
 
+            var pastTerminalWindow = TerminalGoalEvidenceAging.IsPastTerminalWindow(goal, attempts, now, reclaim);
             var protectedAttemptIds = EvidenceRetentionPolicy.ProtectedAttemptIds(attempts);
             var countBoundAttemptIds = EvidenceRetentionPolicy.AttemptIdsPastCountBound(
                 attempts,
@@ -809,7 +816,10 @@ internal static partial class StorageRetentionMaintenance
                     owner = EvidenceRetentionPolicy.ResolveLegacyOwner(attempts, trxPath);
                 }
 
-                if (owner.Attempt is not null && retainedAttemptIds.Contains(owner.Attempt.AttemptId))
+                var reduceProtectedTrx = pastTerminalWindow && owner.Attempt is not null &&
+                    protectedAttemptIds.Contains(owner.Attempt.AttemptId) &&
+                    !retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, owner.Attempt.AttemptId));
+                if (!reduceProtectedTrx && owner.Attempt is not null && retainedAttemptIds.Contains(owner.Attempt.AttemptId))
                 {
                     decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.Preserved,
                         trxPath, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
@@ -817,7 +827,7 @@ internal static partial class StorageRetentionMaintenance
                     continue;
                 }
 
-                if (owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
+                if (!reduceProtectedTrx && owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
                 {
                     var identity = owner.Attempt;
                     decisions.Add(new EvidenceRetentionDecision(
@@ -834,7 +844,15 @@ internal static partial class StorageRetentionMaintenance
                 }
 
                 var attempt = owner.Attempt;
-                if (attempt is null)
+                var attemptId = attempt?.AttemptId;
+                var ownershipSource = owner.Source;
+                if (attempt is null && !owner.Ambiguous && pastTerminalWindow &&
+                    AttemptDirectoryGoalOwner.TryResolve(root, trxPath, goal.GoalId, out var directoryAttempt))
+                {
+                    attemptId = directoryAttempt;
+                    ownershipSource = EvidenceOwnershipSource.InferredFromDirectory;
+                }
+                if (attemptId is null)
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -851,10 +869,10 @@ internal static partial class StorageRetentionMaintenance
                     trxPath,
                     sweepId,
                     goal.GoalId,
-                    attempt.AttemptId,
+                    attemptId,
                     now))
                 {
-                    retainedTrxAttemptIds.Add(attempt.AttemptId);
+                    retainedTrxAttemptIds.Add(attemptId);
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
                         EvidenceRetentionAction.Preserved,
@@ -873,9 +891,9 @@ internal static partial class StorageRetentionMaintenance
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
                     "trx-identities-preserved",
-                    attempt.AttemptId,
-                    attempt.Ordinal,
-                    OwnershipSource: owner.Source));
+                    attemptId,
+                    attempt?.Ordinal,
+                    OwnershipSource: ownershipSource));
                 var length = SafeLength(trxPath);
                 var deletion = TryDeleteExclusive(trxPath);
                 decisions.Add(new EvidenceRetentionDecision(
@@ -885,19 +903,19 @@ internal static partial class StorageRetentionMaintenance
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
                     deletion.Success ? "trx-reduced-to-receipt" : "exclusive-delete-failed",
-                    attempt.AttemptId,
-                    attempt.Ordinal,
+                    attemptId,
+                    attempt?.Ordinal,
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType,
-                    OwnershipSource: owner.Source));
+                    OwnershipSource: ownershipSource));
                 if (deletion.Success)
                 {
                     deleted++;
                 }
                 else
                 {
-                    retainedTrxAttemptIds.Add(attempt.AttemptId);
+                    retainedTrxAttemptIds.Add(attemptId);
                 }
             }
 
@@ -964,6 +982,15 @@ internal static partial class StorageRetentionMaintenance
                             !legacyOwner.Ambiguous;
                         if (!legacyUnattributed)
                         {
+                            if (!owner.Ambiguous && !legacyOwner.Ambiguous && pastTerminalWindow &&
+                                AttemptDirectoryGoalOwner.TryResolve(root, path, goal.GoalId, out var directoryAttempt))
+                            {
+                                decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.Preserved,
+                                    path, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
+                                    "goal-attributed-artifact-retained", directoryAttempt,
+                                    OwnershipSource: EvidenceOwnershipSource.InferredFromDirectory));
+                                continue;
+                            }
                             decisions.Add(new EvidenceRetentionDecision(
                                 family,
                                 EvidenceRetentionAction.RetainedUndecidable,

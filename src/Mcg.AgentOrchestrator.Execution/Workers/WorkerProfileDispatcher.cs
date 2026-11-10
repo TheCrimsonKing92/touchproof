@@ -2308,7 +2308,7 @@ public static partial class WorkerProfileDispatcher
             : new RegistryArtifactSource(
                 ContextArtifactKind.RegisteredContext,
                 RegistryArtifactDisposition.Deliver,
-                ContextDeliveryMode.InlineFull);
+                WorkerRepositoryDiffArtifacts.IsSupplementalName(path) ? null : ContextDeliveryMode.InlineFull);
 
     private static byte[] ApplyHumanInputRetractions(
         byte[] bytes,

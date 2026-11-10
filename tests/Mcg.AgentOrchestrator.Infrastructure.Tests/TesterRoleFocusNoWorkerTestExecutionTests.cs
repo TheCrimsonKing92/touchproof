@@ -21,7 +21,7 @@ public sealed class TesterRoleFocusNoWorkerTestExecutionTests
             ?? throw new MissingMethodException(typeof(WorkerArtifactWriter).FullName, "BuildDigest");
 
         var digest = Assert.IsType<string>(method.Invoke(
-            null, [goal, task, repositoryRoot, null, false, false, false]));
+            null, [goal, task, repositoryRoot, null, false, false, false, Array.Empty<string>()]));
         var lines = digest.Split(Environment.NewLine);
         var roleFocusIndex = Assert.Single(
             Enumerable.Range(0, lines.Length), index => lines[index] == "## Role Focus");
