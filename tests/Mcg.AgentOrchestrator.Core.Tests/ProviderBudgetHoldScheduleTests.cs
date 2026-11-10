@@ -161,7 +161,7 @@ public sealed class ProviderBudgetHoldScheduleTests
         var success = fixture.NewGoal();
         fixture.Dispatch(success, Start.AddHours(2), "Anthropic", "C:\\profiles\\a");
         fixture.Kernel.RecordTaskVerification(success.Id, success.Tasks.Single().Id,
-            Verification("", Start.AddHours(2).AddMinutes(1)) with { ExitCode = 0 });
+            Verification("", Start.AddHours(2).AddMinutes(1)) with { ExitCode = 0, CompletionVerdictVerifiedSuccess = true });
         fixture.Exhaust(fixture.NewGoal(), Start.AddHours(3), provider: "Anthropic", credential: "C:\\profiles\\a");
         Assert.True(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(fixture.Kernel.Goals, first.BindingKey, out var current));
         Assert.Equal(1, ProviderBudgetHoldSchedules.Evaluate(fixture.Kernel.Goals, current, fixture.Clock.UtcNow).Attempt);

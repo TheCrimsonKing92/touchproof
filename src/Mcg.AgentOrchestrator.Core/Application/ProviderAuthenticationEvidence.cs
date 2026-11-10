@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public static class ProviderAuthenticationEvidence
 {
     private static readonly Regex Diagnostic = new(
-        @"\A(?:(?:ERROR|API Error|Error|\[grok(?:-cli)?\])[: ]+)*(?:No auth credentials for cli-chat-proxy\b.*|Missing (?:authentication |auth )?credentials\b.*|Not signed in\b.*|Failed to authenticate\b.*|authentication failed\b.*|invalid (?:api key|credentials|access token|authentication credentials)\b.*|(?:credentials|access token|authentication token) (?:have |has |is )?expired\b.*|(?:API Error:?\s*|API error \(status )?401\b.*|access token could not be refreshed\b.*|refresh token was already used\b.*|refresh_token_reused\b.*|Please (?:sign|log) in(?: again)?[.!]?)\z",
+        @"\A(?:(?:ERROR|API Error|Error|\[grok(?:-cli)?\])[: ]+)*(?:No auth credentials for cli-chat-proxy\b.*|Missing (?:authentication |auth )?credentials\b.*|Not signed in\b.*|Failed to authenticate\b.*|authentication failed\b.*|invalid (?:api key|credentials|access token|authentication credentials)\b.*|(?:credentials|access token|authentication token) (?:have |has |is )?expired\b.*|(?:API Error:?\s*|API error \(status )?401\b.*|(?:Your )?access token could not be refreshed\b.*|refresh token was already used\b.*|refresh_token_reused\b.*|Please (?:sign|log) in(?: again)?[.!]?)\z",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRequired(WorkerProviderOutcome outcome)

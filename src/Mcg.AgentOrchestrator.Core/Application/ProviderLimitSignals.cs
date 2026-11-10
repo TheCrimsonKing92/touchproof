@@ -138,7 +138,7 @@ public static class ProviderLimitSignals
         var latestAvailabilityAt = observations
             .Where(observation =>
                 observation.Binding.Equals(requestedBinding) &&
-                observation.Verification.Succeeded &&
+                HasAvailabilityEvidence(observation.Verification) &&
                 IsCurrentAvailability(observation.Task, observation.Verification))
             .Select(observation => (DateTimeOffset?)observation.Verification.CompletedAt)
             .Max();
@@ -188,6 +188,11 @@ public static class ProviderLimitSignals
         hold = latest!;
         return latest is not null;
     }
+
+    // Exit zero alone says nothing about whether the provider completed a valid task response.
+    internal static bool HasAvailabilityEvidence(TaskVerificationRecord verification) =>
+        verification.Succeeded && verification.CompletionVerdictVerifiedSuccess &&
+        verification.ProviderFailureKind == ProviderFailureKind.Unknown;
 
     private static bool HasExplicitBudgetRecoveryForBinding(
         TaskSpec task,

@@ -83,10 +83,13 @@ public sealed class ProviderAuthenticationRecoveryTests
     [InlineData("Not signed in", ProviderFailureKind.AuthenticationRequired)]
     [InlineData("Error: invalid API key", ProviderFailureKind.AuthenticationRequired)]
     [InlineData("Error: credentials have expired", ProviderFailureKind.AuthenticationRequired)]
+    [InlineData("ERROR: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.", ProviderFailureKind.AuthenticationRequired)]
     [InlineData("{\"error\":{\"message\":\"401 Unauthorized\"}}", ProviderFailureKind.AuthenticationRequired)]
     [InlineData("403 Forbidden", ProviderFailureKind.Unknown)]
     [InlineData("Permission denied: C:\\credentials", ProviderFailureKind.Unknown)]
     [InlineData("The test expects Not signed in", ProviderFailureKind.Unknown)]
+    [InlineData("The test expects ERROR: Your access token could not be refreshed because your refresh token was already used.", ProviderFailureKind.Unknown)]
+    [InlineData("```text\nERROR: Your access token could not be refreshed because your refresh token was already used.\n```", ProviderFailureKind.Unknown)]
     [InlineData("WORKER_RESULT:\nNot signed in\nEND_WORKER_RESULT", ProviderFailureKind.Unknown)]
     [InlineData("API error (status 402 Payment Required): Grok Build usage balance exhausted", ProviderFailureKind.BudgetExhausted)]
     public void Adapter_UsesAuthoritativeFailureEvidence(string stderr, ProviderFailureKind expected)

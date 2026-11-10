@@ -86,7 +86,7 @@ public sealed class ProviderResetGenerationTests
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
         fixture.Kernel.RecordTaskVerification(waiting.Id, task.Id,
             new("fixture", fixture.Workspace.ExecutionDirectory, exitCode, "AVAILABLE", "", fixture.Clock.UtcNow,
-                ProviderFailureKind: kind, DispatchStartedAt: fixture.Due));
+                ProviderFailureKind: kind, DispatchStartedAt: fixture.Due, CompletionVerdictVerifiedSuccess: exitCode == 0));
         var row = Row(fixture);
         Assert.False(row.Schedule!.ProbeInFlight);
         Assert.Equal(1, row.Schedule.Attempt);
@@ -115,7 +115,7 @@ public sealed class ProviderResetGenerationTests
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
         fixture.Kernel.RecordTaskVerification(waiting.Id, task.Id,
             new("fixture", fixture.Workspace.ExecutionDirectory, 0, "AVAILABLE", "", fixture.Clock.UtcNow,
-                DispatchStartedAt: fixture.Due));
+                DispatchStartedAt: fixture.Due, CompletionVerdictVerifiedSuccess: true));
         var row = Row(fixture);
         Assert.Equal(replacement.Id, row.Hold.SourceGoalId);
         Assert.Equal(placed, row.Hold.PlacedAt);
@@ -197,6 +197,103 @@ public sealed class ProviderResetGenerationTests
         fixture.Tick();
         Assert.Equal(2, fixture.Calls);
         Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+    }
+
+    [Fact]
+    public void SuccessTiedWithExhaustion_KeepsHoldAndRecoverySchedule()
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        var success = fixture.NewGoal();
+        var task = success.Tasks.Single();
+        fixture.Kernel.RecordTaskDispatch(success.Id, task.Id,
+            new("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory, fixture.Clock.UtcNow.AddSeconds(-1), ProviderName: "xAI"));
+        fixture.Kernel.RecordTaskVerification(success.Id, task.Id,
+            new("fixture", fixture.Workspace.ExecutionDirectory, 0, "Verified response", "", fixture.Clock.UtcNow,
+                CompletionVerdictVerifiedSuccess: true));
+        var row = Row(fixture);
+        Assert.NotNull(row.Schedule);
+        Assert.Equal(1, row.Schedule.Attempt);
+        Assert.Equal(fixture.Due, row.Schedule.NextProbeAt);
+        fixture.Clock.UtcNow = fixture.Due;
+        fixture.Tick();
+        Assert.Equal(1, fixture.Calls);
+        Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConsecutiveTaskOutcomes_PreserveBackoffAfterLaterExhaustion(bool reset)
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        fixture.Clock.UtcNow = fixture.Due;
+        if (reset) Reset(fixture, "current", fixture.Due);
+        var kinds = new[] { ProviderFailureKind.AuthenticationRequired, ProviderFailureKind.Unknown,
+            ProviderFailureKind.BudgetExhausted, ProviderFailureKind.BudgetExhausted };
+        for (var i = 0; i < kinds.Length; i++)
+        {
+            fixture.Clock.UtcNow = Row(fixture).Schedule!.NextProbeAt;
+            var waiting = fixture.NewGoal();
+            var task = waiting.Tasks.Single();
+            fixture.WaitingTask = task.Id;
+            ProviderBudgetProbeAdmission.Apply(fixture.Kernel, waiting, [task.Id], fixture.Preflight, fixture.Clock.UtcNow);
+            var started = fixture.Clock.UtcNow;
+            fixture.Kernel.RecordTaskDispatch(waiting.Id, task.Id,
+                new("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory, started, ProviderName: "xAI"));
+            fixture.Clock.UtcNow = started.AddMinutes(1);
+            fixture.Kernel.RecordTaskVerification(waiting.Id, task.Id,
+                new("fixture", fixture.Workspace.ExecutionDirectory, 1, "", "fixture", fixture.Clock.UtcNow,
+                    ProviderFailureKind: kinds[i], DispatchStartedAt: started));
+            var row = Row(fixture);
+            Assert.Equal(i + 2, row.Schedule!.Attempt);
+            Assert.Equal(reset ? "current" : null, row.Schedule.ResetIntentId);
+            Assert.Equal(fixture.Clock.UtcNow.AddMinutes(Math.Min(30 * Math.Pow(2, i + 1), 360)), row.Schedule.NextProbeAt);
+            Assert.False(row.Schedule.ProbeInFlight);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainedCheck_UsesOtherGoalsBindingHistory(bool priorCheck)
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("failed");
+        if (priorCheck)
+        {
+            fixture.Clock.UtcNow = fixture.Due;
+            fixture.Tick();
+        }
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+        var latest = fixture.NewGoal();
+        fixture.Exhaust(latest);
+        fixture.Kernel.CancelGoal(latest.Id, "Retain the latest source without reopening it.");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel, TestContext.Current.CancellationToken);
+        Assert.Equal(1, fixture.Kernel.EvictTerminalGoalAggregates([latest.Id]));
+        var row = Row(fixture);
+        Assert.Equal(latest.Id, row.Hold.SourceGoalId);
+        Assert.Equal(priorCheck ? 3 : 2, row.Schedule!.Attempt);
+        fixture.Clock.UtcNow = row.Schedule.NextProbeAt;
+        var calls = 0;
+        var adapter = new ProviderHoldAvailabilityProbe(WorkerProfileCatalog.Default(), (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new WorkerProcessRunResult(0, "AVAILABLE", "", false));
+        });
+        var recorder = new ProviderResetRetainedSourceRecorder(() => repository);
+        var prober = new ProviderHoldStandaloneProbe(adapter, fixture.Writer, fixture.Preflight,
+            recorder.RecordCheck, () => fixture.Clock.UtcNow);
+        prober.ObserveTick(fixture.Kernel, fixture.Clock.UtcNow);
+        Assert.Equal(1, calls);
+        Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        var stored = await repository.LoadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(GoalStatus.Cancelled, stored.GetGoal(latest.Id).Status);
+        Assert.Empty(ProviderUsageHoldView.Read(stored.ProviderHoldScope, fixture.Clock.UtcNow));
+        var check = Assert.Single(stored.GetGoal(latest.Id).Timeline.Where(evt =>
+            ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _)));
+        Assert.True(ProviderBudgetHoldSchedules.TryParseStandaloneResult(check, out var result));
+        Assert.Equal(row.Schedule.Attempt, result.Attempt);
+        Assert.Equal("available", result.Outcome);
     }
 
     [Fact]

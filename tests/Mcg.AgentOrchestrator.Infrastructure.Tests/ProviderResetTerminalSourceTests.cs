@@ -350,7 +350,8 @@ public sealed class ProviderResetTerminalSourceTests
             Kernel.ActivateGoal(goal.Id, Agents);
             Kernel.RecordTaskDispatch(goal.Id, goal.Tasks.Single().Id, new("grok-cli", "grok", Root, Clock.UtcNow, ProviderName: "xAI"));
             Clock.UtcNow = Clock.UtcNow.AddMinutes(1);
-            Kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id, new("grok", Root, 0, "Success", "", Clock.UtcNow));
+            Kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id, new("grok", Root, 0, "Success", "", Clock.UtcNow,
+                CompletionVerdictVerifiedSuccess: true));
             Assert.False(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(Kernel.ProviderHoldScope, Binding, out _));
         }
 

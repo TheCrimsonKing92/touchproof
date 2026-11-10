@@ -244,13 +244,13 @@ public static class ProviderBudgetHoldSchedules
         var recoveryAt = tasks.Where(task => task.LatestProviderBudgetRecoveryAt is not null)
             .Where(task => task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= task.LatestProviderBudgetRecoveryAt) is { } dispatch && IsBinding(dispatch, hold.BindingKey))
             .Select(task => task.LatestProviderBudgetRecoveryAt!.Value)
-            .Concat(observations.Where(item => item.Verification.Succeeded &&
+            .Concat(observations.Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&
                 IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!)).Select(item => item.Verification.CompletedAt))
             .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var notes = all.SelectMany(goal => goal.Timeline.Select((evt, index) => (Goal: goal, Event: evt, Index: index))).ToArray();
         var reset = LatestReset(all, hold.BindingKey);
         var firstExhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt > recoveryAt).Min(item => item.Verification.CompletedAt);
+            item.Verification.CompletedAt >= recoveryAt).Min(item => item.Verification.CompletedAt);
         if (reset?.AppliedAt < firstExhaustion) reset = null;
         var standaloneHistory = notes.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
             SameBinding(result.BindingKey, hold.BindingKey) && result.PlacedAt >= firstExhaustion &&
@@ -271,15 +271,19 @@ public static class ProviderBudgetHoldSchedules
                 return observations.FirstOrDefault(item => item.Task == task && item.Dispatch == dispatch);
             })
             .Where(item => item.Verification is not null).Distinct().ToArray();
-        var completedProbes = probeResults.Where(item => IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!))
+        // Applicability is judged at completion; a later exhaustion must not erase prior attempts.
+        bool InCurrentGeneration((TaskSpec Task, TaskVerificationRecord Verification, TaskDispatchRecord? Dispatch) item) =>
+            IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!, item.Verification.CompletedAt) &&
+            (reset is null || LatestReset(all, hold.BindingKey, item.Verification.CompletedAt)?.Marker.IntentId == reset.Marker.IntentId);
+        var completedProbes = probeResults.Where(InCurrentGeneration)
             .Select(item => item.Verification)
-            .Where(verification => verification is not null && verification.CompletedAt > (reset is null ? exhaustion.CompletedAt : firstExhaustion) &&
-                (reset is null || verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted))
+            .Where(verification => verification is not null && verification.CompletedAt >= firstExhaustion &&
+                verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted)
             .Select(verification => verification!).Distinct().ToArray();
         var k = observations.Count(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt > recoveryAt && (reset is null ||
+            item.Verification.CompletedAt >= recoveryAt && (reset is null ||
                 item.Dispatch!.DispatchedAt >= reset.AppliedAt && item.Dispatch.DispatchedAt >= reset.Marker.ResetAt &&
-                IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch)));
+                InCurrentGeneration(item)));
         var attempt = (reset is null ? Math.Max(1, k) : 1 + k) + completedProbes.Length + standalone.Length;
         DateTimeOffset? resetAt = null;
         var source = "backoff";

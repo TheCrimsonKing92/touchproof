@@ -131,7 +131,7 @@ public sealed class ProviderHoldHistoryTests
         kernel.RecordTaskVerification(goal.Id, task.Id, new("fixture", @"C:\fixture", success ? 0 : 1,
             "", success ? "" : "Provider budget exhausted.", at.AddMinutes(1),
             ProviderFailureKind: success ? ProviderFailureKind.Unknown : ProviderFailureKind.BudgetExhausted,
-            DispatchStartedAt: at));
+            DispatchStartedAt: at, CompletionVerdictVerifiedSuccess: success));
         return goal;
     }
 
