@@ -1599,6 +1599,8 @@ public sealed partial class AgentOrchestratorKernel
         EnsureGoalCanResumeWork(goal);
         var task = goal.FindTask(taskId);
 
+        this.EnsurePlannerOperatorEvidenceReady(goalId, taskId);
+
         if (task.LastVerification?.Succeeded is true)
         {
             throw new InvalidOperationException($"Task '{taskId}' already has passing verification; retry the task before dispatching it again.");

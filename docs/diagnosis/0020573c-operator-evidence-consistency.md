@@ -1,0 +1,39 @@
+# Accepted Planner operator evidence consistency
+
+This is a slice of backlog `cc03b769`. It checks prospective operator requests at next-role readiness; it does not complete the broader backlog or establish a shared cause for every historical rejection.
+
+## Authority and behavior
+
+`PlannerOperatorEvidenceConsistency.Evaluate` uses `PlannerEvidenceCompletion.TryGetCurrentAcceptedBatch` and requires the matching host-recorded human-input identity and payload. Goal, Planner task, brief, criterion version/text and accepted-round criteria identity must agree. Obsolete, failed, malformed and unbound rounds cannot establish ownership. Retrievable prerequisite requests are outside this prospective-request check.
+
+API Planner execution now captures and persists its criteria hash beside the existing brief binding, before invoking the provider. The operator consistency evaluator refuses a missing or changed API criteria identity; it does not retrofit historical API output with current criteria. Existing acceptance ownership projection keeps its existing behavior.
+
+`Goal.DescribeOperatorEvidenceOwnershipProblem` consults the current validated criterion obligation and existing refined ownership declarations. Explicit `criterion-evidence-map` repairs retain their existing authority. Lifecycle declarations alone, REAL-WORLD-DEPENDENT classification, request prose and Reviewer verdicts supply no ownership. Missing or conflicting declarations produce one typed `PlannerOperatorEvidenceConsistencyHold`, containing all discrepancies in stable order, with criterion, request, source identity, task, evidence key and declaration details.
+
+Refinement and mapping already create the canonical operator obligation. Reconciliation preserves that record instead of publishing a second obligation: owner, scope, phase, candidate binding and receipts stay intact. The conductor holds before retry/dispatch decisions; subscription preparation, API execution and prepared process starts also refuse unresolved consistency before execution effects. Planner execution remains available for amendment. The normal hold tracker persists one logical hold; SQLite merge rejects stale hold publication/clearance over changed brief, criteria, obligations, Planner round or terminal state.
+
+`PlannerEvidenceReadiness` owns amendment/consistency decision ordering, and `ConductorGoalHoldTracker` owns outcome-to-hold tracking. The kernel keeps request synchronization while the consistency collaborator owns evaluation. The existing optional worktree-head lookup moved unchanged to `DispatchWorktreeRevision`. These extractions keep the existing large classes within their source-size ceilings.
+
+An authorized mapping clears consistency blocking on the next readiness evaluation. It does not answer the request or satisfy evidence. Existing Reviewer deferral and candidate-bound landing evidence rules continue to apply; conflicting operator declarations also remain worker-enforced in the attestation policy. Independent worker criteria and acceptance-owned criteria retain their own enforcement.
+
+## Historical source records and limits
+
+Source: packaged `goal/timeline.json`, SHA-256 `100233cb7151b272391de7557dc5ce64e38268a9ebac9bd397eec207a804c232`, under `.orchestrator-context/0020573c7cf941078b6540ec013a4dc2/authoritative/b8c15bcaef1b416eb4a86d314100a56e/typed/goal/timeline.json`. Its three `HumanInputReceived` operator projections answer the bound source-record requests. These are evidence records, never grants of ownership.
+
+| Goal | Recorded issue and source identities | Applicability |
+| --- | --- | --- |
+| `c99b3da4` | Planner `ef2e70549d1943a19740e22c07bd62b3` requested prospective operator evidence for criteria 1, 5 and 6: populated corpus/provenance, registered empirical report and historical no-code value bound. Reviewer `bb681d229fe845458b29d082df89ea7f` rejected those criteria at 2026-11-10 05:48 UTC. Explicit mapping intents `62686b61e1c443bf9d711ebda3ad967a`, `812beecc27b24501bd9714beabfa652d`, `0a5f2a13dd464acfab00f94bbb93418e` followed at 06:00 UTC. | The prospective request shape is covered. Current mapped obligations remain pending operator evidence; this change would preserve them. |
+| `7d118915` | Request `fe7e142c90184d97b2bac71816838a9d`, key `recorded-duration-impact`, asks for a retained-duration coverage/savings estimate for criterion 11. Reviewer `2317537005674f05bf554ea18fbbae66` rejected deferral at 06:27 UTC. Mapping intent `a35999d7f07b4fc9969d9eb48aaf680d` followed at 06:29 UTC. | The prospective operator request shape is covered. Neither source nor this slice proves measured wall-time or CPU savings. |
+| `70326e62` | Planner `620c9cface24413bb1bf3a75974148e2` made three **retrievable prerequisite** requests for criterion 2 in brief v2; each has no operator owner. Reviewer `ba5377ac9dff4948b07fd00f6b3059b7` rejected historical discovery-provenance deferral at 07:58 UTC. Mapping intent `623986ea5e464ed28d3588e807cff0cc` followed at 08:00 UTC, for criterion version 1. | Outside this prospective operator slice. The delivered requests do not support the objective summary's implication that this case used the same request kind. Do not promote prerequisite answers into ownership. |
+
+The projections contain current mapped obligations and later map history, but no complete contemporaneous ownership-declaration snapshots. They support the request/rejection/repair sequence and the applicability distinctions above, not a definitive reconstruction of every earlier readiness decision. No historical paid replay was performed.
+
+## Verification ownership and operator fixture
+
+Developer authors the global-namespace classes `PlannerOperatorEvidenceConsistencyTests` and `PlannerOperatorEvidenceReadinessTests`; Acceptance executes them, plus `PlannerAcceptanceOwnershipTests`, `PlannerAcceptanceOwnershipLifecycleTests`, `GateOwnedCriterionDeferralTests` and `CriterionEvidenceWorkerRoutingTests`. Developer runs the sanctioned build only. No passing test execution or RED/GREEN receipt is claimed here.
+
+The predicted negative control is `OperatorFixture_HoldReplayMappingAndResumedReadinessPreserveAcceptedWork`: temporarily remove only `consistency(goal)?.ToOutcome(state)` from `PlannerEvidenceReadiness.GetHold`, retaining the amendment decision, types and test fixture. This restores the prior readiness decision; the first `Assert.IsType<ConductorAdvanceOutcome.Held>` must fail because the dispatch delegate runs. Restore the guard for GREEN. Acceptance owns executing the exact candidate and demonstrating this control; zero matched tests or setup/build failures are inconclusive.
+
+Operator criterion 12 can use the isolated fixture `PlannerOperatorEvidenceReadinessTests.OperatorFixture_HoldReplayMappingAndResumedReadinessPreserveAcceptedWork` without a live worker. It accepts a typed prospective operator request, retains completed Developer verification and an independent candidate-bound acceptance receipt, observes three identical holds across SQLite reloads, applies the existing authoritative mapping, and observes resumed readiness with the operator obligation still pending. Record the actual fixture run, candidate, hold identity, applied mapping and outstanding evidence receipt as the operator validation. Acceptance execution alone is not an operator validation claim in this report.
+
+For a supported CLI reproduction on an isolated fixture goal, inspect the hold, then queue `criterion-evidence-map --goal <goal> --criterion <number> --version <version> operator <required-scope> <finding-stable-id> <candidate-sha>` through `scripts/Invoke-OrchestratorCommand.ps1`. Confirm the intent was applied before re-evaluating readiness; queuing is not application. Use the exact authoritative criterion version and candidate, not a request's assertion of ownership. The CLI contract is in `docs/cli-reference.md#criterion-evidence-mappings`.

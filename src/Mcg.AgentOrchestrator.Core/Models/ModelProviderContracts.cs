@@ -37,7 +37,8 @@ public sealed record TaskExecutionRecord(
     int? PromptCharacterCount = null,
     string? FullOutput = null,
     bool OutputIsAuthoritative = true,
-    int? PlannerEvidenceBriefVersion = null)
+    int? PlannerEvidenceBriefVersion = null,
+    string? PlannerEvidenceCriteriaVersionHash = null)
 {
     public string? AuthoritativeOutput { get; init; } = FullOutput ?? (OutputIsAuthoritative ? Output : null);
 
