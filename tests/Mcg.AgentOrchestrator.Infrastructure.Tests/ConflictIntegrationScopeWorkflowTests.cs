@@ -69,6 +69,12 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot());
         Assert.False(fixture.Reload(restarted).IntegrateMainBeforeDeveloperDispatch(restarted.GetGoal(fixture.Goal.Id)).CanDispatch);
         Assert.Equal(requirement.Id, Assert.Single(restarted.HumanInputRequests.Where(item => !item.IsCompleted)).Id);
+        Assert.Collection(escalations,
+            reason => Assert.Equal(requirement.Question, reason),
+            reason => Assert.Equal("Goal is in AwaitingHumanInput state; operator action required", reason));
+        // The scope wait above is expected. Observe settlement escalations separately so
+        // approval must proceed cleanly and an unapproved edit must fail exactly once.
+        escalations.Clear();
         var approval = fixture.Intent(paths: approved ? ["src/Other.cs"] : ["src/Unused.cs"]);
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
         Assert.True(requirement.IsCompleted);
