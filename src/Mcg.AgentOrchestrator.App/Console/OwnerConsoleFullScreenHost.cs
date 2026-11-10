@@ -84,7 +84,7 @@ internal static class OwnerConsoleFullScreenHost
                     () => coalescer?.Request(null, OwnerConsoleRefreshScope.All));
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
-            var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
+            var jointEvidence = new OwnerJointGateEvidenceStore(new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory).Observe, clock);
             var evidence = new OwnerActivityEvidenceLoader(item => item.EventKind == "acceptance-cohort"
                 ? jointEvidence.Read(item, cohortEvidence.Read(item)) : gateEvidence.Read(item) ?? jointEvidence.Read(item));
             var conductTail = new OwnerConsoleJsonlTail(workspace.ConductEventsLogPath);

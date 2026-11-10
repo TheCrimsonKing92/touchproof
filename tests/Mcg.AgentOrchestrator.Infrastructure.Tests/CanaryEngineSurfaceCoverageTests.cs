@@ -55,6 +55,8 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Theory]
+    [InlineData("BuildReceiptLedger")]
+    [InlineData("BuildReceiptSite")]
     [InlineData("FocusedEvidenceMethodResolver")]
     [InlineData("HeavyFixtureGitLaunchBoundCheck")]
     public void Direct_acceptance_collaborators_trigger_canary(string helper)
