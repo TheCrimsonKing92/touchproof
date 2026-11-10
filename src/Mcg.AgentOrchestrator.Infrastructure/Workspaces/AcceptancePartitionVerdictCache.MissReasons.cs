@@ -16,6 +16,8 @@ internal static class PartitionVerdictMissReasons
     internal const string NoGreenVerdictForWholeProjectClosure = "no-green-verdict-for-whole-project-closure";
     internal const string IdenticalTreeClosureHashMismatch = "identical-tree-closure-hash-mismatch";
     internal const string MissingStructuralCoverageEvidence = "missing-structural-coverage-evidence";
+    internal const string NonreusableAuthoritativeVerdict = "nonreusable-authoritative-verdict";
+    internal const string ClosureSourceNotAuthoritative = "closure-source-not-authoritative";
 }
 
 internal sealed record PartitionVerdictMissReceipt(string LaneId, string Reason, string? ClosureHash, string? ReasonCode = null);
