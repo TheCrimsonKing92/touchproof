@@ -6,23 +6,25 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // A conductor-owned reference to one pending retry, validated against live git state.
 internal static class ConductorConflictIntegrationMarker
 {
-    private sealed record Marker(string TaskId, DateTimeOffset RetryAt, string OriginalHead, string MainSha);
+    private sealed record Marker(string TaskId, DateTimeOffset RetryAt, string OriginalHead, string MainSha,
+        RetryCause? PendingRetryCause = null);
 
     internal static void Write(TaskSpec task, string worktree, string originalHead, string mainSha)
     {
         if (task.LatestRetryAt is not { } retryAt)
             throw new InvalidOperationException("Conductor integration requires a recorded retry time.");
-        File.WriteAllText(MarkerPath(worktree), JsonSerializer.Serialize(new Marker(task.Id.Value, retryAt, originalHead, mainSha)));
+        File.WriteAllText(MarkerPath(worktree), JsonSerializer.Serialize(new Marker(task.Id.Value, retryAt, originalHead, mainSha, task.PendingRetryCause)));
     }
 
     internal static bool Admits(TaskSpec task, string worktree)
     {
-        if (task.RequiredRole != AgentRole.Developer || task.PendingRetryCause != RetryCause.MainDriftConflict)
+        if (task.RequiredRole != AgentRole.Developer)
             return false;
         try
         {
             var marker = JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath(worktree)));
-            return marker is not null && marker.TaskId == task.Id.Value && marker.RetryAt == task.LatestRetryAt &&
+            return marker is not null && task.PendingRetryCause == (marker.PendingRetryCause ?? RetryCause.MainDriftConflict) &&
+                marker.TaskId == task.Id.Value && marker.RetryAt == task.LatestRetryAt &&
                 Matches(worktree, "HEAD", marker.OriginalHead) && Matches(worktree, "MERGE_HEAD", marker.MainSha);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)

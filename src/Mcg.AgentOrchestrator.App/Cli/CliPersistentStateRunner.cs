@@ -238,7 +238,7 @@ internal static partial class CliPersistentStateRunner
         if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
-            if (args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase)) return SubmitPolicyChangeApprovalIntent(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
+            if (CliScopeApprovalCommands.IsCommand(args)) return CliScopeApprovalCommands.Submit(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
             if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
                 var submitArgs = OperatorIntentSubmissionOutput.PrepareOperatorIntentArguments(
@@ -1831,7 +1831,7 @@ internal static partial class CliPersistentStateRunner
             command.RetryCause);
     }
 
-    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag) =>
+    internal static string? ResolveFlagValue(IReadOnlyList<string> args, string flag) =>
         CliCriterionEvidenceIntents.ResolveFlagValue(args, flag);
 
     private static bool ExecuteGoalScopedTaskMutationCommand(
@@ -3025,7 +3025,7 @@ internal static partial class CliPersistentStateRunner
         }
     }
 
-    private static GoalId ResolveSingleGoalCommandGoalId(
+    internal static GoalId ResolveSingleGoalCommandGoalId(
         ITransactionalOrchestratorStateRepository stateRepository,
         string? currentGoalId,
         string? idOrPrefix)

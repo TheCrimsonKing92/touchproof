@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Owns one integration round per candidate head. The journal is authoritative; the git marker
 // only allows the dispatcher to recognize the merge that this round has actually started.
-internal sealed class ConductorConflictIntegration(
+internal sealed partial class ConductorConflictIntegration(
     AgentOrchestratorKernel kernel, string executionDirectory, string integrationBranch,
     Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> retry,
     Func<Goal, DeveloperBranchIntegrationResult> inner,
@@ -20,7 +20,8 @@ internal sealed class ConductorConflictIntegration(
     internal const string OperationName = "conductor:conflict-integration";
     private sealed record Round(string OriginalHead, string MainSha, string[] ConflictPaths,
         string DeveloperTaskId, string[] LandingGoalPrefixes, DateTimeOffset? RetryAt = null, bool Admitted = false,
-        string? BuildCheck = null);
+        string? BuildCheck = null, string? RoundId = null, ScopeDecision[]? ScopeDecisions = null,
+        bool ScopeRequired = false, AdmissionScope? Admission = null);
 
     internal (bool Started, string Detail) TryRecord(Goal goal)
     {
@@ -54,7 +55,7 @@ internal sealed class ConductorConflictIntegration(
         }
         var paths = tree.ConflictPaths.Order(StringComparer.Ordinal).ToArray();
         var note = BuildNote(worktree, original, main, paths, objectiveReader ?? ReadObjective, out var prefixes);
-        var round = new Round(original, main, paths, developer.Id.Value, prefixes);
+        var round = new Round(original, main, paths, developer.Id.Value, prefixes, RoundId: Guid.NewGuid().ToString("N"));
         Save(goal, round, GoalOperationStatus.Begin);
         try
         {
@@ -74,8 +75,27 @@ internal sealed class ConductorConflictIntegration(
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var round = worktree is null ? null : RetireStaleRound(goal, worktree, "dispatch");
         var task = goal.Tasks.FirstOrDefault(item => item.RequiredRole == AgentRole.Developer && item.Status == WorkTaskStatus.Assigned);
+        if (round is not null && worktree is not null && !round.Admitted && ReadRef(worktree, integrationBranch) != round.MainSha)
+        {
+            Save(goal, round, GoalOperationStatus.Failed);
+            ConductorConflictIntegrationMarker.Remove(worktree);
+            return inner(goal);
+        }
+        if (round is not null && task?.Id.Value == round.DeveloperTaskId && worktree is not null &&
+            ReadRef(worktree, "HEAD") == round.OriginalHead && ReadRef(worktree, integrationBranch) == round.MainSha)
+        {
+            var captured = round.Admitted && round.Admission?.RetryAt == task.LatestRetryAt;
+            if (!captured && NeedsScopeDecision(goal, round, task))
+                return RequireScope(goal, round);
+            if (!captured && round.RetryAt != task.LatestRetryAt && task.PendingRetryCause == RetryCause.MainDriftConflict && HasScopeDecision(round))
+            {
+                round = round with { RetryAt = task.LatestRetryAt, Admitted = false, Admission = null };
+                Save(goal, round, GoalOperationStatus.Begin);
+            }
+        }
         if (round is null || worktree is null || task is null || task.Id.Value != round.DeveloperTaskId ||
-            task.PendingRetryCause != RetryCause.MainDriftConflict || round.RetryAt is null || task.LatestRetryAt != round.RetryAt ||
+            (task.PendingRetryCause != RetryCause.MainDriftConflict && round.ScopeDecisions is not { Length: > 0 }) ||
+            round.RetryAt is null || task.LatestRetryAt != round.RetryAt ||
             ReadRef(worktree, "HEAD") != round.OriginalHead || ReadRef(worktree, integrationBranch) != round.MainSha)
         {
             if (worktree is not null) RetireStaleRound(goal, worktree, "dispatch");
@@ -125,7 +145,7 @@ internal sealed class ConductorConflictIntegration(
         var candidate = Run(worktree, "rev-parse", "HEAD").Trim();
         string? failure;
         string? buildOutput = null;
-        try { failure = ValidateCandidate(worktree, round, candidate, out buildOutput); }
+        try { failure = ValidateCandidate(worktree, goal.Id.Value, round, candidate, out buildOutput); }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         { failure = "validation unavailable: " + exception.Message; }
         if (failure is null)
@@ -144,7 +164,7 @@ internal sealed class ConductorConflictIntegration(
             "; the operator integrates main into the goal branch";
     }
 
-    private string? ValidateCandidate(string worktree, Round round, string head, out string? buildOutput)
+    private string? ValidateCandidate(string worktree, string goalId, Round round, string head, out string? buildOutput)
     {
         buildOutput = null;
         if (ReadRef(worktree, "MERGE_HEAD") is not null) return "merge still in progress";
@@ -160,10 +180,10 @@ internal sealed class ConductorConflictIntegration(
         if (mergeTree.DrainTimedOut || mergeTree.ExitCode is not (0 or 1) || tree is null || tree.Length != 40 || !tree.All(Uri.IsHexDigit))
             return "scope check: could not read original merge tree";
         var outside = Run(worktree, "diff", "--name-only", "-z", tree, head).Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Except(round.ConflictPaths, StringComparer.Ordinal).ToArray();
+            .Except(round.ConflictPaths.Concat(AdmittedPaths(goalId, round)), StringComparer.Ordinal).ToArray();
         if (outside.Length > 0) return "scope check: changed outside recorded paths: " + string.Join(", ", outside);
         if (GitCli.IsWorktreeDirty(worktree)) return "resolution worktree is dirty";
-        foreach (var path in round.ConflictPaths)
+        foreach (var path in round.ConflictPaths.Concat(AdmittedPaths(goalId, round)).Distinct(StringComparer.Ordinal))
         {
             // A resolved deletion has no blob to scan.
             if (Run(worktree, "ls-tree", head, "--", path).Length == 0) continue;
@@ -180,10 +200,21 @@ internal sealed class ConductorConflictIntegration(
 
     private DeveloperBranchIntegrationResult Admit(Goal goal, TaskSpec task, string worktree, Round round)
     {
+        var admission = round.Admission?.RetryAt == task.LatestRetryAt ? round.Admission :
+            new AdmissionScope(goal.Id.Value, round.RoundId, round.OriginalHead, round.MainSha, task.LatestRetryAt,
+                ActiveApprovals(round).Select(item => item.IntentId).ToArray(),
+                ActiveApprovals(round).SelectMany(item => item.Request.Paths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+        round = round with { Admitted = true, Admission = admission };
+        Save(goal, round, GoalOperationStatus.Begin);
+        if (admission.Paths.Length > 0)
+            kernel.RecordTaskNote(goal.Id, task.Id, $"Integration scope amendment for round {round.RoundId}: " +
+                "the earlier edit-only limit now also permits these exact adjacent files: " + string.Join(", ", admission.Paths) +
+                ". Resolve the original conflicts and preserve all merge, clean-tree and build requirements. " +
+                "This admission's captured authority is recorded in the integration journal.");
         ConductorConflictIntegrationMarker.Write(task, worktree, round.OriginalHead, round.MainSha);
-        Save(goal, round with { Admitted = true }, GoalOperationStatus.Begin);
-        return new(DeveloperBranchIntegrationStatus.ConflictAdmitted, "Conductor admitted integration merge; edit only " + string.Join(", ", round.ConflictPaths),
-            round.ConflictPaths, round.OriginalHead, round.MainSha, round.OriginalHead);
+        return new(DeveloperBranchIntegrationStatus.ConflictAdmitted, "Conductor admitted integration merge; edit only " +
+            string.Join(", ", round.ConflictPaths.Concat(admission.Paths)),
+            round.ConflictPaths, round.OriginalHead, round.MainSha, round.OriginalHead) { ApprovedAdditionalPaths = admission.Paths };
     }
 
     private Round? OpenRound(Goal goal)
@@ -192,8 +223,14 @@ internal sealed class ConductorConflictIntegration(
         var entry = journal.LatestByOperation.SingleOrDefault(item => item.Operation == OperationName);
         if (entry?.Status != GoalOperationStatus.Begin) return null;
         var round = ReadRound(entry);
+        if (goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        {
+            Save(goal, round, GoalOperationStatus.Failed);
+            return null;
+        }
         return journal.Entries.Any(item => item.Operation == OperationName &&
-            item.Status is GoalOperationStatus.Completed or GoalOperationStatus.Failed && ReadRound(item).OriginalHead == round.OriginalHead)
+            item.Status is GoalOperationStatus.Completed or GoalOperationStatus.Failed &&
+            (round.RoundId is null ? ReadRound(item).OriginalHead == round.OriginalHead : ReadRound(item).RoundId == round.RoundId))
             ? null : round;
     }
 
