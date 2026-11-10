@@ -56,7 +56,16 @@ internal sealed class ImpactReplayRunSink : IImpactReplaySink, IDisposable
     }
 
     public void Diagnostic(ImpactReplayDiagnostic diagnostic) => Change(p => p with { Skipped = p.Skipped + 1 },
-        persist: p => _store.AddDiagnostic(diagnostic, p));
+        persist: p =>
+        {
+            try { _store.AddDiagnostic(diagnostic, p); }
+            catch (Exception ex)
+            {
+                // Rollback removes the diagnostic payload too; retain it in the terminal failure evidence.
+                throw new ImpactReplayObservationException(
+                    $"Impact replay diagnostic persistence failed: {ImpactReplayCheckpointStore.Serialize(diagnostic)}", ex);
+            }
+        });
 
     public void CompleteCase(ImpactReplayCaseResult result)
     {

@@ -197,10 +197,23 @@ public sealed class ImpactReplayCheckpointTests
 
         Assert.Equal(1, fixture.Run());
 
+        var status = fixture.Status();
         Assert.Equal(0L, fixture.Sql("SELECT count(*) FROM diagnostics"));
-        Assert.Equal(0, fixture.Status().Progress.Skipped);
-        Assert.Equal("failed", fixture.Status().Completion);
+        Assert.Equal(0L, fixture.Sql("SELECT count(*) FROM cases"));
+        Assert.Equal(0, status.Progress.Skipped);
+        Assert.Equal(0, status.Progress.Completed);
+        Assert.Equal("failed", status.Completion);
+        Assert.Contains("\"source\":\"receipt\"", fixture.Error.ToString());
+        Assert.Contains("\"reason\":\"malformed\"", fixture.Error.ToString());
         Assert.Contains("injected diagnostic fault", fixture.Error.ToString());
+        var failure = Assert.Single(status.Errors);
+        Assert.Contains("\"source\":\"receipt\"", failure);
+        Assert.Contains("\"reason\":\"malformed\"", failure);
+        Assert.Contains("injected diagnostic fault", failure);
+        Assert.Contains("durability unconfirmed", failure);
+        Assert.Equal(fixture.Error.ToString(), fixture.Error.Flushed);
+        Assert.Equal("", fixture.Output.ToString());
+        Assert.False(File.Exists(Path.Combine(fixture.Destination, "impact-replay.json")));
     }
 
     [Fact]
