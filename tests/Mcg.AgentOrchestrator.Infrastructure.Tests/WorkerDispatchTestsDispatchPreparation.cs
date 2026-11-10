@@ -33,6 +33,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             ProviderName: "OpenAI", ModelName: "gpt-6-sol", RetryContextFingerprint: fingerprint,
             PaidRoute: PaidRouteClassification.Paid, AssignedAgentId: agent.Id.Value);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        Assert.Equal(EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
+            task.LastDispatch!.PlannerEvidenceCriteriaVersionHash);
+        var recordedDispatch = JsonSerializer.Serialize(task.LastDispatch);
         kernel.RecordPreparedRetryAdmission(goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
             at, reservationOwnerId: "owner", reservationLeaseExpiresAt: at.AddMinutes(1));
         if (phase != "unclaimed")
@@ -51,7 +54,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var receipt = Assert.Single(task.RetryAdmissionHistory);
         Assert.Equal(expectedRefresh, new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, true));
         Assert.False(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, false));
-        Assert.Equal(dispatch, task.LastDispatch);
+        Assert.Equal(recordedDispatch, JsonSerializer.Serialize(task.LastDispatch));
         Assert.Equal(receipt, Assert.Single(task.RetryAdmissionHistory));
     }
 

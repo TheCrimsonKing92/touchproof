@@ -26,17 +26,20 @@ public sealed class ImpactReplayBalancedPoolMissTests
     }
 
     [Fact]
-    public void RecordedPoolFlake_KeepsClassificationAndCountsSkippedFailure()
+    public void RecordedPoolFlake_KeepsClassificationAndExcludesMiss()
     {
         using var fixture = new ImpactReplayFixture(balancedPool: true);
         fixture.AddAttempt("pool-flake", failingPoolBeta: true);
         fixture.AddFlake("pool-flake", "Infrastructure tests: Balanced 2", "PoolBetaTests");
-        var (report, _) = fixture.Run();
+        var (report, markdown) = fixture.Run();
         var attempt = Assert.Single(report.Attempts);
         var failure = Assert.Single(attempt.FailingClasses);
         Assert.True(failure.IsFlakyFailureInSkippedLane);
-        Assert.False(failure.IsMiss); // Preserve the legacy field's classification.
-        Assert.Equal(1, report.Measurement!.MissCount);
+        Assert.False(failure.IsMiss);
+        Assert.Equal(0, report.Measurement!.MissCount);
+        Assert.Equal(1, report.Measurement.FlakeExcludedCount);
+        Assert.Contains("## Flaky failures in skipped lanes", markdown);
+        Assert.Contains("SampleTests.PoolBetaTests", markdown);
         Assert.True(attempt.MissCheckComplete);
     }
 

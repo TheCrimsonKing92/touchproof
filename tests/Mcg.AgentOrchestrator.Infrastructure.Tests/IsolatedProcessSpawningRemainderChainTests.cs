@@ -2,6 +2,7 @@ using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel safe: reads metadata and the checked-in manifest; controls change only local copies.
+[TestAssemblyMembership]
 public sealed class IsolatedProcessSpawningRemainderChainTests
 {
     private const string OriginalCollection = "IsolatedProcessSpawning";

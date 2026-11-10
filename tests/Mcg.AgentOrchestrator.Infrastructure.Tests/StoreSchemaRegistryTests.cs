@@ -84,12 +84,32 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("progressive-review-glance-circuit.db", StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.Database);
         Assert.Equal(1, StoreSchemaRegistry.CollaborationItems.CurrentVersion);
         Assert.Equal("collaboration-items.db", StoreSchemaRegistry.CollaborationItems.Database);
-        Assert.Equal(1, StoreSchemaRegistry.MergeTrainAcceptance.CurrentVersion);
+        Assert.Equal(2, StoreSchemaRegistry.MergeTrainAcceptance.CurrentVersion);
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
         Assert.Equal(4, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
+        var replay = Assert.Single(entries.Where(entry => entry.StoreName == "impact-replay-checkpoint"));
+        Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ImpactReplayCheckpointStore.cs", replay.SourceFile);
+        Assert.Equal("impact-replay.checkpoint.db", replay.Database);
+        Assert.Equal("report-artifact", replay.Family);
+        // The CLI owns its PRAGMA user_version schema; live-store setup must not create this artifact.
+        Assert.Null(replay.CurrentVersion);
+        Assert.DoesNotContain(replay.StoreName, StoreSetupRunner.RegisteredStoreNames);
+    }
+
+    [Fact]
+    public void MemberRecheckSchema_DeclaresExistingTrainStoreOwner()
+    {
+        const string source = "src/Mcg.AgentOrchestrator.Execution/Persistence/MergeTrainMemberRecheckStoreSetup.cs";
+        var fragment = Assert.Single(typeof(StoreSchemaRegistry).Assembly.GetTypes()
+            .SelectMany(type => type.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static))
+            .SelectMany(method => method.GetCustomAttributes<StoreSchemaSourceAttribute>())
+            .Where(attribute => attribute.SourceFile == source));
+        var owner = Assert.Single(StoreSchemaRegistry.Inventory.Where(entry => entry.StoreName == fragment.StoreName));
+        Assert.Equal(StoreSchemaRegistry.MergeTrainAcceptance, owner);
+        Assert.Equal(2, owner.CurrentVersion);
     }
 
     [Fact]

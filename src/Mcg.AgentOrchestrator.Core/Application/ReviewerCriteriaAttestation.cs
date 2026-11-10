@@ -62,7 +62,8 @@ internal static class ReviewerCriteriaAttestation
             {
                 var matches = goal.CriterionEvidenceObligations.Where(item =>
                     item.CriterionIndex == deferred.CriterionIndex &&
-                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version).ToArray();
+                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version &&
+                    item.State != CriterionEvidenceState.Repaired).ToArray();
                 if (matches.Length != 1)
                 {
                     nonPassingCriteriaDiagnostic =

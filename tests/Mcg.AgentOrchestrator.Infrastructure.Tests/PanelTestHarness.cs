@@ -27,8 +27,8 @@ internal sealed class PanelTestHarness : IDisposable
     internal AgentOrchestratorKernel Kernel { get; }
     internal Goal Goal { get; }
     internal ConductorJudgePanelCaseStore Store { get; }
-    internal PanelFakeJudge Sol { get; } = new("sol");
-    internal PanelFakeJudge Sonnet { get; } = new("sonnet");
+    internal PanelFakeJudge Sol { get; } = new("sol", "codex-cli");
+    internal PanelFakeJudge Sonnet { get; } = new("sonnet", "claude-cli");
     internal ConductorJudgePanelHost Host { get; }
     internal string Candidate { get; set; } = new('a', 40);
     internal ConductorJudgePanelHost NewHost() => new(Store, Sol, Sonnet, _ => Candidate,
@@ -61,7 +61,7 @@ internal sealed class PanelTestHarness : IDisposable
     }
 }
 
-internal sealed class PanelFakeJudge(string judge) : IConductorPanelJudgeRunner
+internal sealed class PanelFakeJudge(string judge, string? profile = null) : IConductorPanelJudgeRunner
 {
     private int _calls;
     private TaskCompletionSource<bool>? _release;
@@ -71,6 +71,7 @@ internal sealed class PanelFakeJudge(string judge) : IConductorPanelJudgeRunner
     internal Func<PanelCase, string> Reply { get; set; } = item => PanelTestHarness.Answer(item.Id);
     internal PanelJudgeOutcome? Fault { get; set; }
     public string Judge => judge;
+    public string? WorkerProfileName => profile;
     public string? BindingError { get; set; }
     internal void Hold() => _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal void Release() => _release!.TrySetResult(true);
@@ -87,6 +88,6 @@ internal sealed class PanelFakeJudge(string judge) : IConductorPanelJudgeRunner
             _ => Reply(item)
         };
         return new(Judge, Fault ?? PanelV0Contract.Validate(answer, item.Id),
-            Fault == PanelJudgeOutcome.InvocationFailed ? 1 : 0, answer, "");
+            Fault == PanelJudgeOutcome.InvocationFailed ? 1 : 0, answer, "", WorkerProfileName: profile, ModelAlias: "fake-model");
     }
 }

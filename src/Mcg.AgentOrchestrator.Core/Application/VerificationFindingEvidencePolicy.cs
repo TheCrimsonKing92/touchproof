@@ -14,11 +14,13 @@ internal static class VerificationFindingEvidencePolicy
         var matches = version is null
             ? []
             : goal.CriterionEvidenceObligations.Where(item =>
-                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value).ToArray();
+                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value &&
+                item.State != CriterionEvidenceState.Repaired).ToArray();
         var obligation = matches.Length == 1 ? matches[0] : null;
         // A legacy/malformed record has no authoritative ownership; do not
         // convert it into a deferred obligation based on worker prose.
         return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown ||
+            (obligation.Owner == CriterionEvidenceOwner.Operator && goal.DescribeOperatorEvidenceOwnershipProblem(criterionIndex) is not null) ||
             !goal.HasCurrentPlannerExecutionAuthority(obligation);
     }
 

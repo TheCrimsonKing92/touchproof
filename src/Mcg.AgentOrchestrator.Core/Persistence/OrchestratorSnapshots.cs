@@ -180,7 +180,8 @@ public sealed record TaskExecutionSnapshot(
     int? PromptCharacterCount = null,
     int? CachedInputTokens = null,
     string? AuthoritativeOutput = null,
-    int? PlannerEvidenceBriefVersion = null)
+    int? PlannerEvidenceBriefVersion = null,
+    string? PlannerEvidenceCriteriaVersionHash = null)
 {
     public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
 }
@@ -286,7 +287,8 @@ public sealed record TaskDispatchSnapshot(
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
     int WorkerBuildProtocolVersion = 0,
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
-    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
+    string? PlannerEvidenceCriteriaVersionHash = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

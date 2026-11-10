@@ -592,6 +592,9 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     internal bool CancelForOperator(ConductorGroupedGateAttempt attempt, string intentId) =>
         StopRunningAttempt(attempt, $"operator-gate-cancel:{intentId}", $"refused:operator-cancelled intent={intentId}");
 
+    internal bool CancelForSupersededCandidate(ConductorGroupedGateAttempt attempt, string goalId, string gated, string head) =>
+        StopRunningAttempt(attempt, $"candidate-superseded:{goalId}", $"refused:candidate-superseded member={goalId} gated={gated} head={head}");
+
     internal bool AbandonForReopenedMember(ConductorGroupedGateAttempt attempt, string goalId, string intentId) =>
         StopRunningAttempt(attempt, $"cohort-member-reopened:{intentId}", $"refused:cohort-member-reopened goal={goalId} intent={intentId}");
 

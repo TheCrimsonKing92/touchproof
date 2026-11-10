@@ -7,14 +7,14 @@ internal sealed partial class ConductorJudgePanelHost
 {
     internal static ConductorJudgePanelHost CreateDefault(OrchestratorWorkspace workspace)
     {
-        ModelFunctionCatalog catalog;
-        try { catalog = ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath); }
-        // A deserialized null Bindings list fails in the shared loader before resolution.
-        catch (NullReferenceException) { catalog = new(null!); }
+        IReadOnlyList<IConductorPanelJudgeRunner> LoadJudges() =>
+            ConductorPanelBindingSnapshot.Load(() => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath));
+        var judges = LoadJudges();
         var store = new ConductorJudgePanelCaseStore(Path.Combine(workspace.OrchestratorDirectory, "judge-panel.db"));
         return new(store,
-            new CodexSolPanelJudgeRunner(catalog), new ClaudeSonnetPanelJudgeRunner(catalog),
-            goal => ResolveCandidate(workspace, goal), new ConductEventLogWriter(workspace.ConductEventsLogPath))
+            judges[0], judges[1],
+            goal => ResolveCandidate(workspace, goal), new ConductEventLogWriter(workspace.ConductEventsLogPath),
+            judgeLoader: LoadJudges)
         {
             Triggers = new(store, new(workspace.GoalLifecycleEventsDirectory, workspace.ConductEventsLogPath,
                 Path.Combine(workspace.OrchestratorDirectory, "author-claims.db"),

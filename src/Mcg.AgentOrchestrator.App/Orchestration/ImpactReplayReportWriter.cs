@@ -18,6 +18,13 @@ internal static class ImpactReplayReportWriter
     internal static string Render(ImpactReplayReport report)
     {
         var text = new StringBuilder("# Impact replay\n\n");
+        if (report.Run is { } run)
+        {
+            text.AppendLine($"Run: {run.RunId}");
+            text.AppendLine($"Checkpoint: {Cell(run.CheckpointPath)}");
+            text.AppendLine("Consult the checkpoint for completion state. Partial runs are not safety verdicts.");
+            text.AppendLine();
+        }
         text.AppendLine($"Floor source: {report.FloorSource}");
         if (report.FloorSource == "default")
             text.AppendLine("Default floor policy: Process spawning*, Isolated process spawning*, Chaos gate, Remainder merge train and ratchet.");
@@ -100,9 +107,12 @@ internal static class ImpactReplayReportWriter
             if (measurement.ClassLevel is { } classLevel)
                 ImpactReplayClassLevelReportWriter.AppendSummary(text, classLevel);
             text.AppendLine($"- Share of Infrastructure test seconds skipped (readable TRX durations): {(measurement.ShareOfTestSecondsSkipped is { } share ? Percent(share) : "unavailable")}");
-            text.AppendLine($"- Miss count (including recorded flakes): {measurement.MissCount}");
+            text.AppendLine($"- Miss count (true misses): {measurement.MissCount}");
+            text.AppendLine($"- Flake-excluded count (known flaky skipped failures): {measurement.FlakeExcludedCount}");
             text.AppendLine($"- Complete miss checks: {measurement.CompleteMissCheckCount}");
             text.AppendLine($"- Attempts with incomplete duration coverage: {measurement.IncompleteDurationCoverageCount}");
+            text.AppendLine();
+            text.AppendLine(measurement.Interpretation);
             if (measurement.ClassLevel is not null)
                 ImpactReplayClassLevelReportWriter.AppendAttempts(text, report.Attempts);
         }
@@ -131,6 +141,24 @@ internal static class ImpactReplayReportWriter
                 text.AppendLine($"| {Cell(item.Class)} | {Cell(item.Reason)} | {item.Attempts} | {Cell(string.Join(", ", item.FullNames))} |");
         }
         report.SourceReadingGuards?.AppendTo(text);
+        var declaredGuardAttempts = report.Attempts.Where(attempt => attempt.DeclaredGuards is { } guards &&
+            (guards.Selections.Count > 0 || !string.IsNullOrWhiteSpace(guards.DegradationReason))).ToArray();
+        if (declaredGuardAttempts.Length > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("## Declared guard selections");
+            text.AppendLine();
+            foreach (var attempt in declaredGuardAttempts)
+            {
+                var declared = attempt.DeclaredGuards!;
+                if (!string.IsNullOrWhiteSpace(declared.DegradationReason))
+                    text.AppendLine($"- {Cell(attempt.AttemptId)}: {Cell(declared.DegradationReason)}");
+                foreach (var guard in declared.Selections)
+                    text.AppendLine($"- {Cell(attempt.AttemptId)}: {Cell(guard.Project)} / {Cell(guard.ClassName)}; " +
+                        $"{Cell(guard.DependencyKind)}; declaration: {Cell(guard.DeclarationPath)}; " +
+                        $"inputs: {Cell(string.Join(", ", guard.TriggerPaths))}; {Cell(guard.Reason)}");
+            }
+        }
         return text.ToString();
     }
 
