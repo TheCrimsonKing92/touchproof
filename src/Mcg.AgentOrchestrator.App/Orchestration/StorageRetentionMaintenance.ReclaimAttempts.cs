@@ -201,7 +201,7 @@ internal static partial class StorageRetentionMaintenance
     private static TimeSpan MaxGrace(TimeSpan configured) =>
         configured > WorkerCompressionAge ? configured : WorkerCompressionAge;
 
-    private static TimeSpan MaxAttemptGrace(TimeSpan configured) =>
+    internal static TimeSpan MaxAttemptGrace(TimeSpan configured) =>
         configured > AcceptanceArtifactMaxAge ? configured : AcceptanceArtifactMaxAge;
 
     private static (bool Success, long BytesAttempted, string? ExceptionType) DeleteMeasuredFile(

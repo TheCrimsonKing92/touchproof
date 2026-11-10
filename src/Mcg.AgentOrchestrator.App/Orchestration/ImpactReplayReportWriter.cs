@@ -97,10 +97,14 @@ internal static class ImpactReplayReportWriter
             text.AppendLine($"- Changed source file count distribution: {string.Join(", ", measurement.ChangedSourceFileCountDistribution.Select(p => $"{p.Key}: {p.Value}"))}");
             text.AppendLine($"- Named-lane estimated seconds saved: {Number(measurement.NamedLaneSecondsSaved)}");
             text.AppendLine($"- Balanced-pool seconds saved: {Number(measurement.BalancedPoolSecondsSaved)}");
+            if (measurement.ClassLevel is { } classLevel)
+                ImpactReplayClassLevelReportWriter.AppendSummary(text, classLevel);
             text.AppendLine($"- Share of Infrastructure test seconds skipped (readable TRX durations): {(measurement.ShareOfTestSecondsSkipped is { } share ? Percent(share) : "unavailable")}");
             text.AppendLine($"- Miss count (including recorded flakes): {measurement.MissCount}");
             text.AppendLine($"- Complete miss checks: {measurement.CompleteMissCheckCount}");
             text.AppendLine($"- Attempts with incomplete duration coverage: {measurement.IncompleteDurationCoverageCount}");
+            if (measurement.ClassLevel is not null)
+                ImpactReplayClassLevelReportWriter.AppendAttempts(text, report.Attempts);
         }
         var unresolved = report.Attempts.SelectMany(a => (a.UnresolvedFailures ?? []).Select(f => (a.AttemptId, Failure: f))).ToArray();
         if (unresolved.Length > 0)

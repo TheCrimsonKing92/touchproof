@@ -149,6 +149,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceVerificationResult",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/BuildReceiptLedger",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/BuildReceiptSite",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CandidateRerunCheckClassifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CrosswalkAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",

@@ -12,7 +12,8 @@ internal enum EvidenceArtifactFamily
     RunEvents,
     DiagnosticDumps,
     MergeTrainEvidence,
-    CohortAcceptanceEvidence
+    CohortAcceptanceEvidence,
+    RelaunchBuildCaches
 }
 
 internal enum EvidenceRetentionAction
@@ -41,7 +42,8 @@ internal enum EvidenceOwnershipSource
 {
     Declared,
     InferredFromName,
-    Unresolved
+    Unresolved,
+    InferredFromDirectory
 }
 
 internal enum EvidenceEligibility

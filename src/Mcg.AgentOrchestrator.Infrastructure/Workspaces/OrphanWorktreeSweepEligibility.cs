@@ -22,33 +22,17 @@ internal sealed class OrphanWorktreeSweepEligibility
         return matches.Length == 0 ? null : matches.FirstOrDefault(goal => !goal.IsTerminal, matches[0]).Id;
     }
 
-    internal string Classify(string directory, IReadOnlySet<string> registered, DateTimeOffset referenceTime)
+    internal string Classify(string directory, IReadOnlySet<string> registered, DateTimeOffset referenceTime,
+        IReadOnlyList<GoalWorktreeRegistration>? records = null,
+        Func<string, IReadOnlyList<WorktreeLockHolder>>? findHolders = null)
     {
-        if (registered.Contains(GoalWorktreeLayout.NormalizePath(directory))) return "registered";
+        if (registered.Contains(GoalWorktreeLayout.NormalizePath(directory)))
+            return PrefixedWorktreeReclaim.Classify(directory, records, referenceTime, findHolders);
         var name = System.IO.Path.GetFileName(directory);
         var matches = goals.Where(goal => goal.Id.Value.StartsWith(name, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Any(goal => !goal.IsTerminal)) return "non-terminal-goal";
         if (matches.Length == 0 && name.Length == 8 && name.All(Uri.IsHexDigit)) return "goal-state-unavailable";
 
-        try
-        {
-            var pending = new Stack<FileSystemInfo>();
-            pending.Push(new DirectoryInfo(directory));
-            var cutoff = referenceTime.UtcDateTime - GraceWindow;
-            while (pending.TryPop(out var entry))
-            {
-                entry.Refresh();
-                // Never follow a junction/symlink or authorize deletion from missing metadata.
-                if (!entry.Exists || (entry.Attributes & FileAttributes.ReparsePoint) != 0) return "freshness-unknown";
-                if (entry.LastWriteTimeUtc >= cutoff) return "recent";
-                if (entry is DirectoryInfo childDirectory)
-                    foreach (var child in childDirectory.EnumerateFileSystemInfos()) pending.Push(child);
-            }
-            return "eligible";
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            return "freshness-unknown";
-        }
+        return WorktreeTreeFreshness.Classify(directory, referenceTime, GraceWindow);
     }
 }

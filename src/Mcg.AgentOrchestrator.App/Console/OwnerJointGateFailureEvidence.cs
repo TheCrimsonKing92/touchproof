@@ -7,11 +7,17 @@ using Microsoft.Data.Sqlite;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Joint gate evidence is observational: never construct a store (its constructor migrates it).
-internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory)
+internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory,
+    Func<string, AcceptanceTrxReadResult>? readTrx = null, Func<string, TextReader>? openOutput = null)
 {
     internal OwnerActivityTestEvidence? Read(OwnerConductEvent item, OwnerActivityTestEvidence? recorded = null)
     {
         if (item.EventKind != "acceptance-cohort" || !string.IsNullOrWhiteSpace(recorded?.FirstFailure)) return recorded;
+        return OwnerJointGateEvidenceStore.Compose(Observe(item), recorded);
+    }
+
+    internal OwnerJointGateEvidenceStore.Observation Observe(OwnerConductEvent item)
+    {
         var sources = new Sources();
         var kind = OwnerEventFields.Field(item, "kind");
         if (kind != "train") ReadCohort(item, sources);
@@ -23,7 +29,7 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
         {
             TryRead(() =>
             {
-                var result = AcceptanceTrxFailureReader.Read(Path.GetFullPath(path, directory));
+                var result = (readTrx ?? AcceptanceTrxFailureReader.Read)(sources.Snapshot.Track(path, directory));
                 sources.Found |= result.Status != AcceptanceTrxReadStatus.Missing;
                 foreach (var test in result.Failures)
                 {
@@ -36,11 +42,10 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
         {
             TryRead(() =>
             {
-                var fullPath = Path.GetFullPath(path, directory);
+                var fullPath = sources.Snapshot.Track(path, directory);
                 if (!File.Exists(fullPath)) return;
                 sources.Found = true;
-                using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var reader = new StreamReader(stream);
+                using var reader = (openOutput ?? OwnerJointGateEvidenceStore.OpenOutput)(fullPath);
                 while (reader.ReadLine() is { } line)
                     if (CompilerError(line) is { } error) { failure ??= error; break; }
             });
@@ -50,9 +55,7 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
         failure ??= check is not null ? "check " + check + (sources.ExitCode is { } code ? " exited " + code : " failed") :
             sources.ExitCode is { } exit ? "gate exited " + exit :
             sources.Found ? "recorded gate evidence contains no failure detail" : null;
-        if (failure is null) return recorded;
-        return new(recorded?.Tests.Count > 0 ? recorded.Tests : tests.Distinct().ToArray(),
-            recorded?.Checks.Count > 0 ? recorded.Checks : sources.Checks, recorded?.OwnTest ?? false, failure);
+        return new(failure is null ? null : new(tests.Distinct().ToArray(), sources.Checks, false, failure), sources.Snapshot);
     }
 
     private void ReadCohort(OwnerConductEvent item, Sources sources)
@@ -99,13 +102,13 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
             identity = "merge-train-v2-" + receipt["merge-train-receipt-".Length..];
         if (!SafeSegment(identity)) return;
         var directory = Path.Combine(orchestratorDirectory, "merge-train-evidence", identity!);
+        sources.Snapshot.TrainDirectory = directory;
         TryRead(() =>
         {
-            if (!Directory.Exists(directory)) return;
+            var verdict = sources.Snapshot.Track("gate-verdict.json", directory);
             // The retained copies are authoritative even if original result paths have disappeared.
-            var files = Directory.EnumerateFiles(directory, "*.trx").Order(StringComparer.Ordinal).ToArray();
+            var files = sources.Snapshot.TrainFiles();
             sources.Results.InsertRange(0, files.Select(path => (path, directory)));
-            var verdict = Path.Combine(directory, "gate-verdict.json");
             if (!File.Exists(verdict)) return;
             sources.Found = true;
             ReadJson(File.ReadAllText(verdict), root => AddJson(root, directory, sources));
@@ -117,9 +120,9 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
         var attempt = OwnerEventFields.Field(item, "attempt");
         if (!SafeSegment(attempt)) return;
         var directory = Path.Combine(orchestratorDirectory, "grouped-gate-attempts", attempt!);
-        var metadata = Path.Combine(directory, attempt + ".attempt.json");
         TryRead(() =>
         {
+            var metadata = sources.Snapshot.Track(attempt + ".attempt.json", directory);
             if (!File.Exists(metadata)) return;
             // Metadata alone is not a receipt, results file or captured output.
             ReadJson(File.ReadAllText(metadata), root => AddJson(root, directory, sources));
@@ -213,6 +216,7 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
 
     private sealed class Sources
     {
+        internal readonly OwnerJointGateEvidenceStore.SourceSnapshot Snapshot = new();
         internal readonly List<(string Path, string Directory)> Results = [];
         internal readonly List<(string Path, string Directory)> Outputs = [];
         internal readonly List<string> Checks = [];

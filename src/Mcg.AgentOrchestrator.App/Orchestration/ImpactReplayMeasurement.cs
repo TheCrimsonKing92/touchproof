@@ -3,7 +3,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record ImpactReplayMeasurement(int MaximumChangedSourceFiles,
     IReadOnlyDictionary<int, int> ChangedSourceFileCountDistribution, double NamedLaneSecondsSaved,
     double BalancedPoolSecondsSaved, double ObservedInfrastructureSeconds, double? ShareOfTestSecondsSkipped,
-    int MissCount, int CompleteMissCheckCount, int IncompleteDurationCoverageCount)
+    int MissCount, int CompleteMissCheckCount, int IncompleteDurationCoverageCount,
+    ImpactReplayClassLevelSummary? ClassLevel = null)
 {
     internal static ImpactReplayMeasurement Create(int maximum, IReadOnlyList<ImpactReplayAttemptRecord> attempts)
     {
@@ -13,6 +14,7 @@ internal sealed record ImpactReplayMeasurement(int MaximumChangedSourceFiles,
             seconds > 0 ? attempts.Sum(a => a.NamedLaneObservedSecondsSaved + a.PoolSecondsSaved) / seconds : null,
             attempts.Sum(a => a.FailingClasses.Where(f => f.Lane is not null && f.WouldRun == false)
                 .Select(f => f.ClassName).Distinct(StringComparer.Ordinal).Count()),
-            attempts.Count(a => a.MissCheckComplete), attempts.Count(a => !a.DurationCoverageComplete));
+            attempts.Count(a => a.MissCheckComplete), attempts.Count(a => !a.DurationCoverageComplete),
+            ImpactReplayClassLevelSummary.Create(attempts));
     }
 }
