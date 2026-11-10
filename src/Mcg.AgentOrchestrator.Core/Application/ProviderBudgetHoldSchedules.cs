@@ -62,16 +62,51 @@ public static class ProviderBudgetHoldSchedules
         TaskDispatchRecord dispatch, DateTimeOffset? asOf = null)
     {
         var all = goals.ToArray();
+        var parsed = DispatchMarker(all, bindingKey, task, dispatch);
+        if (!MatchesGeneration(all, bindingKey, task, dispatch, asOf)) return false;
+        if (parsed?.HoldPlacedAt is not { } placed) return true;
+
+        // Validate exhaustion observations in time order. A rejected old-generation
+        // result cannot create a newer hold that poisons a subsequent current probe.
+        // Timestamp ties are evaluated together, without inventing an ordering.
+        DateTimeOffset? latestExhaustion = null;
+        var observations = all.SelectMany(goal => goal.Tasks).SelectMany(owner => owner.VerificationHistory
+                .Where(verification => verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                    (asOf is null || verification.CompletedAt <= asOf))
+                .Select(verification => (Task: owner, Verification: verification,
+                    Dispatch: SubscriptionLimitEvidence.FindDispatchForVerification(owner, verification))))
+            .Where(item => item.Dispatch is not null && IsBinding(item.Dispatch, bindingKey))
+            .GroupBy(item => item.Verification.CompletedAt).OrderBy(group => group.Key);
+        foreach (var group in observations)
+        {
+            var applicable = group.Where(item => MatchesGeneration(all, bindingKey, item.Task,
+                    item.Dispatch!, item.Verification.CompletedAt) &&
+                (DispatchMarker(all, bindingKey, item.Task, item.Dispatch!)?.HoldPlacedAt is not { } original ||
+                    latestExhaustion is null || latestExhaustion <= original)).ToArray();
+            if (applicable.Length == 0) continue;
+            if (group.Key > placed && applicable.Any(item => item.Task != task || item.Dispatch != dispatch)) return false;
+            latestExhaustion = group.Key;
+        }
+        return true;
+    }
+
+    private static ProbeMarker? DispatchMarker(IReadOnlyCollection<Goal> all, string bindingKey,
+        TaskSpec task, TaskDispatchRecord dispatch)
+    {
+        var marker = all.SelectMany(goal => goal.Timeline).Where(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
+                TryParseProbe(evt, out var probe) && SameBinding(probe.BindingKey, bindingKey))
+            .OrderBy(evt => evt.OccurredAt).LastOrDefault();
+        return marker is not null && TryParseProbe(marker, out var found) ? found : null;
+    }
+
+    private static bool MatchesGeneration(IReadOnlyCollection<Goal> all, string bindingKey, TaskSpec task,
+        TaskDispatchRecord dispatch, DateTimeOffset? asOf)
+    {
         var reset = LatestReset(all, bindingKey, asOf);
         var marker = all.SelectMany(goal => goal.Timeline).Where(evt => evt.TaskId == task.Id && evt.OccurredAt <= dispatch.DispatchedAt &&
                 TryParseProbe(evt, out var probe) && SameBinding(probe.BindingKey, bindingKey))
             .OrderBy(evt => evt.OccurredAt).LastOrDefault();
         ProbeMarker? parsed = marker is not null && TryParseProbe(marker, out var found) ? found : null;
-        if (parsed?.HoldPlacedAt is { } placed && all.SelectMany(goal => goal.Tasks).Any(owner =>
-                owner.VerificationHistory.Any(verification => verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-                    verification.CompletedAt > placed && (asOf is null || verification.CompletedAt <= asOf) &&
-                    SubscriptionLimitEvidence.FindDispatchForVerification(owner, verification) is { } observed &&
-                    IsBinding(observed, bindingKey) && (owner != task || observed != dispatch)))) return false;
         if (reset is null) return parsed?.ResetIntentId is null;
         if (dispatch.DispatchedAt < reset.AppliedAt || dispatch.DispatchedAt < reset.Marker.ResetAt) return false;
         return parsed is null || parsed.ResetIntentId == reset.Marker.IntentId ||
@@ -241,24 +276,32 @@ public static class ProviderBudgetHoldSchedules
         var exhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted)
             .MaxBy(item => item.Verification.CompletedAt).Verification
             ?? throw new InvalidOperationException("A budget hold requires an exhaustion verification on its binding.");
-        var recoveryAt = tasks.Where(task => task.LatestProviderBudgetRecoveryAt is not null)
-            .Where(task => task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= task.LatestProviderBudgetRecoveryAt) is { } dispatch && IsBinding(dispatch, hold.BindingKey))
-            .Select(task => task.LatestProviderBudgetRecoveryAt!.Value)
-            .Concat(observations.Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&
-                IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!)).Select(item => item.Verification.CompletedAt))
-            .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var notes = all.SelectMany(goal => goal.Timeline.Select((evt, index) => (Goal: goal, Event: evt, Index: index))).ToArray();
-        var reset = LatestReset(all, hold.BindingKey);
-        var firstExhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-            item.Verification.CompletedAt >= recoveryAt).Min(item => item.Verification.CompletedAt);
-        if (reset?.AppliedAt < firstExhaustion) reset = null;
+        // Preserve historical recovery even after a later exhaustion or reset. Each
+        // receipt must have been applicable when observed, on its original source.
         var standaloneHistory = notes.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
-            SameBinding(result.BindingKey, hold.BindingKey) && result.PlacedAt >= firstExhaustion &&
+            SameBinding(result.BindingKey, hold.BindingKey) &&
             observations.Any(observation => observation.Task.Id == item.Event.TaskId &&
                 observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
                 observation.Verification.CompletedAt == result.PlacedAt) &&
             IsApplicable(result, LatestReset(all, hold.BindingKey, item.Event.OccurredAt, item.Event)))
             .OrderBy(item => item.Event.OccurredAt).ToArray();
+        var recoveryAt = tasks.Where(task => task.LatestProviderBudgetRecoveryAt is not null)
+            .Where(task => task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= task.LatestProviderBudgetRecoveryAt) is { } dispatch && IsBinding(dispatch, hold.BindingKey))
+            .Select(task => task.LatestProviderBudgetRecoveryAt!.Value)
+            .Concat(observations.Where(item => ProviderLimitSignals.HasAvailabilityEvidence(item.Verification) &&
+                IsCurrentDispatch(all, hold.BindingKey, item.Task, item.Dispatch!, item.Verification.CompletedAt))
+                .Select(item => item.Verification.CompletedAt))
+            .Concat(standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) && result.Outcome == "available")
+                .Select(item => item.Event.OccurredAt))
+            .Where(at => at <= exhaustion.CompletedAt)
+            .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
+        var reset = LatestReset(all, hold.BindingKey);
+        var firstExhaustion = observations.Where(item => item.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+            item.Verification.CompletedAt >= recoveryAt).Min(item => item.Verification.CompletedAt);
+        if (reset?.AppliedAt < firstExhaustion) reset = null;
+        standaloneHistory = standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
+            result.PlacedAt >= firstExhaustion).ToArray();
         var standalone = standaloneHistory.Where(item => TryParseStandaloneResult(item.Event, out var result) &&
             IsApplicable(result, reset)).ToArray();
         var probes = notes.Where(item => TryParseProbe(item.Event, out var marker) && SameBinding(marker.BindingKey, hold.BindingKey))

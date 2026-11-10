@@ -47,7 +47,7 @@ internal static class OwnerFleetDiagram
                 $"held since: {Stamp(hold.PlacedAt)}",
                 $"source: {hold.Source}",
                 ..(hold.Diagnosis is { } diagnosis ? new[] { diagnosis } : [])
-            ], true);
+            ], true, wrapRow: hold.Diagnosis is null ? -1 : 6);
         }
         foreach (var executor in model.Executors)
         {

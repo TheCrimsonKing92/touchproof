@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -95,6 +96,105 @@ public sealed class ProviderResetGenerationTests
         fixture.Tick();
         Assert.Equal(1, fixture.Calls);
         Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(ProviderFailureKind.Unknown, true)]
+    [InlineData(ProviderFailureKind.AuthenticationRequired, false)]
+    [InlineData(ProviderFailureKind.BudgetExhausted, false)]
+    public void StaleExhaustion_DoesNotInvalidateNextCurrentTaskProbe(
+        ProviderFailureKind currentKind, bool success)
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        fixture.Clock.UtcNow = fixture.Due;
+        var stale = StartTaskProbe(fixture);
+        Reset(fixture, "replacement", fixture.Due);
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+        CompleteTaskProbe(fixture, stale, ProviderFailureKind.BudgetExhausted);
+        Assert.Equal(1, Row(fixture).Schedule!.Attempt);
+        Assert.Equal(fixture.Source.Id, Row(fixture).Hold.SourceGoalId);
+
+        var current = StartTaskProbe(fixture);
+        var marker = current.Timeline.Single(evt => ProviderBudgetHoldSchedules.TryParseProbe(evt, out _));
+        Assert.True(ProviderBudgetHoldSchedules.TryParseProbe(marker, out var admitted));
+        Assert.Equal("replacement", admitted.ResetIntentId);
+        Assert.True(Row(fixture).Schedule!.ProbeInFlight);
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+        CompleteTaskProbe(fixture, current, currentKind, success);
+        if (success)
+            Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        else
+        {
+            var schedule = Row(fixture).Schedule!;
+            Assert.False(schedule.ProbeInFlight);
+            Assert.Equal(2, schedule.Attempt);
+            Assert.Equal(fixture.Clock.UtcNow.AddMinutes(60), schedule.NextProbeAt);
+            Assert.Equal(currentKind, schedule.LastActionableFailure);
+        }
+        Assert.Equal(0, fixture.Calls);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ValidRecovery_ThenNewExhaustionStartsFreshEpisode(bool standalone, bool reset)
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        fixture.Clock.UtcNow = fixture.Due;
+        if (reset) Reset(fixture, "recovered-generation", fixture.Due);
+        if (standalone) fixture.Tick();
+        else
+        {
+            var recovery = StartTaskProbe(fixture);
+            fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+            CompleteTaskProbe(fixture, recovery, ProviderFailureKind.Unknown, success: true);
+        }
+        Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+        var next = fixture.NewGoal();
+        fixture.Exhaust(next);
+        var row = Row(fixture);
+        Assert.Equal(next.Id, row.Hold.SourceGoalId);
+        Assert.Equal(1, row.Schedule!.Attempt);
+        Assert.Null(row.Schedule.ResetIntentId);
+        Assert.Equal(fixture.Clock.UtcNow.AddMinutes(30), row.Schedule.NextProbeAt);
+        Assert.Equal(ProviderFailureKind.BudgetExhausted, row.Schedule.LastActionableFailure);
+        Assert.Equal(fixture.Clock.UtcNow, row.Schedule.LastActionableFailureAt);
+    }
+
+    [Fact]
+    public async Task EvictedProbeGoals_RetainDiagnosisAndBackoffAcrossRestart()
+    {
+        using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("available");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
+        foreach (var kind in new[] { ProviderFailureKind.AuthenticationRequired, ProviderFailureKind.Unknown })
+        {
+            fixture.Clock.UtcNow = Row(fixture).Schedule!.NextProbeAt;
+            var probe = StartTaskProbe(fixture);
+            fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
+            CompleteTaskProbe(fixture, probe, kind);
+            fixture.Kernel.CancelGoal(probe.Id, "Keep completed probe evidence without an active goal.");
+            var before = Row(fixture);
+            await repository.SaveAsync(fixture.Kernel, TestContext.Current.CancellationToken);
+            Assert.Equal(1, fixture.Kernel.EvictTerminalGoalAggregates([probe.Id]));
+            Assert.Contains(fixture.Kernel.ProviderHoldHistory.Retained, goal => goal.Id == probe.Id);
+            Assert.Equal(before, Row(fixture));
+
+            // The live source is loaded normally; terminal probe goals are seeded from the index.
+            var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot(), fixture.Clock);
+            ProviderHoldHistorySeed.Apply(restarted, repository, _ => { });
+            var restored = Assert.Single(ProviderUsageHoldView.Read(restarted.ProviderHoldScope, fixture.Clock.UtcNow));
+            Assert.Equal(before, restored);
+            Assert.DoesNotContain(restarted.Goals, goal => goal.Id == probe.Id);
+            Assert.Equal(ProviderFailureKind.AuthenticationRequired, restored.Schedule!.LastActionableFailure);
+        }
+        var final = Row(fixture);
+        Assert.Equal(3, final.Schedule!.Attempt);
+        Assert.Equal("inconclusive", final.Schedule.LastProbeOutcome);
+        Assert.Contains("last confirmed: authentication-required", final.Diagnosis);
+        Assert.Contains("recovery: sign in", final.Diagnosis);
     }
 
     [Fact]
@@ -318,6 +418,32 @@ public sealed class ProviderResetGenerationTests
     private static ProviderUsageHoldRow Row(ProviderHoldStandaloneProbeTests.Fixture fixture) =>
         ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow)
             .Single(row => row.Hold.BindingKey == Binding);
+
+    private static Goal StartTaskProbe(ProviderHoldStandaloneProbeTests.Fixture fixture)
+    {
+        var goal = fixture.NewGoal();
+        var task = goal.Tasks.Single();
+        fixture.WaitingTask = task.Id;
+        ProviderBudgetProbeAdmission.Apply(fixture.Kernel, goal, [task.Id], fixture.Preflight, fixture.Clock.UtcNow);
+        Assert.Single(goal.Timeline.Where(evt => ProviderBudgetHoldSchedules.TryParseProbe(evt, out _)));
+        fixture.Kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new("grok-cli", "fixture", fixture.Workspace.ExecutionDirectory, fixture.Clock.UtcNow,
+                ProviderName: "xAI", ModelName: "grok-4.7"));
+        return goal;
+    }
+
+    private static void CompleteTaskProbe(ProviderHoldStandaloneProbeTests.Fixture fixture, Goal goal,
+        ProviderFailureKind kind, bool success = false)
+    {
+        var task = goal.Tasks.Single();
+        fixture.Kernel.RecordTaskVerification(goal.Id, task.Id,
+            new("fixture", fixture.Workspace.ExecutionDirectory, success ? 0 : 1, success ? "AVAILABLE" : "", "fixture",
+                fixture.Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: task.LastDispatch!.DispatchedAt,
+                CompletionVerdictVerifiedSuccess: success));
+        if (!success)
+            fixture.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Fixture provider check failed.");
+        fixture.WaitingTask = null;
+    }
 
     private static void Reset(ProviderHoldStandaloneProbeTests.Fixture fixture, string id,
         DateTimeOffset due, DateTimeOffset? issued = null) =>

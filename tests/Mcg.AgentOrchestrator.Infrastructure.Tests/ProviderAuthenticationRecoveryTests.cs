@@ -7,8 +7,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: private database/workspace, injected time and process responses; no credentials.
 public sealed class ProviderAuthenticationRecoveryTests
 {
-    [Fact]
-    public async Task AuthenticationThenUnknownThenAvailable_PersistsTruthfulLifecycle()
+    [Theory]
+    [InlineData(40)]
+    [InlineData(60)]
+    [InlineData(160)]
+    public async Task AuthenticationThenUnknownThenAvailable_PersistsTruthfulLifecycle(int width)
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("failed");
         fixture.Kernel.CancelGoal(fixture.Source.Id, "Retain the exhausted source for recovery.");
@@ -63,9 +66,16 @@ public sealed class ProviderAuthenticationRecoveryTests
         Assert.Contains("sign-in required", phrase);
         Assert.Contains("latest check: inconclusive", reason);
         var console = OwnerFleetDiagram.Render(OwnerFleetViewModelBuilder.Build(
-            RemoteExecutorReport.Build([], [], []), true, TimeZoneInfo.Utc, providerHolds: [row]), 160);
-        Assert.Contains("authentication-required", console);
-        Assert.Contains("historical exhaustion:", console);
+            RemoteExecutorReport.Build([], [], []), true, TimeZoneInfo.Utc, providerHolds: [row]), width);
+        var readable = string.Join(" ", console.Split('\n').Where(line => line.StartsWith('║'))
+            .Select(line => line.Trim('║', ' ')));
+        Assert.Contains("latest check: inconclusive", readable);
+        Assert.Contains("last confirmed: authentication-required", readable);
+        Assert.Contains(ProviderBudgetHoldSchedules.FormatInstant(authAt), readable);
+        Assert.Contains("age 3600s", readable);
+        Assert.Contains("recovery: sign in", readable);
+        Assert.Contains("historical exhaustion:", readable);
+        Assert.Contains(row.Hold.EvidenceReceipt, readable.Replace(" ", "", StringComparison.Ordinal));
         Assert.DoesNotContain("has no usage balance left", console);
 
         fixture.Clock.UtcNow = row.Schedule.NextProbeAt;
