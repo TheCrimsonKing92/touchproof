@@ -38,7 +38,7 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(1, backlog.Version);
         var mergeTrain = Assert.Single(results, result => result.StoreName == "merge-train-acceptance");
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"), mergeTrain.DatabasePath);
-        Assert.Equal(1, mergeTrain.Version);
+        Assert.Equal(2, mergeTrain.Version);
         var dogfood = Assert.Single(results, result => result.StoreName == "dogfood-log");
         Assert.Equal(workspace.DogfoodLogStorePath, dogfood.DatabasePath);
         Assert.Equal(1, dogfood.Version);
