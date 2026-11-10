@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using System.Text;
 using System.Text.Json;
+using WorkerContextSemanticSource = Mcg.AgentOrchestrator.Infrastructure.WorkerProfileDispatcher.WorkerContextSemanticSource;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
