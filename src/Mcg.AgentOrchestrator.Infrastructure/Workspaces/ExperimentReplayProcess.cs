@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,6 +9,21 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // completeness: the job's lifetime process count must agree with the observed identities.
 internal static class ExperimentReplayProcess
 {
+    // Scoped observation lets contract tests synchronize with actual job membership, not elapsed time.
+    private static readonly AsyncLocal<Action<OwnedProcessGroup, SafeFileHandle, int>?> Observation = new();
+
+    internal static IDisposable ObserveForTests(Action<OwnedProcessGroup, SafeFileHandle, int> observer)
+    {
+        var previous = Observation.Value;
+        Observation.Value = observer;
+        return new ObservationScope(() => Observation.Value = previous);
+    }
+
+    private sealed class ObservationScope(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+
     internal sealed record Result(int? ExitCode, string State, string? Reason, string Priority, string PowerThrottling,
         ExperimentReplayResources? Resources, string StdoutPath, string StderrPath);
 
@@ -44,6 +60,10 @@ internal static class ExperimentReplayProcess
         using var processHandle = started.ProcessHandle;
         using var output = started.StandardOutput;
         using var error = started.StandardError;
+        // Cleanup disposes the group. Keep a non-inherited observer alive until FINAL
+        // accounting has been read after termination and the empty-job confirmation.
+        group.TryDuplicateAccountingHandle(out var accountingObserver);
+        using var retainedAccounting = accountingObserver;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
         var state = "exited";
@@ -54,6 +74,7 @@ internal static class ExperimentReplayProcess
             while (!process.HasExited)
             {
                 Observe(group, observations);
+                Observation.Value?.Invoke(group, retainedAccounting, observations.Count);
                 await Task.Delay(10, deadline.Token).ConfigureAwait(false);
             }
             exit = OwnedProcessGroup.ReadProcessExitCode(processHandle);
@@ -70,7 +91,7 @@ internal static class ExperimentReplayProcess
         }
         await Task.WhenAll(outputTask, errorTask).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
         elapsed.Stop();
-        var counted = group.TryGetTotalProcesses(out var total);
+        var counted = OwnedProcessGroup.TryGetTotalProcesses(retainedAccounting, out var total);
         var complete = counted && total == observations.Count;
         var priorityValid = observations.Values.All(o => o.BelowNormal);
         var launches = observations.Values.GroupBy(p => p.Image, StringComparer.OrdinalIgnoreCase)
@@ -81,7 +102,7 @@ internal static class ExperimentReplayProcess
             try { executableIdentities[image] = ExperimentReplayStore.Source(image).Sha256 + ":" + FileVersionInfo.GetVersionInfo(image).FileVersion; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { complete = false; }
         }
-        var resources = group.TryReadAccounting(out var accounting)
+        var resources = OwnedProcessGroup.TryReadAccounting(retainedAccounting, out var accounting)
             ? new ExperimentReplayResources(accounting.CpuMilliseconds, accounting.PeakMemoryBytes,
                 elapsed.Elapsed.TotalMilliseconds, launches, "job-object/" + accounting.AccountingSource, complete, total, executableIdentities) : null;
         if (resources is null || !complete)
