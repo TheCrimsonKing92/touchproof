@@ -104,6 +104,8 @@ internal sealed partial class ConductorJudgePanelCaseStore
         return ReadCases(connection, "SELECT case_id FROM panel_cases ORDER BY rowid");
     }
 
+    internal PanelJudgmentCompleteness Judgment(string id) => PanelJudgmentCompleteness.Evaluate(Results(id));
+
     internal IReadOnlyList<PanelJudgeResult> Results(string id)
     {
         using var connection = Open();

@@ -49,7 +49,7 @@ internal sealed partial class ConductorAuthorHost
         new ConductorAuthorClaimStore(Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")),
         CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
         new ClaudeConductorAuthorModelRound(Path.Combine(workspace.OrchestratorDirectory, "author-rounds"),
-            catalog: ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
+            catalogLoader: () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
         SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
         new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
         goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
@@ -65,6 +65,7 @@ internal sealed partial class ConductorAuthorHost
         var changed = new HashSet<GoalId>();
         AuthorOwnerQuestionHoldReconciler.Reconcile(kernel, _collaboration, _conduct, onlyGoalId, changed);
         if (!Enabled) return changed;
+        (_model as IConductorModelBindingRefresh)?.RefreshBindings();
         Harvest(kernel, onlyGoalId, changed);
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
                      (onlyGoalId is null || goal.Id.Value == onlyGoalId)))
