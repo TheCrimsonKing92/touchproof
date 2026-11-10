@@ -82,8 +82,7 @@ public sealed class ExperimentReplayProcessTests
         using var releaseChild = new EventWaitHandle(false, EventResetMode.ManualReset, eventPrefix + "-child");
         var childScript = $"$e = [Threading.EventWaitHandle]::OpenExisting('{eventPrefix}-child'); [void]$e.WaitOne(); exit 0";
         var rootScript = $"[IO.File]::WriteAllText('{rootIdPath.Replace("'", "''")}', [string]$PID); " +
-            $"$i = [Diagnostics.ProcessStartInfo]::new('{PowerShell}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; " +
-            $"$i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {Encode(childScript)}'; $p = [Diagnostics.Process]::Start($i); " +
+            StartChildScript(childScript) +
             $"$e = [Threading.EventWaitHandle]::OpenExisting('{eventPrefix}-root'); [void]$e.WaitOne(); exit 0";
         OwnedProcessGroup? ownedGroup = null;
         Process? root = null;
@@ -154,7 +153,8 @@ public sealed class ExperimentReplayProcessTests
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, eventName);
         var childScript = $"$e = [Threading.EventWaitHandle]::OpenExisting('{eventName}'); [void]$e.WaitOne(); $e.Dispose(); exit 0";
         var rootScript = count == 1 ? "[void]([Threading.ManualResetEvent]::new($false)).WaitOne()"
-            : $"$i = [Diagnostics.ProcessStartInfo]::new('{PowerShell}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; $i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {Encode(childScript)}'; $p = [Diagnostics.Process]::Start($i); $p.WaitForExit(); exit $p.ExitCode";
+            : StartChildScript(childScript) +
+                "$p.WaitForExit(); [void]$out.GetAwaiter().GetResult(); [void]$err.GetAwaiter().GetResult(); exit $p.ExitCode";
         OwnedProcessGroup? ownedGroup = null;
         SafeFileHandle? runnerObserver = null;
         SafeFileHandle? independentObserver = null;
@@ -181,7 +181,8 @@ public sealed class ExperimentReplayProcessTests
                 Path.Combine(fixture.Root, "measurement"),
                 state == "timed-out" ? TimeSpan.Zero : TestHangGuard.HangSafetyBound, cancellation.Token);
 
-            Assert.Equal(count, maximumObserved);
+            Assert.True(count == maximumObserved,
+                $"Expected {count} observed identities, got {maximumObserved}. {LaunchDiagnostics(result)}");
             Assert.Equal(state, result.State);
             if (state == "exited") { Assert.Equal(0, result.ExitCode); Assert.Null(result.Reason); }
             else { Assert.Null(result.ExitCode); Assert.Equal(state, result.Reason); }
@@ -202,6 +203,7 @@ public sealed class ExperimentReplayProcessTests
         finally
         {
             // Also clean up if a test assertion throws while observation retains the job.
+            release.Set();
             ownedGroup?.TerminateAndConfirmEmpty(TestHangGuard.HangSafetyBound);
             independentObserver?.Dispose();
         }
@@ -211,6 +213,7 @@ public sealed class ExperimentReplayProcessTests
     {
         var resources = Assert.IsType<ExperimentReplayResources>(result.Resources);
         Assert.True(resources.LaunchAttributionComplete);
+        Assert.True((uint)count == resources.TotalProcesses, LaunchDiagnostics(result));
         Assert.Equal((uint)count, resources.TotalProcesses);
         Assert.Equal(count, Assert.Single(resources.LaunchesByExecutable).Value);
         Assert.True(resources.CpuMilliseconds >= 0);
@@ -221,6 +224,18 @@ public sealed class ExperimentReplayProcessTests
 
     private static string PowerShell => Path.Combine(Environment.SystemDirectory,
         "WindowsPowerShell", "v1.0", "powershell.exe");
+
+    // Match the runner root's pipe contract for the nested launch as well. No stream
+    // depends on an ambient console, and output drains start before the child waits.
+    private static string StartChildScript(string command) =>
+        $"$i = [Diagnostics.ProcessStartInfo]::new('{PowerShell}'); $i.UseShellExecute = $false; $i.CreateNoWindow = $true; " +
+        "$i.RedirectStandardInput = $true; $i.RedirectStandardOutput = $true; $i.RedirectStandardError = $true; " +
+        $"$i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {Encode(command)}'; $p = [Diagnostics.Process]::Start($i); " +
+        "$p.StandardInput.Close(); $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync(); ";
+
+    private static string LaunchDiagnostics(ExperimentReplayProcess.Result result) =>
+        $"State={result.State}; reason={result.Reason}; total={result.Resources?.TotalProcesses}; launches=" +
+        string.Join(", ", result.Resources?.LaunchesByExecutable.Select(pair => $"{pair.Key}={pair.Value}") ?? []);
 
     private static string Encode(string command) => Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
 }
