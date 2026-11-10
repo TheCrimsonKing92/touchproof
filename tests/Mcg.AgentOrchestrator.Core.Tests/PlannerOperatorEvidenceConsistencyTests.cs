@@ -271,7 +271,13 @@ public sealed class PlannerOperatorEvidenceConsistencyTests
         f.Review();
         Assert.Equal(WorkTaskStatus.Completed, f.Reviewer.Status);
         Assert.Equal(GoalStatus.Verified, f.Goal.Status);
-        Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
+        Assert.Equal(0, f.Reviewer.CriterionRetryCount);
+        Assert.Contains(audit, f.Goal.CriterionEvidenceObligations);
+        var pending = Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
+        Assert.Equal(canonical.Id, pending.Id);
+        Assert.Equal(CriterionEvidenceOwner.Operator, pending.Owner);
+        Assert.Equal(Candidate, pending.ExpectedCandidateSha);
+        Assert.Null(pending.ReceiptId);
         Assert.Throws<InvalidOperationException>(() => f.Kernel.CompleteGoal(f.Goal.Id, "Receipt still required"));
     }
 
