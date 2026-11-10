@@ -1,21 +1,47 @@
 using System.Globalization;
-using System.Text.Json;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliImpactReplayCommand
 {
+    // Aggregate errors keep the primary operation first; cleanup faults cannot establish cancellation.
+    private static bool IsCancellation(Exception error, CancellationToken callerToken) =>
+        error is OperationCanceledException cancellation && callerToken.IsCancellationRequested &&
+            cancellation.CancellationToken == callerToken ||
+        error is AggregateException aggregate && aggregate.InnerExceptions.Count > 0 &&
+            IsCancellation(aggregate.InnerExceptions[0], callerToken);
+
     internal static bool IsCommand(IReadOnlyList<string> args) => args.Count > 0 &&
         args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase);
 
-    internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace) =>
-        Run(args, workspace.ExecutionDirectory, workspace.OrchestratorDirectory, null, Console.Out, Console.Error);
+    internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
+    {
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler handler = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+        Console.CancelKeyPress += handler;
+        try { return Run(args, workspace.ExecutionDirectory, workspace.OrchestratorDirectory, null,
+            Console.Out, Console.Error, cancellation.Token); }
+        finally { Console.CancelKeyPress -= handler; }
+    }
 
     // Explicit directories let fixture tests exercise the command without opening live stores.
     internal static int Run(IReadOnlyList<string> args, string executionDirectory, string orchestratorDirectory,
-        string? tempCheckoutParent, TextWriter output, TextWriter error)
+        string? tempCheckoutParent, TextWriter output, TextWriter error, CancellationToken cancellationToken = default,
+        TimeProvider? clock = null, ImpactReplayExecutionSource? source = null)
     {
+        if (args.Count > 1 && args[1] == "--status")
+        {
+            if (args.Count != 4 || args[2] != "--checkpoint-file" || string.IsNullOrWhiteSpace(args[3])) return Usage();
+            try
+            {
+                output.WriteLine(ImpactReplayCheckpointStore.Serialize(ImpactReplayCheckpointStore.ReadStatus(args[3])));
+                return 0;
+            }
+            catch (Exception ex) { error.WriteLine($"Impact replay failed: {ex.Message}"); return 1; }
+        }
         DateTimeOffset? since = null;
         var limit = 100;
         int? maxChangedSourceFiles = null;
@@ -23,7 +49,12 @@ internal static class CliImpactReplayCommand
         var floor = new List<string>();
         for (var i = 1; i < args.Count; i++)
         {
-            if (args[i] is "--help" or "-h") { output.WriteLine(CliCommandHelp.ImpactReplayUsage); return 0; }
+            if (args[i] is "--help" or "-h")
+            {
+                output.WriteLine(CliCommandHelp.ImpactReplayUsage);
+                output.WriteLine(CliCommandHelp.ImpactReplayStatusUsage);
+                return 0;
+            }
             if (args[i] is not ("--since" or "--limit" or "--out" or "--floor" or "--max-changed-source-files") || i + 1 == args.Count)
                 return Usage();
             var flag = args[i++];
@@ -49,20 +80,48 @@ internal static class CliImpactReplayCommand
             }
         }
         if (destination is null) return Usage();
+        ImpactReplayRunSink? sink = null;
         try
         {
+            clock ??= TimeProvider.System;
+            var configuration = new ImpactReplayRunConfiguration(Path.GetFullPath(executionDirectory),
+                Path.GetFullPath(orchestratorDirectory), since, limit, floor.Count == 0 ? null : floor.ToArray(),
+                maxChangedSourceFiles ?? 5, tempCheckoutParent is null ? null : Path.GetFullPath(tempCheckoutParent));
+            var assembly = typeof(ImpactReplay).Assembly;
+            source ??= new ImpactReplayExecutionSource();
+            var revision = source.ReadSourceRevision(executionDirectory);
+            var identity = new ImpactReplayRunIdentity(Guid.NewGuid().ToString("N"), clock.GetUtcNow(), configuration,
+                RuntimeInformation.FrameworkDescription + "; " + RuntimeInformation.OSDescription,
+                assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion +
+                    "; mvid=" + assembly.ManifestModule.ModuleVersionId,
+                revision);
+            sink = new ImpactReplayRunSink(destination, identity, error, clock);
             var report = ImpactReplay.Read(executionDirectory, orchestratorDirectory, since, limit,
-                floor.Count == 0 ? null : floor, tempCheckoutParent, maxChangedSourceFiles);
+                floor.Count == 0 ? null : floor, tempCheckoutParent, maxChangedSourceFiles,
+                sink, cancellationToken, source);
+            report = report with { Run = new(sink.RunId, sink.CheckpointPath) };
+            cancellationToken.ThrowIfCancellationRequested();
+            sink.FinalizeReport(report);
             ImpactReplayReportWriter.Write(destination, report);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (report.CleanupErrors.Count > 0)
+            {
+                foreach (var cleanupError in report.CleanupErrors) error.WriteLine(cleanupError);
+                error.Flush();
+                sink.Fail(new IOException(string.Join(Environment.NewLine, report.CleanupErrors)), false);
+            }
+            else sink.Complete();
             output.WriteLine($"Impact replay: {report.Attempts.Count} attempts; reports: {Path.GetFullPath(destination)}");
-            foreach (var cleanupError in report.CleanupErrors) error.WriteLine(cleanupError);
             return report.CleanupErrors.Count == 0 ? 0 : 1;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
+        catch (Exception ex)
         {
-            error.WriteLine($"Impact replay failed: {ex.Message}");
+            sink?.Fail(ex, IsCancellation(ex, cancellationToken));
+            error.WriteLine($"Impact replay failed: {ex}");
+            error.Flush();
             return 1;
         }
+        finally { sink?.Dispose(); }
         int Usage() { error.WriteLine(CliCommandHelp.ImpactReplayUsage); return 2; }
     }
 }

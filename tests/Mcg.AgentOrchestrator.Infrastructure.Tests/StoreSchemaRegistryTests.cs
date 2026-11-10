@@ -92,6 +92,13 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
         Assert.Equal(4, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
+        var replay = Assert.Single(entries.Where(entry => entry.StoreName == "impact-replay-checkpoint"));
+        Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ImpactReplayCheckpointStore.cs", replay.SourceFile);
+        Assert.Equal("impact-replay.checkpoint.db", replay.Database);
+        Assert.Equal("report-artifact", replay.Family);
+        // The CLI owns its PRAGMA user_version schema; live-store setup must not create this artifact.
+        Assert.Null(replay.CurrentVersion);
+        Assert.DoesNotContain(replay.StoreName, StoreSetupRunner.RegisteredStoreNames);
     }
 
     [Fact]
