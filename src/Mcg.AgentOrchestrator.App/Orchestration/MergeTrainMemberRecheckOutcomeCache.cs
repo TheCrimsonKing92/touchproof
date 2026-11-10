@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -38,18 +39,16 @@ internal sealed class MergeTrainMemberRecheckOutcomeCache(string databasePath) :
 
     private SqliteConnection Open()
     {
+        // Schema creation and upgrades belong to the versioned train-store setup.
+        MergeTrainAcceptanceStore.Setup(databasePath);
+        _ = MergeTrainAcceptanceStore.OpenReadOnly(databasePath);
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = databasePath, Mode = SqliteOpenMode.ReadWriteCreate }.ToString());
+            { DataSource = databasePath, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
         try
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = """
-                PRAGMA busy_timeout=5000;
-                CREATE TABLE IF NOT EXISTS merge_train_member_rechecks(
-                    receipt_id TEXT NOT NULL, train_id TEXT NOT NULL, outcome_json TEXT NOT NULL,
-                    PRIMARY KEY(receipt_id, train_id));
-                """;
+            command.CommandText = "PRAGMA busy_timeout=5000;";
             command.ExecuteNonQuery();
             return connection;
         }
