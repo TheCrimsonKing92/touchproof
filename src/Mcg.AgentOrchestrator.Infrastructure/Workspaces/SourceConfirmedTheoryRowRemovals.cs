@@ -136,7 +136,9 @@ internal static class SourceConfirmedTheoryRowRemovals
                     yield return [{{variable}}.Replace('/', '\\').ToUpperInvariant()];
                 }
                 """) as ForEachStatementSyntax;
-            if (!loopBody.IsEquivalentTo(expectedLoop!.Statement)) return null;
+            // The one-argument overload compares green nodes, including formatting. Select
+            // language equivalence explicitly: ignore trivia, but compare every body token.
+            if (!loopBody.IsEquivalentTo(expectedLoop!.Statement, topLevel: false)) return null;
             var locals = new Dictionary<string, string[]>(StringComparer.Ordinal);
             foreach (var statement in body.Statements.Take(body.Statements.Count - 1))
             {

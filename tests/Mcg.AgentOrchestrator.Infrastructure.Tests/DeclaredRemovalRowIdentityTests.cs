@@ -172,6 +172,22 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         Assert.Equal(new TestCoverageCountComparison(25, 25, 27, 2, false), coverage.CountComparison);
     }
 
+    [Theory]
+    [InlineData("format-lf")]
+    [InlineData("format-crlf")]
+    [InlineData("format-compact")]
+    public async Task Compare_ProducerFormatting_CreditsExactSourceRows(string fault)
+    {
+        var coverage = await CompareAsync(truncated: true, customName: false, fault: fault);
+
+        Assert.True(coverage.Passed, coverage.Summary);
+        AssertCredit(coverage, 2);
+        Assert.Equal(new TestCoverageCountComparison(25, 25, 27, 2, false), coverage.CountComparison);
+        Assert.Equal(25, coverage.ExecutedTests.Count);
+        Assert.Contains(Survivor, coverage.ExecutedTests);
+        Assert.Empty(coverage.MissingTests);
+    }
+
     [Fact]
     public async Task Compare_ContainedBaseline_RebindsSourceAndDiscoveryIdentities()
     {
@@ -199,6 +215,16 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         {
             mainSource = LinqSource(mainSource);
             candidateSource = LinqSource(candidateSource);
+        }
+        if (fault is "format-lf" or "format-crlf" or "format-compact")
+        {
+            mainSource = mainSource.ReplaceLineEndings("\r\n");
+            candidateSource = candidateSource.ReplaceLineEndings(fault switch
+            {
+                "format-lf" => "\n",
+                "format-crlf" => "\r\n",
+                _ => " "
+            });
         }
         if (fault == "contained-baseline")
         {
