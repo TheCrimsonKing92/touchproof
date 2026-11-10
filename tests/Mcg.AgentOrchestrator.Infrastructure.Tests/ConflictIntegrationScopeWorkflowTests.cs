@@ -21,9 +21,16 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         Assert.True(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
         var retryAt = task.LatestRetryAt;
         var process = StartAttempt(fixture);
-        var question = fixture.Kernel.RequestHumanInput(fixture.Goal.Id, task.Id, "May I edit the adjacent seam?");
+        var ended = process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 0 };
+        // Apply the completion as the process refresher does. A bare exit record leaves
+        // dispatch held for reconciliation before it can reach integration preflight.
         fixture.Kernel.RecordTaskProcessRefreshed(fixture.Goal.Id, task.Id,
-            process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 0 }, null);
+            ended, new TaskVerificationRecord(process.Command, process.WorkingDirectory, 0,
+                "HUMAN_INPUT: May I edit the adjacent seam?", "", ended.CompletedAt!.Value,
+                HumanInputQuestion: "May I edit the adjacent seam?", AssignedScopeComplete: false));
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.True(DispatchProcessCompletionState.HasAlreadyBeenApplied(task, ended));
+        var question = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
         Git(git.Worktree, "merge", "--abort");
         var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput, question.Id.Value,
             fixture.Goal.Id.Value, "Approved: edit src/Other.cs", OperatorActorKind.Human);
@@ -32,8 +39,6 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(answer)).Status);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(retryAt, task.LatestRetryAt);
-        var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot());
-        Assert.False(fixture.Reload(restarted).IntegrateMainBeforeDeveloperDispatch(restarted.GetGoal(fixture.Goal.Id)).CanDispatch);
 
         var developerStarts = 0;
         var testerStarts = 0;
@@ -61,6 +66,9 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         Assert.Equal(0, developerStarts);
         var requirement = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
         git.AssertRestored();
+        var restarted = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot());
+        Assert.False(fixture.Reload(restarted).IntegrateMainBeforeDeveloperDispatch(restarted.GetGoal(fixture.Goal.Id)).CanDispatch);
+        Assert.Equal(requirement.Id, Assert.Single(restarted.HumanInputRequests.Where(item => !item.IsCompleted)).Id);
         var approval = fixture.Intent(paths: approved ? ["src/Other.cs"] : ["src/Unused.cs"]);
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
         Assert.True(requirement.IsCompleted);
@@ -96,8 +104,11 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(approval)).Status);
         Assert.True(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
         var process = StartAttempt(fixture);
-        fixture.Kernel.RecordTaskProcessRefreshed(fixture.Goal.Id, fixture.Base.Developer.Id,
-            process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 0 }, null);
+        // Cancellation settles the task as well as the process before the same-round retry.
+        fixture.Kernel.RecordTaskProcessCancelled(fixture.Goal.Id, fixture.Base.Developer.Id,
+            process with { CompletedAt = process.StartedAt.AddSeconds(1), ExitCode = 1, WasCancelled = true });
+        Assert.Equal(WorkTaskStatus.Cancelled, fixture.Base.Developer.Status);
+        Assert.False(fixture.Base.Developer.LastProcess!.IsRunning);
         Git(git.Worktree, "merge", "--abort");
         fixture.Kernel.RetryTaskAutomatically(fixture.Goal.Id, fixture.Base.Developer.Id, "Retry ended integration",
             RetryCause.MainDriftConflict, authoritativeRetryFeedback: true);
