@@ -36,6 +36,7 @@ public sealed class ProductionMemberReflectionScannerTests
     [Theory]
     [InlineData("typeof(Cases).GetMethod(\"Check\");")]
     [InlineData("GetType().GetMethod(\"Check\");")]
+    [InlineData("this.GetType().GetMethod(\"Check\");")]
     [InlineData("typeof(string).GetProperty(\"Length\");")]
     [InlineData("typeof(Mcg.AgentOrchestrator.Fixture).GetMethod(\"Check\");")]
     public void FixtureAndThirdPartyTargetsAreExcluded(string body)
@@ -50,11 +51,28 @@ public sealed class ProductionMemberReflectionScannerTests
     [InlineData("Type.GetType(\"P.Target\")!.GetProperty(\"Value\");")]
     [InlineData("var t = typeof(string); t = typeof(P.Target); t.GetMethod(\"Hidden\");")]
     [InlineData("var t = typeof(P.Target); Change(ref t); t.GetMethod(\"Hidden\");")]
+    [InlineData("void Inspect<T>() { typeof(T).GetMethod(\"Hidden\"); } Inspect<P.Target>();")]
+    [InlineData("void Inspect<T>() { var t = typeof(T); t.GetProperty(\"Value\"); } Inspect<P.Target>();")]
     public void UnknownTargetsRequireEvidenceWithoutProductionClassification(string body)
     {
         var result = Fixture(body);
         var lookup = Assert.Single(result.Lookups);
         Assert.Equal("unresolved-target", lookup.Classification);
+        Assert.Contains("exact reasoned exemption", Assert.Single(result.Diagnostics), StringComparison.Ordinal);
+        Assert.DoesNotContain("production-member", result.Diagnostics[0], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("GetType()")]
+    [InlineData("this.GetType()")]
+    public void ShadowedGetType_ProductionHelper_RequiresClassificationEvidence(string receiver)
+    {
+        var result = Fixture($"{receiver}.GetMethod(\"Hidden\");",
+            members: "public new Type GetType() => typeof(P.Target);");
+
+        var lookup = Assert.Single(result.Lookups);
+        Assert.Equal("unresolved-target", lookup.Classification);
+        Assert.Equal(receiver, lookup.Target);
         Assert.Contains("exact reasoned exemption", Assert.Single(result.Diagnostics), StringComparison.Ordinal);
         Assert.DoesNotContain("production-member", result.Diagnostics[0], StringComparison.Ordinal);
     }
@@ -236,7 +254,8 @@ public sealed class ProductionMemberReflectionScannerTests
     private static Exemption Allowed() => new(FilePath, "Cases.Check()", "GetMethod", "Hidden", "typeof(P.Target)",
         "Fixture metadata contract: lookup is inspected, never invoked.");
 
-    private static Result Fixture(string body, bool production = true, Exemption[]? exemptions = null)
+    private static Result Fixture(string body, bool production = true, Exemption[]? exemptions = null,
+        string members = "")
     {
         var assembly = CSharpCompilation.Create(Production,
             [CSharpSyntaxTree.ParseText("namespace P; public class Target { private void Hidden() {} public int Value => 0; }")],
@@ -249,6 +268,7 @@ public sealed class ProductionMemberReflectionScannerTests
             using System.Reflection;
             using Alias = P.Target;
             class Cases {
+                {{members}}
                 public void Check() { {{body}} }
                 static Type HelperType() => typeof(P.Target);
                 static string HelperName() => "Hidden";

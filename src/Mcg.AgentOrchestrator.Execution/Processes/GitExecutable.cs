@@ -10,6 +10,8 @@ internal static class GitExecutable
         () => Recognize(HandleListProcessLauncher.ResolveApplication("git")),
         LazyThreadSafetyMode.ExecutionAndPublication);
 
+    internal static bool IsInstallationCreated => Installation.IsValueCreated;
+
     internal static bool Prepare(ProcessStartInfo info)
     {
         if (!OperatingSystem.IsWindows() || info.FileName != "git")

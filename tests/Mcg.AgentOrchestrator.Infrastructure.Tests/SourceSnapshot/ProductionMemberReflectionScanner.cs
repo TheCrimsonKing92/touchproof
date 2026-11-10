@@ -133,11 +133,13 @@ internal static class ProductionMemberReflectionScanner
         if (expression is TypeOfExpressionSyntax typeOf)
         {
             var type = model.GetTypeInfo(typeOf.Type).Type;
-            return type is null || type.TypeKind == TypeKind.Error ? null : type;
+            // A type parameter's declaring assembly does not identify its runtime argument.
+            return type is null || type.TypeKind is TypeKind.Error or TypeKind.TypeParameter ? null : type;
         }
         if (expression is InvocationExpressionSyntax getType && getType.ArgumentList.Arguments.Count == 0 &&
             (getType.Expression is IdentifierNameSyntax { Identifier.ValueText: "GetType" } ||
-             getType.Expression is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name.Identifier.ValueText: "GetType" }))
+             getType.Expression is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name.Identifier.ValueText: "GetType" }) &&
+            model.GetSymbolInfo(getType).Symbol is IMethodSymbol { ContainingType.SpecialType: SpecialType.System_Object })
             return model.GetEnclosingSymbol(call.SpanStart)?.ContainingType;
         if (expression is IdentifierNameSyntax && model.GetSymbolInfo(expression).Symbol is ILocalSymbol local &&
             local.DeclaringSyntaxReferences is [var reference] && reference.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } variable &&
