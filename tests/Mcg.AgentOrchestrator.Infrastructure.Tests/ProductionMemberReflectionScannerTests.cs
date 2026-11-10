@@ -127,6 +127,45 @@ public sealed class ProductionMemberReflectionScannerTests
     }
 
     [Theory]
+    [InlineData("checkout")]
+    [InlineData(".orchestrator-worktrees")]
+    public void RepositoryScanFiltersContentRelativeToCandidateRoot(string parentDirectory)
+    {
+        using var fixture = new SourceSnapshotFixture();
+        var prefix = $"{parentDirectory}/candidate/";
+        fixture.Write(prefix + "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project />");
+        fixture.Write(prefix + FilePath, """
+            using Mcg.AgentOrchestrator.Core;
+            class Cases
+            {
+                void Check()
+                {
+                    typeof(GoalId).GetProperty("Value");
+                    typeof(string).GetProperty("Length");
+                }
+            }
+            """);
+        foreach (var excluded in new[] { "bin", "obj", ".scratch", ".orchestrator-prototype",
+                     ".orchestrator-worktrees", "TestResults", "playwright-report" })
+        {
+            fixture.Write(prefix + $"tests/{excluded}/Ignored.cs",
+                "class Ignored { void Check() { typeof(Mcg.AgentOrchestrator.Core.GoalId).GetProperty(\"Value\"); } }");
+            fixture.Write(prefix + $"src/{excluded}/Ignored.csproj",
+                $"<Project><PropertyGroup><AssemblyName>{typeof(string).Assembly.GetName().Name}</AssemblyName></PropertyGroup></Project>");
+        }
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.Combine(fixture.Root, parentDirectory, "candidate"));
+
+        var result = ScanRepository(snapshot, snapshot.EnumerateFiles("tests"), []);
+
+        Assert.Equal(2, result.Lookups.Count);
+        Assert.All(result.Lookups, lookup => Assert.Equal(FilePath, lookup.Path));
+        var production = Assert.Single(result.Lookups, lookup => lookup.Classification == "production-member");
+        Assert.Equal("Mcg.AgentOrchestrator.Core.GoalId", production.Target);
+        Assert.Equal(production.ToString(), Assert.Single(result.Diagnostics));
+        Assert.Equal("Length", Assert.Single(result.Lookups, lookup => lookup.Classification == "excluded-target").Member);
+    }
+
+    [Theory]
     [InlineData("typeof(P.Target).GetMethod(\"Hidden\");")]
     [InlineData("HelperType().GetMethod(\"Hidden\");")]
     public void ExactExemptionAcceptsOneProvenOrUnknownSite(string body)

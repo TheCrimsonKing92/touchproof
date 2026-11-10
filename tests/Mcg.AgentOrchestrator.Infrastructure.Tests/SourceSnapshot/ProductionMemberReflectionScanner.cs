@@ -163,7 +163,9 @@ internal static class ProductionMemberReflectionScanner
             .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var references = referencePaths.Select(path => MetadataReference.CreateFromFile(path)).ToArray();
-        var files = testFiles.Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(path)).ToArray();
+        // Exclusions describe content inside this repository, not its parent checkout location.
+        var files = testFiles.Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(
+            Path.GetRelativePath(snapshot.Root, path))).ToArray();
         var trees = files.Select(path => snapshot.GetSyntaxTree(path).WithFilePath(
             Path.GetRelativePath(snapshot.Root, path).Replace('\\', '/'))).ToArray();
         var globals = CSharpSyntaxTree.ParseText("""
@@ -182,7 +184,7 @@ internal static class ProductionMemberReflectionScanner
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         // Names come from actual production projects, never a namespace spelling heuristic.
         var assemblies = Directory.EnumerateFiles(Path.Combine(snapshot.Root, "src"), "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(path))
+            .Where(path => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(snapshot.Root, path)))
             .Select(path => System.Xml.Linq.XDocument.Load(path).Descendants().FirstOrDefault(element =>
                 element.Name.LocalName == "AssemblyName")?.Value ?? Path.GetFileNameWithoutExtension(path))
             .ToHashSet(StringComparer.Ordinal);
