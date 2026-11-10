@@ -107,9 +107,12 @@ internal static class ImpactReplayReportWriter
             if (measurement.ClassLevel is { } classLevel)
                 ImpactReplayClassLevelReportWriter.AppendSummary(text, classLevel);
             text.AppendLine($"- Share of Infrastructure test seconds skipped (readable TRX durations): {(measurement.ShareOfTestSecondsSkipped is { } share ? Percent(share) : "unavailable")}");
-            text.AppendLine($"- Miss count (including recorded flakes): {measurement.MissCount}");
+            text.AppendLine($"- Miss count (true misses): {measurement.MissCount}");
+            text.AppendLine($"- Flake-excluded count (known flaky skipped failures): {measurement.FlakeExcludedCount}");
             text.AppendLine($"- Complete miss checks: {measurement.CompleteMissCheckCount}");
             text.AppendLine($"- Attempts with incomplete duration coverage: {measurement.IncompleteDurationCoverageCount}");
+            text.AppendLine();
+            text.AppendLine(measurement.Interpretation);
             if (measurement.ClassLevel is not null)
                 ImpactReplayClassLevelReportWriter.AppendAttempts(text, report.Attempts);
         }

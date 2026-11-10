@@ -8,7 +8,7 @@ internal enum PanelJudgeHealthState { Active, Suspended }
 
 internal sealed record PanelJudgeResult(string Judge, PanelJudgeOutcome Outcome, int? ExitCode,
     string RawStdout, string RawStderr, string? Answer = null, string? Reason = null,
-    string? UsageJson = null, string? ModelAlias = null);
+    string? UsageJson = null, string? ModelAlias = null, string? WorkerProfileName = null);
 
 internal static class PanelV0Contract
 {
