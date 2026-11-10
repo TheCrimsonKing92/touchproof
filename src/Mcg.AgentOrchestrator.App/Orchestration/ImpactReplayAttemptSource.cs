@@ -8,14 +8,20 @@ internal static class ImpactReplayAttemptSource
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     internal static IReadOnlyList<ImpactReplayStoredAttempt> Read(string orchestratorDirectory,
-        DateTimeOffset? since, List<ImpactReplayDiagnostic> skipped)
+        DateTimeOffset? since, ICollection<ImpactReplayDiagnostic> skipped,
+        IImpactReplaySink? observation = null, CancellationToken cancellationToken = default)
     {
         var directory = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
-        if (!Directory.Exists(directory)) return [];
+        var sink = observation ?? ImpactReplayNullSink.Instance;
+        if (!Directory.Exists(directory)) { sink.InventoryDiscovered(0); return []; }
         var attempts = new List<ImpactReplayStoredAttempt>();
-        foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json", SearchOption.AllDirectories)
-                     .Order(StringComparer.Ordinal))
+        var inputPaths = Directory.EnumerateFiles(directory, "*.attempt.json", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal).ToArray();
+        sink.InventoryDiscovered(inputPaths.Length);
+        foreach (var path in inputPaths)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            sink.InputExamined();
             try
             {
                 var attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path), Json)

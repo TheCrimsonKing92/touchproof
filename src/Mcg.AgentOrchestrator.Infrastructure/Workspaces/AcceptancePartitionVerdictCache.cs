@@ -8,7 +8,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record PartitionVerdictJournalSnapshot(
     IReadOnlyList<PartitionVerdictRecord> Records,
-    IReadOnlyList<PartitionVerdictJournalSummary> Summaries);
+    IReadOnlyList<PartitionVerdictJournalSummary> Summaries,
+    bool IsComplete = true);
 
 internal sealed record PartitionVerdictJournalSummary(
     string PairKey,
@@ -336,7 +337,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
             return null;
         }
 
-        var cached = LatestGreenVerdict(_journal, GoalId, cacheKey);
+        var cached = LatestVerdict(_journal, GoalId, cacheKey);
+        if (!CanConsiderReuse(_journal, cached, partitionId))
+            return null;
         var reuseRule = "pair";
         string? closureHash = null;
         if (cached is null)
@@ -357,6 +360,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
                     ClosureMissReasonCode(_closureIndex.FindLatestForFilter(filterHash), closureHash));
                 return null;
             }
+            if (!HasAuthoritativeClosureSource(contentVerdict, partitionId))
+                return null;
             cached = new PartitionVerdictRecord(
                 GoalId, contentVerdict.SourceAttemptId, CandidateTreeSha, MainSha, filterHash,
                 partitionId, cacheKey, true, "GREEN", contentVerdict.TestResultPaths,
@@ -835,6 +840,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result, string verdictSource = "first_run")
     {
+        // Reuse is already recorded by TryReuse; it is never a new executed verdict.
+        if (result.TestResultIsExplicitCrossAttemptReuse)
+            return;
         if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out var identity, out var identicalTreeKey))
         {
             var identicalTreeClosureHash = ResolveClosureHash(check);
@@ -1008,7 +1016,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
             RecordMiss(partitionId, PartitionVerdictMissReasons.ClosureHashUnavailable);
             return null;
         }
-        var cached = LatestGreenVerdict(_journal, GoalId, cacheKey);
+        var cached = LatestVerdict(_journal, GoalId, cacheKey);
+        if (!CanConsiderReuse(_journal, cached, partitionId, closureHash))
+            return null;
         var reuseRule = "identical-tree";
         if (cached is null)
         {
@@ -1022,6 +1032,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForWholeProjectClosure, closureHash);
                 return null;
             }
+            if (!HasAuthoritativeClosureSource(contentVerdict, partitionId))
+                return null;
             cached = new PartitionVerdictRecord(
                 GoalId, contentVerdict.SourceAttemptId, CandidateTreeSha, MainSha, identity,
                 partitionId, cacheKey, true, "GREEN", contentVerdict.TestResultPaths,
@@ -1113,12 +1125,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         string goalId,
         string cacheKey)
     {
-        var latest = journal.Records
-            .Where(record =>
-                record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase) &&
-                record.CacheKey.Equals(cacheKey, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(record => record.RecordedAt)
-            .LastOrDefault();
+        var latest = LatestVerdict(journal, goalId, cacheKey);
         return latest?.Passed == true ? latest : null;
     }
 
@@ -1180,10 +1187,14 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
             var records = new List<PartitionVerdictRecord>();
             var summaries = new List<PartitionVerdictJournalSummary>();
+            var isComplete = true;
             foreach (var line in SharedJsonlFile.ReadAllLines(path))
             {
                 if (TryDeserializePartitionVerdictJournalEntry(line) is not { } entry)
+                {
+                    if (!string.IsNullOrWhiteSpace(line)) isComplete = false;
                     continue;
+                }
 
                 if (entry.Operation.Equals(PartitionVerdictJournalOperation, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrWhiteSpace(entry.PartitionVerdictCacheKey) &&
@@ -1207,6 +1218,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
                         entry.PartitionTestResultPaths ?? [],
                         entry.At, entry.PartitionClosureHash));
                 }
+                else if (entry.Operation.Equals(PartitionVerdictJournalOperation, StringComparison.OrdinalIgnoreCase))
+                {
+                    isComplete = false;
+                }
                 else if (entry.Operation.Equals(PartitionVerdictCacheJournalOperation, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrWhiteSpace(entry.PartitionPairKey) &&
                     entry.PartitionReuseAttemptCount is { } reuseAttemptCount)
@@ -1219,7 +1234,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 }
             }
 
-            return new PartitionVerdictJournalSnapshot(records, summaries);
+            return new PartitionVerdictJournalSnapshot(records, summaries, isComplete);
         }
     }
 
@@ -1227,7 +1242,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
     {
         try
         {
-            return JsonSerializer.Deserialize<PartitionVerdictJournalEntry>(line, PartitionVerdictJournalJsonOptions);
+            var entry = JsonSerializer.Deserialize<PartitionVerdictJournalEntry>(line, PartitionVerdictJournalJsonOptions);
+            return entry is not null && !string.IsNullOrWhiteSpace(entry.Operation) && !string.IsNullOrWhiteSpace(entry.GoalId?.Value)
+                ? entry : null;
         }
         catch (JsonException)
         {
@@ -1326,7 +1343,6 @@ internal sealed partial class AcceptancePartitionVerdictCache
         string pairKey) =>
         journal.Summaries
             .Where(summary => summary.PairKey.Equals(pairKey, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(summary => summary.RecordedAt)
             .LastOrDefault()
             ?.ReuseAttemptCount ?? 0;
 
