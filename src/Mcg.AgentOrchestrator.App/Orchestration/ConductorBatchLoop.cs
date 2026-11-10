@@ -2232,6 +2232,9 @@ internal sealed partial class ConductorBatchLoop
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission));
+        ConductorTickStepLedger.Measure("candidate-supersession", () => _candidateSupersessionTick.Apply(
+            kernel, driver, CandidateSupersessionStop, _operatorIntents?.GateCancellation,
+            line => RecordParallelAcceptanceProgress(line, changedGoalLines), changedGoalIds));
         var (priorityOccupantsBefore, priorityResultsBefore, priorityBaseOrder) = ConductorTickStepLedger.Measure("priority-order", () =>
             (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
              state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
@@ -2296,17 +2299,6 @@ internal sealed partial class ConductorBatchLoop
         }
 
         return null;
-    }
-
-    private static void ReplayParallelAcceptanceLeaseReceipts(
-        ConductorDriver driver,
-        ConductorParallelAcceptanceAttempt attempt,
-        List<string> changedGoalLines)
-    {
-        foreach (var receipt in driver.ParallelAcceptanceAttemptCoordinator.TakePendingLeaseReceipts(attempt))
-        {
-            RecordParallelAcceptanceProgress(receipt, changedGoalLines);
-        }
     }
 
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(

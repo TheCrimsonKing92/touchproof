@@ -28,6 +28,8 @@ public sealed class ConductorJudgePanelSuspensionTests
         Assert.Equal(3, h.Sonnet.Calls);
         Assert.Equal(PanelJudgeOutcome.Valid, h.Store.Results(third.Id).Single(result => result.Judge == "sonnet").Outcome);
         Assert.Equal(PanelCaseTerminal.Completed, h.Store.Get(third.Id)!.Terminal);
+        Assert.Equal(PanelJudgmentOutcome.Partial, h.Store.Judgment(third.Id).Outcome);
+        Assert.Contains("judge-suspended", h.Store.Get(third.Id)!.Reason);
     }
 
     [Fact]

@@ -210,7 +210,7 @@ internal sealed partial class ConductorBatchLoop
             .ToArray();
         foreach (var runningDecision in running)
         {
-            ReplayParallelAcceptanceLeaseReceipts(driver, runningDecision.Attempt, changedGoalLines);
+            ConductorAcceptanceLeaseReceipts.Replay(driver, runningDecision.Attempt, changedGoalLines);
         }
 
         var retainedRunning = running[0];

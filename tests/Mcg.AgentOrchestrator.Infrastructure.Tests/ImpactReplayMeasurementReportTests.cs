@@ -17,6 +17,7 @@ public sealed class ImpactReplayMeasurementReportTests
         Assert.Equal(13d, summary.ObservedInfrastructureSeconds);
         Assert.Equal(9d / 13, summary.ShareOfTestSecondsSkipped);
         Assert.Equal(1, summary.MissCount);
+        Assert.Equal(0, summary.FlakeExcludedCount);
         Assert.Equal(1, summary.CompleteMissCheckCount);
         Assert.Equal(0, summary.IncompleteDurationCoverageCount);
         Assert.Contains("Maximum changed source files: 20", markdown);
@@ -24,10 +25,19 @@ public sealed class ImpactReplayMeasurementReportTests
         Assert.Contains("Named-lane estimated seconds saved: 23.5", markdown);
         Assert.Contains("Balanced-pool seconds saved: 8", markdown);
         Assert.Contains("Share of Infrastructure test seconds skipped (readable TRX durations): 69.2", markdown);
-        Assert.Contains("Miss count (including recorded flakes): 1", markdown);
+        Assert.Contains("Miss count (true misses): 1", markdown);
+        Assert.Contains("Flake-excluded count (known flaky skipped failures): 0", markdown);
         Assert.Contains("Complete miss checks: 1", markdown);
         using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json")));
         Assert.Equal(8d, json.RootElement.GetProperty("measurement").GetProperty("balancedPoolSecondsSaved").GetDouble());
+        var measurement = json.RootElement.GetProperty("measurement");
+        Assert.Equal(summary.MissCount, measurement.GetProperty("missCount").GetInt32());
+        Assert.Equal(summary.FlakeExcludedCount, measurement.GetProperty("flakeExcludedCount").GetInt32());
+        var interpretation = measurement.GetProperty("interpretation").GetString()!;
+        Assert.Contains(interpretation, markdown);
+        Assert.Contains("Historical summaries may include skipped flaky failures", interpretation);
+        Assert.Contains("not directly comparable", interpretation);
+        Assert.Contains("Zero true misses does not establish selection safety", interpretation);
         Assert.Equal(2, json.RootElement.GetProperty("attempts")[0].GetProperty("balancedClasses").GetArrayLength());
     }
 
