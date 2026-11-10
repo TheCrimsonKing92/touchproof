@@ -184,7 +184,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            ReplayParallelAcceptanceLeaseReceipts(driver, retainedTerminal.Attempt, changedGoalLines);
+            ConductorAcceptanceLeaseReceipts.Replay(driver, retainedTerminal.Attempt, changedGoalLines);
             if (retainedTerminal.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed)
             {
                 var run = retainedTerminal.Run ?? ConductorParallelAcceptanceRunResult.Fault(
@@ -605,7 +605,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 driver.ResetCohortFairness(goal.Id);
             }
-            ReplayParallelAcceptanceLeaseReceipts(driver, decision.Attempt, changedGoalLines);
+            ConductorAcceptanceLeaseReceipts.Replay(driver, decision.Attempt, changedGoalLines);
 
             switch (decision.Kind)
             {
@@ -621,7 +621,7 @@ internal sealed partial class ConductorBatchLoop
                             candidate,
                             policy,
                             driver.RunParallelLandingAcceptance);
-                        ReplayParallelAcceptanceLeaseReceipts(driver, terminalDecision.Attempt, changedGoalLines);
+                        ConductorAcceptanceLeaseReceipts.Replay(driver, terminalDecision.Attempt, changedGoalLines);
                         if (terminalDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed)
                         {
                             var terminalRun = terminalDecision.Run ?? ConductorParallelAcceptanceRunResult.Fault(

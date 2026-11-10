@@ -1,10 +1,13 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
     internal Func<ConductorParallelAcceptanceAttempt, string, bool>? SupersededAttemptStop { get; init; }
+    internal GateCandidateSupersessionStop? CandidateSupersessionStop { get; init; }
+    private readonly GateCandidateSupersessionTick _candidateSupersessionTick = new();
 
     private void NoteLandingAndStopSupersededAttempts(
         AgentOrchestratorKernel kernel,

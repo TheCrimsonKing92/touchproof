@@ -20,7 +20,7 @@ internal sealed partial class ConductorJudgePanelHost
             var suspended = results.Count == ConductorJudgePanelBudgets.MaxJudgeCallsPerCase &&
                             results.All(result => result.Outcome == PanelJudgeOutcome.Skipped && result.Reason == "judge-suspended");
             _store.Complete(claim, superseded ? PanelCaseTerminal.Superseded : suspended ?
-                PanelCaseTerminal.SuspendedSkip : PanelCaseTerminal.Completed, superseded ? "candidate-or-criteria-changed" : null);
+                PanelCaseTerminal.SuspendedSkip : PanelCaseTerminal.Completed, superseded ? "candidate-or-criteria-changed" : PanelJudgmentCompleteness.Evaluate(results).Reason);
         }
         _running = null;
         _round = null;
@@ -31,8 +31,10 @@ internal sealed partial class ConductorJudgePanelHost
         foreach (var item in _store.Unreported())
         {
             var results = _store.Results(item.Id);
+            var judgment = PanelJudgmentCompleteness.Evaluate(results);
             var detail = $"PANEL_CASE case={item.Id} trigger={item.Key.TriggerId} result={PanelV0Contract.Token(item.Terminal!.Value)} " +
-                         string.Join(' ', results.Select(result => $"{result.Judge}={PanelV0Contract.Token(result.Outcome)}"));
+                         string.Join(' ', results.Select(result => $"{result.Judge}={PanelV0Contract.Token(result.Outcome)}")) +
+                         $" judgment={judgment.Outcome.ToString().ToLowerInvariant()} reason={judgment.Reason ?? item.Reason ?? "none"}";
             if (_conduct.AppendRequired("judge-panel", item.Key.GoalId, detail, _utcNow(), "panel-case-" + item.Id))
                 _store.MarkReported(item.Id);
         }
