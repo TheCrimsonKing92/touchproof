@@ -46,9 +46,7 @@ public sealed class OwnerConsoleHoldPhraseTests
             AssertPlain(OwnerConsoleHoldPhrase.For("untyped/" + owner));
         }
 
-        var field = typeof(ConductorLandingBlockerRecorder).GetField("NextActions", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(field);
-        var actions = Assert.IsAssignableFrom<IReadOnlyDictionary<string, (string Actor, string Verb)>>(field.GetValue(null));
+        var actions = ConductorLandingBlockerRecorder.NextActions;
         Assert.NotEmpty(actions);
         foreach (var kind in actions.Keys) AssertPlain(OwnerConsoleHoldPhrase.For("verified-admission/" + kind));
     }

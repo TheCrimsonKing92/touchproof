@@ -832,7 +832,7 @@ internal sealed class GitRevisionReader : IDisposable
 
     internal sealed class ReaderProcess
     {
-        private readonly HandleListLaunchedProcess process;
+        internal readonly HandleListLaunchedProcess process;
         private readonly GitCli.ProcessCompletion? completion;
         private readonly string packedRefsPath;
         private readonly string packedRefsVersion;

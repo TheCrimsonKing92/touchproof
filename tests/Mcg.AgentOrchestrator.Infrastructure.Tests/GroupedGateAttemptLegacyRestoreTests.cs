@@ -184,8 +184,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         var finished = fixture.Attempt("follower", ["a", "b"], leased);
         Publish(finished, status);
         var original = File.ReadAllBytes(finished.MetadataPath);
-        var driver = Driver(fixture.Coordinator, fixture.Root);
-        SetField(driver, "_cohortAcceptanceVerifier", new UnexpectedVerifier());
+        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
 
         // A different main makes the next admission decision observable without creating a worktree.
         var outcome = driver.StartFollowerGate(Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0],
@@ -203,8 +202,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
     {
         using var fixture = new Fixture();
         fixture.Attempt("follower", ["a", "b"]);
-        var driver = Driver(fixture.Coordinator, fixture.Root);
-        SetField(driver, "_cohortAcceptanceVerifier", new UnexpectedVerifier());
+        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
 
         Assert.IsType<FollowerGateStartOutcome.LeaderHasFollower>(driver.StartFollowerGate(
             Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0], ConductorAutonomyPolicy.Conservative));
@@ -235,7 +233,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         var firstKind = secondKind == "follower" && identical ? "follower" : "cohort";
         var first = fixture.Attempt(firstKind, ["a", "b"]);
         var second = fixture.Attempt(secondKind, identical ? ["a", "b"] : ["b", "c"]);
-        var driver = Driver(fixture.Coordinator, fixture.Root);
+        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
         var restored = new List<IReadOnlySet<string>>();
 
         Assert.Null(Record.Exception(() => driver.GetActiveCohortGateMemberGoalIds((ids, _) => restored.Add(ids))));
@@ -254,7 +252,6 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         driver.GetActiveCohortGateMemberGoalIds();
         Assert.Single(fixture.Events.Where(line => line.StartsWith("GROUPED_GATE_ATTEMPT_OVERLAP ", StringComparison.Ordinal)));
         StartGrouped(driver, ["x", "y"]); // disjoint admission must also be held
-        SetField(driver, "_cohortAcceptanceVerifier", new UnexpectedVerifier());
         var followers = Projections(["x", "y"]);
         Assert.IsType<FollowerGateStartOutcome.FollowerBusy>(driver.StartFollowerGate(
             followers[0], followers[1], ConductorAutonomyPolicy.Conservative));
@@ -412,21 +409,16 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         }
     }
 
-    private static ConductorDriver Driver(ConductorGroupedGateAttemptCoordinator coordinator, string root)
+    private static ConductorDriver Driver(ConductorGroupedGateAttemptCoordinator coordinator, string root, IGoalAcceptanceVerifier? verifier = null)
     {
-        var driver = MakeDriver();
-        SetField(driver, "_groupedGateAttempts", coordinator);
-        SetField(driver, "_executionDirectory", root);
+        var driver = MakeDriver(executionDirectory: root, cohortAcceptanceVerifier: verifier);
+        driver._groupedGateAttempts = coordinator;
         return driver;
     }
 
-    private static void SetField(ConductorDriver driver, string name, object value) =>
-        typeof(ConductorDriver).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(driver, value);
-
     private static void StartGrouped(ConductorDriver driver, string[] members) =>
-        typeof(ConductorDriver).GetMethod("StartGroupedGateAttempt", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(driver, ["cohort", Projections(members), MainRevision, "tree", "manifest", "new-identity", "new-key",
-                ConductorAutonomyPolicy.Conservative]);
+        driver.StartGroupedGateAttempt("cohort", Projections(members), MainRevision, "tree", "manifest", "new-identity", "new-key",
+                ConductorAutonomyPolicy.Conservative);
 
     private static GateReadyCandidateProjection[] Projections(string[] ids, string mainRevision = MainRevision) => ids.Select(id =>
         new ConductorGroupedGateMember(id, BranchRevision, BranchRevision, ["src/" + id], [], ChangeRiskTier.Behavior)

@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
+    internal ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
     private readonly Dictionary<string, GroupedGateAttemptOverlap> _groupedGateAdmissionHolds = new(StringComparer.Ordinal);
 
     internal IReadOnlyCollection<GroupedGateAttemptOverlap> GroupedGateAdmissionHolds =>
@@ -117,7 +117,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private CohortGateRun StartGroupedGateAttempt(
+    internal CohortGateRun StartGroupedGateAttempt(
         string kind,
         IReadOnlyList<GateReadyCandidateProjection> members,
         string mainRevision,

@@ -13,9 +13,7 @@ public sealed class DispatchProcessRecoveryServiceTests
     {
         var process = ProcessRecord(40, Now.AddMinutes(-1));
         var task = new TaskSpec(TaskId.New(), "Inspect recovery.", AgentRole.Researcher);
-        var recordProcess = typeof(TaskSpec).GetMethod("RecordProcess", BindingFlags.Instance | BindingFlags.NonPublic);
-        Xunit.Assert.NotNull(recordProcess);
-        recordProcess!.Invoke(task, [process]);
+        task.RecordProcess(process);
         var commandLineReads = 0;
         var writer = new CaptureDiagnosticWriter();
         var service = CreateService(

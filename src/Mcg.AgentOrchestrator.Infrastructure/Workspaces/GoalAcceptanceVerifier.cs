@@ -1667,7 +1667,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ToList();
     }
 
-    private static List<AcceptanceManifestCheck>? BuildChangeScopedChecks(
+    internal static List<AcceptanceManifestCheck>? BuildChangeScopedChecks(
         string worktreePath,
         AcceptanceManifestCheck? solutionCheck,
         IReadOnlyList<AcceptanceManifestCheck> allChecks,
@@ -1730,7 +1730,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string.Equals(NormalizePath(left.Project), NormalizePath(right.Project), StringComparison.OrdinalIgnoreCase) &&
         left.Arguments.SequenceEqual(right.Arguments, StringComparer.OrdinalIgnoreCase);
 
-    private static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
+    internal static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
         string worktreePath,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles,
@@ -1852,7 +1852,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             semanticDeduplication.Receipts, laneExpansion.Layout);
     }
 
-    private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
+    internal static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
@@ -2059,7 +2059,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string ComputeEffectiveAcceptanceManifestIdentity(
+    internal static string ComputeEffectiveAcceptanceManifestIdentity(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         AcceptanceGateEngineSettings? engineSettings = null)
     {

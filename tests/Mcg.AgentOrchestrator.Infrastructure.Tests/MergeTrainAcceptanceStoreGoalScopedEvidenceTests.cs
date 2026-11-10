@@ -85,15 +85,8 @@ public sealed class MergeTrainAcceptanceStoreGoalScopedEvidenceTests
         </TestRun>
         """;
 
-    private static Type CacheType => typeof(MergeTrainReceipt).Assembly.GetType(
-        "Mcg.AgentOrchestrator.Core.TrxCoherenceCache", throwOnError: true)!;
 
-    private static void ResetCache() =>
-        (CacheType.GetMethod("Reset", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(CacheType.FullName, "Reset")).Invoke(null, null);
+    private static void ResetCache() => TrxCoherenceCache.Reset();
 
-    private static long CacheLoadCount() => (long)(
-        (CacheType.GetProperty("LoadCount", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMemberException(CacheType.FullName, "LoadCount")).GetValue(null)
-        ?? throw new InvalidOperationException("TRX cache load count was unavailable."));
+    private static long CacheLoadCount() => TrxCoherenceCache.LoadCount;
 }

@@ -15,13 +15,8 @@ public sealed class TesterRoleFocusNoWorkerTestExecutionTests
             new GoalId("role-focus-tester"),
             "Keep Tester guidance aligned.",
             [task]);
-        var method = typeof(WorkerArtifactWriter).GetMethod(
-            "BuildDigest",
-            BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(typeof(WorkerArtifactWriter).FullName, "BuildDigest");
-
-        var digest = Assert.IsType<string>(method.Invoke(
-            null, [goal, task, repositoryRoot, null, false, false, false, Array.Empty<string>()]));
+        var digest = WorkerArtifactWriter.BuildDigest(
+            goal, task, repositoryRoot, null, false, false, false, Array.Empty<string>());
         var lines = digest.Split(Environment.NewLine);
         var roleFocusIndex = Assert.Single(
             Enumerable.Range(0, lines.Length), index => lines[index] == "## Role Focus");

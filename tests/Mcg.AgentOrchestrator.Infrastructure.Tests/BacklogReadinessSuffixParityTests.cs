@@ -125,10 +125,7 @@ public sealed class BacklogReadinessSuffixParityTests
             ref agents, providers, ref profiles, ref currentGoal));
         var host = ConductorBoardFillHost.CreateDefault(fixture.Workspace,
             () => ConductorAutonomyPolicy.Permissive, () => CliAuthorDraftCommandTests.Fixture.MainSha);
-        var field = typeof(ConductorBoardFillHost).GetField("_readiness", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(field);
-        var factory = Assert.IsType<Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>>>(
-            field.GetValue(host));
+        var factory = host._readiness;
         var items = BoardFillBacklogSnapshot.Read(fixture.Workspace.BacklogStorePath);
         var readiness = factory(kernel, items)(Assert.Single(items.Where(item => item.Id == fixture.Item.Id)));
 

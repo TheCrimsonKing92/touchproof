@@ -493,7 +493,7 @@ internal sealed partial class ConductorBatchLoop
         return decision;
     }
 
-    private void EmitAcceptanceCohortFairnessDecision(
+    internal void EmitAcceptanceCohortFairnessDecision(
         ConductorAcceptanceCohortFairnessDecision? decision)
     {
         if (decision is null) return;

@@ -56,12 +56,7 @@ public sealed class WorkerBuildGuidanceContractTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var task = new TaskSpec(TaskId.New(), "Implement the scoped .NET change.", AgentRole.Developer, "Run focused verification.");
-        var method = typeof(WorkerArtifactWriter).GetMethod(
-            "BuildCurrentTask",
-            BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(typeof(WorkerArtifactWriter).FullName, "BuildCurrentTask");
-
-        var guidance = Assert.IsType<string>(method.Invoke(null, [task, repositoryRoot, false, null]));
+        var guidance = WorkerArtifactWriter.BuildCurrentTask(task, repositoryRoot, false, null);
 
         var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
         Assert.Contains(invocation + " <project.csproj> [project.csproj...]", guidance, StringComparison.Ordinal);

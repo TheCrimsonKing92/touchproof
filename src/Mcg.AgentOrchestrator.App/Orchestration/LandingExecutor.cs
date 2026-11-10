@@ -1055,7 +1055,7 @@ internal static partial class LandingExecutor
             $"Landing held before merge: {blockReason}");
     }
 
-    private static string? TryResolveBranch(string executionDirectory, string branch)
+    internal static string? TryResolveBranch(string executionDirectory, string branch)
     {
         if (GitRefFileResolver.TryResolve(executionDirectory, $"refs/heads/{branch}", out var revision))
         {
@@ -1147,7 +1147,7 @@ internal static partial class LandingExecutor
             .ToArray();
     }
 
-    private static string ResolveRef(string executionDirectory, string reference)
+    internal static string ResolveRef(string executionDirectory, string reference)
     {
         if (!reference.StartsWith('-') && GitRefFileResolver.TryResolve(executionDirectory, reference, out var revision))
         {
@@ -1163,7 +1163,7 @@ internal static partial class LandingExecutor
         return result.Output.Trim();
     }
 
-    private static bool BranchExists(string executionDirectory, string branch)
+    internal static bool BranchExists(string executionDirectory, string branch)
     {
         if (GitRefFileResolver.TryResolve(executionDirectory, $"refs/heads/{branch}", out _))
         {

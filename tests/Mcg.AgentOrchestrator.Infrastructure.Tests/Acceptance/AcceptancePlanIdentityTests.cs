@@ -57,13 +57,9 @@ public sealed class AcceptancePlanIdentityTests
         {
             var settings = AcceptanceGateEngineSettings.Load(root);
             var checks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
-            var identityMethod = typeof(GoalAcceptanceVerifier).GetMethod(
-                "ComputeEffectiveAcceptanceManifestIdentity",
-                BindingFlags.NonPublic | BindingFlags.Static)!;
-            var expectedInGateIdentity = (string)identityMethod.Invoke(null, [checks, settings])!;
-            var defaultSettingsIdentity = (string)identityMethod.Invoke(
-                null,
-                [checks, new AcceptanceGateEngineSettings()])!;
+            var expectedInGateIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptanceManifestIdentity(checks, settings);
+            var defaultSettingsIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptanceManifestIdentity(
+                checks, new AcceptanceGateEngineSettings());
 
             var effectivePlanIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(root);
 

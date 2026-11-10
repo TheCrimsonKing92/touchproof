@@ -92,6 +92,7 @@ public sealed class PreTesterTestSourceGuardClassesTests(ITestOutputHelper outpu
         Assert.Equal(guardNames, selected.Where(selection => selection.TestClass.EndsWith("GuardTests", StringComparison.Ordinal))
             .Select(selection => selection.TestClass).OrderBy(name => name, StringComparer.Ordinal));
         Assert.All(SharedNames, name => Assert.Single(selected, selection => selection.TestClass == name));
+        Assert.Single(selected, selection => selection.TestClass == nameof(ProductionMemberReflectionGuardTests));
         Assert.Equal(guardNames.Length + SharedNames.Length, selected.Count);
         try
         {

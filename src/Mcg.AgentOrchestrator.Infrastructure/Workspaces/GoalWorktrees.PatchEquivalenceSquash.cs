@@ -17,7 +17,7 @@ public static partial class GoalWorktrees
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + '\0' + first + '\0' + second;
 
     // A squash may change patch history, but it must preserve exactly the merged candidate tree.
-    private static bool TryComputeSquashEquivalence(
+    internal static bool TryComputeSquashEquivalence(
         string executionDirectory, string oldHeadSha, string newHeadSha, string integrationBranch, out string evidence)
     {
         evidence = string.Empty;

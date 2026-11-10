@@ -176,7 +176,7 @@ internal static partial class LockAttribution
     internal static bool DisableRestartManagerForTests { get; set; }
     private static readonly AsyncLocal<Func<ProcessCommandLineSnapshot>?> ProcessCommandLineSnapshotOverride = new();
 
-    private static Func<ProcessCommandLineSnapshot> ProcessCommandLineSnapshotProvider =>
+    internal static Func<ProcessCommandLineSnapshot> ProcessCommandLineSnapshotProvider =>
         ProcessCommandLineSnapshotOverride.Value ?? ProcessCommandLines.Snapshot;
 
     // Scopes inherit through ExecutionContext and restore in reverse order in the owning flow.
@@ -559,7 +559,7 @@ internal static partial class LockAttribution
         }
     }
 
-    private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
+    internal static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
         var snapshot = ProcessCommandLineSnapshotProvider() ?? ProcessCommandLines.Snapshot();
         if (snapshot.Failure is { } failure)

@@ -78,8 +78,8 @@ public sealed class ExperimentStopExtensionTests
             var after = ExperimentReading.Evaluate(updated, kernel.Goals, new Dictionary<string, DateTimeOffset>(), [], At, null, ExperimentHostLedgers.Empty);
             Assert.Equal(before.ObservedCount, after.ObservedCount);
             Assert.False(after.StopRuleMet);
-            // Keep the prescribed main-file revert compilable so it fails on behavior.
-            Assert.Equal(5, Assert.IsType<int>(after.GetType().GetProperty("StopTarget")?.GetValue(after)));
+            // Pin the updated stop target through compile-checked access.
+            Assert.Equal(5, after.StopTarget);
             var output = CaptureConsole(() => ExperimentReading.Render(after));
             Assert.Contains("stop rule: 2 of 5 goals (not met)", output.Split(Environment.NewLine));
         });

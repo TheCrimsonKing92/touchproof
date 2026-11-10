@@ -140,7 +140,7 @@ public static partial class GoalWorktrees
         return true;
     }
 
-    private static bool TryResolveCommit(string executionDirectory, string sha, out string resolved)
+    internal static bool TryResolveCommit(string executionDirectory, string sha, out string resolved)
     {
         resolved = string.Empty;
         return CommitShaPattern.IsMatch(sha) &&
@@ -161,7 +161,7 @@ public static partial class GoalWorktrees
             count is > 0 and <= PatchEquivalenceCommitLimit;
     }
 
-    private static bool TryVerifyIntegrationMergesClean(
+    internal static bool TryVerifyIntegrationMergesClean(
         string executionDirectory,
         string baseSha,
         string headSha,

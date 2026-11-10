@@ -208,7 +208,7 @@ internal sealed partial class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string BuildDigest(
+    internal static string BuildDigest(
         Goal goal,
         TaskSpec task,
         string workingDirectory,
@@ -353,7 +353,7 @@ internal sealed partial class WorkerArtifactWriter
                 lines.Add($"- criterion_index={entry.CriterionIndex} status={entry.StatusText} evidence={DeveloperCriteriaSelfCheck.OneLine(entry.Evidence)}");
     }
 
-    private static string BuildCurrentTask(
+    internal static string BuildCurrentTask(
         TaskSpec task,
         string workingDirectory,
         bool preserveCompleteArtifacts,
