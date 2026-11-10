@@ -33,7 +33,7 @@ internal static class ImpactReplayAttemptSource
                 var paths = (attempt.TestResultPaths ?? []).Concat(result.Acceptance?.TestResultPaths ?? [])
                     .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).ToArray();
                 attempts.Add(new(attempt.AttemptId, attempt.GoalId, attempt.StartedAt, main!, branch!,
-                    Path.GetDirectoryName(path)!, paths, result.Acceptance?.FailedChecks ?? []));
+                    Path.GetDirectoryName(path)!, paths, result.Acceptance?.FailedChecks ?? [], path));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
             { Skip($"Unreadable attempt/result: {ex.Message}"); }

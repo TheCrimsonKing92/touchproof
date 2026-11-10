@@ -8,6 +8,20 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ExperimentReplayRunner
 {
     internal sealed record Prepared(string Checkout, string BuildArtifacts);
+    internal sealed class PreparationInterrupted(ExperimentReplayProcess.Result result,
+        IReadOnlyList<ExperimentReplaySource> sources) : Exception(result.Reason ?? result.State)
+    {
+        internal ExperimentReplayProcess.Result Result { get; } = result;
+        internal IReadOnlyList<ExperimentReplaySource> Sources { get; } = sources;
+        internal string? CleanupFailure { get; set; }
+    }
+
+    internal static void RequirePreparationSuccess(ExperimentReplayProcess.Result result,
+        IReadOnlyList<ExperimentReplaySource> sources, string failure)
+    {
+        if (result.State is "cancelled" or "timed-out") throw new PreparationInterrupted(result, sources);
+        if (result.State != "exited" || result.ExitCode != 0) throw new InvalidDataException(failure);
+    }
     internal interface IHost
     {
         Task<Prepared> PrepareAsync(ExperimentReplayCase item, string artifacts, CancellationToken token);
@@ -50,6 +64,18 @@ internal sealed class ExperimentReplayRunner
                     {
                         candidate = await host.PrepareAsync(registration.Cases.Single(c => c.Id == slot.CaseId),
                             Path.Combine(root, run.Id, slot.CaseId), deadline.Token);
+                    }
+                    catch (PreparationInterrupted ex)
+                    {
+                        var interrupted = new ExperimentReplayExecution(Guid.NewGuid().ToString("N"), run.Id, slot,
+                            ex.Result.State, ex.Message, HostIdentity(), registration.RuntimeIdentity, registration.ToolchainIdentity,
+                            ex.Result.Priority, ex.Result.PowerThrottling, DateTimeOffset.UtcNow,
+                            ex.Result.Resources, null, [], ex.Sources);
+                        store.Record(interrupted);
+                        executions.Add(interrupted);
+                        state = ex.CleanupFailure is null ? "incomplete" : "apparatus-failed";
+                        reason = ex.CleanupFailure is null ? ex.Message : $"{ex.Message}; cleanup: {ex.CleanupFailure}";
+                        break;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -107,9 +133,12 @@ internal sealed class ExperimentReplayRunner
     internal sealed class LocalHost(string repository, string dotnet, string runtimeAssembly,
         IReadOnlyList<ExperimentReplaySource>? patches = null, string? toolchainIdentity = null) : IHost
     {
+        private readonly Dictionary<string, ExperimentReplayCheckoutLease> _leases = new(StringComparer.OrdinalIgnoreCase);
+        private readonly string _checkoutRoot = OrchestratorTempRoot.GetPurposeDirectory("experiment-replay");
+
         public async Task<Prepared> PrepareAsync(ExperimentReplayCase item, string artifacts, CancellationToken token)
         {
-            var checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("experiment-replay"), Guid.NewGuid().ToString("N"));
+            var checkout = Path.Combine(_checkoutRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.GetDirectoryName(checkout)!);
             var added = GitCli.RunForRepository(repository, "-c", "core.hooksPath=" + Path.Combine(checkout, "no-hooks"),
                 "worktree", "add", "--detach", "--quiet", checkout, item.CandidateCommit!);
@@ -117,9 +146,13 @@ internal sealed class ExperimentReplayRunner
             var prepared = new Prepared(checkout, Path.Combine(artifacts, "build"));
             try
             {
+                _leases.Add(checkout, ExperimentReplayCheckoutLease.Create(checkout, item.CandidateCommit!, _checkoutRoot));
+                var sources = new List<ExperimentReplaySource>();
                 var version = await ExperimentReplayProcess.RunAsync(dotnet, ["--version"], checkout,
                     Path.Combine(artifacts, "toolchain"), TimeSpan.FromMinutes(1), token);
-                if (version.State != "exited" || version.ExitCode != 0 || toolchainIdentity is not null &&
+                Retain(version, Path.Combine(artifacts, "toolchain"));
+                RequirePreparationSuccess(version, sources, "Historical toolchain probe unavailable.");
+                if (toolchainIdentity is not null &&
                     ExperimentReplayStore.Hash(ExperimentReplayStore.Source(dotnet).Sha256 + File.ReadAllText(version.StdoutPath).Trim()) != toolchainIdentity)
                     throw new InvalidDataException("Historical toolchain differs from the registered installed SDK.");
                 var head = GitCli.RunForRepository(checkout, "rev-parse", "HEAD");
@@ -133,10 +166,23 @@ internal sealed class ExperimentReplayRunner
                     var result = await ExperimentReplayProcess.RunAsync(dotnet,
                         ["build", relative, "--artifacts-path", prepared.BuildArtifacts, "--nologo", "-v:q", "-p:RunAnalyzers=false"],
                         checkout, Path.Combine(artifacts, "prerequisites", ExperimentReplayStore.Hash(relative)[..12]), TimeSpan.FromMinutes(20), token);
-                    ExperimentReplayEvidence.Write(Path.Combine(artifacts, "prerequisites"), JsonSerializer.Serialize(result, ExperimentReplayStore.Json), ".json");
-                    if (result.ExitCode != 0 || result.State != "exited") throw new InvalidDataException($"Historical build unavailable: {relative}; {result.Reason}");
+                    Retain(result, Path.Combine(artifacts, "prerequisites"));
+                    RequirePreparationSuccess(result, sources, $"Historical build unavailable: {relative}; {result.Reason}");
                 }
                 return prepared;
+
+                void Retain(ExperimentReplayProcess.Result result, string directory)
+                {
+                    sources.Add(ExperimentReplayEvidence.Write(directory, JsonSerializer.Serialize(result, ExperimentReplayStore.Json), ".json"));
+                    sources.Add(ExperimentReplayStore.Source(result.StdoutPath));
+                    sources.Add(ExperimentReplayStore.Source(result.StderrPath));
+                }
+            }
+            catch (PreparationInterrupted ex)
+            {
+                try { Cleanup(prepared); }
+                catch (Exception cleanup) { ex.CleanupFailure = cleanup.Message; }
+                throw;
             }
             catch { Cleanup(prepared); throw; }
         }
@@ -150,7 +196,7 @@ internal sealed class ExperimentReplayRunner
                 throw new InvalidDataException("Registered runtime bytes changed.");
             var request = new ExperimentReplayProcedure.Request(prepared.Checkout, item.BaseCommit!, item.CandidateCommit!,
                 slot.Stage == "AA" ? "B" : slot.Arm, dotnet, prepared.BuildArtifacts,
-                Path.Combine(artifacts, "results"), Path.Combine(artifacts, "completion.json"), slot.Stage == "reference", patches);
+                Path.Combine(artifacts, "results"), Path.Combine(artifacts, "completion.json"), slot.Stage == "reference", patches, _checkoutRoot);
             var source = ExperimentReplayEvidence.Write(artifacts, JsonSerializer.Serialize(request, ExperimentReplayStore.Json), ".request.json");
             var load = ExperimentReplayEvidence.Write(artifacts, JsonSerializer.Serialize(new
             {
@@ -179,9 +225,20 @@ internal sealed class ExperimentReplayRunner
 
         public void Cleanup(Prepared prepared)
         {
-            var removed = GitCli.RunForRepository(repository, "worktree", "remove", "--force", prepared.Checkout);
-            if (!removed.ProcessStarted || !removed.Succeeded || removed.DrainTimedOut || Directory.Exists(prepared.Checkout))
-                throw new IOException($"Owned replay worktree cleanup failed: {prepared.Checkout}; {removed.Error}");
+            if (!_leases.TryGetValue(prepared.Checkout, out var lease))
+                throw new InvalidDataException("Replay cleanup requires this host's live checkout lease.");
+            try
+            {
+                using var ownership = ExperimentReplayCheckoutLease.Acquire(prepared.Checkout, lease.CandidateCommit, lease.CheckoutRoot);
+                var removed = GitCli.RunForRepository(repository, "worktree", "remove", "--force", prepared.Checkout);
+                if (!removed.ProcessStarted || !removed.Succeeded || removed.DrainTimedOut || Directory.Exists(prepared.Checkout))
+                    throw new IOException($"Owned replay worktree cleanup failed: {prepared.Checkout}; {removed.Error}");
+            }
+            finally
+            {
+                _leases.Remove(prepared.Checkout);
+                lease.Dispose();
+            }
         }
     }
 

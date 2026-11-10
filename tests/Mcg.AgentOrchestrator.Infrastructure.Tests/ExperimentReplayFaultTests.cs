@@ -28,6 +28,47 @@ public sealed class ExperimentReplayFaultTests
         Assert.Equal("unsupported/nonpositive", Evaluate("deleted-assertion-plus-defect", Control(), original).State);
     }
 
+    [Fact]
+    public void ParameterizedRows_UnrelatedRowCannotEstablishReferenceOrCatch()
+    {
+        using var fixture = new ExperimentReplayTestData();
+        var trx = Path.Combine(fixture.Root, "rows.trx");
+        File.WriteAllText(trx, """
+            <TestRun><Results>
+              <UnitTestResult testId="2" testName="Parses_case(value: 2)" outcome="Failed"/>
+              <UnitTestResult testId="3" testName="Parses_case(value: 3)" outcome="Failed"/>
+            </Results><TestDefinitions>
+              <UnitTest id="2"><TestMethod className="Sample.Tests.ParserTests" name="Parses_case"/></UnitTest>
+              <UnitTest id="3"><TestMethod className="Sample.Tests.ParserTests" name="Parses_case"/></UnitTest>
+            </TestDefinitions></TestRun>
+            """);
+        var rows = ExperimentReplayEvidence.Tests(trx);
+        Assert.Equal("Sample.Tests.ParserTests.Parses_case(value: 2)", rows[0].Identity);
+        Assert.Equal("Sample.Tests.ParserTests.Parses_case(value: 3)", rows[1].Identity);
+        var run = new ExperimentReplayRun("run", "registration", "complete", null, Now, Now);
+        var definition = new ExperimentReplayFaultRunner.Definition("case-000", "reflection-signature", "patch", [rows[0].Identity]);
+        var wrongReference = Reference() with { FailingTests = [rows[1].Identity] };
+        var unsupported = ExperimentReplayFaultRunner.Evaluate("fault", run, Registration(), definition,
+            [new("patch", "hash")], [Control(), wrongReference]);
+        Assert.Equal("unsupported/nonpositive", unsupported.State);
+        var rightReference = Reference() with { FailingTests = [rows[0].Identity] };
+        var unrelatedMutant = Mutant("A") with { FailingTests = [rows[1].Identity] };
+        var positive = ExperimentReplayFaultRunner.Evaluate("fault", run, Registration(), definition,
+            [new("patch", "hash")], [Control(), rightReference, unrelatedMutant]);
+        Assert.Equal("positive", positive.State);
+        Assert.Empty(positive.ACatches);
+
+        var registration = Registration();
+        registration = registration with { Cases = registration.Cases.Select(c => c.Id != "case-000" ? c : c with {
+            Gates = [new("gate", Now, "test-failed", [rows[0].Identity], [])] }).ToArray() };
+        var mismatched = ExperimentReplayReportWriter.Create(registration, run, [wrongReference]);
+        Assert.Equal(0, mismatched.ConfirmedCatchDenominator);
+        var measured = unrelatedMutant with { Slot = unrelatedMutant.Slot with { Stage = "AB" } };
+        var matched = ExperimentReplayReportWriter.Create(registration, run, [rightReference, measured]);
+        Assert.Equal(1, matched.ConfirmedCatchDenominator);
+        Assert.Equal(0, matched.ACaught);
+    }
+
     private static ExperimentReplayFault Evaluate(string shape, params ExperimentReplayExecution[] executions) =>
         ExperimentReplayFaultRunner.Evaluate("fault", new("run", "registration", "complete", null, Now, Now), Registration(),
             new("case-000", shape, "patch", ["Example.Defect"], "defect-patch"), [new("patch", "hash")], executions);

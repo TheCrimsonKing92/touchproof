@@ -10,7 +10,7 @@ internal static class ExperimentReplayProcedure
     internal const string Command = "__experiment-replay-procedure";
     internal sealed record Request(string Checkout, string BaseCommit, string CandidateCommit, string Arm,
         string Dotnet, string BuildArtifacts, string ResultsDirectory, string CompletionPath, bool Reference = false,
-        IReadOnlyList<ExperimentReplaySource>? Patches = null);
+        IReadOnlyList<ExperimentReplaySource>? Patches = null, string? CheckoutRoot = null);
     internal sealed record Completion(string State, string? Reason, ExperimentReplaySelection? Selection,
         IReadOnlyList<string> FailingTests, IReadOnlyList<ExperimentReplaySource> Sources);
 
@@ -21,17 +21,14 @@ internal static class ExperimentReplayProcedure
         Completion completion;
         try
         {
+            using var ownership = ExperimentReplayCheckoutLease.Acquire(request.Checkout, request.CandidateCommit, request.CheckoutRoot);
             try { completion = await ExecuteAsync(request, token); }
             finally
             {
-                // Only the verified detached checkout is reset. Build/results/runtime stay outside it.
-                var head = GitCli.RunForRepository(request.Checkout, "rev-parse", "HEAD");
-                if (File.Exists(Path.Combine(request.Checkout, ".git")) && head.Succeeded && head.Output.Trim() == request.CandidateCommit)
-                {
-                    Git(request.Checkout, "reset", "--hard", "--quiet", request.CandidateCommit);
-                    Git(request.Checkout, "clean", "-fdx", "--quiet");
-                }
-                else throw new InvalidDataException("Procedure cleanup lost its pinned detached-worktree identity.");
+                // Revalidate at the destructive boundary, including cancellation/failure cleanup.
+                using var cleanupOwnership = ExperimentReplayCheckoutLease.Acquire(request.Checkout, request.CandidateCommit, request.CheckoutRoot);
+                Git(request.Checkout, "reset", "--hard", "--quiet", request.CandidateCommit);
+                Git(request.Checkout, "clean", "-fdx", "--quiet");
             }
         }
         catch (Exception ex) { completion = new("apparatus-failed", ex.Message, null, [], []); }
@@ -44,10 +41,8 @@ internal static class ExperimentReplayProcedure
 
     internal static async Task<Completion> ExecuteAsync(Request request, CancellationToken token)
     {
+        using var ownership = ExperimentReplayCheckoutLease.Acquire(request.Checkout, request.CandidateCommit, request.CheckoutRoot);
         Directory.CreateDirectory(request.ResultsDirectory);
-        var head = GitCli.RunForRepository(request.Checkout, "rev-parse", "HEAD");
-        if (!head.Succeeded || head.Output.Trim() != request.CandidateCommit || !File.Exists(Path.Combine(request.Checkout, ".git")))
-            throw new InvalidDataException("Procedure requires its owned detached worktree at the pinned candidate.");
         Git(request.Checkout, "reset", "--hard", "--quiet", request.CandidateCommit);
         Git(request.Checkout, "clean", "-fdx", "--quiet");
         ApplyPatches(request.Checkout, request.Patches ?? []);
@@ -86,13 +81,12 @@ internal static class ExperimentReplayProcedure
             if (result.TimedOut || !File.Exists(trx))
                 return new("apparatus-failed", "Test timeout or required TRX missing.", selected, failures.ToArray(), evidence);
             var tests = ExperimentReplayEvidence.Tests(trx);
+            evidence.Add(ExperimentReplayStore.Source(trx));
+            var error = ExperimentReplayEvidence.ExecutionError(tests, result.ExitCode);
+            if (error is not null) return new("apparatus-failed", error, selected, failures.ToArray(), evidence);
             var executed = tests.Where(t => t.Outcome is "Passed" or "Failed").ToArray();
-            if (executed.Length == 0) return new("apparatus-failed", "Zero executed tests in selected project.", selected, [], evidence);
             ran += executed.Length;
             failures.UnionWith(executed.Where(t => t.Outcome == "Failed").Select(t => t.Identity));
-            evidence.Add(ExperimentReplayStore.Source(trx));
-            if (result.ExitCode != 0 && !executed.Any(t => t.Outcome == "Failed"))
-                return new("apparatus-failed", $"Test host exit {result.ExitCode} without failed-test evidence.", selected, failures.ToArray(), evidence);
         }
         return ran == 0 ? new("apparatus-failed", "No projects executed.", selected, [], evidence)
             : new(failures.Count > 0 ? "test-failed" : "passed", null, selected, failures.ToArray(), evidence);

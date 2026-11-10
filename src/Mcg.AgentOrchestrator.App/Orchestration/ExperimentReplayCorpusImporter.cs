@@ -11,7 +11,8 @@ internal static class ExperimentReplayCorpusImporter
         DateTimeOffset CompletedAt, string? BaseCommit, string? CandidateCommit, string? ObservedMain,
         ExperimentReplaySource Source);
     internal sealed record Gate(string GoalId, string CandidateCommit, string ObservedMain,
-        ExperimentReplayGate Evidence);
+        ExperimentReplayGate Evidence, string? TaskId = null, DateTimeOffset? DispatchedAt = null,
+        ExperimentReplaySource? DispatchLinkSource = null);
     internal sealed record Inventory(int Considered, int Added, int Replayable,
         IReadOnlyList<ExperimentReplayCase> Cases, IReadOnlyList<string> Diagnostics, string CorpusIdentity);
 
@@ -28,14 +29,16 @@ internal static class ExperimentReplayCorpusImporter
             if (!Commit(round.BaseCommit)) reasons.Add("dispatch base is unavailable");
             if (!Commit(round.CandidateCommit)) reasons.Add("candidate commit is unavailable");
             if (!Commit(round.ObservedMain)) reasons.Add("observed main was not recorded for this dispatch");
-            // Uniqueness is checked across all rounds, not only the truncated inventory. No nearest-time join.
-            var ambiguous = all.Count(r => r.GoalId == round.GoalId && r.CandidateCommit == round.CandidateCommit &&
-                r.ObservedMain == round.ObservedMain) != 1;
-            if (ambiguous) reasons.Add("candidate/main provenance maps to multiple dispatches");
+            // A unique commit tuple is not evidence that a gate followed this task/dispatch.
+            var ambiguous = all.Count(r => r.GoalId == round.GoalId && r.TaskId == round.TaskId &&
+                r.DispatchAt == round.DispatchAt) != 1;
+            if (ambiguous) reasons.Add("task/dispatch provenance maps to multiple rounds");
             var linked = !ambiguous && Commit(round.CandidateCommit) && Commit(round.ObservedMain)
-                ? gates.Where(g => g.GoalId == round.GoalId && g.CandidateCommit == round.CandidateCommit &&
+                ? gates.Where(g => g.TaskId == round.TaskId && g.DispatchedAt == round.DispatchAt &&
+                    g.DispatchLinkSource is not null && g.GoalId == round.GoalId && g.CandidateCommit == round.CandidateCommit &&
                     g.ObservedMain == round.ObservedMain && g.Evidence.StartedAt >= round.CompletedAt)
-                    .Select(g => g.Evidence).OrderBy(g => g.StartedAt).ThenBy(g => g.AttemptId, StringComparer.Ordinal).ToArray()
+                    .Select(g => g.Evidence with { Sources = g.Evidence.Sources.Append(g.DispatchLinkSource!).ToArray() })
+                    .OrderBy(g => g.StartedAt).ThenBy(g => g.AttemptId, StringComparer.Ordinal).ToArray()
                 : [];
             if (linked.Length == 0) reasons.Add("no exact-linked subsequent solo gate");
             if (linked.Any(g => g.Outcome == "unknown")) reasons.Add("gate outcome unavailable");
@@ -75,6 +78,16 @@ internal static class ExperimentReplayCorpusImporter
         var skipped = new List<ImpactReplayDiagnostic>();
         var retained = ImpactReplayAttemptSource.Read(workspace.OrchestratorDirectory, cutoff.AddDays(-30), skipped);
         diagnostics.AddRange(skipped.Select(s => $"{s.Source}: {s.Reason}"));
+        var gates = ReadGates(retained, evidenceDirectory, diagnostics, token);
+        var cases = Map(rounds, gates, cutoff);
+        var added = cases.Count(store.Import);
+        return new(cases.Count, added, cases.Count(c => c.Replayability == "replayable"), cases, diagnostics,
+            ExperimentReplayStore.Hash(JsonSerializer.Serialize(cases, ExperimentReplayStore.Json)));
+    }
+
+    internal static IReadOnlyList<Gate> ReadGates(IReadOnlyList<ImpactReplayStoredAttempt> retained,
+        string evidenceDirectory, List<string> diagnostics, CancellationToken token)
+    {
         var gates = new List<Gate>();
         foreach (var gate in retained)
         {
@@ -82,8 +95,7 @@ internal static class ExperimentReplayCorpusImporter
             try
             {
                 // Source reader validates paired receipts; retain both bytes, not only its filtered projection.
-                var metadata = Directory.EnumerateFiles(gate.GoalDirectory, "*.attempt.json")
-                    .Single(p => JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(p), ExperimentReplayStore.Json)?.AttemptId == gate.AttemptId);
+                var metadata = gate.MetadataPath ?? throw new InvalidDataException("Validated gate source path unavailable.");
                 var resultPath = metadata[..^".attempt.json".Length] + ".result.json";
                 var result = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllText(resultPath), ExperimentReplayStore.Json)!;
                 var sources = new List<ExperimentReplaySource>
@@ -91,6 +103,7 @@ internal static class ExperimentReplayCorpusImporter
                 var failures = new SortedSet<string>(StringComparer.Ordinal);
                 var hasResults = false;
                 var complete = gate.TestResultPaths.Count > 0;
+                var fatal = false;
                 foreach (var path in gate.TestResultPaths)
                 {
                     var full = Path.IsPathRooted(path) ? path : Path.GetFullPath(path, gate.GoalDirectory);
@@ -98,21 +111,22 @@ internal static class ExperimentReplayCorpusImporter
                     sources.Add(ExperimentReplayEvidence.Copy(evidenceDirectory, full));
                     var tests = ExperimentReplayEvidence.Tests(full);
                     hasResults |= tests.Count > 0;
-                    complete &= tests.Count > 0;
+                    complete &= tests.Any(t => t.Outcome is "Passed" or "Failed");
+                    fatal |= tests.Any(t => t.Outcome == "Error");
                     failures.UnionWith(tests.Where(t => t.Outcome == "Failed").Select(t => t.Identity));
                 }
-                var outcome = ClassifyOutcome(result.Acceptance?.Passed, result.FaultKind is not null,
+                var outcome = ClassifyOutcome(result.Acceptance?.Passed, result.FaultKind is not null || fatal,
                     complete && hasResults, failures.Count);
                 gates.Add(new(gate.GoalId, gate.BranchHeadSha, gate.MainHeadSha,
                     new(gate.AttemptId, gate.StartedAt, outcome, failures.ToArray(), sources)));
+                // Retained solo gate receipts do not name a Developer task/dispatch. Preserve inventory,
+                // but never promote tuple equality to exact linkage for replay/catch scoring.
+                diagnostics.Add($"{gate.AttemptId}: authoritative task/dispatch linkage was not recorded");
             }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or System.Xml.XmlException)
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or JsonException or System.Xml.XmlException)
             { diagnostics.Add($"{gate.AttemptId}: retained evidence unreadable: {ex.Message}"); }
         }
-        var cases = Map(rounds, gates, cutoff);
-        var added = cases.Count(store.Import);
-        return new(cases.Count, added, cases.Count(c => c.Replayability == "replayable"), cases, diagnostics,
-            ExperimentReplayStore.Hash(JsonSerializer.Serialize(cases, ExperimentReplayStore.Json)));
+        return gates;
     }
 
     private static bool Commit(string? value) => value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);

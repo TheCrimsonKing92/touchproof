@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 using Xunit;
 using static ExperimentReplayTestData;
 
@@ -39,7 +40,7 @@ public sealed class ExperimentReplayCorpusTests
     }
 
     [Fact]
-    public void Map_ExactTuple_PreservesFailureAndPassingRetry()
+    public void Map_ExplicitDispatchLink_PreservesFailureAndPassingRetry()
     {
         var first = Gate();
         var retry = first with { Evidence = first.Evidence with { AttemptId = "retry", StartedAt = Now.AddMinutes(-5), Outcome = "passed", FailingTests = [] } };
@@ -56,11 +57,60 @@ public sealed class ExperimentReplayCorpusTests
     }
 
     [Fact]
-    public void Map_AmbiguousDispatches_NeitherReceivesAGate()
+    public void Map_MatchingTupleWithoutDispatchProof_RemainsUnknown()
     {
-        var rows = ExperimentReplayCorpusImporter.Map([Round(), Round() with { TaskId = "other" }], [Gate()], Now);
-        Assert.Equal(2, rows.Count);
+        var gate = Gate() with { TaskId = null, DispatchedAt = null, DispatchLinkSource = null };
+        var rows = ExperimentReplayCorpusImporter.Map([Round()], [gate], Now);
+        Assert.Single(rows);
         Assert.All(rows, r => { Assert.Equal("unknown", r.Replayability); Assert.Empty(r.Gates); });
+    }
+
+    [Fact]
+    public void Map_ExplicitLink_CannotTransferToAnotherTaskOrDispatch()
+    {
+        var rows = ExperimentReplayCorpusImporter.Map([Round(), Round() with { TaskId = "other" },
+            Round() with { DispatchAt = Now.AddHours(-3) }], [Gate()], Now);
+        Assert.Single(rows.Where(r => r.Replayability == "replayable"));
+        Assert.Equal(2, rows.Count(r => r.Gates.Count == 0));
+        var linked = Assert.Single(rows.Where(r => r.Gates.Count > 0));
+        Assert.Contains(new ExperimentReplaySource("dispatch-link", "hash"), Assert.Single(linked.Gates).Sources);
+    }
+
+    [Fact]
+    public void Map_DuplicateDispatchIdentity_RemainsUnknown()
+    {
+        var rows = ExperimentReplayCorpusImporter.Map([Round(), Round()], [Gate()], Now);
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => { Assert.Equal("unknown", row.Replayability); Assert.Empty(row.Gates); });
+    }
+
+    [Theory]
+    [InlineData("Failed", "test-failed")]
+    [InlineData("Timeout", "apparatus-failed")]
+    [InlineData("Error", "apparatus-failed")]
+    [InlineData("Aborted", "apparatus-failed")]
+    public void ReadGates_ValidAttemptSurvivesMalformedNeighbor_AndFatalRowsStaySeparate(string outcome, string expected)
+    {
+        using var fixture = new ExperimentReplayTestData();
+        var directory = Directory.CreateDirectory(Path.Combine(fixture.Root, "acceptance-gate-attempts", "goal")).FullName;
+        var trx = Path.Combine(directory, "tests.trx");
+        File.WriteAllText(trx, $"<TestRun><UnitTestResult testId='1' testName='Example.Fails' outcome='Failed'/><UnitTestResult testId='2' testName='Example.Other' outcome='{outcome}'/></TestRun>");
+        var metadata = Path.Combine(directory, "valid.attempt.json");
+        File.WriteAllText(metadata, JsonSerializer.Serialize(new { attemptId = "valid", goalId = "goal", kind = "gate",
+            startedAt = Now.AddMinutes(-10), branchHeadSha = Candidate, mainHeadSha = Main, testResultPaths = new[] { trx } }));
+        File.WriteAllText(Path.Combine(directory, "valid.result.json"), JsonSerializer.Serialize(new {
+            branchHeadSha = Candidate, mainHeadSha = Main, acceptance = new { passed = false, testResultPaths = new[] { trx } } }));
+        File.WriteAllText(Path.Combine(directory, "malformed.attempt.json"), "{broken");
+        var skipped = new List<ImpactReplayDiagnostic>();
+        var retained = ImpactReplayAttemptSource.Read(fixture.Root, Now.AddDays(-30), skipped);
+        Assert.Single(skipped);
+        Assert.Equal(metadata, Assert.Single(retained).MetadataPath);
+        var diagnostics = new List<string>();
+        var gate = Assert.Single(ExperimentReplayCorpusImporter.ReadGates(retained, Path.Combine(fixture.Root, "evidence"), diagnostics, default));
+        Assert.Equal(expected, gate.Evidence.Outcome);
+        Assert.Contains(gate.Evidence.Sources, s => s.Sha256 == ExperimentReplayStore.Source(metadata).Sha256);
+        Assert.Contains(diagnostics, d => d.Contains("task/dispatch linkage was not recorded", StringComparison.Ordinal));
+        Assert.Null(gate.DispatchLinkSource);
     }
 
     [Fact]
@@ -77,5 +127,6 @@ public sealed class ExperimentReplayCorpusTests
 
     private static ExperimentReplayCorpusImporter.Round Round() => new("home", "goal", "task", Now.AddHours(-2), Now.AddHours(-1), Base, Candidate, Main, new("dispatch", "hash"));
     private static ExperimentReplayCorpusImporter.Gate Gate() => new("goal", Candidate, Main,
-        new("red", Now.AddMinutes(-10), "test-failed", ["Example.Test"], [new("gate", "hash")]));
+        new("red", Now.AddMinutes(-10), "test-failed", ["Example.Test"], [new("gate", "hash")]),
+        "task", Now.AddHours(-2), new("dispatch-link", "hash"));
 }

@@ -28,17 +28,25 @@ internal static class ExperimentReplayEvidence
     internal sealed record Test(string Identity, string Outcome);
     internal static IReadOnlyList<Test> Tests(string path)
     {
+        var read = new TrxTestResultSource().Read(path);
+        if (read.Status != TestResultReadStatus.Readable)
+            throw new InvalidDataException($"Replay TRX is {read.Status}: {read.Detail}");
+        var tests = read.Records.Select(row => new Test(row.Id, row.Status.ToString())).ToList();
+        // Summary-only fatal evidence must not disappear when the host wrote partial rows.
         var document = XDocument.Load(path);
-        var definitions = document.Descendants().Where(e => e.Name.LocalName == "UnitTest")
-            .Where(e => e.Attribute("id") is not null).ToDictionary(e => e.Attribute("id")!.Value,
-                e => e.Descendants().FirstOrDefault(m => m.Name.LocalName == "TestMethod"));
-        return document.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").Select(e =>
-        {
-            definitions.TryGetValue(e.Attribute("testId")?.Value ?? "", out var method);
-            var identity = method?.Attribute("className")?.Value is { } name
-                ? name.Split(',')[0] + "." + method.Attribute("name")?.Value
-                : e.Attribute("testName")?.Value ?? "unknown";
-            return new Test(identity, e.Attribute("outcome")?.Value ?? "unknown");
-        }).ToArray();
+        if (document.Descendants().Where(e => e.Name.LocalName == "Counters").Any(counter =>
+            AcceptanceTrxOutcomeTaxonomy.HasFatalCounter(name => name == "failed" ? 0 :
+                int.TryParse(counter.Attribute(name)?.Value, out var count) ? count : null)))
+            tests.Add(new("TRX fatal summary", "Error"));
+        return tests;
+    }
+
+    internal static string? ExecutionError(IReadOnlyList<Test> tests, int exitCode)
+    {
+        if (tests.Any(t => t.Outcome == "Error")) return "Fatal or unknown TRX outcome; execution is incomplete.";
+        if (!tests.Any(t => t.Outcome is "Passed" or "Failed")) return "Zero executed tests in selected project.";
+        // Native MTP uses 2 for test failures. Other nonzero exits describe host/apparatus failures.
+        var failed = tests.Any(t => t.Outcome == "Failed");
+        return exitCode == (failed ? 2 : 0) ? null : $"Test host exit {exitCode} disagrees with completed TRX outcomes.";
     }
 }
