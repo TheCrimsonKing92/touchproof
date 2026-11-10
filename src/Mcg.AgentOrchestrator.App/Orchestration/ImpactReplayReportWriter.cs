@@ -18,6 +18,13 @@ internal static class ImpactReplayReportWriter
     internal static string Render(ImpactReplayReport report)
     {
         var text = new StringBuilder("# Impact replay\n\n");
+        if (report.Run is { } run)
+        {
+            text.AppendLine($"Run: {run.RunId}");
+            text.AppendLine($"Checkpoint: {Cell(run.CheckpointPath)}");
+            text.AppendLine("Consult the checkpoint for completion state. Partial runs are not safety verdicts.");
+            text.AppendLine();
+        }
         text.AppendLine($"Floor source: {report.FloorSource}");
         if (report.FloorSource == "default")
             text.AppendLine("Default floor policy: Process spawning*, Isolated process spawning*, Chaos gate, Remainder merge train and ratchet.");

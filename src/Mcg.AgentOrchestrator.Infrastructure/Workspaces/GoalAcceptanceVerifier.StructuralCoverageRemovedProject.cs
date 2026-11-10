@@ -178,11 +178,11 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 // Preserve the existing post-build argument-validation failure on a bypass.
             }
-            var cachedDiscovery = key is null ? null : cache.TryRead(key);
+            var cachedDiscovery = cache.TryRead(key, out var cachedAssemblyIdentities);
             Console.WriteLine($"MAIN_BASELINE_DISCOVERY_CACHE status={(key is null ? "bypass" : cachedDiscovery is null ? "miss" : "hit")} project={baselineCheck.Project}");
             if (cachedDiscovery is not null)
-                return new AcceptanceStructuralCoverageBaseline(discoveryArguments!, baselineWorktreePath,
-                    baselineWorktreePath, UsesMicrosoftTestingPlatform(baselineCheck), false, cachedDiscovery);
+                return new(discoveryArguments!, baselineWorktreePath, baselineWorktreePath, UsesMicrosoftTestingPlatform(baselineCheck),
+                    false, cachedDiscovery, CachedAssemblyIdentities: cachedAssemblyIdentities);
             if (key is not null) cacheWrite = new MainBaselineDiscoveryCacheWrite(cache, key);
         }
         string[] mainBuildArguments =
