@@ -199,49 +199,43 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false, 2)]
-    [InlineData(true, false, 0)]
-    [InlineData(true, true, 2)]
-    public async Task Compare_CachedBaselineOrigin_CharacterizesRowCredit(
-        bool relocate, bool explicitIdentity, int expectedCredit)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Compare_CachedBaselineOrigin_PreservesRowCredit(
+        bool relocate, bool explicitIdentity)
     {
-        // Characterization before correction: path-derived UIDs from A cannot be proved
-        // using B's arguments. The explicit identity control changes only that identity basis.
+        // Reuse the recorded identity even after A disappears and B's sidecar changes.
         var evaluation = await CompareCachedAsync(relocate, explicitIdentity);
         var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
 
-        Assert.Equal(expectedCredit == 2, coverage.Passed);
-        AssertCredit(coverage, expectedCredit);
-        Assert.Equal(new TestCoverageCountComparison(25, 27 - expectedCredit, 27,
-            expectedCredit, expectedCredit == 0), coverage.CountComparison);
+        Assert.True(coverage.Passed);
+        AssertCredit(coverage, 2);
+        Assert.Equal(new TestCoverageCountComparison(25, 25, 27, 2, false), coverage.CountComparison);
         Assert.Equal(25, coverage.ExecutedTests.Count);
         Assert.Contains(Survivor, coverage.ExecutedTests);
         foreach (var group in Rows(true, false, true).GroupBy(row => row.DisplayName))
             Assert.Equal(12, coverage.ExecutedTests.Count(test => test == group.Key));
         Assert.Empty(coverage.EmptyPartitions);
-        if (expectedCredit == 0)
-            Assert.Equal("cross-generation-count:candidate=25,minimum=27,main=27,deleted=0",
-                Assert.Single(coverage.MissingTests));
-        else
-            Assert.Empty(coverage.MissingTests);
+        Assert.Empty(coverage.MissingTests);
     }
 
     [Theory]
-    [InlineData(false, false, 2)]
-    [InlineData(true, false, 0)]
-    [InlineData(true, true, 2)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public async Task Compare_CachedBaseline_MissingSurvivorStillFails(
-        bool relocate, bool explicitIdentity, int expectedCredit)
+        bool relocate, bool explicitIdentity)
     {
         var evaluation = await CompareCachedAsync(relocate, explicitIdentity, omitCollisionReceipt: true);
         var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
 
         Assert.False(coverage.Passed);
-        AssertCredit(coverage, expectedCredit);
+        AssertCredit(coverage, 2);
         Assert.Equal(24, coverage.ExecutedTests.Count);
         Assert.Contains(Survivor, coverage.ExecutedTests);
         Assert.Contains(DisplayName(PathPrefix + Files[0], true, false), coverage.MissingTests);
-        Assert.Equal(expectedCredit == 0 ? 2 : 1, coverage.MissingTests.Count);
+        Assert.Single(coverage.MissingTests);
     }
 
     [Theory]
@@ -257,8 +251,23 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         Assert.Null(evaluation.Coverage);
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("wrong")]
+    [InlineData("empty")]
+    public async Task Compare_UnprovenCacheOrigin_GrantsNoRowCredit(string originFault)
+    {
+        var evaluation = await CompareCachedAsync(relocate: true, explicitIdentity: false, originFault: originFault);
+        var coverage = Assert.IsType<TestCoverageInvariantResult>(evaluation.Coverage);
+
+        Assert.False(coverage.Passed);
+        AssertCredit(coverage, 0);
+        Assert.Equal(new TestCoverageCountComparison(25, 27, 27, 0, true), coverage.CountComparison);
+    }
+
     private async Task<AcceptanceStructuralCoverageEvaluation> CompareCachedAsync(
-        bool relocate, bool explicitIdentity, bool omitCollisionReceipt = false, string? cacheFault = null)
+        bool relocate, bool explicitIdentity, bool omitCollisionReceipt = false, string? cacheFault = null,
+        string? originFault = null)
     {
         var mainRoot = Path.Combine(_root, "main");
         var candidateRoot = Path.Combine(_root, "candidate");
@@ -293,19 +302,37 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
         var cache = new MainBaselineDiscoveryCache(Path.Combine(_root, "cache"), clock: clock);
         var keyA = MainBaselineDiscoveryCache.CreateKey(digest, mainRoot, "Fixture.csproj", "Debug", argumentsA, outputA);
         var trustedDiscovery = new GoalAcceptanceVerifier.CommandResult(0, Discovery(main, mainRoot));
-        cache.TryWrite(keyA, trustedDiscovery);
+        var originIdentities = XunitStringTheoryIdentity.CaptureAssemblyIdentities(argumentsA, mainRoot);
+        Assert.Single(originIdentities);
+        cache.TryWrite(keyA, trustedDiscovery, originFault switch
+        {
+            "missing" => null,
+            "wrong" => new Dictionary<string, string> { ["Fixture"] = "wrong-assembly-identity" },
+            "empty" => new Dictionary<string, string>(),
+            _ => originIdentities
+        });
         Assert.Equal(trustedDiscovery, cache.TryRead(keyA));
+        if (relocate)
+        {
+            var resolvedOrigin = Path.GetFullPath(outputA);
+            Assert.StartsWith(Path.GetFullPath(_root) + Path.DirectorySeparatorChar, resolvedOrigin);
+            Directory.Delete(resolvedOrigin, recursive: true);
+            Assert.False(Directory.Exists(outputA));
+            File.WriteAllText(Path.ChangeExtension(assemblyB, ".uniqueid"), "changed-at-output-B");
+        }
         var keyB = MainBaselineDiscoveryCache.CreateKey(SourceDigest(), mainRoot, "Fixture.csproj", "Debug", argumentsB, outputB);
         Assert.Equal(digest, SourceDigest());
         Assert.Equal(keyA, keyB);
         if (cacheFault == "malformed")
             File.WriteAllText(Path.Combine(_root, "cache", keyA.EntryName + ".json"), "{");
         if (cacheFault == "stale") clock.Now += TimeSpan.FromDays(8);
-        var cached = cache.TryRead(keyB);
+        var cached = cache.TryRead(keyB, out var cachedIdentities);
         if (cacheFault is null)
         {
             Assert.NotNull(cached);
             Assert.Equal(Discovery(main, mainRoot), cached.Output);
+            if (originFault is null)
+                Assert.Equal(originIdentities["Fixture"], cachedIdentities!["Fixture"]);
         }
         else Assert.Null(cached);
 
@@ -332,18 +359,21 @@ public sealed class DeclaredRemovalRowIdentityTests : IDisposable
             Arguments(candidateAssembly), candidateRoot, TimeSpan.FromMinutes(1), false,
             () => [new TestPartitionCoverage("fixture", true, [trx])], () => [], null, [Declaration],
             _ => Task.FromResult<AcceptanceStructuralCoverageBaseline?>(
-                new(argumentsB, mainRoot, mainRoot, false, false, CachedDiscovery: cached)));
+                new(argumentsB, mainRoot, mainRoot, false, false, CachedDiscovery: cached,
+                    CachedAssemblyIdentities: cachedIdentities)));
         var prepared = await evaluator.PrepareAsync(request, CancellationToken.None);
         if (cacheFault is null)
         {
             Assert.Equal(argumentsB, prepared.BaselineDiscoveryArguments);
+            Assert.Same(cachedIdentities, prepared.BaselineAssemblyIdentities);
             var snapshot = Assert.IsType<TestDiscoverySnapshot>(prepared.BaselineSnapshot);
             Assert.Equal(27, snapshot.Rows!.Count);
             Assert.Equal(27, snapshot.Rows.Select(row => row.Uid).Distinct().Count());
             var candidateSnapshot = TestCoverageInvariant.ParseDiscovery(Discovery(candidate, candidateRoot), false, candidateRoot);
             var proof = SourceConfirmedTheoryRowRemovals.Resolve(snapshot, candidateSnapshot,
-                mainRoot, candidateRoot, [Declaration], argumentsB, Arguments(candidateAssembly));
-            if (relocate && !explicitIdentity) Assert.Empty(proof);
+                mainRoot, candidateRoot, [Declaration], argumentsB, Arguments(candidateAssembly),
+                prepared.BaselineAssemblyIdentities);
+            if (originFault is not null) Assert.Empty(proof);
             else
             {
                 var removedPath = PathPrefix + RemovedFile;

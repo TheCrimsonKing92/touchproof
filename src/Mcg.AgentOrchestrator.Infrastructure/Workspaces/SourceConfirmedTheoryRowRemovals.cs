@@ -11,7 +11,8 @@ internal static class SourceConfirmedTheoryRowRemovals
     internal static IReadOnlyDictionary<string, IReadOnlyList<int>> Resolve(
         TestDiscoverySnapshot? main, TestDiscoverySnapshot candidate,
         string? mainRoot, string candidateRoot, IReadOnlyList<string> declarations,
-        IReadOnlyList<string>? mainDiscoveryArguments, IReadOnlyList<string> candidateDiscoveryArguments)
+        IReadOnlyList<string>? mainDiscoveryArguments, IReadOnlyList<string> candidateDiscoveryArguments,
+        IReadOnlyDictionary<string, string>? mainAssemblyIdentities = null)
     {
         var result = new Dictionary<string, IReadOnlyList<int>>(StringComparer.OrdinalIgnoreCase);
         if (main?.Rows is not { } mainRows || candidate.Rows is not { } candidateRows ||
@@ -40,7 +41,7 @@ internal static class SourceConfirmedTheoryRowRemovals
             var removedArguments = before.Arguments.Except(after.Arguments, StringComparer.Ordinal).ToArray();
             if (removedArguments.Length == 0) continue;
             var mainMethodUid = XunitStringTheoryIdentity.MethodUid(mainDiscoveryArguments, mainRoot,
-                first.AssemblyName!, first.ClassName!, first.MethodName!);
+                first.AssemblyName!, first.ClassName!, first.MethodName!, mainAssemblyIdentities);
             var candidateMethodUid = XunitStringTheoryIdentity.MethodUid(candidateDiscoveryArguments, candidateRoot,
                 first.AssemblyName!, first.ClassName!, first.MethodName!);
             if (mainMethodUid is null || candidateMethodUid is null ||
