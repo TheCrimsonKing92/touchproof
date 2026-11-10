@@ -12,7 +12,7 @@ internal static class GroupedGateChildCompletionText
         if (string.Equals(verdict, "failed", StringComparison.OrdinalIgnoreCase)) return "failed";
         return verdict is CohortStableSlotAcquisitionRounds.DeferredVerdict or
             MergeTrainChildOutcome.InfrastructureFailure or MergeTrainChildOutcome.Invalidated or
-            MergeTrainChildOutcome.NoReceipt ? verdict : "unknown";
+            MergeTrainChildOutcome.NoReceipt || CohortChildOutcome.IsPublishedVerdict(verdict) ? verdict! : "unknown";
     }
 
     internal static string RenderDetail(string detail)
