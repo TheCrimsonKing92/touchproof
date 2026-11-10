@@ -54,7 +54,7 @@ public static class StoreSchemaRegistry
         new("cohort-solo-inherited-receipts", Persistence + "CohortAcceptanceStore.SoloInheritedReceipts.cs", "cohort-acceptance.db", "cohort", 1);
 
     public static StoreSchemaEntry MergeTrainAcceptance { get; } =
-        new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", 1);
+        new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", 2);
 
     public static StoreSchemaEntry FollowerGateAcceptance { get; } =
         new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStoreSetup.cs", "follower-gate-acceptance.db", "cohort", 1);

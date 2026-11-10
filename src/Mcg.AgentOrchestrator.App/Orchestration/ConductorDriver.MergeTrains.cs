@@ -9,6 +9,7 @@ internal sealed partial class ConductorDriver
 {
     internal MergeTrainPrefixBisection.Runner? MergeTrainBisectionRunner { get; set; }
     internal MergeTrainFocusedRecheckRunner.Runner? MergeTrainRecheckRunner { get; set; }
+    internal MergeTrainMemberRecheckRunner.Runner? MergeTrainMemberRunner { get; set; }
     internal MergeTrainFocusedRecheckDecision.DependencySelector MergeTrainRecheckDependencySelector { get; set; } = RepositoryRecheckTestSelection.Read;
 
     internal MergeTrainPrefixBisection.Runner CreateMergeTrainBisectionRunner(GoalId goalId) =>
@@ -386,7 +387,32 @@ internal sealed partial class ConductorDriver
                 return Fallback(detail);
             }
 
-            // Keep the bounded bisection; absent source attribution, retain drop-newest.
+            var memberRecheck = MergeTrainMemberRecheck.Run(receipt, attributed, messageSubjectFailure, attempt,
+                MergeTrainMemberRunner ?? MergeTrainMemberRecheckRunner.Create(_cohortAcceptanceVerifier, _cohortWorkspace,
+                    _cohortCleanupHooks, (runId, token) => CohortPartitionStableSlotLeaseSource is { } source
+                        ? source(runId, token) : _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(runId, token)),
+                new MergeTrainMemberRecheckOutcomeCache(Path.Combine(_cohortWorkspace.OrchestratorDirectory, "merge-train-acceptance.db")),
+                (member, source) => RecordTrainImplicatedMember(member, receipt, [], source),
+                memberEjection =>
+                {
+                    allEjections.Add(memberEjection);
+                    _mergeTrainAcceptanceStore.RecordEjections(attemptId, [memberEjection]);
+                    AppendTrainEjectionObservation(outerAttemptId ?? attemptId, receipt.Identity, memberEjection.GoalId, memberEjection.Reason);
+                },
+                (kind, detail) => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
+                    members[0].GoalId.Value, detail, eventKind: kind), cancellationToken);
+            if (memberRecheck is { FallbackReason: null })
+            {
+                var memberSurvivors = memberRecheck.Remaining(receipt).Select(member => member.GoalId).ToHashSet();
+                composition = originalBindings.Where(member => memberSurvivors.Contains(member.GoalId)).ToArray();
+                redDropped = null;
+                pendingRecheck = null;
+                if (composition.Count < 2)
+                    return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+                continue;
+            }
+
+            // Keep the bounded bisection; an inconclusive member sweep retains drop-newest.
             // The dropped member remains absent from MemberResults for its later solo gate.
             var dropped = attributed ?? members[^1];
             if (!messageSubjectFailure)
@@ -470,94 +496,10 @@ internal sealed partial class ConductorDriver
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
         IGoalLifecycleEventWriter eventWriter,
-        MergeTrainAcceptanceStore store)
-    {
-        var goalsById = kernel.Goals.ToDictionary(goal => goal.Id);
-        foreach (var recovery in store.RecoverPreparedLandings(workspace.ExecutionDirectory, workspace.IntegrationBranch))
-        {
-            var goals = recovery.Receipt.Identity.Members
-                .Select(member => goalsById.TryGetValue(member.GoalId, out var goal) ? goal : null)
-                .ToArray();
-            if (goals.Any(goal => goal is null))
-            {
-                continue;
-            }
+        MergeTrainAcceptanceStore store) =>
+        MergeTrainLandingRecovery.Recover(kernel, workspace, eventWriter, store, _integrationBranch,
+            _tryAcquireEvidenceMutationLease,
+            (receipt, identity, receiptId) => _pendingRecoveredMergeTrainLandingReceipts.Add((receipt, identity, receiptId)),
+            _afterSuccessfulLanding);
 
-            var resolvedGoals = goals.Cast<Goal>().ToArray();
-            var evidenceMutationLeases = new Stack<IDisposable>();
-            try
-            {
-                foreach (var goal in resolvedGoals.OrderBy(goal => goal.Id.Value, StringComparer.Ordinal))
-                {
-                    var lease = _tryAcquireEvidenceMutationLease(goal, "conductor:merge-train-recovery");
-                    if (lease is null)
-                    {
-                        break;
-                    }
-                    evidenceMutationLeases.Push(lease);
-                }
-                if (evidenceMutationLeases.Count != resolvedGoals.Length)
-                {
-                    continue;
-                }
-
-                var changedFiles = recovery.Receipt.Identity.Members
-                    .SelectMany(member => member.LandingPaths)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Order(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                    resolvedGoals,
-                    goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
-                    kernel,
-                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}", _integrationBranch,
-                    workspace.ExecutionDirectory);
-                if (evidenceDiagnostic is not null)
-                {
-                    Console.WriteLine($"MERGE_TRAIN_RECOVERY_HELD train={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}");
-                    continue;
-                }
-                foreach (var goal in resolvedGoals)
-                {
-                    GoalOperationJournal.Completed(
-                        workspace.ExecutionDirectory,
-                        goal,
-                        "conductor:land",
-                        $"Recovered merge train receipt {recovery.Receipt.ReceiptId} after main advanced.");
-                    eventWriter.AppendGoalLanded(
-                        goal.Id,
-                        $"train/{recovery.Receipt.Identity.Value}",
-                        GoalWorktrees.BranchName(goal.Id), LandingAdmissionReceipt.Recovered(
-                            recovery.Receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision));
-                    StateEffectProposalApplier.ApplyLandedProposals(
-                        kernel,
-                        goal,
-                        workspace,
-                        changedFiles,
-                        Console.WriteLine);
-                    var landingResult = new LandingResult(
-                        goal.Id.Value,
-                        goal.Id.Value[..8],
-                        new LandingDecision.Promote(),
-                        $"train/{recovery.Receipt.Identity.Value}",
-                        MainAdvanced: true,
-                        "Recovered exact tested merge train landing after main advanced.",
-                        recovery.CommitRevision,
-                        changedFiles);
-                    _pendingRecoveredMergeTrainLandingReceipts.Add((
-                        new ConductorLandingReceipt(goal.Id.Value, changedFiles, recovery.CommitRevision),
-                        recovery.Receipt.Identity.Value,
-                        recovery.Receipt.ReceiptId));
-                    _afterSuccessfulLanding(goal, landingResult);
-                }
-            }
-            finally
-            {
-                while (evidenceMutationLeases.TryPop(out var lease))
-                {
-                    lease.Dispose();
-                }
-            }
-        }
-    }
 }
