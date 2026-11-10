@@ -14,7 +14,8 @@ internal static class VerificationFindingEvidencePolicy
         var matches = version is null
             ? []
             : goal.CriterionEvidenceObligations.Where(item =>
-                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value).ToArray();
+                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value &&
+                item.State != CriterionEvidenceState.Repaired).ToArray();
         var obligation = matches.Length == 1 ? matches[0] : null;
         // A legacy/malformed record has no authoritative ownership; do not
         // convert it into a deferred obligation based on worker prose.

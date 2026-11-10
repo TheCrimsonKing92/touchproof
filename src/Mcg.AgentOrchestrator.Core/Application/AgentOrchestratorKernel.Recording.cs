@@ -1622,6 +1622,8 @@ public sealed partial class AgentOrchestratorKernel
         dispatch.GoalId = goalId;
         dispatch = dispatch with
         {
+            PlannerEvidenceCriteriaVersionHash = task.RequiredRole == AgentRole.Planner
+                ? EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal) : null,
             CandidateIdentity = dispatch.CandidateIdentity ?? ResolveCandidateIdentity(goal),
             PreDispatchIntegrationReceipt = task.PendingPreDispatchIntegrationReceipt ??
                 (allowPendingRecordedDispatchRefresh ? task.LastDispatch?.PreDispatchIntegrationReceipt : null)
@@ -1887,7 +1889,7 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         dispatch.BriefVersion = task.LastDispatch?.BriefVersion ?? goal.AuthoritativeBrief.Version;
         dispatch.BriefSnapshot = task.LastDispatch?.BriefSnapshot ?? goal.Objective;
-        task.ReplacePreparedDispatch(dispatch);
+        task.ReplacePreparedDispatch(dispatch with { PlannerEvidenceCriteriaVersionHash = task.LastDispatch?.PlannerEvidenceCriteriaVersionHash });
     }
 
     private static string FormatDispatchTimelineModelSelection(TaskDispatchRecord dispatch)

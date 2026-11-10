@@ -18,7 +18,7 @@ An authorized mapping clears consistency blocking on the next readiness evaluati
 
 ## Historical source records and limits
 
-Source: packaged `goal/timeline.json`, SHA-256 `100233cb7151b272391de7557dc5ce64e38268a9ebac9bd397eec207a804c232`, under `.orchestrator-context/0020573c7cf941078b6540ec013a4dc2/authoritative/b8c15bcaef1b416eb4a86d314100a56e/typed/goal/timeline.json`. Its three `HumanInputReceived` operator projections answer the bound source-record requests. These are evidence records, never grants of ownership.
+Source: packaged `goal/timeline.json`, SHA-256 `1781b86d560be732a4656d3e23a86777689b34a5855e1225478cba9a53ef16a7`, under `.orchestrator-context/0020573c7cf941078b6540ec013a4dc2/authoritative/b8c15bcaef1b416eb4a86d314100a56e/typed/goal/timeline.json`. Its three `HumanInputReceived` operator projections answer the bound source-record requests. These are evidence records, never grants of ownership.
 
 | Goal | Recorded issue and source identities | Applicability |
 | --- | --- | --- |
@@ -29,6 +29,10 @@ Source: packaged `goal/timeline.json`, SHA-256 `100233cb7151b272391de7557dc5ce64
 The projections contain current mapped obligations and later map history, but no complete contemporaneous ownership-declaration snapshots. They support the request/rejection/repair sequence and the applicability distinctions above, not a definitive reconstruction of every earlier readiness decision. No historical paid replay was performed.
 
 ## Verification ownership and operator fixture
+
+Review round `5fe3d27033a281cf4c369062532407ebe9ea1781a1257a416a8744b18b07033f` on candidate `2d4dfa9e8b522c0245321c972fab250e43343cf5` identified three additional boundaries. Operator owner tokens now compare without case at each consistency check. Active ownership and Reviewer deferral exclude repaired audit records while retaining unresolved duplicate conflicts. Subscription dispatch captures the criteria hash before execution and persists it through snapshots and prepared-dispatch rewrites; completion-time criteria cannot rebind an accepted request. Missing legacy dispatch hashes require replanning rather than reconstruction from current criteria.
+
+Acceptance must execute the added `PlannerOperatorEvidenceConsistencyTests` regressions `AcceptedOwnerCaseVariants_WithoutAuthority_HoldUntilMapped`, `DuplicateClaim_AuditedRepairAndReload_AllowDeferralWithEvidencePending`, `SubscriptionCriteria_ChangedBeforeCompletion_CannotRebindAcceptedRequest`, and `SubscriptionCriteria_MissingOrForeignIdentity_RequireReplanning`. Their assertions respectively require a missing-ownership hold for accepted casing variants, cleared consistency plus honest deferral after audited repair/reload, and invalid-provenance holds for changed or unproven dispatch criteria. All retain the required landing evidence obligation. Developer has not executed these tests.
 
 Developer authors the global-namespace classes `PlannerOperatorEvidenceConsistencyTests` and `PlannerOperatorEvidenceReadinessTests`; Acceptance executes them, plus `PlannerAcceptanceOwnershipTests`, `PlannerAcceptanceOwnershipLifecycleTests`, `GateOwnedCriterionDeferralTests` and `CriterionEvidenceWorkerRoutingTests`. Developer runs the sanctioned build only. No passing test execution or RED/GREEN receipt is claimed here.
 

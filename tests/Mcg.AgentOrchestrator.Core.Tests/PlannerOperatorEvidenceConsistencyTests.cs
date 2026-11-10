@@ -12,6 +12,30 @@ public sealed class PlannerOperatorEvidenceConsistencyTests
         """;
     private const string Result = "WORKER_RESULT:\nfiles: none\ncommands: inspect\ntests: deferred - PlannerOperatorEvidenceConsistencyTests\ncommit: none\nblockers: none\nmodel_fit: fixture/model - adequate\nskills: none\nconfidence: high\nEND_WORKER_RESULT";
 
+    [Theory]
+    [InlineData("operator")]
+    [InlineData("Operator")]
+    [InlineData("OPERATOR")]
+    [InlineData("oPeRaToR")]
+    public void AcceptedOwnerCaseVariants_WithoutAuthority_HoldUntilMapped(string owner)
+    {
+        var f = new Fixture();
+        f.Plan(Request.Replace("\"owner\":\"operator\"", $"\"owner\":\"{owner}\"", StringComparison.Ordinal));
+        Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
+        var request = Assert.Single(f.Kernel.HumanInputRequests);
+        Assert.Equal(owner, request.PlannerEvidence!.Owner);
+        var discrepancy = Assert.Single(f.Hold!.Discrepancies);
+        Assert.Equal(PlannerOperatorEvidenceProblem.MissingOwnership, discrepancy.Problem);
+        Assert.Equal(request.Id, discrepancy.RequestId);
+        Assert.Throws<InvalidOperationException>(() => f.DispatchReview());
+        Assert.Null(f.Reviewer.LastDispatch);
+        f.Map();
+        Assert.Null(f.Hold);
+        f.Review();
+        Assert.Equal(WorkTaskStatus.Completed, f.Reviewer.Status);
+        Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
+    }
+
     [Fact]
     public void MissingAuthorityConsolidatesRequestsBeforeDispatchAndReplayPreservesWork()
     {
@@ -217,6 +241,41 @@ public sealed class PlannerOperatorEvidenceConsistencyTests
     }
 
     [Fact]
+    public void DuplicateClaim_AuditedRepairAndReload_AllowDeferralWithEvidencePending()
+    {
+        var f = new Fixture("structured");
+        f.Plan();
+        var snapshot = f.Kernel.ExportSnapshot();
+        var saved = snapshot.Goals[0];
+        var canonical = Assert.Single(saved.CriterionEvidenceObligations!);
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        { Goals = [saved with { CriterionEvidenceObligations = [canonical, canonical] }] });
+        var unresolved = Assert.Single(f.Goal.CriterionEvidenceObligations,
+            item => item.Owner == CriterionEvidenceOwner.Unknown);
+        Assert.Equal(PlannerOperatorEvidenceProblem.ConflictingOwnership,
+            Assert.Single(f.Hold!.Discrepancies).Problem);
+        Assert.True(VerificationFindingEvidencePolicy.IsWorkerOwnedCriterionObligation(f.Goal, 0));
+        Assert.Throws<InvalidOperationException>(() => f.DispatchReview());
+        var replacement = f.Kernel.RepairMalformedCriterionEvidenceObligation(f.Goal.Id, unresolved.Id,
+            0, 1, CriterionEvidenceOwner.Operator, "operator", "Resolve duplicate claim",
+            "retained corpus observation", expectedCandidateSha: Candidate);
+        Assert.Equal(canonical.Id, replacement.Id);
+        var audit = Assert.Single(f.Goal.CriterionEvidenceObligations,
+            item => item.State == CriterionEvidenceState.Repaired);
+        Assert.Equal(replacement.Id, audit.ReplacementObligationId);
+        Assert.Null(f.Hold);
+        f.Reload();
+        Assert.Contains(audit, f.Goal.CriterionEvidenceObligations);
+        Assert.Null(f.Hold);
+        Assert.False(VerificationFindingEvidencePolicy.IsWorkerOwnedCriterionObligation(f.Goal, 0));
+        f.Review();
+        Assert.Equal(WorkTaskStatus.Completed, f.Reviewer.Status);
+        Assert.Equal(GoalStatus.Verified, f.Goal.Status);
+        Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
+        Assert.Throws<InvalidOperationException>(() => f.Kernel.CompleteGoal(f.Goal.Id, "Receipt still required"));
+    }
+
+    [Fact]
     public async Task ApiReadinessRefusesBeforeProviderEffects()
     {
         var f = new Fixture();
@@ -263,6 +322,61 @@ public sealed class PlannerOperatorEvidenceConsistencyTests
         Assert.Equal(PlannerOperatorEvidenceProblem.InvalidRequestProvenance, Assert.Single(f.Hold!.Discrepancies).Problem);
         Assert.Throws<InvalidOperationException>(() => f.DispatchReview());
         Assert.Empty(f.Goal.CriterionEvidenceObligations);
+    }
+
+    [Fact]
+    public void SubscriptionCriteria_ChangedBeforeCompletion_CannotRebindAcceptedRequest()
+    {
+        var f = new Fixture();
+        var version = f.Goal.AuthoritativeRefinedSpecVersion!;
+        var dispatchedHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(f.Goal);
+        Assert.Equal(dispatchedHash, f.Planner.LastDispatch!.PlannerEvidenceCriteriaVersionHash);
+        const string changed = "A different operator observation.";
+        f.Kernel.SetGoalRefinedSpec(f.Goal.Id, new RefinedSpec(f.Goal.Objective,
+            [changed], VerificationClass.TestVerifiable, [], []) { OperatorOwnedAcceptanceCriteria = [changed] });
+        Assert.Equal(version.RecordedAt, f.Goal.AuthoritativeRefinedSpecVersion!.RecordedAt);
+        var currentHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(f.Goal);
+        Assert.NotEqual(dispatchedHash, currentHash);
+        f.Reload();
+        f.Kernel.ReplacePreparedTaskDispatch(f.Goal.Id, f.Planner.Id,
+            f.Planner.LastDispatch! with { PlannerEvidenceCriteriaVersionHash = currentHash });
+        Assert.Equal(dispatchedHash, f.Planner.LastDispatch!.PlannerEvidenceCriteriaVersionHash);
+        Assert.Equal(dispatchedHash, Assert.Single(f.Planner.DispatchHistory).PlannerEvidenceCriteriaVersionHash);
+        f.Plan();
+        Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
+        Assert.Equal(currentHash, f.Planner.LastVerification!.AcceptanceCriteriaVersionHash);
+        Assert.Single(f.Kernel.HumanInputRequests);
+        f.Reload();
+        Assert.Equal(dispatchedHash, f.Planner.LastDispatch!.PlannerEvidenceCriteriaVersionHash);
+        Assert.Equal(PlannerOperatorEvidenceProblem.InvalidRequestProvenance,
+            Assert.Single(f.Hold!.Discrepancies).Problem);
+        Assert.Throws<InvalidOperationException>(() => f.DispatchReview());
+        Assert.Null(f.Reviewer.LastDispatch);
+        Assert.Equal(0, f.Reviewer.CriterionRetryCount);
+        Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("foreign-criteria")]
+    public void SubscriptionCriteria_MissingOrForeignIdentity_RequireReplanning(string? hash)
+    {
+        var f = new Fixture("structured");
+        f.Plan();
+        Assert.Null(f.Hold);
+        var snapshot = f.Kernel.ExportSnapshot();
+        var saved = snapshot.Goals[0];
+        var tasks = saved.Tasks.Select(task => task.RequiredRole != AgentRole.Planner ? task : task with
+        {
+            LastDispatch = task.LastDispatch! with { PlannerEvidenceCriteriaVersionHash = hash },
+            DispatchHistory = task.DispatchHistory!.Select(dispatch => dispatch with
+                { PlannerEvidenceCriteriaVersionHash = hash }).ToArray()
+        }).ToArray();
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [saved with { Tasks = tasks }] });
+        Assert.Equal(PlannerOperatorEvidenceProblem.InvalidRequestProvenance,
+            Assert.Single(f.Hold!.Discrepancies).Problem);
+        Assert.Throws<InvalidOperationException>(() => f.DispatchReview());
+        Assert.Single(f.Goal.GetLandingPrerequisiteObligations(Candidate));
     }
 
     [Fact]
@@ -363,6 +477,8 @@ public sealed class PlannerOperatorEvidenceConsistencyTests
                 WorkerResultPresent: true, DispatchAttemptAt: Planner.LastDispatch!.DispatchedAt));
         internal void Map() => Kernel.MapCriterionEvidenceOwner(goalId, 0, 1, CriterionEvidenceOwner.Operator,
             "operator", "retained corpus observation", expectedCandidateSha: Candidate);
+        internal void Reload() => Kernel = AgentOrchestratorKernel.FromSnapshot(
+            JsonSerializer.Deserialize<OrchestratorSnapshot>(JsonSerializer.Serialize(Kernel.ExportSnapshot()))!);
         internal void DispatchReview() => Kernel.RecordTaskDispatch(goalId, reviewerId,
             new TaskDispatchRecord("fixture", "review", "C:\\fixture", DateTimeOffset.UtcNow));
         internal void Review(string workerVerdict = "met")

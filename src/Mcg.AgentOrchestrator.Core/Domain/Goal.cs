@@ -460,7 +460,8 @@ public sealed class Goal
     {
         var version = AuthoritativeRefinedSpecVersion!;
         var matches = _criterionEvidenceObligations.Where(item =>
-            item.CriterionVersion == version.Version && item.CriterionIndex == criterionIndex).ToArray();
+            item.CriterionVersion == version.Version && item.CriterionIndex == criterionIndex &&
+            item.State != CriterionEvidenceState.Repaired).ToArray();
         if (matches.Length == 0)
             return (PlannerOperatorEvidenceProblem.MissingOwnership,
                 $"Missing authoritative Operator declaration for {CriterionEvidenceObligation.DescribeCriterion(version.Version, criterionIndex)}.");

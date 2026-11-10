@@ -287,7 +287,8 @@ public sealed record TaskDispatchSnapshot(
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
     int WorkerBuildProtocolVersion = 0,
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
-    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
+    string? PlannerEvidenceCriteriaVersionHash = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

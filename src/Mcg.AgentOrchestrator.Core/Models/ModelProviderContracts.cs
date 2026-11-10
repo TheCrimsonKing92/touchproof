@@ -348,7 +348,9 @@ public sealed record TaskDispatchRecord(
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
     int WorkerBuildProtocolVersion = 0,
     FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
-    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null)
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null,
+    // Host-captured dispatch input, never reconstructed from completion-time criteria.
+    string? PlannerEvidenceCriteriaVersionHash = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

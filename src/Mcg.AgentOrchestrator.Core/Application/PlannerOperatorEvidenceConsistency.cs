@@ -33,7 +33,8 @@ public static class PlannerOperatorEvidenceConsistency
             foreach (var directive in batch.Directives)
             {
                 if (directive.Kind != HumanWaitKind.ProspectiveAcceptanceEvidence ||
-                    directive.PlannerEvidence is not { Availability: "post-implementation", Owner: "operator" } payload)
+                    directive.PlannerEvidence is not { Availability: "post-implementation" } payload ||
+                    !string.Equals(payload.Owner, "operator", StringComparison.OrdinalIgnoreCase))
                     continue;
                 var identity = new PlannerEvidenceIdentity(goal.Id.Value, task.Id.Value, brief.Value,
                     payload.CriterionIndex, payload.EvidenceKey);
@@ -41,18 +42,19 @@ public static class PlannerOperatorEvidenceConsistency
                 var criterion = index >= 0 && index < version.Spec.AcceptanceCriteria.Count
                     ? version.Spec.AcceptanceCriteria[index].Trim() : "<outside authoritative criteria>";
                 var matches = recorded.Where(item => item.TaskId == task.Id && item.PlannerIdentity == identity &&
-                    item.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence && item.EvidenceOwner == "operator" &&
+                    item.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+                    string.Equals(item.EvidenceOwner, "operator", StringComparison.OrdinalIgnoreCase) &&
                     item.SupersededByRequestId is null && item.BriefSupersession is null &&
                     payload.SemanticallyEquals(item.PlannerEvidence)).ToArray();
                 if (matches.Length != 1 || index < 0 || index >= version.Spec.AcceptanceCriteria.Count ||
                     version.RecordedAt > (task.LastDispatch?.DispatchedAt ?? acceptedAt) ||
-                    (task.LastDispatch is null && task.LastExecution?.PlannerEvidenceCriteriaVersionHash !=
-                        EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)) ||
+                    (task.LastDispatch is { } dispatch ? dispatch.PlannerEvidenceCriteriaVersionHash :
+                        task.LastExecution?.PlannerEvidenceCriteriaVersionHash) != EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal) ||
                     (task.LastVerification?.AcceptanceCriteriaVersionHash is { Length: > 0 } acceptedCriteria &&
                      acceptedCriteria != EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)) ||
                     string.IsNullOrWhiteSpace(payload.EvidenceKey) || string.IsNullOrWhiteSpace(payload.Needed) ||
                     string.IsNullOrWhiteSpace(payload.Reason) || payload.Store is not null || payload.StoreReference is not null ||
-                    directive.EvidenceOwner != "operator")
+                    !string.Equals(directive.EvidenceOwner, "operator", StringComparison.OrdinalIgnoreCase))
                 {
                     discrepancies.Add(new(identity, matches.FirstOrDefault()?.Id, version.Version, criterion,
                         PlannerOperatorEvidenceProblem.InvalidRequestProvenance,
