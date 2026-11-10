@@ -158,4 +158,56 @@ public sealed class OperatorIntentIntegrationScopeTests
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(intent)).Status);
         Assert.Equal(new[] { "src/Other.cs" }, fixture.Reload().IntegrateMainBeforeDeveloperDispatch(fixture.Goal).ApprovedAdditionalPaths);
     }
+
+    [Fact]
+    public async Task RetiredIntentReplayAcrossRestart_ClosesOnlyObsoleteWait()
+    {
+        using var fixture = new IntegrationScopeFixture();
+        fixture.Owner.RequireScopeAfterAnswer(fixture.Goal, fixture.Base.Developer.Id.Value);
+        Assert.False(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var pending = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        var snapshot = fixture.Kernel.ExportSnapshot();
+        var intent = await fixture.Store.EnqueueAsync(fixture.Intent());
+        fixture.Intents.ExecutePending(fixture.Kernel, fixture.Goal);
+        Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        var detail = fixture.Base.Entry.Detail!;
+        GoalOperationJournal.Failed(fixture.Base.GitFixture.Repository, fixture.Goal,
+            ConductorConflictIntegration.OperationName, detail);
+        // Crash after the journal effect/retirement, before kernel checkpoint and intent completion.
+        var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
+        var goal = kernel.GetGoal(fixture.Goal.Id);
+        var recovered = Assert.Single(kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        Assert.Equal(pending.Id, recovered.Id);
+        var coordinator = fixture.Coordinator(kernel);
+
+        coordinator.ExecutePending(kernel, goal);
+        coordinator.CompletePersisted([goal.Id]);
+
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        Assert.True(recovered.IsCompleted);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, recovered.AuthoritativeAnswer!.Origin);
+        Assert.Contains("no path authority transferred", recovered.Answer);
+        Assert.Equal(GoalOperationStatus.Failed, fixture.Base.Entry.Status);
+        Assert.Equal(detail, fixture.Base.Entry.Detail);
+        Assert.False(fixture.Reload(kernel).IntegrateMainBeforeDeveloperDispatch(goal).CanDispatch);
+        fixture.Base.GitFixture.AssertRestored();
+    }
+
+    [Fact]
+    public void RequirementWithoutRecordedRound_RemainsPending()
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var missingId = Guid.NewGuid().ToString("N");
+        var request = fixture.Kernel.RequestHumanInputDeduplicated(fixture.Goal.Id, null,
+            "Missing scope authority", kind: HumanWaitKind.Other, isAutoDefaultable: false, isDismissible: false,
+            questionFingerprint: "integration-scope:" + missingId,
+            blockerFingerprint: "integration-scope:" + missingId + ":initial").Request;
+
+        fixture.Owner.ReconcileScopeRequirements(fixture.Goal);
+
+        Assert.False(request.IsCompleted);
+        Assert.Equal(GoalStatus.WaitingForHuman, fixture.Goal.Status);
+        Assert.Equal(GoalOperationStatus.Begin, fixture.Base.Entry.Status);
+        fixture.Base.GitFixture.AssertRestored();
+    }
 }

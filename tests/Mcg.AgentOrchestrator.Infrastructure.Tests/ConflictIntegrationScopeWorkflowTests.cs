@@ -120,4 +120,106 @@ public sealed class ConflictIntegrationScopeWorkflowTests
         Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
         fixture.Base.GitFixture.AssertRestored();
     }
+
+    [Theory]
+    [InlineData("main")]
+    [InlineData("head")]
+    [InlineData("terminal")]
+    public void ObsoleteScopeThroughDriver_RetiresWaitWithoutStartingWorker(string change)
+    {
+        using var fixture = new IntegrationScopeFixture();
+        fixture.Owner.RequireScopeAfterAnswer(fixture.Goal, fixture.Base.Developer.Id.Value);
+        Assert.False(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var requirement = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        Assert.Equal(GoalStatus.WaitingForHuman, fixture.Goal.Status);
+        var git = fixture.Base.GitFixture;
+        if (change == "main")
+        {
+            File.WriteAllText(Path.Combine(git.Repository, "src/MainLater.cs"), "later main\n");
+            Commit(git.Repository, "Advance main while scope is pending");
+        }
+        else if (change == "head")
+        {
+            File.WriteAllText(Path.Combine(git.Worktree, "src/Other.cs"), "operator recovery\n");
+            Commit(git.Worktree, "Operator recovery while scope is pending");
+        }
+        else GoalOperationJournal.Failed(git.Repository, fixture.Goal,
+            ConductorConflictIntegration.OperationName, fixture.Base.Entry.Detail);
+        var expectedHead = Git(git.Worktree, "rev-parse", "HEAD").Trim();
+        var starts = 0;
+        var escalations = new List<string>();
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); },
+            writeEscalation: (_, _, reason) => escalations.Add(reason), executionDirectory: git.Repository);
+        driver.ConfigureDeveloperCompletionStructuralPreflightRetry(fixture.Kernel, fixture.Reload());
+
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(requirement.IsCompleted);
+        Assert.Contains("no path authority transferred", requirement.Answer);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, requirement.AuthoritativeAnswer!.Origin);
+        Assert.NotEqual(GoalStatus.WaitingForHuman, fixture.Goal.Status);
+        Assert.Equal(0, starts);
+        Assert.Contains("conflict", Assert.Single(escalations));
+        Assert.Equal(GoalOperationStatus.Failed, fixture.Base.Entry.Status);
+        Assert.Equal(expectedHead, Git(git.Worktree, "rev-parse", "HEAD").Trim());
+        Assert.False(GitCli.IsWorktreeDirty(git.Worktree));
+        Assert.Equal(1, GitCli.Run(git.Worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").ExitCode);
+        var historyCount = GoalOperationJournal.Read(git.Repository, fixture.Goal.Id).Entries.Count;
+        fixture.Reload().ReconcileScopeRequirements(fixture.Goal);
+        Assert.Equal(historyCount, GoalOperationJournal.Read(git.Repository, fixture.Goal.Id).Entries.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplacementRoundThroughDriver_RequiresFreshTypedDecision(bool terminal)
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var oldApproval = fixture.Intent();
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(oldApproval)).Status);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(fixture.Intent(
+            IntegrationScopeAction.Revoke, approvalId: oldApproval.Id))).Status);
+        Assert.False(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var obsolete = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        var detail = fixture.Base.Entry.Detail!;
+        if (terminal) GoalOperationJournal.Failed(fixture.Base.GitFixture.Repository, fixture.Goal,
+            ConductorConflictIntegration.OperationName, detail);
+        var replacementId = Guid.NewGuid().ToString("N");
+        var replacement = System.Text.Json.Nodes.JsonNode.Parse(detail)!;
+        replacement["RoundId"] = replacementId;
+        replacement["ScopeDecisions"] = null;
+        GoalOperationJournal.Begin(fixture.Base.GitFixture.Repository, fixture.Goal,
+            ConductorConflictIntegration.OperationName, replacement.ToJsonString());
+        // An ordinary question with the same text must not be treated as the typed requirement.
+        var ordinary = fixture.Kernel.RequestHumanInput(fixture.Goal.Id, null, obsolete.Question);
+        fixture.Owner.ReconcileScopeRequirements(fixture.Goal);
+        Assert.True(obsolete.IsCompleted);
+        Assert.False(ordinary.IsCompleted);
+        fixture.Kernel.SubmitHumanInput(ordinary.Id, "Unrelated question answered", supersedeSiblings: false);
+
+        var starts = 0;
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); },
+            executionDirectory: fixture.Base.GitFixture.Repository);
+        driver.ConfigureDeveloperCompletionStructuralPreflightRetry(fixture.Kernel, fixture.Reload());
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        var current = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        Assert.Equal("integration-scope:" + replacementId, current.QuestionFingerprint);
+        // Replaying the old approval must neither resurrect its grant nor answer the new wait.
+        fixture.Reload().ApplyScope(fixture.Goal, oldApproval);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        Assert.False(current.IsCompleted);
+        Assert.Equal(0, starts);
+        fixture.Base.GitFixture.AssertRestored();
+
+        Assert.Equal(OperatorIntentStatus.Applied,
+            (await fixture.Apply(fixture.Intent(IntegrationScopeAction.OriginalOnly))).Status);
+        driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+        Assert.True(current.IsCompleted);
+        Assert.Equal(1, starts);
+        fixture.Base.Resolve(outside: true);
+        Assert.Contains("src/Other.cs", fixture.Reload().Validate(fixture.Goal));
+        fixture.Base.GitFixture.AssertRestored();
+    }
 }

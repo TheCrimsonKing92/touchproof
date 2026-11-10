@@ -24,6 +24,7 @@ internal sealed partial class ConductorConflictIntegration
             !Guid.TryParseExact(request.RoundId, "N", out _) || !FullSha(request.OriginalHead) || !FullSha(request.MainSha) ||
             string.IsNullOrWhiteSpace(request.Reason) || string.IsNullOrWhiteSpace(intent.IdempotencyKey))
             throw new InvalidOperationException("Integration scope requires exact goal, round, original/main SHAs, reason and idempotency key.");
+        ReconcileScopeRequirements(goal);
         // The journal effect, rather than a timeline message, proves replay. Never rewrite the old grant,
         // including after revocation or terminal settlement.
         var prior = GoalOperationJournal.Read(executionDirectory, goal.Id).Entries
@@ -120,13 +121,45 @@ internal sealed partial class ConductorConflictIntegration
         $"Integration scope confirmation required. Use integration-scope {goal.Id.Value} {round.RoundId} {round.OriginalHead} {round.MainSha} " +
         "<approve|original-only> --text-file <reason> --idempotency-key <key> [--path <exact-file> ...]. Answer prose grants no path authority.";
 
+    internal void ReconcileScopeRequirements(Goal goal)
+    {
+        var pending = kernel.HumanInputRequests.Where(item => item.GoalId == goal.Id && !item.IsCompleted &&
+            IsScopeRequirement(item)).ToArray();
+        if (pending.Length == 0) return;
+        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var round = worktree is not null && Directory.Exists(worktree)
+            ? RetireStaleRound(goal, worktree, "scope-reconcile") : OpenRound(goal);
+        var entries = GoalOperationJournal.Read(executionDirectory, goal.Id).Entries
+            .Where(item => item.Operation == OperationName).ToArray();
+        var latestId = entries.LastOrDefault() is { } latest ? ReadRound(latest).RoundId : null;
+        foreach (var request in pending)
+        {
+            var roundId = request.QuestionFingerprint[ScopeRequirementPrefix.Length..];
+            if (round?.RoundId == roundId)
+            {
+                // Recover a journaled decision whose kernel checkpoint was interrupted.
+                ResolveScopeRequirement(goal, roundId);
+                continue;
+            }
+            var history = entries.Where(item => ReadRound(item).RoundId == roundId).ToArray();
+            // Absence of authority is not evidence of retirement. Require a durable terminal
+            // outcome or a recorded replacement, and never copy a decision into that replacement.
+            if (history.Any(item => item.Status is GoalOperationStatus.Completed or GoalOperationStatus.Failed) ||
+                (history.Length > 0 && latestId is not null && latestId != roundId))
+                kernel.SubmitHumanInput(request.Id,
+                    $"Integration scope requirement retired with round {roundId}; no path authority transferred.",
+                    origin: HumanInputAnswerOrigin.Worker, supersedeSiblings: false);
+        }
+    }
+
     private void ResolveScopeRequirement(Goal goal, string roundId)
     {
         var round = OpenRound(goal);
-        if (round?.RoundId != roundId || round.ScopeRequired) return;
+        if (round?.RoundId != roundId || round.ScopeRequired || !HasScopeDecision(round)) return;
         foreach (var request in kernel.HumanInputRequests.Where(item => item.GoalId == goal.Id && !item.IsCompleted &&
             item.TaskId is null && item.QuestionFingerprint == ScopeRequirementPrefix + roundId).ToArray())
-            kernel.SubmitHumanInput(request.Id, "Resolved by durable typed integration-scope decision.");
+            kernel.SubmitHumanInput(request.Id, "Resolved by durable typed integration-scope decision.",
+                supersedeSiblings: false);
     }
 
     internal static bool IsScopeRequirement(HumanInputRequest request) => request.TaskId is null &&

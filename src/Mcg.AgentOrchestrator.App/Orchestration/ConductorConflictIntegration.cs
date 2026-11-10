@@ -72,15 +72,10 @@ internal sealed partial class ConductorConflictIntegration(
 
     internal DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(Goal goal)
     {
+        ReconcileScopeRequirements(goal);
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var round = worktree is null ? null : RetireStaleRound(goal, worktree, "dispatch");
         var task = goal.Tasks.FirstOrDefault(item => item.RequiredRole == AgentRole.Developer && item.Status == WorkTaskStatus.Assigned);
-        if (round is not null && worktree is not null && !round.Admitted && ReadRef(worktree, integrationBranch) != round.MainSha)
-        {
-            Save(goal, round, GoalOperationStatus.Failed);
-            ConductorConflictIntegrationMarker.Remove(worktree);
-            return inner(goal);
-        }
         if (round is not null && task?.Id.Value == round.DeveloperTaskId && worktree is not null &&
             ReadRef(worktree, "HEAD") == round.OriginalHead && ReadRef(worktree, integrationBranch) == round.MainSha)
         {
@@ -239,8 +234,10 @@ internal sealed partial class ConductorConflictIntegration(
         var round = OpenRound(goal);
         if (round is null) return null;
         var head = ReadRef(worktree, "refs/heads/" + GoalWorktrees.BranchName(goal.Id));
-        if (OwnsHead(worktree, round, head)) return round;
-        Retire(goal, round, head ?? "missing", site);
+        if (!OwnsHead(worktree, round, head)) Retire(goal, round, head ?? "missing", site);
+        else if (!round.Admitted && ReadRef(worktree, integrationBranch) != round.MainSha)
+            Save(goal, round, GoalOperationStatus.Failed);
+        else return round;
         ConductorConflictIntegrationMarker.Remove(worktree);
         return null;
     }
