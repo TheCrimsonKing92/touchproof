@@ -25,6 +25,9 @@ internal sealed partial class OperatorIntentCoordinator
             throw new InvalidOperationException("Answer target belongs to a different goal.");
         if (payload.ActorKind != intent.ActorKind)
             throw new InvalidOperationException("Answer actor kind does not match intent actor kind.");
+        if (payload.TargetKind == OperatorAnswerTargetKind.HumanInput && kernel.HumanInputRequests.Any(request =>
+            request.Id.Value == payload.TargetId && request.GoalId == goal.Id && ConductorConflictIntegration.IsScopeRequirement(request)))
+            throw new InvalidOperationException("Use the typed integration-scope command to resolve this requirement.");
         if (payload.AmendmentDisposition is not null &&
             (payload.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline ||
              payload.TargetKind != OperatorAnswerTargetKind.HumanInput ||
@@ -67,6 +70,7 @@ internal sealed partial class OperatorIntentCoordinator
                 if (!effect.Applied)
                     throw new InvalidOperationException($"Answer decision effect was rejected: {effect.Receipt.Result}");
                 if (route is not null) ApplyAnswerRoute(kernel, goal, developer!, intent, route);
+                RequireIntegrationScopeAfterAnswer(kernel, goal, payload);
                 RecordAnswerTimeline(kernel, goal, intent, payload, priorReceipt,
                     route is null ? "applied" : "applied; routed developer");
             }
@@ -169,6 +173,7 @@ internal sealed partial class OperatorIntentCoordinator
         {
             var receipt = routeOnly ? null : RecordAnswerDecision(decisions, goal, intent, payload);
             if (route is not null) ApplyAnswerRoute(kernel, goal, developer!, intent, route);
+            RequireIntegrationScopeAfterAnswer(kernel, goal, payload);
             RecordAnswerTimeline(kernel, goal, intent, payload, receipt,
                 routeOnly ? "answer-already-recorded; routed developer" :
                 route is null ? "applied" : "applied; routed developer");

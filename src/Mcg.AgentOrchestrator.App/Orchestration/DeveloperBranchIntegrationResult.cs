@@ -17,7 +17,7 @@ internal sealed record DeveloperBranchIntegrationResult(
     string? IntegratedMainSha = null,
     string? ResultingCandidateSha = null)
 {
+    internal IReadOnlyList<string> ApprovedAdditionalPaths { get; init; } = [];
     internal bool CanDispatch =>
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated or DeveloperBranchIntegrationStatus.ConflictAdmitted;
 }
-
