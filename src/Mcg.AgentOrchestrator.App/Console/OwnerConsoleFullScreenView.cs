@@ -53,6 +53,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal string? ActivityFilter => _activityPane.Filter;
     private View? _commandReturnFocus;
     public bool ActionRunning => _acting || _operation.IsRunning;
+    internal Task Completion => _operation.Completion;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
     public DataTable BoardTable { get; } = OwnerConsoleFullScreenComposer.CreateBoardTable();

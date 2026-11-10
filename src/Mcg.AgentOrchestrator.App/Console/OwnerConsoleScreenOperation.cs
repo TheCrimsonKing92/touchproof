@@ -21,7 +21,7 @@ internal sealed class OwnerConsoleScreenOperation(TimeProvider clock, Action<str
         Task operation;
         lock (_gate)
         {
-            if (_operation is { IsCompleted: false }) return false;
+            if (cancellationToken.IsCancellationRequested || _operation is { IsCompleted: false }) return false;
             operation = _operation = Task.Run(() => action(stepToken), CancellationToken.None);
         }
         using var timers = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -42,22 +42,56 @@ internal sealed class OwnerConsoleScreenOperation(TimeProvider clock, Action<str
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        { step.Cancel(); _ = ObserveAsync(operation, label); return false; }
+        { step.Cancel(); _ = ObserveAsync(operation, label, cancellationToken); return false; }
         catch (TimeoutException) when (hitBound)
         {
             report($"{label} did not finish within {_options.OperationBound.TotalSeconds:0.###}s; the console is still running");
             step.Cancel();
-            _ = ObserveAsync(operation, label);
+            _ = ObserveAsync(operation, label, cancellationToken);
             return false;
         }
-        catch (Exception ex) { report($"{label} failed: {ex.Message}"); return false; }
-        finally { timers.Cancel(); working(null); }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested) report($"{label} failed: {ex.Message}");
+            return false;
+        }
+        finally { timers.Cancel(); if (!cancellationToken.IsCancellationRequested) working(null); }
     }
 
-    private async Task ObserveAsync(Task operation, string label)
+    private async Task ObserveAsync(Task operation, string label, CancellationToken cancellationToken)
     {
         try { await operation; }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { report($"{label} failed after its bound: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            // Shutdown owns fault observation once the UI lifetime has ended.
+            if (!cancellationToken.IsCancellationRequested) report($"{label} failed after its bound: {ex.Message}");
+        }
+    }
+
+    // Stop producers before capturing their underlying reads: a bounded wrapper can finish
+    // before its read, and a producer can still be registering a read when shutdown starts.
+    internal static async Task DrainAsync(Task producers, Func<Task> ownedReads,
+        Func<ValueTask> dispose, TimeProvider clock, Action<Exception> failure,
+        OwnerConsoleLoopOptions? options = null)
+    {
+        async Task Observe(Task task)
+        {
+            try { await task; }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { failure(ex); }
+        }
+
+        // Even an already-completed read can have slow synchronous disposal. Never execute
+        // disposal inline on the UI shutdown path. All late faults remain observed here.
+        var cleanup = Task.Run(async () =>
+        {
+            await Observe(producers);
+            await Observe(ownedReads());
+            try { await dispose(); }
+            catch (Exception ex) { failure(ex); }
+        });
+        try { await cleanup.WaitAsync((options ?? OwnerConsoleLoopOptions.Default).ShutdownBound, clock, CancellationToken.None); }
+        catch (TimeoutException) { }
     }
 }

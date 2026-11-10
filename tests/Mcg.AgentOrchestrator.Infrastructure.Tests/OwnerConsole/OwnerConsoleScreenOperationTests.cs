@@ -89,6 +89,49 @@ public sealed class OwnerConsoleScreenOperationTests
         Assert.Single(notices);
     }
 
+    [Fact]
+    public async Task CanceledWrapper_KeepsReadSingleFlightUntilUnderlyingCompletion()
+    {
+        using var stop = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var operation = new OwnerConsoleScreenOperation(new ManualStewardTimeProvider(), _ => { }, _ => { });
+        var first = operation.RunAsync("read", _ =>
+        {
+            Interlocked.Increment(ref calls);
+            entered.SetResult();
+            return release.Task;
+        }, stop.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            stop.Cancel();
+            Assert.False(await first);
+            Assert.True(operation.IsRunning);
+            Assert.False(await operation.RunAsync("next read", _ =>
+            { Interlocked.Increment(ref calls); return Task.CompletedTask; }));
+            Assert.Equal(1, calls);
+        }
+        finally { release.TrySetResult(); await operation.Completion; }
+        Assert.True(await operation.RunAsync("next read", _ =>
+        { Interlocked.Increment(ref calls); return Task.CompletedTask; }));
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task CanceledAdmission_DoesNotStartAnUncooperativeRead()
+    {
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        var calls = 0;
+        var operation = new OwnerConsoleScreenOperation(new ManualStewardTimeProvider(), _ => { }, _ => { });
+        Assert.False(await operation.RunAsync("read", _ =>
+        { calls++; return Task.CompletedTask; }, stop.Token));
+        Assert.Equal(0, calls);
+        Assert.True(operation.Completion.IsCompletedSuccessfully);
+    }
+
     private sealed class HeldQuestions : IOwnerQuestionSource
     {
         internal int Reads;

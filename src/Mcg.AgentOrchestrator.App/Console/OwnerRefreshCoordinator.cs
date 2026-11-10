@@ -28,6 +28,7 @@ internal sealed class OwnerRefreshCoordinator(TimeProvider clock, CancellationTo
 
     internal void HoldForStartup() => _rebuild.Wait(token);
     internal void Release() => _rebuild.Release();
+    internal Task Completion => _operation.Completion;
     public void Dispose() => _rebuild.Dispose();
 
     internal OwnerConsoleViewModel TrackBoard(OwnerConsoleViewModel board)

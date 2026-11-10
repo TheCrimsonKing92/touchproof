@@ -8,6 +8,10 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
     private readonly OwnerActivityEvidenceLoader _evidence = evidence ?? new(null);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly OwnerConsoleLoopOptions _options = options ?? OwnerConsoleLoopOptions.Default;
+    private Task _decisionRead = Task.CompletedTask;
+    private Task _activityRead = Task.CompletedTask;
+    // Capture after FillAsync has ended, so both underlying reads have been registered.
+    internal Task Completion => Task.WhenAll(_decisionRead, _activityRead);
 
     internal async Task<Task> StartAsync(Action<OwnerConsoleViewModel> renderBoard,
         Action<OwnerConsoleViewModel> renderUpdate, OwnerConsoleViewInputs inputs,
@@ -44,7 +48,8 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         {
             try
             {
-                var (rows, hidden) = await LoadBoundedAsync(step => builder.ReadDecisionsAsync(step), "questions", token);
+                var (rows, hidden) = await LoadBoundedAsync(step => builder.ReadDecisionsAsync(step), "questions", token,
+                    operation => _decisionRead = operation);
                 Update(current =>
                 {
                     var updated = builder.WithDecisions(current, rows, hidden) with { DecisionsState = null };
@@ -64,7 +69,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
                         ownBoardGoalIds ?? model.Board.Where(row => !row.IsForeign && !row.IsDiagnostic)
                             .Select(row => row.GoalId).ToArray(), step);
                     return (result, _evidence.Resolve(result.Recent));
-                }, "activity", token);
+                }, "activity", token, operation => _activityRead = operation);
                 token.ThrowIfCancellationRequested();
                 activityLoaded(loaded);
                 Update(current =>
@@ -81,11 +86,12 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
     }
 
     private async Task<T> LoadBoundedAsync<T>(Func<CancellationToken, Task<T>> load, string pane,
-        CancellationToken token)
+        CancellationToken token, Action<Task> track)
     {
         using var step = CancellationTokenSource.CreateLinkedTokenSource(token);
         var stepToken = step.Token;
         var operation = Task.Run(() => load(stepToken), CancellationToken.None);
+        track(operation);
         try { return await operation.WaitAsync(_options.OperationBound, _clock, token); }
         catch (TimeoutException)
         {
