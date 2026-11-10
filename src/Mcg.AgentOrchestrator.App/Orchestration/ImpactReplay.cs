@@ -57,11 +57,17 @@ internal static class ImpactReplay
             try
             {
                 ImpactReplayCaseResult result;
+                Exception? inputFailure = null;
                 try { result = source.ExecuteCase(attempt, configuration, context, flakeRows, history, sink, cancellationToken); }
                 catch (Exception ex) when (IsRecoverableInput(ex))
-                { result = new(ImpactReplayCaseKind.Unreplayable, Diagnostic: new(attempt.AttemptId, ex.Message)); }
+                {
+                    inputFailure = ex;
+                    result = new(ImpactReplayCaseKind.Unreplayable, Diagnostic: new(attempt.AttemptId, ex.Message));
+                }
                 // Durability precedes cleanup and the next case. Sink faults never become input diagnostics.
-                sink.CompleteCase(result);
+                try { sink.CompleteCase(result); }
+                catch (Exception ex) when (inputFailure is not null)
+                { throw new AggregateException(inputFailure, ex); }
                 if (result.Record is { } record)
                 {
                     records.Add(record);

@@ -7,8 +7,12 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliImpactReplayCommand
 {
-    private static bool IsCancellation(Exception error) => error is OperationCanceledException ||
-        error is AggregateException aggregate && aggregate.InnerExceptions.Count > 0 && IsCancellation(aggregate.InnerExceptions[0]);
+    // Aggregate errors keep the primary operation first; cleanup faults cannot establish cancellation.
+    private static bool IsCancellation(Exception error, CancellationToken callerToken) =>
+        error is OperationCanceledException cancellation && callerToken.IsCancellationRequested &&
+            cancellation.CancellationToken == callerToken ||
+        error is AggregateException aggregate && aggregate.InnerExceptions.Count > 0 &&
+            IsCancellation(aggregate.InnerExceptions[0], callerToken);
 
     internal static bool IsCommand(IReadOnlyList<string> args) => args.Count > 0 &&
         args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase);
@@ -106,7 +110,7 @@ internal static class CliImpactReplayCommand
         }
         catch (Exception ex)
         {
-            sink?.Fail(ex, IsCancellation(ex) && cancellationToken.IsCancellationRequested);
+            sink?.Fail(ex, IsCancellation(ex, cancellationToken));
             error.WriteLine($"Impact replay failed: {ex}");
             error.Flush();
             return 1;

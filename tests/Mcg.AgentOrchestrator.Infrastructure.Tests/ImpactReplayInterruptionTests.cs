@@ -3,6 +3,53 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 // Parallel-safe: injected faults, cancellation, time, and checkouts are scoped to the private fixture.
 public sealed class ImpactReplayInterruptionTests
 {
+    [Theory]
+    [InlineData(true, "caller", false, "cancelled")]
+    [InlineData(true, "caller", true, "cancelled")]
+    [InlineData(false, "caller", false, "failed")]
+    [InlineData(false, "caller", true, "failed")]
+    [InlineData(true, "foreign", false, "failed")]
+    [InlineData(true, "foreign", true, "failed")]
+    [InlineData(false, "foreign", false, "failed")]
+    [InlineData(false, "foreign", true, "failed")]
+    [InlineData(true, "unbound", false, "failed")]
+    [InlineData(true, "unbound", true, "failed")]
+    [InlineData(false, "unbound", false, "failed")]
+    [InlineData(false, "unbound", true, "failed")]
+    public void Cancellation_TokenProvenance_DeterminesTerminalState(
+        bool cancelCaller, string provenance, bool cleanupFails, string expected)
+    {
+        using var fixture = new ImpactReplayObservationFixture();
+        using var caller = new CancellationTokenSource();
+        using var foreign = new CancellationTokenSource();
+        foreign.Cancel();
+        fixture.Source.OnCase = (_, _, _, token) =>
+        {
+            if (cancelCaller) caller.Cancel();
+            throw new OperationCanceledException("injected cancellation: " + provenance, provenance switch
+            {
+                "caller" => token,
+                "foreign" => foreign.Token,
+                _ => CancellationToken.None
+            });
+        };
+        fixture.Source.OnCleanup = _ => cleanupFails ? "cleanup after cancellation fault" : null;
+
+        Assert.Equal(1, fixture.Run(caller.Token));
+
+        var status = fixture.Status();
+        Assert.Equal(expected, status.Completion);
+        Assert.Equal(0, status.Progress.Completed);
+        Assert.Equal(0L, fixture.Sql("SELECT count(*) FROM cases"));
+        Assert.Equal(1, fixture.Source.Cleaned);
+        Assert.Equal(cleanupFails ? "failed" : "succeeded", Assert.Single(status.Checkouts).CleanupStatus);
+        Assert.Contains("injected cancellation: " + provenance, status.Errors[0]);
+        Assert.Contains("injected cancellation: " + provenance, fixture.Error.ToString());
+        if (cleanupFails) Assert.Contains("cleanup after cancellation fault", status.Errors[0]);
+        Assert.Equal("", fixture.Output.ToString());
+        Assert.False(File.Exists(Path.Combine(fixture.Destination, "impact-replay.json")));
+    }
+
     [Fact]
     public void Checkout_PartiallyRegisteredInputFailure_StillRunsOwnedCleanup()
     {

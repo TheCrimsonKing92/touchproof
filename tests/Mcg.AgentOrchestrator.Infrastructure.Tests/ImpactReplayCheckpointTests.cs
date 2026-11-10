@@ -5,6 +5,53 @@ using System.Text.Json;
 // Parallel-safe: per-test fake sources and private SQLite files, including independent reader connections.
 public sealed class ImpactReplayCheckpointTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Checkpoint_InputAndWriteFail_PreservesErrorsAndPriorCase(bool cleanupFails)
+    {
+        using var fixture = new ImpactReplayObservationFixture();
+        fixture.Source.OnCase = (attempt, _, _, _) =>
+        {
+            if (attempt.AttemptId == "second")
+            {
+                fixture.Sql("""
+                    CREATE TRIGGER fail_unreplayable BEFORE UPDATE OF progress_json ON runs
+                    WHEN json_extract(NEW.progress_json,'$.completed')=2
+                    BEGIN SELECT RAISE(FAIL,'checkpoint fault after input failure'); END;
+                    """);
+                throw new InvalidDataException("original recoverable case fault");
+            }
+            return ImpactReplayObservationFixture.Replayed(attempt.AttemptId);
+        };
+        fixture.Source.OnCleanup = context => cleanupFails && Path.GetFileName(context.Checkout) == "second"
+            ? "cleanup after checkpoint fault" : null;
+
+        Assert.Equal(1, fixture.Run());
+
+        var status = fixture.Status();
+        Assert.Equal("failed", status.Completion);
+        Assert.Equal(1L, fixture.Sql("SELECT count(*) FROM cases"));
+        Assert.Equal("first", fixture.Sql("SELECT json_extract(attempt_json,'$.attemptId') FROM cases"));
+        Assert.Equal(1, status.Progress.Completed);
+        Assert.Equal(0, status.Progress.Unreplayable);
+        Assert.Equal(2, fixture.Source.Cleaned);
+        Assert.Equal(2, status.Checkouts.Count);
+        Assert.Contains(status.Checkouts, c => Path.GetFileName(c.Path) == "second" &&
+            c.CleanupStatus == (cleanupFails ? "failed" : "succeeded"));
+        Assert.Contains("original recoverable case fault", status.Errors[0]);
+        Assert.Contains("checkpoint fault after input failure", status.Errors[0]);
+        Assert.Contains("original recoverable case fault", fixture.Error.ToString());
+        Assert.Contains("checkpoint fault after input failure", fixture.Error.ToString());
+        if (cleanupFails)
+        {
+            Assert.Contains("cleanup after checkpoint fault", status.Errors[0]);
+            Assert.Contains("cleanup after checkpoint fault", fixture.Error.ToString());
+        }
+        Assert.Equal("", fixture.Output.ToString());
+        Assert.False(File.Exists(Path.Combine(fixture.Destination, "impact-replay.json")));
+    }
+
     [Fact]
     public void Inventory_MalformedAndDateExcludedInputs_CountsBothWithoutCases()
     {
