@@ -146,8 +146,13 @@ internal static class ProductionMemberReflectionScanner
             variable.SpanStart < expression.SpanStart)
         {
             var scope = variable.Ancestors().FirstOrDefault(node => node is BaseMethodDeclarationSyntax or AnonymousFunctionExpressionSyntax);
+            // Tuple assignment targets have no single local symbol. Inspect their leaves, and
+            // invalidate escaped ref sources rather than trusting their original initializer.
             if (scope is null || scope.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(assignment =>
-                    SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(assignment.Left).Symbol, local)) ||
+                    assignment.Left.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().Any(target =>
+                        SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(target).Symbol, local))) ||
+                scope.DescendantNodes().OfType<RefExpressionSyntax>().Any(refExpression =>
+                    SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(refExpression.Expression).Symbol, local)) ||
                 scope.DescendantNodes().OfType<ArgumentSyntax>().Any(argument => argument.RefKindKeyword.RawKind != 0 &&
                     SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(argument.Expression).Symbol, local))) return null;
             return Resolve(variable.Initializer.Value, model, call, depth + 1);

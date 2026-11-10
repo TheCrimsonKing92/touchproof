@@ -63,6 +63,21 @@ public sealed class ProductionMemberReflectionScannerTests
     }
 
     [Theory]
+    [InlineData("Type t = typeof(Cases); (t, _) = (typeof(P.Target), 0); t.GetMethod(\"Hidden\");")]
+    [InlineData("Type t = typeof(Cases); (_, (t, _)) = (0, (typeof(P.Target), 0)); t.GetProperty(\"Value\");")]
+    [InlineData("Type t = typeof(Cases); ref Type alias = ref t; alias = typeof(P.Target); t.GetMethod(\"Hidden\");")]
+    public void IndirectAliasWrites_ExcludedInitializer_RequiresClassificationEvidence(string body)
+    {
+        var result = Fixture(body);
+
+        var lookup = Assert.Single(result.Lookups);
+        Assert.Equal("unresolved-target", lookup.Classification);
+        Assert.Equal("t", lookup.Target);
+        Assert.Contains("exact reasoned exemption", Assert.Single(result.Diagnostics), StringComparison.Ordinal);
+        Assert.DoesNotContain("production-member", result.Diagnostics[0], StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("GetType()")]
     [InlineData("this.GetType()")]
     public void ShadowedGetType_ProductionHelper_RequiresClassificationEvidence(string receiver)
