@@ -1,5 +1,15 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Integration scope authorization
+
+`integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]`
+
+The local human operator submits this typed intent for one open conductor conflict-integration round. Read its round ID and full heads from the integration journal or pending scope requirement. `approve` requires exact repository-relative files, `original-only` confirms scope without adding paths, and `revoke` names an approval intent ID. Paths cannot be directories, globs, repository metadata or traversal. Additional approvals accumulate separately from original conflicts.
+
+Submission acknowledges queued intake. Inspect the returned intent until Applied or Rejected; only application records authority. Reuse the same idempotency key for redelivery of the same request. Prose answers do not grant file authority. A scope clarification without typed confirmation blocks dispatch and provides one command with the exact round identities.
+
+Authority survives restart and retries within the same open round. Terminal or replacement rounds require new approval, even with identical heads. Revocation blocks future admissions; an admitted attempt settles with its captured exact scope. Approval grants no acceptance or landing permission. Merge parents, clean worktree, build and compare-and-swap restore checks still apply.
+
 ## Fleet conduct-tail sources
 
 `project event-sources` exports home and every registered authoritative workspace as a complete conduct-tail source list. It accepts no project filter or output options and ignores the selected project. Aliases share one record: home is canonical when aliased, otherwise the stable registration order (OrdinalIgnoreCase then Ordinal) chooses the label. Different authoritative state stores remain distinct even when their repository roots match. Final labels sort ordinally; home has no special first position.
