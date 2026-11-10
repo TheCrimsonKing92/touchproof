@@ -8,10 +8,22 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ImpactReplayTestSourceIndex
 {
     internal IReadOnlyList<SyntaxTree> Trees { get; }
-    internal ImpactReplayTestSourceIndex(IEnumerable<string> files)
+    internal IReadOnlyList<ImpactReplayChangedSourceRouting.Project>? Projects { get; }
+    internal string? RepositoryRoot { get; }
+    internal ImpactReplayTestSourceIndex(IEnumerable<string> files,
+        IReadOnlyList<ImpactReplayChangedSourceRouting.Project>? projects = null, string? repositoryRoot = null)
+        : this(files.Distinct(StringComparer.Ordinal).Select(file =>
+            CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)), projects, repositoryRoot)
     {
-        Trees = files.Distinct(StringComparer.Ordinal).Select(file =>
-            CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)).ToArray();
+    }
+
+    // The same parser inventory can be supplied in memory without filesystem or assembly discovery.
+    internal ImpactReplayTestSourceIndex(IEnumerable<SyntaxTree> trees,
+        IReadOnlyList<ImpactReplayChangedSourceRouting.Project>? projects = null, string? repositoryRoot = null)
+    {
+        Trees = trees.ToArray();
+        Projects = projects;
+        RepositoryRoot = repositoryRoot;
         foreach (var tree in Trees)
             if (tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{tree.FilePath}'.");
