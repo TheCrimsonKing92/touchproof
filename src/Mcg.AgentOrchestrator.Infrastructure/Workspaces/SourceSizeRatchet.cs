@@ -70,7 +70,8 @@ internal static class SourceSizeRatchet
             // Goal a9983773 adds 11 lines binding the lane-plan observation to the existing attempt and dispatch set.
             // Goal fafad26f: tool-home binding, preflight and existing environment delegate adaptation.
             // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3936),
+            // Goal 0bc1199a: one line binds build receipt recording; logic lives in BuildReceiptSite.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3937),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -573,7 +574,7 @@ internal static class SourceSizeRatchet
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
-            new SourceClassCeiling("ConductorDriver", 14198, 70),
+            new SourceClassCeiling("ConductorDriver", 14140, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -640,7 +641,8 @@ internal static class SourceSizeRatchet
             // Goal 8846120e extracts AcceptanceProcessRunner; main d2ecd0a2e integrated, measured 7830 lines in 26 partials.
             // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6622, 17),
+            // Goal 0bc1199a: one added receipt-site binding line across the existing partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6623, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
