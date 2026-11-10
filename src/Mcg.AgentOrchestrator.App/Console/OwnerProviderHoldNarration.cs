@@ -10,20 +10,7 @@ internal static class OwnerProviderHoldNarration
         if (string.IsNullOrWhiteSpace(binding)) return false;
         var name = DisplayName(binding);
         var attempt = OwnerEventFields.Field(evt, "attempt");
-        ownerAction = "No. You can let the conductor continue.";
-        // Legacy event wording is retained; new observations carry their current diagnosis separately.
-        if (evt.EventKind is "provider-hold-placed" or "provider-hold-check" or "provider-hold-overdue" &&
-            OwnerEventFields.Field(evt, "diagnosis") is { Length: > 0 } diagnosis)
-        {
-            var overdue = evt.EventKind == "provider-hold-overdue" || OwnerEventFields.Field(evt, "state") == "probe-overdue";
-            reason = (overdue ? $"The probe became due {OwnerEventFields.Field(evt, "due")}; " : "") + Uri.UnescapeDataString(diagnosis);
-            var auth = reason.Contains("last confirmed: authentication-required", StringComparison.Ordinal);
-            sentence = auth ? $"Provider sign-in required: {name}" : overdue
-                ? $"Provider check overdue: {name} balance unverified" : $"Provider availability unverified: {name}";
-            nextStep = "Protective admission remains until a successful current same-binding availability check.";
-            if (auth) ownerAction = $"Sign in to {name}; the conductor will check availability again.";
-            return true;
-        }
+        if (TryNarrateDiagnosis(evt, name, out sentence, out reason, out nextStep, out ownerAction)) return true;
         switch (evt.EventKind)
         {
             case "provider-hold-overdue":
@@ -64,6 +51,24 @@ internal static class OwnerProviderHoldNarration
                 return true;
             default: return false;
         }
+    }
+
+    private static bool TryNarrateDiagnosis(OwnerConductEvent evt, string name, out string sentence,
+        out string reason, out string nextStep, out string ownerAction)
+    {
+        sentence = reason = nextStep = "";
+        ownerAction = "No. You can let the conductor continue.";
+        // Legacy event wording is retained; new observations carry their current diagnosis separately.
+        if (evt.EventKind is not ("provider-hold-placed" or "provider-hold-check" or "provider-hold-overdue") ||
+            OwnerEventFields.Field(evt, "diagnosis") is not { Length: > 0 } diagnosis) return false;
+        var overdue = evt.EventKind == "provider-hold-overdue" || OwnerEventFields.Field(evt, "state") == "probe-overdue";
+        reason = (overdue ? $"The probe became due {OwnerEventFields.Field(evt, "due")}; " : "") + Uri.UnescapeDataString(diagnosis);
+        var auth = reason.Contains("last confirmed: authentication-required", StringComparison.Ordinal);
+        sentence = auth ? $"Provider sign-in required: {name}" : overdue
+            ? $"Provider check overdue: {name} balance unverified" : $"Provider availability unverified: {name}";
+        nextStep = "Protective admission remains until a successful current same-binding availability check.";
+        if (auth) ownerAction = $"Sign in to {name}; the conductor will check availability again.";
+        return true;
     }
 
     internal static string DisplayName(string bindingKey)
