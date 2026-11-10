@@ -283,6 +283,11 @@ internal static class CliCommandHelp
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
         ["--goal", "--text-file", "--ruling-text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
+    public const string IntegrationScopeUsage = "Usage: integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]";
+    private static readonly CommandHelpEntry IntegrationScope = new(IntegrationScopeUsage,
+        "Confirm exact integration scope for one open round; revoke names an approval intent id.",
+        ["--text-file", "--idempotency-key", "--path", "--approval", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry ApprovePolicyChange = new(
         ApprovePolicyChangeUsage,
         "Record a human candidate-bound approval for acceptance policy changes.",
@@ -1224,6 +1229,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("approve-policy-change", StringComparison.OrdinalIgnoreCase))
         {
             entry = ApprovePolicyChange;
+            return true;
+        }
+
+        if (args[0].Equals("integration-scope", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = IntegrationScope;
             return true;
         }
 

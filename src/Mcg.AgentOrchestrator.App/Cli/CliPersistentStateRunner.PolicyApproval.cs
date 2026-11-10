@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliPersistentStateRunner
 {
-    private static bool SubmitPolicyChangeApprovalIntent(
+    internal static bool SubmitPolicyChangeApprovalIntent(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
