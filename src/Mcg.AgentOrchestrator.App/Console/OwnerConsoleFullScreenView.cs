@@ -44,7 +44,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
-    private bool _editingCommand;
     private string? _completionHint;
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
@@ -74,7 +73,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
-    public bool EditingCommand { get => _editingCommand; set => _editingCommand = value; }
+    public bool EditingCommand { get; set; }
     string? IOwnerConsoleKeySurface.CompletionHint { set => _completionHint = value; }
     public View? CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
     int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
@@ -217,7 +216,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         RenderHints();
     }
 
-    public void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
+    public void RenderHints() => _hints.Text = EditingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
             ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
