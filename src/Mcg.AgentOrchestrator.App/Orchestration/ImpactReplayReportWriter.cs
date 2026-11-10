@@ -141,6 +141,24 @@ internal static class ImpactReplayReportWriter
                 text.AppendLine($"| {Cell(item.Class)} | {Cell(item.Reason)} | {item.Attempts} | {Cell(string.Join(", ", item.FullNames))} |");
         }
         report.SourceReadingGuards?.AppendTo(text);
+        var declaredGuardAttempts = report.Attempts.Where(attempt => attempt.DeclaredGuards is { } guards &&
+            (guards.Selections.Count > 0 || !string.IsNullOrWhiteSpace(guards.DegradationReason))).ToArray();
+        if (declaredGuardAttempts.Length > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("## Declared guard selections");
+            text.AppendLine();
+            foreach (var attempt in declaredGuardAttempts)
+            {
+                var declared = attempt.DeclaredGuards!;
+                if (!string.IsNullOrWhiteSpace(declared.DegradationReason))
+                    text.AppendLine($"- {Cell(attempt.AttemptId)}: {Cell(declared.DegradationReason)}");
+                foreach (var guard in declared.Selections)
+                    text.AppendLine($"- {Cell(attempt.AttemptId)}: {Cell(guard.Project)} / {Cell(guard.ClassName)}; " +
+                        $"{Cell(guard.DependencyKind)}; declaration: {Cell(guard.DeclarationPath)}; " +
+                        $"inputs: {Cell(string.Join(", ", guard.TriggerPaths))}; {Cell(guard.Reason)}");
+            }
+        }
         return text.ToString();
     }
 
