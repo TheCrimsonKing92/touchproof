@@ -10,14 +10,14 @@ internal static class ConductorRoundModelResolver
     internal static ConductorRoundModel Resolve(ModelFunctionCatalog? catalog, string purpose, bool fallback = false)
     {
         var bindings = (catalog ?? ModelFunctionCatalog.Empty).ForPurpose(purpose);
-        var author = string.Equals(purpose, ModelFunctionPurposes.ConductorAuthor, StringComparison.OrdinalIgnoreCase);
+        var supportsProviders = ConductorRoundBindingPolicy.SupportsSubscriptionProviders(purpose);
         if (bindings.Count == 0) return fallback ? Invalid("missing-subscription-fallback") : new(purpose, DefaultModelAlias, null, null);
         if (bindings.Count > 1) return Invalid("multiple-bindings");
         var subscription = fallback ? bindings[0].SubscriptionFallback : bindings[0].Subscription;
-        if (fallback && !author) return Invalid("fallback-unsupported-purpose");
+        if (fallback && !supportsProviders) return Invalid("fallback-unsupported-purpose");
         if (fallback && subscription is null) return Invalid("missing-subscription-fallback");
         if (subscription is null) return Invalid("missing-subscription");
-        var codex = author && string.Equals(subscription.WorkerProfileName, "codex-cli", StringComparison.OrdinalIgnoreCase);
+        var codex = supportsProviders && string.Equals(subscription.WorkerProfileName, "codex-cli", StringComparison.OrdinalIgnoreCase);
         if (!codex && !string.Equals(subscription.WorkerProfileName,
                 WorkerProfileDispatcher.AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
             return Invalid($"non-claude-profile:{subscription.WorkerProfileName}");

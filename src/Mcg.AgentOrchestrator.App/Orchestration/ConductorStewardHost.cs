@@ -111,7 +111,7 @@ internal sealed partial class ConductorStewardHost
                 lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
                     message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
                         .Append("steward-lessons", null, message)),
-                catalog: ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
+                catalogLoader: () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
             new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             goalId => SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(
@@ -147,6 +147,7 @@ internal sealed partial class ConductorStewardHost
         var changed = new HashSet<GoalId>();
         StewardOwnerQuestionHoldReconciler.Reconcile(kernel, _conduct, onlyGoalId, changed);
         if (!Enabled) return changed;
+        (_model as IConductorModelBindingRefresh)?.RefreshBindings();
         var now = _utcNow();
         foreach (var expired in _triggers.ExpireStale(now.AddMinutes(-15)))
             Record(expired.Trigger, "model-failure", "timeout", null);
