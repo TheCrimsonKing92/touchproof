@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorJudgePanelHost
 {
     private readonly ConductorJudgePanelCaseStore _store;
-    private readonly IReadOnlyList<IConductorPanelJudgeRunner> _judges;
+    private IReadOnlyList<IConductorPanelJudgeRunner> _judges;
+    private readonly Func<IReadOnlyList<IConductorPanelJudgeRunner>>? _judgeLoader;
     private readonly Func<Goal, string?> _candidate;
     private readonly ConductEventLogWriter _conduct;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -19,10 +20,11 @@ internal sealed partial class ConductorJudgePanelHost
     internal ConductorJudgePanelHost(ConductorJudgePanelCaseStore store,
         IConductorPanelJudgeRunner sol, IConductorPanelJudgeRunner sonnet,
         Func<Goal, string?> candidate, ConductEventLogWriter conduct,
-        Func<DateTimeOffset>? utcNow = null, bool enabled = true)
+        Func<DateTimeOffset>? utcNow = null, bool enabled = true,
+        Func<IReadOnlyList<IConductorPanelJudgeRunner>>? judgeLoader = null)
     {
-        if (sol.Judge != "sol" || sonnet.Judge != "sonnet")
-            throw new ArgumentException("Panel requires distinct sol and sonnet judges.");
+        PanelJudgeAvailability.ValidateSeats([sol, sonnet]);
+        _judgeLoader = judgeLoader;
         _store = store;
         _judges = [sol, sonnet];
         _candidate = candidate;
@@ -34,6 +36,8 @@ internal sealed partial class ConductorJudgePanelHost
     internal void ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
         if (!Enabled || _shutdown.IsCancellationRequested) return;
+        _judges = _judgeLoader?.Invoke() ?? _judges;
+        PanelJudgeAvailability.ValidateSeats(_judges);
         var now = _utcNow();
         _store.Start(now, kernel.Goals.Select(goal => new PanelGoalEnrollment(goal.Id.Value,
             goal.MetadataCreatedAt ?? goal.BriefVersions[0].RecordedAt)));
@@ -47,7 +51,8 @@ internal sealed partial class ConductorJudgePanelHost
             _store.SetIdleReason(string.Join(";", _judges.Select(judge => judge.BindingError)));
             return;
         }
-        _store.SetIdleReason("");
+        var configurationReason = PanelJudgeAvailability.ConfigurationReason(_judges);
+        _store.SetIdleReason(configurationReason ?? "");
         var eligible = onlyGoalId is null ? null : new HashSet<string>(StringComparer.Ordinal) { onlyGoalId };
         var claim = _store.ClaimNext(now, eligible);
         if (claim is null) return;
@@ -55,9 +60,9 @@ internal sealed partial class ConductorJudgePanelHost
         var launches = new List<IConductorPanelJudgeRunner>();
         foreach (var judge in _judges)
         {
-            var reason = _store.Health(judge.Judge).State == PanelJudgeHealthState.Suspended ? "judge-suspended" : judge.BindingError;
+            var reason = _store.Health(judge.Judge).State == PanelJudgeHealthState.Suspended ? "judge-suspended" : judge.BindingError ?? configurationReason;
             var skip = reason is null ? null : new PanelJudgeResult(judge.Judge,
-                PanelJudgeOutcome.Skipped, null, "", "", Reason: reason);
+                PanelJudgeOutcome.Skipped, null, "", "", Reason: reason, WorkerProfileName: judge.WorkerProfileName);
             if (_store.ReserveCall(claim, judge.Judge, skip)) launches.Add(judge);
         }
         // Reservation happens before launch. Reading a result happens only after IsCompleted in Harvest.

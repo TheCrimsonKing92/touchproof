@@ -59,7 +59,7 @@ public sealed class ConductorRoundModelResolverTests
     }
 
     [Fact]
-    public void Author_Codex_resolves_effective_model_and_default_effort_without_changing_other_functions()
+    public void Codex_resolves_effective_model_and_default_effort_for_conductor_functions()
     {
         var binding = Binding(ModelFunctionPurposes.ConductorAuthor) with
         {
@@ -71,7 +71,7 @@ public sealed class ConductorRoundModelResolverTests
         Assert.Equal("gpt-6.1-sol", result.Alias);
         Assert.Equal(AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", "gpt-6.1-sol"), result.ReasoningEffort);
         var other = binding with { Purpose = ModelFunctionPurposes.ConductorSteward };
-        Assert.False(ConductorRoundModelResolver.Resolve(new([other]), other.Purpose).IsValid);
+        Assert.True(ConductorRoundModelResolver.Resolve(new([other]), other.Purpose).IsValid);
     }
 
     [Fact]
@@ -85,6 +85,34 @@ public sealed class ConductorRoundModelResolverTests
         Assert.Equal("codex-cli", result.WorkerProfileName);
         Assert.Equal("gpt-6.1-sol", result.Alias);
         Assert.Equal("high", result.ReasoningEffort);
+    }
+
+    public static IEnumerable<object[]> ProviderMatrix()
+    {
+        foreach (var purpose in new[] { ModelFunctionPurposes.ConductorAuthor, ModelFunctionPurposes.ConductorSteward,
+                     ModelFunctionPurposes.StewardTriage, ModelFunctionPurposes.PlanSampler, ModelFunctionPurposes.BoardFillVerifier })
+        foreach (var profile in new[] { "codex-cli", "claude-cli" })
+        foreach (var fallback in new[] { false, true })
+            yield return [purpose, profile, fallback];
+    }
+
+    [Theory]
+    [MemberData(nameof(ProviderMatrix))]
+    public void Every_round_resolves_both_primary_and_fallback_providers(string purpose, string profile, bool fallback)
+    {
+        var alias = profile == "codex-cli" ? "gpt-6-sol" : "claude-sonnet-5";
+        var binding = Binding(purpose) with
+        {
+            Subscription = new(profile.ToUpperInvariant(), alias, "high"),
+            SubscriptionFallback = new(profile.ToUpperInvariant(), alias, "high")
+        };
+        var result = ConductorRoundModelResolver.Resolve(new([binding]), purpose.ToUpperInvariant(), fallback);
+        Assert.True(result.IsValid, result.InvalidReason);
+        Assert.Equal(profile, result.WorkerProfileName);
+        Assert.Equal(profile == "codex-cli" ? "gpt-6.1-sol" : alias, result.Alias);
+        Assert.Equal("high", result.ReasoningEffort);
+        Assert.Equal("sonnet", ConductorRoundModelResolver.Resolve(ModelFunctionCatalog.Empty, purpose).Alias);
+        Assert.False(ConductorRoundModelResolver.Resolve(ModelFunctionCatalog.Empty, purpose, true).IsValid);
     }
 
     [Fact]
