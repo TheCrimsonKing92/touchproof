@@ -46,6 +46,7 @@ internal sealed class MultiRepositoryTupleLanding(OrchestratorWorkspace workspac
         var currentCandidate = GoalRepositoryCandidateIdentity.Compute(goal, workspace, registry);
         if (currentCandidate.Identity?.RepositoryTupleCanonical != receipt.TupleCanonical)
             return Stale(goal, state, "tuple", receipt.TupleCanonical, currentCandidate.Failure);
+        using var pin = MultiRepositoryLandingTuplePin.Enter(goal.Id, currentCandidate.Identity!.RepositoryTupleCanonical!);
         RepositoryCandidateTuple.TryParse(receipt.TupleCanonical, out var acceptedTuple);
 
         string? homeRefusal;
