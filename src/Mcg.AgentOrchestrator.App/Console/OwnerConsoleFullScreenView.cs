@@ -110,9 +110,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
     }
 
-    internal void Render(OwnerConsoleViewModel model)
+    internal void Render(OwnerConsoleViewModel model) => Render(model, refreshPreview: true);
+
+    internal void Render(OwnerConsoleViewModel model, bool refreshPreview)
     {
-        _paneRenderer.Render(model);
+        _paneRenderer.Render(model, refreshPreview);
         SettingsView.Refresh();
     }
 

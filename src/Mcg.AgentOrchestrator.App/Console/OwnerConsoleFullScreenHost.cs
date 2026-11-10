@@ -158,7 +158,7 @@ internal static class OwnerConsoleFullScreenHost
                 view.Render(board);
                 startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock,
                     evidence: evidence);
-                fill = startup.FillAsync(board, model => view.Render(model), refresh.StartupInputs(), refresh.Seed,
+                fill = startup.FillAsync(board, model => { refresh.SeedPublished(model); view.Render(model); }, refresh.StartupInputs(), refresh.Seed,
                     token, ownBoardGoalIds: refresh.BoardIds);
             }
             catch { refresh.Release(); throw; }

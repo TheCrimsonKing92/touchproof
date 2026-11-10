@@ -56,7 +56,7 @@ internal sealed class OwnerConsolePaneRenderer
         NoticeStrip = noticeStrip;
     }
 
-    internal void Render(OwnerConsoleViewModel model)
+    internal void Render(OwnerConsoleViewModel model, bool refreshPreview = true)
     {
         GateView.Render(model.Gate);
         using var trace = _diagnostics?.Begin("render", _trace.State);
@@ -77,7 +77,7 @@ internal sealed class OwnerConsolePaneRenderer
                 string.Equals(row.Project, SelectedProject, StringComparison.OrdinalIgnoreCase));
             if (SelectedGoalId is not null && index < 0) _selection.CopyValid = false;
             SelectBoard(index < 0 ? _selection.Index : index, refresh: true,
-                allowHeader: selectedHeader && index >= 0);
+                allowHeader: selectedHeader && index >= 0, refreshPreview: refreshPreview);
             RenderActivity();
             RenderHints();
             NoticeStrip.RefreshSucceeded();
@@ -139,6 +139,7 @@ internal sealed class OwnerConsolePaneRenderer
     private void RenderOverflow() => _renderCoordinator.RenderOverflow();
     private void RenderPreview() => _previewPane.Render();
     private void RenderHints() => _renderHints();
-    private void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
-        _selection.Select(index, refresh, direction, allowHeader);
+    private void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false,
+        bool refreshPreview = true) =>
+        _selection.Select(index, refresh, direction, allowHeader, refreshPreview);
 }

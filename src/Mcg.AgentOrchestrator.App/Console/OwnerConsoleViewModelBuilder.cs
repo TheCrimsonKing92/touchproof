@@ -38,8 +38,10 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         (_goals.Count, _roles.Count, _decisionProjection.RetainedNumbers, _previousHolds.Count, _titles.Titles.Count);
 
     internal Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
-        CancellationToken cancellationToken, bool force = false) =>
-        _decisionProjection.ReadAsync(questions, _decisionMarker, cancellationToken, force, live =>
+        CancellationToken cancellationToken, bool force = false, bool independent = false) =>
+        // Independent reads precede the board generation and validate their own
+        // source observation. Shared-generation callers retain the earlier-board guard.
+        _decisionProjection.ReadAsync(questions, independent ? new(decisionsMarker) : _decisionMarker, cancellationToken, force, live =>
         {
             lock (_observationGate) _attention.Observe(live, clock.GetUtcNow());
         });
