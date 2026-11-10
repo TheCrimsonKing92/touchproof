@@ -19,53 +19,11 @@ internal sealed partial class ConductorBatchLoop
         TimeSpan stallThreshold,
         HashSet<GoalId> changedGoalIds,
         List<string> tickLines,
-        ConductEventLogWriter? conductEventLogWriter = null)
-    {
-        if (goal.CurrentHold?.State == "environment-hold") { changedGoalIds.Add(goal.Id); return; }
-        ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, observedAt, changedGoalIds);
-        ConductorGateAttention.ReconcileOutcome(kernel, driver, goal, outcome);
-        if (outcome is ConductorAdvanceOutcome.Held held)
-        {
-            if (driver.SliceBatchParentExecutionGuard?.IsSliceBatchParent(goal) == true)
-            {
-                ClearGoalHold(kernel, goal, changedGoalIds);
-                return;
-            }
+        ConductEventLogWriter? conductEventLogWriter = null) =>
+        ConductorGoalHoldTracker.TrackGoalOutcome(kernel, driver, goal, outcome, observedAt,
+            stallThreshold, changedGoalIds, tickLines, conductEventLogWriter);
 
-            if (held.State is GoalLifecycleState.Running
-                or GoalLifecycleState.AwaitingVerification
-                or GoalLifecycleState.Verifying)
-            {
-                ClearGoalHold(kernel, goal, changedGoalIds);
-                return;
-            }
-
-            if (held.Owner is ConductorHoldOwner.BackgroundAttempt or ConductorHoldOwner.AcceptanceQueue
-                or ConductorHoldOwner.DurableOutbox or ConductorHoldOwner.WorkerCapacity)
-            {
-                ClearGoalHold(kernel, goal, changedGoalIds);
-                return;
-            }
-
-            // The pull request tracker needs the hold record, but owns its progress so it never stalls.
-            TrackGoalHold(
-                kernel, goal,
-                held.State.ToString(),
-                TrainEjectionReport.DescribeWaitingHold(driver, goal.Id, held, held.Reason),
-                observedAt,
-                held.Owner is ConductorHoldOwner.PullRequestReview ? TimeSpan.MaxValue : stallThreshold,
-                changedGoalIds,
-                tickLines,
-                held.StableIdentity ?? TrainEjectionReport.OriginalHoldReason(held),
-                driver,
-                conductEventLogWriter);
-            return;
-        }
-
-        ClearGoalHold(kernel, goal, changedGoalIds);
-    }
-
-    private static void TrackGoalHold(
+    internal static void TrackGoalHold(
         AgentOrchestratorKernel kernel,
         Goal goal,
         string state,
@@ -154,7 +112,7 @@ internal sealed partial class ConductorBatchLoop
         }
     }
 
-    private static void ClearGoalHold(
+    internal static void ClearGoalHold(
         AgentOrchestratorKernel kernel,
         Goal goal,
         HashSet<GoalId> changedGoalIds)

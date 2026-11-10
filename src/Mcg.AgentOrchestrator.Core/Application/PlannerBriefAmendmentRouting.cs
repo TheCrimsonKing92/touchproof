@@ -3,6 +3,15 @@ namespace Mcg.AgentOrchestrator.Core;
 // Classifies durable request/answer authority. The kernel owns the resulting mutation.
 internal static class PlannerBriefAmendmentRouting
 {
+    internal static PlannerBriefAmendmentRevisionPendingHold? GetPendingHold(Goal goal, IEnumerable<HumanInputRequest> requests)
+    {
+        if (goal.IsTerminal || goal.Status == GoalStatus.Parked) return null;
+        foreach (var task in goal.Tasks)
+            if (Evaluate(goal, task, requests) is { Replan: false } decision)
+                return decision.Hold(goal, task);
+        return null;
+    }
+
     internal sealed record Decision(HumanInputRequest Request, bool Revised, bool Declined)
     {
         internal bool Replan => Revised || Declined;

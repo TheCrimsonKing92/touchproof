@@ -226,6 +226,7 @@ public sealed partial class BackgroundDispatchRunner
         TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
         var task = kernel.GetTask(goalId, taskId);
+        kernel.EnsurePlannerOperatorEvidenceReady(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
         if (taskIntentAdmission is { } intentReference &&
@@ -394,6 +395,8 @@ public sealed partial class BackgroundDispatchRunner
         // checkpoint before this read can merge the stale tick-owned task status over an operator
         // cancellation and make the subsequent read falsely appear non-terminal.
         checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.BeforeProcessStart);
+
+        kernel.EnsurePlannerOperatorEvidenceReady(goalId, taskId);
 
         DispatchProcessHost.PrepareSharedSandboxState(runParameters);
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
@@ -1188,20 +1191,8 @@ public sealed partial class BackgroundDispatchRunner
     internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
         WorkerDispatchCompletionClassifier.ShouldReconcileWrapperExit(evidence);
 
-    internal static string? TryGetWorktreeHead(string workingDirectory)
-    {
-        try
-        {
-            if (!Directory.Exists(workingDirectory))
-                return null;
-            var result = GitCli.Run(workingDirectory, "rev-parse", "HEAD");
-            return result.Succeeded ? result.Output.Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    internal static string? TryGetWorktreeHead(string workingDirectory) =>
+        DispatchWorktreeRevision.TryReadHead(workingDirectory);
 
     private static DispatchSpawnReceipt BuildDispatchSpawnReceipt(TaskDispatchRecord dispatch, IWorkerProvider provider)
     {
