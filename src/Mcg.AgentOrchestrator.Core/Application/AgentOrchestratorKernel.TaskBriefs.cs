@@ -249,7 +249,7 @@ public sealed partial class AgentOrchestratorKernel
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity)}",
+            $"Goal: {(goal.RefinedSpec is null ? PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity) : CurrentSpecificationProjection.ProjectObjective(declarationContext.Objective, goal.RefinedSpec))}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach orchestrator state.",
@@ -377,6 +377,7 @@ public sealed partial class AgentOrchestratorKernel
                 if (goal.CriterionEvidenceObligations.Any(item => item.PlannerSources is { Count: > 0 }))
                     specLines.Add("Only execution evidence is deferred. Reviewer must independently pass source, safety and preserved-behavior review, including compound criteria; any source defect remains blocking.");
             }
+            var detailsStart = specLines.Count;
             if (refinedSpec.Decisions.Count > 0)
             {
                 specLines.Add(string.Empty);
@@ -396,10 +397,29 @@ public sealed partial class AgentOrchestratorKernel
                         : "an unknown brief version";
                     specLines.Add(
                         $"- {answer.Id} (answered under {answeredUnder}; " +
-                        $"current brief v{goal.AuthoritativeBrief.Version}): {PromptContextFormatter.TrimPromptBlock(answer.Text)}");
+                        $"current brief v{goal.AuthoritativeBrief.Version}): {answer.Text}");
                 }
             }
             specLines.Add(string.Empty);
+            var sourceBytes = CurrentSpecificationProjection.SourceBytes(refinedSpec);
+            var projectedBytes = CurrentSpecificationProjection.Project(refinedSpec);
+            if (!sourceBytes.AsSpan().SequenceEqual(projectedBytes))
+            {
+                // Inline-only consumers get the same complete view as file-access dispatch.
+                // The derived body references resolve locally, without opening any file.
+                var details = System.Text.Json.Nodes.JsonNode.Parse(projectedBytes)!.AsObject();
+                foreach (var field in new[] { "BehavioralContract", "AcceptanceCriteria", "VerificationClass", "OperatorOwnedAcceptanceCriteria" })
+                    details.Remove(field);
+                specLines.RemoveRange(detailsStart, specLines.Count - detailsStart);
+                specLines.Add("Decisions, questions and clarification answer provenance (local body references):");
+                specLines.Add(details.ToJsonString());
+                specLines.Add(string.Empty);
+            }
+            else if (refinedSpec.OpenQuestions.Count > 0)
+            {
+                specLines.Add("Questions (complete records):");
+                specLines.Add(System.Text.Json.JsonSerializer.Serialize(refinedSpec.OpenQuestions));
+            }
             segments.Add(TaskBriefSegment.Projected("goal/refined-spec.json", specLines));
         }
 
