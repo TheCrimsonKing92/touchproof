@@ -41,7 +41,8 @@ internal sealed record AcceptanceDotnetBuildPhaseHooks(
     Func<string, string> AttemptSlug,
     Func<DotnetBaseBuildCache> ResolveBaseBuildCache,
     Func<DotnetTestBuildPhase, DotnetBuildEnvironment, Task<DotnetBaseBuildCacheIdentity?>> ResolveCacheIdentityAsync,
-    TimeProvider? TimingClock = null);
+    TimeProvider? TimingClock = null,
+    BuildReceiptSite? ReceiptSite = null);
 
 internal sealed class AcceptanceDotnetBuildPhase
 {
@@ -184,6 +185,9 @@ internal sealed class AcceptanceDotnetBuildPhase
             return new DotnetTestBuildPhaseResult(completed, ContributesToCheck: false);
         }
 
+        BuildCpuMeter? meter = null;
+        using var observation = hooks.ReceiptSite?.Observe(phase, out meter);
+        if (meter is not null) hooks = meter.Wrap(hooks);
         phase.BuildEnvironment ??= hooks.ResolveExecutionEnvironment($"{attemptName}-build");
         if (phase.CachePlan is not null &&
             await TryRunCachedAsync(
