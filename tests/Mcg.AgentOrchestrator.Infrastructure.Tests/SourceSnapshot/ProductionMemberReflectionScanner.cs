@@ -42,7 +42,8 @@ internal static class ProductionMemberReflectionScanner
                 if (call.Expression is MemberAccessExpressionSyntax member)
                     (receiver, api) = (member.Expression, member.Name.Identifier.ValueText);
                 else if (call.Expression is MemberBindingExpressionSyntax binding &&
-                         call.Parent is ConditionalAccessExpressionSyntax conditional)
+                         binding.Ancestors().OfType<ConditionalAccessExpressionSyntax>().FirstOrDefault(access =>
+                             access.WhenNotNull.Span.Contains(binding.Span)) is { } conditional)
                     (receiver, api) = (conditional.Expression, binding.Name.Identifier.ValueText);
                 else continue;
                 if (api is not ("GetMethod" or "GetProperty") || call.ArgumentList.Arguments.Count == 0) continue;
@@ -174,7 +175,10 @@ internal static class ProductionMemberReflectionScanner
             global using System.Threading.Tasks;
             global using Xunit;
             """);
-        var compilation = CSharpCompilation.Create("ReflectionGuard.TestSources", trees.Append(globals), references,
+        // Preserve the existing friend-assembly contract so inferred return types from internal
+        // production APIs bind just as they do in the test project (including non-reflection APIs).
+        var compilation = CSharpCompilation.Create(typeof(ProductionMemberReflectionScanner).Assembly.GetName().Name!,
+            trees.Append(globals), references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         // Names come from actual production projects, never a namespace spelling heuristic.
         var assemblies = Directory.EnumerateFiles(Path.Combine(snapshot.Root, "src"), "*.csproj", SearchOption.AllDirectories)

@@ -19,6 +19,8 @@ public sealed class ProductionMemberReflectionScannerTests
     [InlineData("string name = HelperName(); typeof(P.Target).GetMethod(name);", "GetMethod", "name")]
     [InlineData("typeof(P.Target).GetMethod(name: \"Hidden\", bindingAttr: BindingFlags.NonPublic);", "GetMethod", "Hidden")]
     [InlineData("var t = typeof(P.Target); t?.GetProperty(\"Value\");", "GetProperty", "Value")]
+    [InlineData("var t = typeof(P.Target); t?.GetProperty(\"Value\")?.GetValue(null);", "GetProperty", "Value")]
+    [InlineData("typeof(P.Target)?.GetMethod(\"Hidden\")?.Invoke(null, null);", "GetMethod", "Hidden")]
     public void ProductionLookupIsRejected(string body, string api, string member)
     {
         var result = Fixture(body);
@@ -75,6 +77,53 @@ public sealed class ProductionMemberReflectionScannerTests
             """);
         Assert.Empty(result.Lookups);
         Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ConditionalChainKeepsExactExemptionReceiver()
+    {
+        const string receiver = "Type.GetType(\"P.Target\")";
+        var result = Fixture("""
+            Type.GetType("P.Target")
+                ?.GetProperty("Value", BindingFlags.Static | BindingFlags.NonPublic)
+                ?.GetValue(null);
+            """, exemptions: [Allowed() with { Api = "GetProperty", Member = "Value", Receiver = receiver }]);
+
+        var lookup = Assert.Single(result.Lookups);
+        Assert.Equal(receiver, lookup.Receiver);
+        Assert.Equal("unresolved-target", lookup.Classification);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void RepositoryScanBindsJsonBehindInternalProductionApis()
+    {
+        using var fixture = new SourceSnapshotFixture();
+        fixture.Write("src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj", "<Project />");
+        fixture.Write("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project />");
+        fixture.Write(FilePath, """
+            using Mcg.AgentOrchestrator.App.Orchestration;
+            using Mcg.AgentOrchestrator.Core;
+            class Cases
+            {
+                void Check()
+                {
+                    var journal = GoalOperationJournal.ReadStrict("unused", new GoalId("unused"));
+                    var entry = Assert.Single(journal.Entries, entry => entry.AuditProperties != null);
+                    entry.AuditProperties!["partitionRetryReceipt"].GetProperty("flakeConfirmed");
+                    journal.Entries[0].AuditProperties!["partitionRetryReceipt"].GetProperty("flakeConfirmed");
+                    typeof(GoalId).GetProperty("Value");
+                }
+            }
+            """);
+        var snapshot = RepositorySourceSnapshotCache.Get(fixture.Root);
+        var result = ScanRepository(snapshot, snapshot.EnumerateFiles("tests"), []);
+
+        // JSON access must bind and stay outside the guard, while production reflection still fails.
+        var lookup = Assert.Single(result.Lookups);
+        Assert.Equal("production-member", lookup.Classification);
+        Assert.Equal("Mcg.AgentOrchestrator.Core.GoalId", lookup.Target);
+        Assert.Equal(lookup.ToString(), Assert.Single(result.Diagnostics));
     }
 
     [Theory]
