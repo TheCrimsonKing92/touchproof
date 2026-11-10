@@ -133,6 +133,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerProtectedFingerprint",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerResultsRoot",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.Authority",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.MissReasons",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.RemoteLaneIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
