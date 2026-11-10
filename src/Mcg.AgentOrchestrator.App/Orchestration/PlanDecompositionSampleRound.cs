@@ -38,16 +38,19 @@ internal static class PlanDecompositionSampleRound
     internal static async Task<PlanDecompositionSampleResult> RunAsync(string standardInput, string repositoryRoot,
         ModelFunctionCatalog? catalog,
         Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> runProcessAsync,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<string, bool>? launcherAvailable = null)
     {
         try
         {
-            var model = ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.PlanSampler);
-            var result = await AuthorBriefDraftRound.DispatchAsync(
-                standardInput, repositoryRoot, runProcessAsync, model, cancellationToken);
-            return result.ExitCode == 0
-                ? new PlanDecompositionSampleResult.Succeeded(result.StandardOutput)
-                : new PlanDecompositionSampleResult.Failed(result.ExitCode, Tail(result.StandardError),
+            var execution = await ConductorSubscriptionRoundExecutor.RunAsync(catalog,
+                ModelFunctionPurposes.PlanSampler, "plan-sampler", standardInput, repositoryRoot, TimeSpan.FromMinutes(10),
+                model => $"claude {model.ModelArguments} --permission-mode plan -p", runProcessAsync,
+                ConductorSubscriptionRoundExecutor.SamplerFailure,
+                cancellationToken, launcherAvailable, reserveFallback: () => true);
+            var result = execution.Result;
+            return execution.Failure is null
+                ? new PlanDecompositionSampleResult.Succeeded(execution.Answer)
+                : new PlanDecompositionSampleResult.Failed(result.ExitCode, Tail(execution.Failure),
                     result.StandardOutput + Environment.NewLine + "--- stderr ---" + Environment.NewLine + result.StandardError);
         }
         catch (Exception ex)
