@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using System.Text.Json;
 
 // Parallel-safe: injected faults, cancellation, time, and checkouts are scoped to the private fixture.
 public sealed class ImpactReplayInterruptionTests
@@ -171,21 +172,43 @@ public sealed class ImpactReplayInterruptionTests
         Assert.Equal("", fixture.Output.ToString());
     }
 
-    [Fact]
-    public void Cleanup_Fails_PreservesOutcomeAndRejectsCompletion()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Cleanup_Fails_PublishesReportsAndRejectsCompletion(int caseCount)
     {
         using var fixture = new ImpactReplayObservationFixture();
-        fixture.Source.Attempts = [ImpactReplayObservationFixture.Attempt("first")];
-        fixture.Source.OnCleanup = _ => "injected cleanup failure";
+        fixture.Source.Attempts = fixture.Source.Attempts.Take(caseCount).ToArray();
+        fixture.Source.OnCleanup = context => $"injected cleanup failure: path={context.Checkout}";
 
         Assert.Equal(1, fixture.Run());
 
-        Assert.Equal(1L, fixture.Sql("SELECT count(*) FROM cases"));
-        Assert.Equal(1, fixture.Status().Progress.Completed);
-        Assert.Equal("failed", fixture.Status().Completion);
-        Assert.Equal("failed", Assert.Single(fixture.Status().Checkouts).CleanupStatus);
-        Assert.Equal("injected cleanup failure", Assert.Single(fixture.Status().Checkouts).Error);
-        Assert.Equal("", fixture.Output.ToString());
+        Assert.Equal((long)caseCount, fixture.Sql("SELECT count(*) FROM cases"));
+        Assert.Equal(caseCount, fixture.Source.Cleaned);
+        var status = fixture.Status();
+        Assert.Equal(caseCount, status.Progress.Completed);
+        Assert.Equal(caseCount, status.Progress.Replayable);
+        Assert.Equal("failed", status.Completion);
+        Assert.Equal("Failed", status.StoredState);
+        Assert.Equal(caseCount, status.Checkouts.Count);
+        var cleanupErrors = status.Checkouts.Select(c => $"injected cleanup failure: path={c.Path}").ToArray();
+        using var report = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Destination, "impact-replay.json")));
+        Assert.Equal(caseCount, report.RootElement.GetProperty("attempts").GetArrayLength());
+        Assert.Equal(cleanupErrors, report.RootElement.GetProperty("cleanupErrors").EnumerateArray()
+            .Select(e => e.GetString()).ToArray());
+        var markdown = File.ReadAllText(Path.Combine(fixture.Destination, "impact-replay.md"));
+        Assert.All(status.Checkouts, checkout =>
+        {
+            var expected = $"injected cleanup failure: path={checkout.Path}";
+            Assert.Equal("failed", checkout.CleanupStatus);
+            Assert.Equal(expected, checkout.Error);
+            Assert.Contains(expected, markdown);
+            Assert.Contains(expected, fixture.Error.ToString());
+            Assert.Contains(expected, Assert.Single(status.Errors));
+        });
+        Assert.DoesNotContain("durability unconfirmed", fixture.Error.ToString());
+        Assert.Equal($"Impact replay: {caseCount} attempts; reports: {fixture.Destination}{Environment.NewLine}",
+            fixture.Output.ToString());
     }
 
     [Fact]

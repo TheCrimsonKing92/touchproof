@@ -113,11 +113,6 @@ internal sealed class ImpactReplayCheckpointStore : IDisposable
         if (progress.Completed != outcomes.Count || progress.Replayable != report.Attempts.Count ||
             progress.Skipped != report.SkippedInputs.Count || progress.Unreplayable != report.UnreplayableAttempts.Count)
             throw new InvalidDataException("Impact replay checkpoint counts do not reconcile.");
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT count(*) FROM checkouts WHERE run_id=$run AND cleanup_status <> 'succeeded'";
-        command.Parameters.AddWithValue("$run", _runId);
-        if ((long)command.ExecuteScalar()! != 0 || report.CleanupErrors.Count != 0)
-            throw new InvalidDataException("Impact replay owned checkout cleanup is incomplete.");
     }
 
     internal static IReadOnlyList<ImpactReplayCheckpointStatus> ReadStatus(string path)

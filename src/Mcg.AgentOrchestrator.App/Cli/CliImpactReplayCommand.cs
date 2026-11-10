@@ -104,9 +104,15 @@ internal static class CliImpactReplayCommand
             sink.FinalizeReport(report);
             ImpactReplayReportWriter.Write(destination, report);
             cancellationToken.ThrowIfCancellationRequested();
-            sink.Complete();
+            if (report.CleanupErrors.Count > 0)
+            {
+                foreach (var cleanupError in report.CleanupErrors) error.WriteLine(cleanupError);
+                error.Flush();
+                sink.Fail(new IOException(string.Join(Environment.NewLine, report.CleanupErrors)), false);
+            }
+            else sink.Complete();
             output.WriteLine($"Impact replay: {report.Attempts.Count} attempts; reports: {Path.GetFullPath(destination)}");
-            return 0;
+            return report.CleanupErrors.Count == 0 ? 0 : 1;
         }
         catch (Exception ex)
         {
