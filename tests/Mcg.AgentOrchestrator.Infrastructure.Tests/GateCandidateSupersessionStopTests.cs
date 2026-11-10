@@ -33,6 +33,38 @@ public sealed class GateCandidateSupersessionStopTests
         Assert.Empty(f.Solo.GetAllCapacityReservingAttempts());
     }
 
+    [Theory]
+    [InlineData("result")]
+    [InlineData("exit")]
+    public void SoloAttempt_PublishedArtifactAndMovedHead_PreservesPendingCompletion(string artifact)
+    {
+        using var f = new Fixture();
+        var goal = f.Goal();
+        Assert.True(f.Kernel.BeginGoalAcceptanceVerification(goal.Id, "gate"));
+        var attempt = f.Single(goal);
+        var artifactPath = artifact == "result" ? attempt.ResultPath : attempt.ExitCodePath;
+        var artifactContent = artifact == "result" ? "{}" : "0";
+        File.WriteAllText(artifactPath, artifactContent);
+        Assert.Equal(attempt.AttemptId, Assert.Single(f.Solo.GetAllCapacityReservingAttempts()).AttemptId);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, Fixture.ReadSolo(attempt).Outcome);
+        var before = File.ReadAllBytes(attempt.MetadataPath);
+        var holderPhase = f.Lease.Read(AcceptanceHolderBinding.For(attempt)).Phase;
+        f.Heads[goal.Id] = New;
+
+        var result = f.Tick();
+
+        Assert.Equal(before, File.ReadAllBytes(attempt.MetadataPath));
+        Assert.Equal(artifactContent, File.ReadAllText(artifactPath));
+        Assert.Equal(holderPhase, f.Lease.Read(AcceptanceHolderBinding.For(attempt)).Phase);
+        Assert.Equal(GoalStatus.Verifying, goal.Status);
+        Assert.Empty(result.Progress);
+        Assert.Empty(result.ChangedGoalIds);
+        Assert.Empty(f.Reads);
+        Assert.Empty(f.CancelledJobs);
+        Assert.Empty(f.Events());
+        Assert.Single(f.Solo.GetAllCapacityReservingAttempts());
+    }
+
     [Fact]
     public void TrainAttempt_ThreeMembersOneMoved_StopsGroupedAttemptAndNamesMemberAndRevisions()
     {

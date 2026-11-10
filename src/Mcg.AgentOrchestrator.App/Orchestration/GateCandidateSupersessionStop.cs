@@ -17,8 +17,10 @@ internal sealed class GateCandidateSupersessionStop(
     {
         List<string> progress = [];
         HashSet<GoalId> changed = [];
+        // Published artifacts belong to completion reconciliation, even while the holder retains capacity.
         var attempts = solo.GetAllCapacityReservingAttempts().Where(a => a.Kind == "gate" &&
-                a.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && a.ReconciledAt is null)
+                a.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && a.ReconciledAt is null &&
+                !File.Exists(a.ResultPath) && !File.Exists(a.ExitCodePath))
             .Select(a => (a.AttemptId, Solo: (ConductorParallelAcceptanceAttempt?)a, Grouped: (ConductorGroupedGateAttempt?)null))
             .Concat(grouped.ReadAll().Where(a => a.Kind is "cohort" or "train" &&
                     a.Outcome == "Running" && a.ReconciledAt is null && grouped.ReservesCapacity(a))
