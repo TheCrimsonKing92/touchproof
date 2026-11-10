@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -51,7 +52,13 @@ internal sealed class MainBaselineDiscoveryCache
     }
 
     internal GoalAcceptanceVerifier.CommandResult? TryRead(MainBaselineDiscoveryCacheKey key)
+        => TryRead(key, out _);
+
+    internal GoalAcceptanceVerifier.CommandResult? TryRead(MainBaselineDiscoveryCacheKey? key,
+        out IReadOnlyDictionary<string, string>? assemblyIdentities)
     {
+        assemblyIdentities = null;
+        if (key is null) return null;
         try
         {
             var entry = JsonSerializer.Deserialize<Entry>(File.ReadAllText(EntryPath(key)));
@@ -60,6 +67,9 @@ internal sealed class MainBaselineDiscoveryCache
                 payload.CreatedAt < _clock.GetUtcNow() - _maxAge ||
                 !string.Equals(entry.ContentHash, Hash(JsonSerializer.Serialize(payload)), StringComparison.Ordinal))
                 return null;
+            // Identity belongs to the same validated payload as the discovery rows. Old
+            // entries remain readable, but cannot invent provenance for relocated outputs.
+            assemblyIdentities = payload.AssemblyIdentities;
             return new(payload.ExitCode, payload.Output, TimedOut: false, Stderr: payload.Stderr);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
@@ -68,7 +78,8 @@ internal sealed class MainBaselineDiscoveryCache
         }
     }
 
-    internal void TryWrite(MainBaselineDiscoveryCacheKey key, GoalAcceptanceVerifier.CommandResult result)
+    internal void TryWrite(MainBaselineDiscoveryCacheKey key, GoalAcceptanceVerifier.CommandResult result,
+        IReadOnlyDictionary<string, string>? assemblyIdentities = null)
     {
         if (result.ExitCode != 0 || result.TimedOut) return;
         string? temporaryPath = null;
@@ -78,7 +89,7 @@ internal sealed class MainBaselineDiscoveryCache
             Directory.CreateDirectory(_rootPath);
             temporaryPath = Path.Combine(_rootPath, $".{Guid.NewGuid():N}.tmp");
             var payload = new Payload(SchemaVersion, key, result.ExitCode, result.Output,
-                result.Stderr, false, _clock.GetUtcNow());
+                result.Stderr, false, _clock.GetUtcNow(), assemblyIdentities);
             File.WriteAllText(temporaryPath, JsonSerializer.Serialize(
                 new Entry(payload, Hash(JsonSerializer.Serialize(payload)))));
             File.SetLastWriteTimeUtc(temporaryPath, payload.CreatedAt.UtcDateTime);
@@ -119,7 +130,9 @@ internal sealed class MainBaselineDiscoveryCache
     internal static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private sealed record Payload(int Schema, MainBaselineDiscoveryCacheKey Key, int ExitCode,
-        string Output, string? Stderr, bool TimedOut, DateTimeOffset CreatedAt);
+        string Output, string? Stderr, bool TimedOut, DateTimeOffset CreatedAt,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        IReadOnlyDictionary<string, string>? AssemblyIdentities = null);
     private sealed record Entry(Payload Payload, string ContentHash);
 }
 
@@ -132,10 +145,11 @@ internal sealed record MainBaselineDiscoveryCacheKey(string TreeDigest, string M
 
 internal sealed record MainBaselineDiscoveryCacheWrite(MainBaselineDiscoveryCache Cache, MainBaselineDiscoveryCacheKey Key)
 {
-    internal void Publish(GoalAcceptanceVerifier.CommandResult result)
+    internal void Publish(GoalAcceptanceVerifier.CommandResult result, IReadOnlyList<string> discoveryArguments)
     {
         // Do not publish under the old identity if main changed during build/discovery.
         if (WorktreeTreeDigest.TryCompute(Key.MainWorktreePath, out var digest, out _) && digest == Key.TreeDigest)
-            Cache.TryWrite(Key, result);
+            Cache.TryWrite(Key, result,
+                XunitStringTheoryIdentity.CaptureAssemblyIdentities(discoveryArguments, Key.MainWorktreePath));
     }
 }
