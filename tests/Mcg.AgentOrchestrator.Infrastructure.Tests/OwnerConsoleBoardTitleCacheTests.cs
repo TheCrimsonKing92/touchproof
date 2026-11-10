@@ -32,6 +32,42 @@ public sealed class OwnerConsoleBoardTitleCacheTests
     }
 
     [Fact]
+    public void Retain_EvictsOldestMissingTitleAfterUnchangedRowIsReobserved()
+    {
+        var calls = 0;
+        var cache = new OwnerConsoleGoalTitleCache(objective => { calls++; return OwnerGoalTitle.Full(objective); });
+        GoalSummary first = new("first", "Completed", "First", "1");
+        GoalSummary second = new("second", "Completed", "Second", "1");
+        cache.Merge([first]);
+        cache.Merge([second]);
+        cache.Merge([first]);
+        cache.Retain([], recentMissing: 1);
+        Assert.Equal(2, calls);
+        Assert.Equal("First", cache.Title("first"));
+        Assert.Equal(string.Empty, cache.Title("second"));
+        Assert.Single(cache.Titles);
+        cache.Merge([]);
+        cache.Retain([], recentMissing: 1);
+        Assert.Equal("First", cache.Title("first"));
+        cache.Retain([], recentMissing: 0);
+        Assert.Empty(cache.Titles);
+    }
+
+    [Fact]
+    public void Retain_KeepsEveryCurrentRowAlongsideBoundedMissingHistory()
+    {
+        var cache = new OwnerConsoleGoalTitleCache();
+        GoalSummary[] rows = [new("first", "Completed", "First", "1"),
+            new("second", "Completed", "Second", "1"), new("third", "Active", "Third", "1")];
+        cache.Merge(rows);
+        cache.Retain(rows.Select(row => row.Id), recentMissing: 1);
+        Assert.Equal(3, cache.Titles.Count);
+        cache.Retain(["third"], recentMissing: 1);
+        Assert.Equal(2, cache.Titles.Count);
+        Assert.Equal("Third", cache.Title("third"));
+    }
+
+    [Fact]
     public async Task Board_UsesBoundedQueryAndKeepsActivityTitleAfterRowDisappears()
     {
         var harness = new OwnerConsoleHarness();

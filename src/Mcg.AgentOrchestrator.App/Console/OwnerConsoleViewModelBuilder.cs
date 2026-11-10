@@ -34,8 +34,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     private string? _epicVersion;
     private string[] _epicIds = [];
     private IReadOnlyDictionary<string, string>? _epicTitles;
-    internal (int Goals, int Roles, int Numbers, int Holds) Retained =>
-        (_goals.Count, _roles.Count, _decisionProjection.RetainedNumbers, _previousHolds.Count);
+    internal (int Goals, int Roles, int Numbers, int Holds, int Titles) Retained =>
+        (_goals.Count, _roles.Count, _decisionProjection.RetainedNumbers, _previousHolds.Count, _titles.Titles.Count);
 
     internal Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
         CancellationToken cancellationToken, bool force = false) =>
@@ -70,7 +70,11 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         }
         var metadata = reuse ? _metadata! : await state.ListGoalBoardRowsAsync(
             new(RecentTerminalTitleRows, TitlePrefixChars, BacklogIntakePlanner.TargetScopeHeadingLine), cancellationToken);
-        if (!reuse) { _titles.Merge(metadata, force: boardMarker is not null); _titles.Retain(metadata.Select(row => row.Id)); }
+        if (!reuse)
+        {
+            _titles.Merge(metadata, force: boardMarker is not null);
+            _titles.Retain(metadata.Select(row => row.Id), MaxActivityItems);
+        }
         var now = clock.GetUtcNow();
         OwnerConsoleGateProgress? gate = null;
         try { gate = gateProgress?.Invoke(_titles.Titles); }

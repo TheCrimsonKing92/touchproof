@@ -12,7 +12,7 @@ public sealed class OwnerConsoleCacheRetentionTests
         for (var round = 0; round < 130; round++)
         {
             var id = $"goal-{round:0000}";
-            f.Harness.AddGoal(id, id, AgentRole.Developer);
+            f.Harness.AddGoal(id, "Title " + round, AgentRole.Developer);
             f.State.Visible.Clear();
             f.State.Visible.Add(id);
             f.State.Versions[id] = "unchanged-timestamp";
@@ -28,6 +28,7 @@ public sealed class OwnerConsoleCacheRetentionTests
             Assert.Equal(1, f.Builder.Retained.Holds);
             Assert.InRange(f.Builder.Retained.Goals, 1, 101);
             Assert.Equal(f.Builder.Retained.Goals, f.Builder.Retained.Roles);
+            Assert.Equal(Math.Min(round + 1, 101), f.Builder.Retained.Titles);
         }
         f.State.Visible.Clear();
         f.Source.Items.Clear();
@@ -37,6 +38,11 @@ public sealed class OwnerConsoleCacheRetentionTests
         Assert.Equal(0, f.Builder.Retained.Numbers);
         Assert.Equal(0, f.Builder.Retained.Holds);
         Assert.InRange(f.Builder.Retained.Goals, 0, 100);
+        Assert.Equal(100, f.Builder.Retained.Titles);
+        var now = f.Clock.GetUtcNow();
+        var activity = f.Builder.WithActivity(await f.Builder.BuildBoardAsync(), new(now, now,
+            [new(now, "goal-lifecycle", "goal-0129", "TaskDispatched role=Developer")], 0));
+        Assert.Equal("Title 129", Assert.Single(activity.Activity).GoalTitle);
     }
 
     [Fact]
