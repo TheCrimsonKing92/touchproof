@@ -14,6 +14,11 @@ public sealed class MergeTrainEvidenceRetentionTests
     {
         using var fixture = new RetentionReclaimFixture();
         var receipt = Save(fixture);
+        var outcome = new MergeTrainMemberRecheck.Outcome(receipt.Identity.Members.Select((member, index) =>
+            new MergeTrainMemberRecheck.MemberResult(member.GoalId.Value, member.CandidateRevision,
+                member.BranchRevision, member.BriefVersion, index == 0 ? "fail" : "pass", 10)).ToArray(), null);
+        var cache = new MergeTrainMemberRecheckOutcomeCache(StorePath(fixture));
+        Assert.True(cache.TrySave(receipt, outcome));
         var directory = TrainDirectory(receipt);
         var nested = Write(Path.Combine(directory, "nested", "old.trx"), "nested evidence");
         var notes = Write(Path.Combine(directory, "notes.txt"), "notes");
@@ -30,6 +35,9 @@ public sealed class MergeTrainEvidenceRetentionTests
         Assert.True(File.Exists(trxLookalike));
         Assert.DoesNotContain(decisions, decision => decision.Path == nested || decision.Path == notes || decision.Path == trxLookalike);
         Assert.NotNull(MergeTrainAcceptanceStore.OpenReadOnly(StorePath(fixture)).TryReadReceipt(receipt.Identity.Value));
+        var replay = new MergeTrainMemberRecheckOutcomeCache(StorePath(fixture)).Read(receipt)!;
+        Assert.Equal(outcome.Members, replay.Members);
+        Assert.Equal(outcome.Implicated(receipt), replay.Implicated(receipt));
     }
 
     [Theory]

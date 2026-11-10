@@ -10,7 +10,7 @@ internal static class MergeTrainFocusedRecheckRunner
         ConductorCohortFocusedSelection selection, DotnetBuildEnvironmentLease lease, CancellationToken cancellationToken);
 
     internal sealed record RunResult(string AttemptId, string MainRevision, ConductorCohortFocusedPassResult Verification,
-        int NotRunSelectionCount = 0);
+        int NotRunSelectionCount = 0, long? CpuMilliseconds = null);
 
     internal static MergeTrainReproductionAttribution.RunResult? ReadExecution(IReadOnlyList<string> paths)
     {

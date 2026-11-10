@@ -33,13 +33,13 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
             using var connection = Open(path, SqliteOpenMode.ReadWrite);
             RunNonQuery(connection, scenario == "missing-record"
                 ? "DELETE FROM store_schema_versions WHERE store_name = 'merge-train-acceptance'"
-                : $"UPDATE store_schema_versions SET version = {(scenario == "older" ? 0 : 2)} WHERE store_name = 'merge-train-acceptance'");
+                : $"UPDATE store_schema_versions SET version = {(scenario == "older" ? 1 : 3)} WHERE store_name = 'merge-train-acceptance'");
         }
         var bytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
 
         var error = Assert.Throws<InvalidOperationException>(() => MergeTrainAcceptanceStore.OpenReadOnly(path));
 
-        Assert.Equal($"Merge train acceptance store '{path}' schema is {state} (expected version 1); run setup.", error.Message);
+        Assert.Equal($"Merge train acceptance store '{path}' schema is {state} (expected version 2); run setup.", error.Message);
         if (scenario == "missing-file")
         {
             Assert.False(File.Exists(path));
@@ -50,7 +50,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
     }
 
     [Fact]
-    public void Setup_FreshDatabase_CreatesOwnedTablesAndVersionOne()
+    public void Setup_FreshDatabase_CreatesOwnedTablesAndVersionTwo()
     {
         Assert.False(File.Exists(Db()));
 
@@ -58,9 +58,9 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
 
         using (var connection = Open(Db()))
         {
-            Assert.Equal(OriginalTables.Concat(["merge_train_bisection_outcomes", "merge_train_receipt_members", "store_schema_versions"])
+            Assert.Equal(OriginalTables.Concat(["merge_train_bisection_outcomes", "merge_train_member_rechecks", "merge_train_receipt_members", "store_schema_versions"])
                 .Order(StringComparer.Ordinal), Tables(connection));
-            Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+            Assert.Equal(2, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
         }
         Assert.Empty(MergeTrainAcceptanceStore.OpenReadOnly(Db()).ReadPassedReceiptsForGoal(Binding('a').GoalId));
         AssertSecondSetupUnchanged(Db());
@@ -86,6 +86,40 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         AssertSecondSetupUnchanged(Db());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Setup_VersionOne_AddsRecheckStorageAndPreservesExistingData(bool hasRechecks)
+    {
+        SeedReceipts(Db());
+        string rows;
+        using (var connection = Open(Db(), SqliteOpenMode.ReadWrite))
+        {
+            rows = OriginalRows(connection);
+            RunNonQuery(connection, "UPDATE store_schema_versions SET version = 1, applied_at = 'legacy'");
+            RunNonQuery(connection, hasRechecks
+                ? "INSERT INTO merge_train_member_rechecks VALUES ('receipt', 'train', 'legacy-outcome')"
+                : "DROP TABLE merge_train_member_rechecks");
+        }
+        var bytes = File.ReadAllBytes(Db());
+        var error = Assert.Throws<InvalidOperationException>(() => MergeTrainAcceptanceStore.OpenReadOnly(Db()));
+        Assert.Contains("schema is Older", error.Message);
+        Assert.Equal(bytes, File.ReadAllBytes(Db()));
+
+        MergeTrainAcceptanceStore.Setup(Db());
+
+        using (var connection = Open(Db()))
+        {
+            Assert.Equal(2, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+            Assert.Equal(rows, OriginalRows(connection));
+            Assert.Contains("merge_train_member_rechecks", Tables(connection));
+            Assert.Equal(hasRechecks ? "[[\"receipt\",\"train\",\"legacy-outcome\"]]" : "[]",
+                RawRows(connection, "SELECT * FROM merge_train_member_rechecks"));
+        }
+        Assert.Equal(2, MergeTrainAcceptanceStore.OpenReadOnly(Db()).ReadReceiptsSince(DateTimeOffset.MinValue).Count);
+        AssertSecondSetupUnchanged(Db());
+    }
+
     [Fact]
     public void Setup_OldShapeDatabase_BackfillsMembersAndPreservesRows()
     {
@@ -103,7 +137,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         {
             Assert.Equal(rows, OriginalRows(connection));
             Assert.Contains("merge_train_bisection_outcomes", Tables(connection));
-            Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+            Assert.Equal(2, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
             AssertMembers(connection, receipts);
         }
         var bytes = File.ReadAllBytes(Db());
@@ -131,7 +165,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
                 DROP TABLE merge_train_receipt_members;
                 """);
             Assert.DoesNotContain("merge_train_receipt_members", Tables(connection));
-            Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+            Assert.Equal(2, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
             versions = RawRows(connection, "SELECT * FROM store_schema_versions ORDER BY store_name");
         }
 
@@ -139,7 +173,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
 
         using var current = Open(Db());
         AssertMembers(current, receipts);
-        Assert.Equal(1, StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+        Assert.Equal(2, StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
         Assert.Equal(versions, RawRows(current, "SELECT * FROM store_schema_versions ORDER BY store_name"));
     }
 
@@ -166,6 +200,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         using var current = Open(Db());
         Assert.Equal(schema, Schema(current));
         Assert.DoesNotContain("merge_train_bisection_outcomes", Tables(current));
+        Assert.DoesNotContain("merge_train_member_rechecks", Tables(current));
         Assert.DoesNotContain("merge_train_receipt_members", Tables(current));
         Assert.Null(StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
         Assert.Equal(rows, OriginalRows(current));
@@ -173,7 +208,8 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
 
     [Theory]
     [InlineData(0)]
-    [InlineData(2)]
+    [InlineData(1)]
+    [InlineData(3)]
     public void Setup_RecordedVersion_UpgradesOlderAndLeavesNewerUntouched(int version)
     {
         MergeTrainAcceptanceStore.Setup(Db());
@@ -187,8 +223,8 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
         MergeTrainAcceptanceStore.Setup(Db());
 
         using var current = Open(Db());
-        Assert.Equal(version == 0 ? 1 : 2, StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
-        if (version == 2)
+        Assert.Equal(version < 2 ? 2 : version, StoreSchemaVersions.Read(current, StoreSchemaRegistry.MergeTrainAcceptance.StoreName));
+        if (version > 2)
         {
             Assert.DoesNotContain("merge_train_receipt_members", Tables(current));
             Assert.Equal(bytes, File.ReadAllBytes(Db()));
@@ -225,6 +261,7 @@ public sealed class MergeTrainAcceptanceStoreTestsVersionedSetup : IDisposable
             INSERT INTO merge_train_implicated_candidates VALUES ('goal', 'candidate', 'train', 'main', 'original');
             INSERT INTO merge_train_pair_suppressions VALUES ('pair', 'train', 'original');
             DROP TABLE merge_train_bisection_outcomes;
+            DROP TABLE merge_train_member_rechecks;
             DROP TABLE merge_train_receipt_members;
             DROP TABLE store_schema_versions;
             """);
