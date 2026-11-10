@@ -189,9 +189,10 @@ public sealed class WorkerSpecificationComparisonTests(Xunit.ITestOutputHelper o
         var objective = redundant ? $"Unique brief requirement\r\n## Acceptance criteria\r\n1. {criterion}\r\n## Operations\r\nPreserve unique operations.\r\n" : "Compact unique objective";
         var task = new TaskSpec(new TaskId("11111111111111111111111111111111"), "Implement scoped fixture", role);
         var goal = new Goal(new GoalId("22222222222222222222222222222222"), objective, [task]);
+        // Record revisions so the matched inputs retain actual supersession history.
         if (redundant)
-            goal.SetRefinedSpec(spec with { AcceptanceCriteria = ["historical criterion"], BehavioralContract = "superseded contract" }, DateTimeOffset.UnixEpoch.AddDays(-1));
-        goal.SetRefinedSpec(spec, DateTimeOffset.UnixEpoch);
+            goal.RecordRefinedSpec(spec with { AcceptanceCriteria = ["historical criterion"], BehavioralContract = "superseded contract" }, DateTimeOffset.UnixEpoch.AddDays(-1));
+        goal.RecordRefinedSpec(spec, DateTimeOffset.UnixEpoch);
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([goal.ToSnapshot()], []));
         goal = kernel.GetGoal(goal.Id);
         task = goal.Tasks.Single();

@@ -50,8 +50,9 @@ public sealed class WorkerSpecificationDeliveryTests
     public void SupersededVersionsRemainActualRecordsAndCurrentCriteriaStayExact()
     {
         using var fixture = WorkerSpecificationComparisonTests.CreateFixture(AgentRole.Developer, true);
+        Assert.Equal(2, fixture.Goal.RefinedSpecVersions.Count);
         var old = fixture.Goal.RefinedSpec!;
-        fixture.Kernel.SetGoalRefinedSpec(fixture.Goal.Id, old with { AcceptanceCriteria = ["revised exact criterion"] });
+        fixture.Kernel.RecordGoalRefinement(fixture.Goal.Id, old with { AcceptanceCriteria = ["revised exact criterion"] });
         var source = fixture.Kernel.BuildTaskBriefSource(fixture.Goal.Id, fixture.Task.Id);
         var package = WorkerProfileDispatcher.BuildContextPackage(fixture.Goal, fixture.Task, fixture.Root, fixture.Root,
             source.ToTaskBrief(""), typedSource: source);
@@ -64,7 +65,9 @@ public sealed class WorkerSpecificationDeliveryTests
         Assert.Equal(2, versions[0]!["SupersededByVersion"]!.GetValue<int>());
         Assert.Equal(3, versions[1]!["SupersededByVersion"]!.GetValue<int>());
         Assert.Null(versions[2]!["SupersededByVersion"]);
+        Assert.Equal("historical criterion", versions[0]!["Spec"]!["AcceptanceCriteria"]![0]!.GetValue<string>());
         Assert.Equal(old.AcceptanceCriteria[0], versions[1]!["Spec"]!["AcceptanceCriteria"]![0]!.GetValue<string>());
+        Assert.Equal("revised exact criterion", versions[2]!["Spec"]!["AcceptanceCriteria"]![0]!.GetValue<string>());
     }
 
     [Xunit.Fact]
