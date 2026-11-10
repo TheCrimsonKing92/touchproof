@@ -26,7 +26,7 @@ internal sealed partial class OperatorIntentCoordinator
         if (payload.ActorKind != intent.ActorKind)
             throw new InvalidOperationException("Answer actor kind does not match intent actor kind.");
         if (payload.TargetKind == OperatorAnswerTargetKind.HumanInput && kernel.HumanInputRequests.Any(request =>
-            request.Id.Value == payload.TargetId && request.GoalId == goal.Id && ConductorConflictIntegration.IsScopeQuestion(request.Question)))
+            request.Id.Value == payload.TargetId && request.GoalId == goal.Id && ConductorConflictIntegration.IsScopeRequirement(request)))
             throw new InvalidOperationException("Use the typed integration-scope command to resolve this requirement.");
         if (payload.AmendmentDisposition is not null &&
             (payload.AmendmentDisposition != PlannerBriefAmendmentDisposition.Decline ||

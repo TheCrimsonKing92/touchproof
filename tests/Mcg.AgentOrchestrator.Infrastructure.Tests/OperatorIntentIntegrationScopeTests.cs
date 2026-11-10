@@ -6,6 +6,60 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: fixture-owned database, journal and repository; no external processes except Git.
 public sealed class OperatorIntentIntegrationScopeTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task OrdinaryScopePrefixQuestion_AppliesAnswer(bool openRound, bool taskScoped)
+    {
+        using var fixture = new IntegrationScopeFixture();
+        var goal = openRound ? fixture.Goal : fixture.Kernel.CreateGoal("Ordinary question",
+            [new(TaskId.New(), "Implement", AgentRole.Developer)]);
+        if (!openRound) fixture.Kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = fixture.Kernel.RequestHumanInput(goal.Id, taskScoped ? goal.Tasks.First().Id : null,
+            "Integration scope confirmation required. May I edit src/Other.cs?");
+        var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
+            request.Id.Value, goal.Id.Value, "Explain the adjacent correction first", OperatorActorKind.Human);
+        var answer = await fixture.Store.EnqueueAsync(fixture.Intent() with
+        {
+            Verb = OperatorIntentVerbs.Answer, GoalId = goal.Id.Value,
+            PayloadJson = JsonSerializer.Serialize(payload, OperatorIntentJson.Options)
+        });
+        fixture.Intents.ExecutePending(fixture.Kernel, goal);
+        fixture.Intents.CompletePersisted([goal.Id]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(answer.Id))!.Status);
+        Assert.True(request.IsCompleted);
+        Assert.Equal(payload.Text, request.Answer);
+    }
+
+    [Fact]
+    public async Task TypedScopeRequirement_RejectsProse_ResolvesOnlyRecordedIdentity()
+    {
+        using var fixture = new IntegrationScopeFixture();
+        fixture.Owner.RequireScopeAfterAnswer(fixture.Goal, fixture.Base.Developer.Id.Value);
+        Assert.False(fixture.Owner.IntegrateMainBeforeDeveloperDispatch(fixture.Goal).CanDispatch);
+        var scope = Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted));
+        Assert.Equal("integration-scope:" + fixture.RoundId, scope.QuestionFingerprint);
+        var ordinary = fixture.Kernel.RequestHumanInput(fixture.Goal.Id, null, scope.Question);
+        Assert.NotEqual(scope.QuestionFingerprint, ordinary.QuestionFingerprint);
+        var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
+            scope.Id.Value, fixture.Goal.Id.Value, "Approved", OperatorActorKind.Human);
+        var answer = fixture.Intent() with { Verb = OperatorIntentVerbs.Answer,
+            PayloadJson = JsonSerializer.Serialize(payload, OperatorIntentJson.Options) };
+        var rejected = await fixture.Apply(answer);
+        Assert.Equal(OperatorIntentStatus.Rejected, rejected.Status);
+        Assert.Contains("typed integration-scope command", rejected.Outcome);
+        Assert.False(scope.IsCompleted);
+        Assert.False(ordinary.IsCompleted);
+
+        Assert.Equal(OperatorIntentStatus.Applied,
+            (await fixture.Apply(fixture.Intent(IntegrationScopeAction.OriginalOnly))).Status);
+        Assert.True(scope.IsCompleted);
+        Assert.False(ordinary.IsCompleted);
+        Assert.Equal(ordinary.Id, Assert.Single(fixture.Kernel.HumanInputRequests.Where(item => !item.IsCompleted)).Id);
+    }
+
     [Fact]
     public void RevocationAfterResolvedRequirement_CreatesOneNewPendingRequirement()
     {

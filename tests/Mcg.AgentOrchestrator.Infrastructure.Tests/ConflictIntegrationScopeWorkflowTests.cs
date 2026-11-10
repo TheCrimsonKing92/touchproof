@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -11,11 +13,48 @@ public sealed class ConflictIntegrationScopeWorkflowTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task OperatorIntentThroughDriverValidation_RetainsOnlyAuthorizedCandidate(bool approved)
+    public async Task CliApprovalThroughDriverValidation_RetainsOnlyAuthorizedCandidate(bool approved)
     {
         using var fixture = new IntegrationScopeFixture();
-        var intent = fixture.Intent(paths: [approved ? "src/Other.cs" : "src/Unused.cs"]);
-        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Apply(intent)).Status);
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Base.GitFixture.Repository);
+        StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = fixture.Goal;
+        var reasonPath = Path.GetTempFileName();
+        var approvedPath = approved ? "src/Other.cs" : "src/Unused.cs";
+        try
+        {
+            File.WriteAllText(reasonPath, "Preserve the approved adjacent correction");
+            string[] args = ["integration-scope", fixture.Goal.Id.Value, fixture.RoundId,
+                fixture.Base.GitFixture.OriginalHead, fixture.Base.GitFixture.MainHead, "approve",
+                "--text-file", reasonPath, "--idempotency-key", "cli-scope", "--path", approvedPath];
+            AsyncLocalConsoleRouter.Capture(() => Assert.False(CliPersistentStateRunner.ExecuteCommand(
+                args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal)));
+        }
+        finally { File.Delete(reasonPath); }
+        var intent = Assert.Single(await fixture.Store.ListForGoalAsync(fixture.Goal.Id.Value));
+        Assert.Equal(OperatorIntentVerbs.IntegrationScope, intent.Verb);
+        Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
+        fixture.Intents.ExecutePending(fixture.Kernel, fixture.Goal);
+        fixture.Intents.CompletePersisted([fixture.Goal.Id]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        using (var journal = JsonDocument.Parse(fixture.Base.Entry.Detail!))
+        {
+            Assert.Equal(new[] { "src/Widget.cs" }, journal.RootElement.GetProperty("ConflictPaths")
+                .EnumerateArray().Select(item => item.GetString()));
+            var decision = Assert.Single(journal.RootElement.GetProperty("ScopeDecisions").EnumerateArray());
+            Assert.Equal(intent.Id, decision.GetProperty("IntentId").GetString());
+            var request = decision.GetProperty("Request");
+            Assert.Equal(fixture.Goal.Id.Value, request.GetProperty("GoalId").GetString());
+            Assert.Equal(fixture.RoundId, request.GetProperty("RoundId").GetString());
+            Assert.Equal(fixture.Base.GitFixture.OriginalHead, request.GetProperty("OriginalHead").GetString());
+            Assert.Equal(fixture.Base.GitFixture.MainHead, request.GetProperty("MainSha").GetString());
+            Assert.Equal(new[] { approvedPath }, request.GetProperty("Paths").EnumerateArray().Select(item => item.GetString()));
+        }
         var developerStarts = 0;
         var testerStarts = 0;
         var acceptanceRuns = 0;

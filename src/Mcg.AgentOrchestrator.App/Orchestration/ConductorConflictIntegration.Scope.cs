@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorConflictIntegration
 {
+    private const string ScopeRequirementPrefix = "integration-scope:";
+
     private sealed record ScopeDecision(string IntentId, string IdempotencyKey, string PayloadJson, IntegrationScopeAuthorization Request,
         string Actor, string Channel, string AuthenticationAssurance, DateTimeOffset RequestedAt, DateTimeOffset AppliedAt);
     private sealed record AdmissionScope(string GoalId, string? RoundId, string OriginalHead, string MainSha,
@@ -108,8 +110,8 @@ internal sealed partial class ConductorConflictIntegration
         var question = ScopeQuestion(goal, round);
         kernel.RequestHumanInputDeduplicated(goal.Id, null, question, kind: HumanWaitKind.Other,
             isAutoDefaultable: false, isDismissible: false,
-            questionFingerprint: "integration-scope:" + round.RoundId,
-            blockerFingerprint: "integration-scope:" + round.RoundId + ":" +
+            questionFingerprint: ScopeRequirementPrefix + round.RoundId,
+            blockerFingerprint: ScopeRequirementPrefix + round.RoundId + ":" +
                 (round.ScopeDecisions?.LastOrDefault()?.IntentId ?? "initial"), recordDuplicateSuppression: false);
         return new(DeveloperBranchIntegrationStatus.Failed, question, round.ConflictPaths);
     }
@@ -123,11 +125,13 @@ internal sealed partial class ConductorConflictIntegration
         var round = OpenRound(goal);
         if (round?.RoundId != roundId || round.ScopeRequired) return;
         foreach (var request in kernel.HumanInputRequests.Where(item => item.GoalId == goal.Id && !item.IsCompleted &&
-            item.Question == ScopeQuestion(goal, round)).ToArray())
+            item.TaskId is null && item.QuestionFingerprint == ScopeRequirementPrefix + roundId).ToArray())
             kernel.SubmitHumanInput(request.Id, "Resolved by durable typed integration-scope decision.");
     }
 
-    internal static bool IsScopeQuestion(string question) => question.StartsWith("Integration scope confirmation required.", StringComparison.Ordinal);
+    internal static bool IsScopeRequirement(HumanInputRequest request) => request.TaskId is null &&
+        request.QuestionFingerprint.StartsWith(ScopeRequirementPrefix, StringComparison.Ordinal) &&
+        Guid.TryParseExact(request.QuestionFingerprint[ScopeRequirementPrefix.Length..], "N", out _);
     internal static bool FullSha(string value) => value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
     internal static string[] NormalizeScopePaths(string worktree, IReadOnlyList<string>? paths)

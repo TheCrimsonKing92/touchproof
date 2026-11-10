@@ -235,7 +235,7 @@ internal static partial class CliPersistentStateRunner
             CliCommandHelp.ThrowIfInvalidFlags(args);
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
-        if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
+        if (IsGoalScopedTaskMutationCommand(args) || CliScopeApprovalCommands.IsCommand(args))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             if (CliScopeApprovalCommands.IsCommand(args)) return CliScopeApprovalCommands.Submit(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
