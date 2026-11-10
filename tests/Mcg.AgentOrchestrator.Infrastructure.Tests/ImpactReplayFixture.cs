@@ -264,13 +264,23 @@ internal sealed class ImpactReplayFixture : IDisposable
             ["impact-replay", "--since", "2026-10-01", "--limit", "100", "--out", OutputDirectory, .. extraArguments ?? []],
             _root, StateDirectory, CheckoutParent, output, error);
         Assert.True(exit == 0, $"exit={exit}; stdout={output}; stderr={error}");
-        Assert.Equal("", error.ToString());
+        var progress = error.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<ImpactReplayRunProgress>(line, ImpactReplayCheckpointStore.Json)!).ToArray();
+        Assert.Equal(ImpactReplayPhase.Startup, progress[0].Phase);
+        Assert.Equal(ImpactReplayPhase.Finished, progress[^1].Phase);
+        Assert.Equal($"Impact replay: {progress[^1].Replayable} attempts; reports: {Path.GetFullPath(OutputDirectory)}{Environment.NewLine}", output.ToString());
         var report = JsonSerializer.Deserialize<ImpactReplayReport>(
             File.ReadAllText(Path.Combine(OutputDirectory, "impact-replay.json")), Json);
         Assert.NotNull(report);
         if (!allowSkippedInputs) Assert.Empty(report.SkippedInputs);
         Assert.Empty(report.UnreplayableAttempts);
         Assert.Empty(report.CleanupErrors);
+        var status = ImpactReplayCheckpointStore.ReadStatus(Path.Combine(OutputDirectory, ImpactReplayCheckpointStore.FileName))
+            .Single(run => run.Identity.RunId == report.Run!.RunId);
+        Assert.Equal("completed", status.Completion);
+        Assert.Equal(report.Attempts.Count, status.Progress.Replayable);
+        Assert.Equal(report.SkippedInputs.Count, status.Progress.Skipped);
+        Assert.Equal(report.UnreplayableAttempts.Count, status.Progress.Unreplayable);
         return (report, File.ReadAllText(Path.Combine(OutputDirectory, "impact-replay.md")));
     }
 

@@ -109,6 +109,7 @@ internal static class CliCommandHelp
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
+    public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
     public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...] [--max-changed-source-files <n>]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -714,8 +715,8 @@ internal static class CliCommandHelp
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
-        ImpactReplayUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
-        ["--since", "--limit", "--out", "--floor", "--max-changed-source-files", "--help", "-h"]);
+        ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
+        ["--since", "--limit", "--out", "--floor", "--max-changed-source-files", "--status", "--checkpoint-file", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
     public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
         "       obligation-rebind <goal-prefix> --selector \"<old selector>\" --to \"<new selector>\" --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
