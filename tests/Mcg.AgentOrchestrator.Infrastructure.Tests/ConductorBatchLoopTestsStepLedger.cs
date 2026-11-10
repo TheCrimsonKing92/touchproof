@@ -41,6 +41,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
                 ["author"] = 19, ["store-evidence"] = 23, ["judge-panel"] = 29,
                 ["board-fill"] = 31, ["operator-intent-list"] = 37, ["eligibility"] = 41,
                 ["attempt-census"] = 0, ["attempt-reconcile"] = 0, ["grouped-admission-prep"] = 0,
+                ["candidate-supersession"] = 43,
                 ["prep-cohort-receipts"] = 0, ["prep-train-reconcile"] = 0, ["prep-projection"] = 0,
                 ["prep-census"] = 0, ["prep-plan-receipt"] = 0, ["prep-cohort-members"] = 0,
                 ["prep-obligation-filter"] = 0, ["prep-merge-conflict"] = 0, ["prep-approval-hold"] = 0,
@@ -66,8 +67,12 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             AssertBound(intentLine, "operator_intent_steps");
             // The 37 ms capture belongs to the early phase: 221 - 37 = 184 ms.
             Assert.EndsWith(" cpu_ms=184", line);
+            var admissionLine = Phase(tick, "acceptance-admission");
+            Assert.Matches(@"candidate-supersession:\d+:43:1(?:,| )", admissionLine);
+            Assert.EndsWith(" cpu_ms=43", admissionLine);
             // Emission order differs from call order; instrumentation cannot reorder calls.
-            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick" }, observed);
+            // Supersession follows fresh grouped preparation and precedes priority handling and admission.
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "admission-pre-batch", "admission-pre-batch", "admission-pre-batch", "begin-tick", "attempt-census", "activation-probe-record", "attempt-reconcile", "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt", "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold", "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-interaction-keys", "prep-probe-backoff", "grouped-admission-prep", "candidate-supersession", "priority-order", "merge-train", "pair-cohort", "hold-cohort-members", "hold-lone-ready", "solo-admission", "priority-guard", "deferral-summary", "begin-tick" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }
@@ -104,6 +109,8 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
     [Xunit.Fact(DisplayName = "Uncalled steps are zero filled and ledger restores on loop exit")]
     public void UncalledStepsAndLoopExit()
     {
+        var ledger = new ConductorTickStepLedger(() => TimeSpan.Zero);
+        Assert.Contains("candidate-supersession:0:0:0", ledger.FormatAdmission(TimeSpan.Zero));
         var (kernel, _) = SimpleGoal();
         var probeCalls = 0;
         var loop = new ConductorBatchLoop(processCpuTime: () => TimeSpan.Zero).WithStepProbe(_ => probeCalls++);
@@ -112,11 +119,12 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         Assert.DoesNotContain("operator-intent-list", Phase(tick, "prewalk"));
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
         Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
-        Assert.Equal(39, probeCalls);
+        Assert.Matches(@"candidate-supersession:\d+:0:1(?:,| )", Phase(tick, "acceptance-admission"));
+        Assert.Equal(40, probeCalls);
         var outsideCalls = 0;
-        ConductorTickStepLedger.Measure("author", () => outsideCalls++);
+        ConductorTickStepLedger.Measure("candidate-supersession", () => outsideCalls++);
         Assert.Equal(1, outsideCalls);
-        Assert.Equal(39, probeCalls);
+        Assert.Equal(40, probeCalls);
     }
 
     [Xunit.Fact(DisplayName = "Repeated fractional CPU samples truncate after accumulation and reset each tick")]
