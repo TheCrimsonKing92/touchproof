@@ -106,7 +106,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
-    private readonly Func<Goal, PlannerBriefAmendmentRevisionPendingHold?> _getAmendmentRevisionPending;
+    private readonly PlannerEvidenceReadiness _plannerEvidenceReadiness;
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     internal readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
@@ -745,7 +745,7 @@ internal sealed partial class ConductorDriver
                 baselineAttestation);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
-        _getAmendmentRevisionPending = goal => kernel.GetPlannerBriefAmendmentRevisionPending(goal.Id);
+        _plannerEvidenceReadiness = new(kernel);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
@@ -1151,7 +1151,7 @@ internal sealed partial class ConductorDriver
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
-        _getAmendmentRevisionPending = getAmendmentRevisionPending ?? (_ => null);
+        _plannerEvidenceReadiness = PlannerEvidenceReadiness.ForTick(getAmendmentRevisionPending, () => _conductorTickKernel);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
@@ -1293,8 +1293,8 @@ internal sealed partial class ConductorDriver
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
-        if (_getAmendmentRevisionPending(goal) is { } amendmentHold)
-            return MakeResult(goalId, goalPrefix, policy, amendmentHold.ToOutcome(state));
+        if (_plannerEvidenceReadiness.GetHold(goal, state) is { } plannerHold)
+            return MakeResult(goalId, goalPrefix, policy, plannerHold);
         if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
             return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
         ConductorParkedWaitEscalationResolution.Resolve(_resolveParkedWaitEscalations, goal, state);

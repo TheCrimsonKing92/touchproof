@@ -31,6 +31,7 @@ public abstract record ConductorAdvanceOutcome
     {
         public UnchangedCandidateHoldReason? TypedReason { get; init; }
         public PlannerBriefAmendmentRevisionPendingHold? AmendmentRevisionPending { get; init; }
+        public PlannerOperatorEvidenceConsistencyHold? OperatorEvidenceConsistency { get; init; }
         public ConductorHoldOwner Owner { get; init; } = ConductorHoldOwner.None;
         public PolicyDecisionRecord? Decision { get; init; }
     }

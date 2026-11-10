@@ -30,6 +30,8 @@ public sealed class AgentTaskRunner
         var goal = _kernel.GetGoal(goalId);
         var task = goal.FindTask(taskId);
 
+        _kernel.EnsurePlannerOperatorEvidenceReady(goalId, taskId);
+
         if (task.Status == WorkTaskStatus.WaitingForHuman)
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input.");
@@ -90,6 +92,7 @@ public sealed class AgentTaskRunner
         _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
         var executionBriefVersion = goal.AuthoritativeBrief.Version;
+        var executionCriteriaVersion = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal);
         ModelResponse response;
         try
         {
@@ -119,7 +122,8 @@ public sealed class AgentTaskRunner
             CountPromptCharacters(request));
 
         if (task.RequiredRole == AgentRole.Planner)
-            execution = execution with { PlannerEvidenceBriefVersion = executionBriefVersion };
+            execution = execution with { PlannerEvidenceBriefVersion = executionBriefVersion,
+                PlannerEvidenceCriteriaVersionHash = executionCriteriaVersion };
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
 

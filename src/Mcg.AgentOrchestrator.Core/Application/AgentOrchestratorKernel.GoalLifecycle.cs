@@ -618,7 +618,9 @@ public sealed partial class AgentOrchestratorKernel
         lock (_humanInputRequestLock)
             foreach (var planner in goal.Tasks.Where(task => task.RequiredRole == AgentRole.Planner))
                 amendmentRouted |= RouteAnsweredPlannerBriefAmendment(goal, planner, out _);
+        var operatorConsistency = this.GetPlannerOperatorEvidenceConsistencyHold(goalId);
         var ownershipReconciled = PlannerOwnership.Reconcile(goal, (ownerGoal, reviewer) =>
+            operatorConsistency is null &&
             !TryFailWorkerResultBlocker(ownerGoal.Id, reviewer, reviewer.LastVerification!, enforceFailureEvidenceRule: true) &&
             TryCompleteTaskWithPassingVerification(ownerGoal, reviewer,
                 "Reconciled passing source review after accepted Planner execution ownership projection; full acceptance evidence remains pending."));
@@ -2237,14 +2239,7 @@ public sealed partial class AgentOrchestratorKernel
     public PlannerBriefAmendmentRevisionPendingHold? GetPlannerBriefAmendmentRevisionPending(GoalId goalId)
     {
         lock (_humanInputRequestLock)
-        {
-            var goal = GetGoal(goalId);
-            if (goal.IsTerminal || goal.Status == GoalStatus.Parked) return null;
-            foreach (var task in goal.Tasks)
-                if (PlannerBriefAmendmentRouting.Evaluate(goal, task, _humanInputRequests.Values) is { Replan: false } decision)
-                    return decision.Hold(goal, task);
-            return null;
-        }
+            return PlannerBriefAmendmentRouting.GetPendingHold(GetGoal(goalId), _humanInputRequests.Values);
     }
 
     public void DismissHumanInput(HumanInputRequestId requestId)
