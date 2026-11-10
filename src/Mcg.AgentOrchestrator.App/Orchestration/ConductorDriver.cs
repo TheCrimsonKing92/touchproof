@@ -1280,9 +1280,9 @@ internal sealed partial class ConductorDriver
         var goalId = goal.Id.Value;
         var goalPrefix = goalId[..8];
 
-        if ((_findingStagnationKernel ?? _conductorTickKernel) is { } stagnationKernel &&
-            !goal.IsTerminal && goal.Status != GoalStatus.Parked)
-            FindingStagnationDecisionRecorder.ReconcileResets(stagnationKernel, goal);
+        _conflictIntegration?.ReconcileScopeRequirements(goal);
+
+        FindingStagnationDecisionRecorder.ReconcileResets(_findingStagnationKernel ?? _conductorTickKernel, goal);
 
         _normalizeLifecycleState(
             goal,
