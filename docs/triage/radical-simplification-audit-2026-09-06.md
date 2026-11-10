@@ -4,11 +4,18 @@
 
 Baseline: `d06b8c519d325da9c224444a105783ac227f6b4a`. The hypothesis is that a
 newer failed execution can be collapsed into an absent green lookup, allowing
-an older closure green to bypass it. This round authors the controlled probe;
-it establishes neither reproduction nor premise-disproof. Acceptance owns
-execution. Production code and persisted formats are unchanged.
+an older closure green to bypass it. Acceptance reproduced this on candidate
+`61d0fc59d34820b45be77b232a30b35880340fcf`, receipt
+`finding-evidence-3515a13ac0ef6f3e07c230d0`. The supplied typed retry feedback is
+`task/criterion-retry-feedback.json` in the Developer context package. The named
+guard failed at `AcceptancePartitionVerdictCacheContentReuseTests.cs:56`:
+`C must miss after B's same-pair/lane failed execution`; C instead reported
+`source_attempt_id=A-pass`, `reuse_rule=closure`. The earlier positive-control,
+forced-rerun, parsed nonzero-coverage and journal assertions precede this failure.
+This selects the reproduced-and-repaired branch. Post-repair execution remains
+Acceptance-owned; no post-repair pass is claimed here.
 
-Current source paths:
+Pre-repair source paths:
 
 - `AcceptancePartitionVerdictCache.TryReuse` calls `LatestGreenVerdict` before
   `AcceptanceClosureVerdictIndex.FindLatest`; a null result permits fallback.
@@ -47,33 +54,57 @@ Existing `AcceptanceStructuralCoverageEvaluatorTests` retain malformed-TRX and
 zero-execution rejection; the cache's file-presence check alone is not a full
 structural validation claim.
 
-Current execution result: **pending Acceptance**. The registered evidence
-request `current-controlled-investigation` (criterion 1, selector
-`AcceptancePartitionVerdictCacheContentReuseTests`) owns the discriminating
-receipt. Historical reports do not select the current branch.
+The current-candidate failure above is the discriminating result, rather than
+the historical hypothesis. Acceptance must retain the enclosing named TRX,
+attachments and output. The worker does not retrieve operator state or execute
+test hosts. Registered focused evidence owns the post-repair result.
 
 ## Branch decision and compatibility
 
-If C misses with a passing positive control, retain the guard, record that
-unchanged-production observation here, and stop production redesign. If C
-reuses A after B, retain the intended assertion failure and its actual reuse
-summary before repairing the existing seam. A setup, compiler, artifact or
-positive-control failure does not reproduce the suspected policy defect.
+The repair preserves the latest journal record at the lookup seam: absent
+permits a proven closure proposal; non-green or incomplete authority produces a
+miss before closure or disjoint fallback; green retains existing artifact and
+coverage checks. Both partition and eligible whole-project reuse use this
+policy. Journal append order, rather than worker timestamps, chooses authority.
+Cached-reuse summaries are not execution records, and `RecordExecution` ignores
+explicit cached-reuse results. A newer executed green can supersede red only
+with retained, parsed passing TRX and nonzero completed coverage, even if the
+structural-coverage switch is off. Non-green alone establishes neither a
+deterministic defect nor an apparatus cause; either blocks only its exact scope.
 
-No persisted representation change is needed for this investigation increment:
+No persisted representation change is needed for this repair:
 the current authoritative goal journal and version-1 closure index remain intact.
 The existing acceptance execution owner delivered by `209400a8b` is untouched.
-Any conditional repair must obey the supplied exact-pair/lane authority ruling:
-authoritative journal order; no cached-reuse event superseding non-green;
-validation of a proposed source within its own authority; blocking that survives
-derived-cache eviction/rebuild; and a miss for missing/ambiguous provenance.
-No global negative-closure propagation or old-binary rollback guarantee is added.
-Non-green execution alone establishes neither determinism nor an apparatus cause;
-apparatus classification needs separate typed evidence.
+The v1 index's source attempt, filter and artifacts resolve against existing
+goal journals. A proposal must identify exactly one executed source, match its
+key rebuilt with the manifest and its artifacts, and remain the latest reusable
+execution within that source's own identity. Missing, ambiguous or incomplete
+source authority misses. Legacy partition journal records need no new closure
+field. Sources are discovered once per cache session, lazily on closure fallback;
+the owning source journal is revalidated at reuse. Pair hits keep their existing path. New miss reasons describe the
+authority failure without changing existing diagnostic strings.
 
-After any reproduced repair, Acceptance owns the source-revert negative control:
-retain this probe, restore only the repaired production seam to the baseline,
-observe C incorrectly reusing A, restore the repair, and observe the safe miss.
-The repaired files and exact receipts must be added here once they exist.
+Blocking survives deletion or reconstruction of the derived index because it
+comes from the journal. Supported compatibility is current main's journal and
+version-1 index, with provenance sufficient to validate reuse. Returning to an
+older binary without this policy is not a supported safe rollback. No global
+negative-closure propagation, new index format or ambient setting is introduced.
+
+`AcceptancePartitionVerdictCacheAuthorityTests` adds partition and whole-project
+controls for timestamp ties/reversal, derived-index eviction/rebuild, later
+executed green, invalid recovery artifacts, cached-reuse isolation, independently
+valid sources, non-green classification scope, supported v1 reads, unsupported
+versions, missing/ambiguous source history and mismatched artifacts. The real
+committed-repository safety guard remains unchanged.
+
+Acceptance owns the source-revert negative control: retain all tests and restore
+only `AcceptancePartitionVerdictCache.TryReuse` to its body at
+`61d0fc59d34820b45be77b232a30b35880340fcf`. This restores the null-collapsing
+`LatestGreenVerdict` call and removes both requesting-authority and source-authority
+checks from that path. Keep the journal snapshot shape and helper declarations
+so the negative control compiles. Require the same named guard to fail because
+C reuses A via closure, restore the repaired body, then require the safe miss.
+Compiler, fixture or positive-control failures do not qualify. Repaired source:
+`AcceptancePartitionVerdictCache.cs`, `.Authority.cs` and `.MissReasons.cs`.
 Different-family review and final integrated full acceptance remain separately
 owned requirements before landing.
