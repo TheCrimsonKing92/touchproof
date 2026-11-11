@@ -452,6 +452,12 @@ internal sealed class OwnedProcessGroup : IDisposable
         return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
+    internal static bool TryGetTotalProcesses(SafeFileHandle jobHandle, out uint totalProcesses)
+    {
+        totalProcesses = 0;
+        return OperatingSystem.IsWindows() && WindowsJob.TryGetTotalProcesses(jobHandle, out totalProcesses);
+    }
+
     internal static int ReadProcessExitCode(SafeFileHandle processHandle) =>
         WindowsJob.ReadProcessExitCode(processHandle);
 
