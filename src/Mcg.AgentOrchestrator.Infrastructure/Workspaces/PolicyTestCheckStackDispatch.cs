@@ -17,7 +17,7 @@ internal static class PolicyTestCheckStackDispatch
         }
 
         if (kind == ManifestTestCheckKinds.Crosswalk &&
-            ManifestTestCheckKinds.TryReadCrosswalkCommand(check.CommandLine, out var project, out var arguments))
+            ManifestTestPolicyCheck.TryReadCrosswalkCommand(check, out var project, out var arguments))
         {
             return new AcceptanceManifestCheck
             {

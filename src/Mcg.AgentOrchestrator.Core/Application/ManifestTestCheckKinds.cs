@@ -23,15 +23,6 @@ public static class ManifestTestCheckKinds
             _ => throw new ArgumentException($"Unsupported test check kind: {kind}", nameof(kind))
         };
 
-    public static bool TryReadCrosswalkCommand(
-        string commandLine, out string? project, out IReadOnlyList<string> arguments)
-    {
-        var parts = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        project = parts.Length > 1 ? parts[1] : null;
-        arguments = parts.Skip(2).ToArray();
-        return FromCommand(parts) == Crosswalk;
-    }
-
     public static string Describe(IEnumerable<string> kinds)
     {
         var found = kinds.ToHashSet(StringComparer.OrdinalIgnoreCase);

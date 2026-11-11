@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -43,20 +44,41 @@ public sealed class PolicyTestCheckStackDispatchTests
             new("unsupported", kind, true, command, "negative control")));
     }
 
-    [Fact]
-    public void RequiredPolicy_CompiledCrosswalk_ReachesManifestDispatch()
+    [Theory]
+    [InlineData("web", "id-one")]
+    [InlineData("web app", "id one")]
+    [InlineData("web app\\", "a \"quoted\" argument")]
+    [InlineData(" web app ", "\tid one\t")]
+    [InlineData("web", "")]
+    public void RequiredPolicy_CompiledCrosswalk_ReachesManifestDispatch(string project, string argument)
     {
+        string[] arguments = [argument, "second id", @"folder\test\", "'literal'", ""];
         var impact = new RepositoryTestImpactPlan(true, false, "crosswalk impact",
-            [new("declared crosswalk", ["crosswalk-test", "web", "id-one"], "manifest check")]);
+            [new("declared crosswalk", ["crosswalk-test", project, .. arguments], "manifest check")]);
         var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], impact);
+        policy = JsonSerializer.Deserialize<VerificationPolicy>(JsonSerializer.Serialize(policy))!;
 
         Assert.True(policy.RequiresTests);
         Assert.Equal("crosswalk-test", Assert.Single(policy.Checks).Kind);
         var actual = Assert.Single(GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests("unused-worktree", policy));
         Assert.Equal("declared crosswalk", actual.Name);
         Assert.Equal("crosswalk-test", actual.Type);
-        Assert.Equal("web", actual.Project);
-        Assert.Equal(new[] { "id-one" }, actual.Arguments);
+        Assert.Equal(project, actual.Project);
+        Assert.Equal(arguments, actual.Arguments);
+    }
+
+    [Fact]
+    public void RequiredPolicy_CompiledDotnet_PreservesExistingPolicyShape()
+    {
+        var impact = new RepositoryTestImpactPlan(true, false, "dotnet impact",
+            [new("unit", ["dotnet", "test", "--project", "unit.csproj"], "manifest check")]);
+        var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], impact);
+        var check = Assert.Single(policy.Checks);
+        Assert.Equal(JsonSerializer.Serialize(new
+        {
+            Name = "unit", Kind = "dotnet-test", Required = true,
+            CommandLine = "dotnet test --project unit.csproj", Reason = "manifest check"
+        }), JsonSerializer.Serialize(check));
     }
 
     [Theory]

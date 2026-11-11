@@ -17,6 +17,41 @@ public sealed class ManifestTestCheckKindScopeTests
         """;
 
     [Fact]
+    public void ScopedPolicies_CrosswalkTokens_SurviveCompilationAndPersistence()
+    {
+        const string name = "declared crosswalk";
+        const string project = "web app";
+        string[] arguments = ["id one", "\"quoted id\"", @"folder\test\", "", " trailing "];
+        using var fixture = new ManifestFixture(JsonSerializer.Serialize(new
+        {
+            checks = new[] { new { name, type = "crosswalk-test", project, arguments } }
+        }));
+        var selected = Plan() with
+        {
+            Checks = [new(name, ["crosswalk-test", project, .. arguments], "selected check")]
+        };
+        var plans = new[]
+        {
+            GoalTargetImpactPlanScope.Scope(Plan(), fixture.Root, fixture.Path),
+            WorkerTestImpactPlanSelection.ScopeToManifest(selected, fixture.Root, fixture.Path),
+            ManifestScopedImpactPlan.Scope(selected,
+                [new() { Name = name, Type = "crosswalk-test", Project = project, Arguments = arguments }])
+        };
+
+        foreach (var plan in plans)
+        {
+            Assert.Equal(new[] { "crosswalk-test", project }.Concat(arguments), Assert.Single(plan.Checks).Command);
+            var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], plan);
+            var restored = JsonSerializer.Deserialize<VerificationPolicy>(JsonSerializer.Serialize(policy))!;
+            var actual = Assert.Single(GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests(fixture.Root, restored));
+            Assert.Equal(name, actual.Name);
+            Assert.Equal("crosswalk-test", actual.Type);
+            Assert.Equal(project, actual.Project);
+            Assert.Equal(arguments, actual.Arguments);
+        }
+    }
+
+    [Fact]
     public void Scope_CrosswalkOnly_DerivesManifestIdentityAndOwnCommand()
     {
         using var fixture = new ManifestFixture(CrosswalkManifest);
