@@ -18,7 +18,7 @@ public static class ManifestTestCheckKinds
     public static IReadOnlyList<string> Command(string kind, string? project, IReadOnlyList<string> arguments) =>
         Canonicalize(kind) switch
         {
-            Dotnet => ["dotnet", "test", "--project", project!, .. arguments],
+            Dotnet => ["dotnet", "test", "--project", project!],
             Crosswalk => [Crosswalk, string.IsNullOrWhiteSpace(project) ? "." : project, .. arguments],
             _ => throw new ArgumentException($"Unsupported test check kind: {kind}", nameof(kind))
         };

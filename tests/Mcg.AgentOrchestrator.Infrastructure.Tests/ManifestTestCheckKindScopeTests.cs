@@ -174,13 +174,13 @@ public sealed class ManifestTestCheckKindScopeTests
     }
 
     [Fact]
-    public void Scope_DotnetArguments_PreservesDeclaredArguments()
+    public void Scope_DotnetArguments_KeepsProjectWideCommand()
     {
         using var fixture = new ManifestFixture("""
             {"checks":[{"name":"unit","type":"dotnet-test","project":"unit.csproj","arguments":["--filter","Example"]}]}
             """);
         var check = Assert.Single(GoalTargetImpactPlanScope.Scope(Plan(), fixture.Root, fixture.Path).Checks);
-        Assert.Equal(new[] { "dotnet", "test", "--project", "unit.csproj", "--filter", "Example" }, check.Command);
+        Assert.Equal(new[] { "dotnet", "test", "--project", "unit.csproj" }, check.Command);
     }
 
     [Fact]
