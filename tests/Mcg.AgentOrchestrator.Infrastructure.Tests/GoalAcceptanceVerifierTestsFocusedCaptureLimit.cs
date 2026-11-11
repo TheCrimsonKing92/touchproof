@@ -85,6 +85,23 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
     public Task FullGateCommandStillTimesOutAfterCaptureLimit() => RunFullGateCaptureScenarioAsync();
 
     [Xunit.Fact]
+    public async Task DrainFaultAfterOutputRetainsDiagnosticsBeforeCaptureDeletion()
+    {
+        var failure = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(() =>
+            RunFullGateCaptureScenarioAsync(faultCaptureDrain: true));
+        Assert.Contains("System.ArgumentOutOfRangeException", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("AcceptanceCaptureDrain.DrainCappedCaptureAsync", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("before_capture_deletion", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("bytes=18 preview=drain-fault-stdout", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("bytes=18 preview=drain-fault-stderr", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("unavailable=FileNotFoundException", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("child=unobserved", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("cap_observed=False timeout_signaled=False", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("owned_child_reaped=True", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Apparatus hang failsafe:", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task ApparatusFailsafeFailsBeforeTimeoutAndReapsItsChild()
     {
         var failure = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(() =>
@@ -98,7 +115,8 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
             AwaitApparatusEventAsync(Task.CompletedTask, expired.Token, "already completed apparatus signal"));
     }
 
-    private static async Task RunFullGateCaptureScenarioAsync(bool expireApparatusFailsafe = false)
+    private static async Task RunFullGateCaptureScenarioAsync(
+        bool expireApparatusFailsafe = false, bool faultCaptureDrain = false)
     {
         var root = CreateRoot();
         using var cancellation = new CancellationTokenSource();
@@ -114,21 +132,39 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         Task? invocationRun = null;
         Exception? failure = null;
         string? diagnostics = null;
+        string? diagnosticsBeforeCaptureDeletion = null;
         await using var owner = CreateGateOwner(root);
         try
         {
             var verifier = new GoalAcceptanceVerifier(async (arguments, workingDirectory, _, cancellationToken) =>
             {
-                processRun = GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(
-                    arguments, workingDirectory, TimeSpan.FromSeconds(3), CapBytes,
-                    GateHeartbeatRunClass.Acceptance, commandIdentityObserver: value => identity.TrySetResult(value),
+                processRun = AcceptanceProcessRunner.RunProcessAsync(
+                    arguments, workingDirectory, TimeSpan.FromSeconds(3), forceUtf8ConsoleOutput: false,
+                    commandIdentityObserver: value => identity.TrySetResult(value),
                     cancellationToken: cancellationToken, timeoutSignal: timeoutSignal.Token,
+                    engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = CapBytes },
+                    stopOnCaptureLimit: AcceptanceProcessRunner.StopsOnCaptureLimit(GateHeartbeatRunClass.Acceptance),
+                    // Task.Delay rejects this interval after the real drain has written output.
+                    capturePublicationInterval: faultCaptureDrain ? TimeSpan.MaxValue : null,
                     captureObserver: (stdout, stderr, limitReached) => captures.TrySetResult((stdout, stderr, limitReached)),
-                    cleanupObserver: cleanup.Enqueue);
+                    cleanupObserver: observation =>
+                    {
+                        cleanup.Enqueue(observation);
+                        if (observation.Stage == "registration-released")
+                            diagnosticsBeforeCaptureDeletion = "before_capture_deletion\n" +
+                                CaptureFailureDiagnostics(captures.Task, identity.Task, processResult,
+                                    processRun, elapsed.Elapsed, timeoutSignal.IsCancellationRequested);
+                    });
                 processResult = await processRun;
                 return processResult;
             });
             var check = expireApparatusFailsafe ? SilentCheck() : LoopingCheck(timeoutMinutes: 1);
+            if (faultCaptureDrain) check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+            {
+                Name = "faulted capture drain", Type = "command", Command = "powershell", TimeoutMinutes = 1,
+                Arguments = ["-NoProfile", "-NonInteractive", "-Command",
+                    "[Console]::Out.Write('drain-fault-stdout'); [Console]::Error.Write('drain-fault-stderr')"]
+            };
             var run = owner.RunInvocationForTestsAsync(
                 verifier, owner.CreateInvocation(check.Name), check, Path.GetTempPath(), cancellation.Token);
             invocationRun = run;
@@ -137,8 +173,11 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
             var capture = await captures.Task;
             // The negative control expires the failsafe by signal, never by waiting on a clock.
             if (expireApparatusFailsafe) apparatusFailsafe.Cancel();
-            await AwaitApparatusEventAsync(capture.LimitReached, apparatusFailsafe.Token,
+            var observationOrExit = Task.WhenAny(capture.LimitReached, processRun!);
+            await AwaitApparatusEventAsync(observationOrExit, apparatusFailsafe.Token,
                 "real drain capture-limit observation");
+            await (await observationOrExit);
+            Assert.True(capture.LimitReached.IsCompletedSuccessfully, "Command exited before real drain cap observation.");
             Assert.False(processRun!.IsCompleted, "Crossing the cap must leave the full-gate process running.");
             Assert.False(run.IsCompleted, "Crossing the cap must leave the full-gate invocation running.");
             var child = await identity.Task;
@@ -169,8 +208,8 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         catch (Exception exception)
         {
             failure = exception;
-            // Snapshot live facts before cancellation, process reaping, or capture deletion.
-            diagnostics = CaptureFailureDiagnostics(captures.Task, identity.Task, processResult,
+            // A faulted invoker may already have deleted captures before propagating here.
+            diagnostics = diagnosticsBeforeCaptureDeletion + "\n" + CaptureFailureDiagnostics(captures.Task, identity.Task, processResult,
                 processRun, elapsed.Elapsed, timeoutSignal.IsCancellationRequested);
         }
         finally
