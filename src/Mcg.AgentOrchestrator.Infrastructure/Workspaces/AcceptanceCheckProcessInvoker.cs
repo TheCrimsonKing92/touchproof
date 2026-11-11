@@ -33,10 +33,10 @@ internal static class AcceptanceCheckProcessInvoker
         // Own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
         var (stdoutPath, stderrPath) = AcceptanceCaptureDrain.CreateCaptureFilePaths();
-
+        using var captureLimitStop = new CaptureLimitStop(stopOnCaptureLimit);
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
-        using var captureLimitStop = new CaptureLimitStop(stopOnCaptureLimit);
+        var onCaptureLimitReached = request.ObserveCaptureLimit(stdoutPath, stderrPath, captureLimitStop.OnLimitReached);
         using var laneStall = AcceptanceLaneStallMonitor.ForHeartbeat(heartbeatContext, TimeProvider.System, AcceptanceLaneResultsDirectory.ProbeFor(arguments));
         var elapsed = Stopwatch.StartNew();
         CancellationTokenSource? heartbeatCts = null;
@@ -99,7 +99,7 @@ internal static class AcceptanceCheckProcessInvoker
                         stdoutPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: captureLimitStop.OnLimitReached,
+                        onLimitReached: onCaptureLimitReached,
                         captureDrainCts.Token, capturePublicationInterval),
                     GoalAcceptanceVerifierCaptureCustody.ConnectAndDrainCappedCaptureAsync(
                         stderrPipe,
@@ -107,7 +107,7 @@ internal static class AcceptanceCheckProcessInvoker
                         stderrPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: captureLimitStop.OnLimitReached,
+                        onLimitReached: onCaptureLimitReached,
                         captureDrainCts.Token, capturePublicationInterval)
                 ];
             }
@@ -193,14 +193,14 @@ internal static class AcceptanceCheckProcessInvoker
                         stdoutPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: captureLimitStop.OnLimitReached,
+                        onLimitReached: onCaptureLimitReached,
                         cancellationToken: captureDrainCts.Token, publicationInterval: capturePublicationInterval),
                     AcceptanceCaptureDrain.DrainCappedCaptureAsync(
                         captureSources[1],
                         stderrPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: captureLimitStop.OnLimitReached,
+                        onLimitReached: onCaptureLimitReached,
                         cancellationToken: captureDrainCts.Token, publicationInterval: capturePublicationInterval)
                 ];
             }

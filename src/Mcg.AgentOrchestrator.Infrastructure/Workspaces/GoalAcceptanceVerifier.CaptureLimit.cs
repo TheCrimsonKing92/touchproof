@@ -3,7 +3,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed partial class GoalAcceptanceVerifier
 {
     private static bool StopsOnCaptureLimit(GateHeartbeatContext context) =>
-        string.Equals(context.RunClass, GateHeartbeatRunClass.FocusedEvidence, StringComparison.Ordinal);
+        AcceptanceProcessRunner.StopsOnCaptureLimit(context.RunClass);
 
     internal static bool IsInterrupted(CommandResult result) => result.TimedOut || result.CaptureLimited;
 
@@ -55,15 +55,11 @@ public sealed partial class GoalAcceptanceVerifier
         long captureLimitBytes,
         string runClass,
         Action<SpawnProcessIdentity>? commandIdentityObserver = null,
-        CancellationToken cancellationToken = default)
-    {
-        var context = new GateHeartbeatContext(
-            "test-goal", "verification-check", "capture-limit", null, null, null,
-            string.Join(' ', arguments.Select(QuoteForDisplay)), null) { RunClass = runClass };
-        return AcceptanceProcessRunner.RunProcessAsync(
-            arguments, workingDirectory, timeout, forceUtf8ConsoleOutput: false,
-            cancellationToken, commandIdentityObserver: commandIdentityObserver,
-            engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = captureLimitBytes },
-            stopOnCaptureLimit: StopsOnCaptureLimit(context));
-    }
+        CancellationToken cancellationToken = default,
+        CancellationToken timeoutSignal = default,
+        Action<string, string, Task>? captureObserver = null,
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null) =>
+        AcceptanceProcessRunner.RunProcessAsync(
+            arguments, workingDirectory, timeout, captureLimitBytes, runClass,
+            commandIdentityObserver, cancellationToken, timeoutSignal, captureObserver, cleanupObserver);
 }
