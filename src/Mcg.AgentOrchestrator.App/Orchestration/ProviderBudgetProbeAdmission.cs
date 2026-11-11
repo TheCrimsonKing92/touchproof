@@ -33,7 +33,8 @@ internal static class ProviderBudgetProbeAdmission
                 var schedule = ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, hold, now);
                 if (now < schedule.NextProbeAt || schedule.ProbeInFlight || schedule.AdmittedTaskId is not null) break;
                 kernel.RecordTaskNote(goal.Id, task.Id, ProviderBudgetHoldSchedules.FormatProbe(
-                    new(hold.BindingKey, schedule.NextProbeAt, schedule.Attempt, schedule.ResetSource)));
+                    new(hold.BindingKey, schedule.NextProbeAt, schedule.Attempt, schedule.ResetSource)
+                        { ResetIntentId = schedule.ResetIntentId, HoldPlacedAt = hold.PlacedAt }));
                 admitted.Add(hold.BindingKey);
                 break;
             }

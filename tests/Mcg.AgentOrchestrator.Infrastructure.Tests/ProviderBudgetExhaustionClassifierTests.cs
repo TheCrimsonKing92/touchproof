@@ -410,7 +410,8 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
                 "provider request completed",
                 string.Empty,
                 recoveryDispatchAt.AddMinutes(1),
-                DispatchStartedAt: recoveryDispatchAt));
+                DispatchStartedAt: recoveryDispatchAt,
+                CompletionVerdictVerifiedSuccess: true));
 
         Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             restored.Goals,

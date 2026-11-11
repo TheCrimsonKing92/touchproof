@@ -10,7 +10,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
     Func<AgentOrchestratorKernel, ProviderBudgetExhaustionHold, string, DateTimeOffset, bool>? recordRetained = null,
     Func<DateTimeOffset>? utcNow = null, Func<bool>? providerBusy = null, Action<string>? diagnostic = null)
 {
-    private readonly HashSet<(string Binding, DateTimeOffset Placed, DateTimeOffset Due, int Attempt)> _claims = [];
+    private readonly HashSet<(string Binding, DateTimeOffset Placed, DateTimeOffset Due, int Attempt, string? Reset)> _claims = [];
 
     internal IReadOnlyList<GoalId> ObserveTick(AgentOrchestratorKernel kernel, DateTimeOffset now)
     {
@@ -36,7 +36,7 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
     private void ObserveHold(AgentOrchestratorKernel kernel, ProviderBudgetExhaustionHold hold,
         ProviderBudgetHoldSchedule schedule, DateTimeOffset now, List<GoalId> changed)
     {
-        var claim = (hold.BindingKey.ToUpperInvariant(), hold.PlacedAt, schedule.NextProbeAt, schedule.Attempt);
+        var claim = (hold.BindingKey.ToUpperInvariant(), hold.PlacedAt, schedule.NextProbeAt, schedule.Attempt, schedule.ResetIntentId);
         if (_claims.Contains(claim)) return;
         // Provider-wide, including other credential bindings and processes whose task has moved state.
         if (kernel.ProviderHoldScope.SelectMany(goal => goal.Tasks).Any(task =>
@@ -55,18 +55,18 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
         ProviderHoldProbeResult result;
         try { result = probe.CheckAsync(hold, dispatch, CancellationToken.None).GetAwaiter().GetResult(); }
         catch (Exception error) { result = new("failed", error.GetType().Name + ":" + error.Message); }
-        if (result.Outcome is not ("available" or "exhausted" or "failed"))
+        if (result.Outcome is not ("available" or "exhausted" or "failed" or "authentication-required"))
             result = new("failed", "invalid-probe-outcome");
         var completed = utcNow?.Invoke() ?? now;
         if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.ProviderHoldScope, hold.BindingKey, out var current) ||
             current != hold || ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, current, completed) is not { } latest ||
-            latest.NextProbeAt != schedule.NextProbeAt || latest.Attempt != schedule.Attempt)
+            latest.NextProbeAt != schedule.NextProbeAt || latest.Attempt != schedule.Attempt || latest.ResetIntentId != schedule.ResetIntentId)
         {
             AppendCheck(hold, schedule, "failed", "stale-probe-result", completed);
             return;
         }
         var note = ProviderBudgetHoldSchedules.FormatStandaloneResult(new(hold.BindingKey, hold.PlacedAt,
-            schedule.NextProbeAt, schedule.Attempt, now, result.Outcome, result.Reason));
+            schedule.NextProbeAt, schedule.Attempt, now, result.Outcome, result.Reason) { ResetIntentId = schedule.ResetIntentId });
         var recorded = true;
         try
         {
@@ -78,17 +78,20 @@ internal sealed class ProviderHoldStandaloneProbe(IProviderHoldAvailabilityProbe
             else recorded = recordRetained?.Invoke(kernel, hold, note, completed) == true;
         }
         catch (Exception error) { recorded = false; result = new("failed", "recording:" + error.GetType().Name); }
+        var diagnosis = recorded && result.Outcome != "available"
+            ? ProviderUsageHoldView.FormatDiagnosis(hold, ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, hold, completed), completed)
+            : null;
         AppendCheck(hold, schedule, recorded ? result.Outcome : "failed",
-            recorded || result.Reason.StartsWith("recording:", StringComparison.Ordinal) ? result.Reason : "source-goal-not-stored", completed);
+            recorded || result.Reason.StartsWith("recording:", StringComparison.Ordinal) ? result.Reason : "source-goal-not-stored", completed, diagnosis);
     }
 
     private void AppendCheck(ProviderBudgetExhaustionHold hold, ProviderBudgetHoldSchedule schedule,
-        string outcome, string reason, DateTimeOffset completed)
+        string outcome, string reason, DateTimeOffset completed, string? diagnosis = null)
     {
         try
         {
             writer.Append("provider-hold-check", hold.SourceGoalId.Value,
-                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)} binding={hold.BindingKey}", timestamp: completed);
+                $"PROVIDER_HOLD_CHECK due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} attempt={schedule.Attempt} outcome={outcome} reason={Uri.EscapeDataString(reason)}{(diagnosis is null ? "" : $" diagnosis={Uri.EscapeDataString(diagnosis)}")} binding={hold.BindingKey}", timestamp: completed);
         }
         catch (Exception error) { ReportFault(error, hold.BindingKey); }
     }

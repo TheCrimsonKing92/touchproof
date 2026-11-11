@@ -11,6 +11,13 @@ public sealed class ProviderHoldAvailabilityProbeTests
     [InlineData(0, "The prompt says AVAILABLE", "", false, "failed")]
     [InlineData(1, "", "API error (status 402 Payment Required): Grok Build usage balance exhausted", false, "exhausted")]
     [InlineData(1, "", "connection refused", false, "failed")]
+    [InlineData(1, "", "No auth credentials for cli-chat-proxy\nNot signed in", false, "authentication-required")]
+    [InlineData(1, "Not signed in", "", false, "authentication-required")]
+    [InlineData(1, "", "API Error: 401 Unauthorized", false, "authentication-required")]
+    [InlineData(1, "", "403 Forbidden", false, "failed")]
+    [InlineData(1, "The worker quoted: Not signed in", "", false, "failed")]
+    [InlineData(1, "", "```\nNot signed in\n```", false, "failed")]
+    [InlineData(0, "AVAILABLE", "Not signed in", false, "available")]
     [InlineData(0, "AVAILABLE", "", true, "failed")]
     public async Task MinimalRequest_IsBoundedAndRequiresPositiveEvidence(int exit, string stdout, string stderr, bool timeout, string expected)
     {
@@ -36,6 +43,8 @@ public sealed class ProviderHoldAvailabilityProbeTests
         });
         var result = await probe.CheckAsync(row.Hold, fixture.Source.Tasks.Single().LastDispatch!, TestContext.Current.CancellationToken);
         Assert.Equal(expected, result.Outcome);
+        Assert.Equal(expected == "authentication-required" ? ProviderFailureKind.AuthenticationRequired :
+            expected == "exhausted" ? ProviderFailureKind.BudgetExhausted : ProviderFailureKind.Unknown, result.FailureKind);
         Assert.Equal(1, calls);
         Assert.NotNull(directory);
         Assert.False(Directory.Exists(directory));

@@ -237,7 +237,8 @@ public static class ProviderFailureSignals
             return false;
         }
 
-        return TryGetProviderAuthenticationLine(verification, out _) &&
+        return (verification.ProviderFailureKind == ProviderFailureKind.AuthenticationRequired ||
+            TryGetProviderAuthenticationLine(verification, out _)) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -305,24 +306,6 @@ public static class ProviderFailureSignals
             IsApiErrorOverloadLine(text);
     }
 
-    private static bool ContainsProviderAuthenticationText(string text)
-    {
-        return text.Contains("Failed to authenticate", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("Not signed in", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("API Error 401", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("403 Forbidden", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("access token could not be refreshed", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("refresh token was already used", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("refresh_token_reused", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("sign in again", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("log out and sign in", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("authentication failed", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("authorization failed", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("invalid api key", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static bool ContainsProviderModelRejectionText(string text)
     {
         return (text.Contains("model", StringComparison.OrdinalIgnoreCase) ||
@@ -386,20 +369,13 @@ public static class ProviderFailureSignals
         }
     }
 
-    internal static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
-    {
-        foreach (var candidate in GetProviderSignalLines(verification))
-        {
-            if (ContainsProviderAuthenticationText(candidate))
-            {
-                line = candidate;
-                return true;
-            }
-        }
-
-        line = string.Empty;
-        return false;
-    }
+    internal static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line) =>
+        ProviderAuthenticationEvidence.TryGetRequiredLine(
+            new(verification.ExitCode,
+                string.Join("\n", DispatchEvidenceSummaries.EnumerateEvidenceLines(
+                    verification, includeStandardOutput: true, includeStandardError: false)),
+                string.Join("\n", DispatchEvidenceSummaries.EnumerateEvidenceLines(
+                    verification, includeStandardOutput: false, includeStandardError: true))), out line);
 
     internal static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
     {

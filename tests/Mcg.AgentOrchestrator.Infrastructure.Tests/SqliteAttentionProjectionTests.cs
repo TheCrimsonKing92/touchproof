@@ -22,6 +22,9 @@ public sealed class SqliteAttentionProjectionTests
     [InlineData("recovered", true)]
     [InlineData("success", false)]
     [InlineData("equal-time", true)]
+    [InlineData("unverified-success", true)]
+    [InlineData("predue-success", false)]
+    [InlineData("stale-generation-success", true)]
     public async Task CrossGoalArchivedHistory_ReusesBindingAndSchedulePolicy(string scenario, bool compress)
     {
         using var fixture = await Fixture.CreateAsync(7);
@@ -39,30 +42,42 @@ public sealed class SqliteAttentionProjectionTests
         }).ToArray();
         // Only two credentials, regardless of the default task count.
         await fixture.WriteAsync(goals[0] with { Status = GoalStatus.Completed, Tasks = tasks.Take(2).ToArray() }, archive: true, compress: compress);
-        var resetAt = At.AddHours(3);
+        var resetAt = At.AddMinutes(3);
         const string binding = "claude::account-a";
         var reset = Note(goals[1], null, ProviderBudgetHoldSchedules.FormatReset(new(binding, resetAt, "reset-intent")), At.AddMinutes(2));
         await fixture.WriteAsync(goals[1] with { Status = GoalStatus.Cancelled, Timeline = [reset] }, archive: true, compress: !compress);
         var admittedTask = goals[2].Tasks[0] with { Status = WorkTaskStatus.Assigned, AssignedAgentId = "probe-agent" };
         var probe = Note(goals[2], admittedTask.Id,
-            ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")), At.AddMinutes(3));
+            ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")
+                { ResetIntentId = "reset-intent", HoldPlacedAt = exhaustion.CompletedAt }), At.AddMinutes(3));
         var invalidation = Note(goals[2], admittedTask.Id, "Reassigned", At.AddMinutes(4)) with { Kind = ProgressKind.TaskRedelegated };
         await fixture.WriteAsync(goals[2] with { Status = GoalStatus.Active, Tasks = [admittedTask],
             Timeline = scenario == "invalidated" ? [probe, invalidation] : [probe] });
         // Success for B must not release A; success for A must release an archived exhaustion.
         var success = goals[3].Tasks[0] with { LastDispatch = Dispatch(At.AddMinutes(4), "account-b"),
-            LastVerification = Verification(At.AddMinutes(5), ProviderFailureKind.Unknown) with { ExitCode = 0 } };
-        var successes = scenario == "success"
-            ? new[] { success, success with { Id = goals[3].Tasks[1].Id, LastDispatch = Dispatch(At.AddMinutes(4), "account-a") } }
+            LastVerification = Verification(At.AddMinutes(5), ProviderFailureKind.Unknown) with
+                { ExitCode = 0, CompletionVerdictVerifiedSuccess = true } };
+        var hasAccountASuccess = scenario is "success" or "unverified-success" or "predue-success" or "stale-generation-success";
+        var successStartedAt = scenario == "predue-success" ? resetAt.AddMinutes(-1) : At.AddMinutes(4);
+        var successes = hasAccountASuccess
+            ? new[] { success, success with { Id = goals[3].Tasks[1].Id, LastDispatch = Dispatch(successStartedAt, "account-a"),
+                LastVerification = success.LastVerification! with { CompletionVerdictVerifiedSuccess = scenario != "unverified-success" } } }
             : [success];
-        await fixture.WriteAsync(goals[3] with { Status = GoalStatus.Superseded, Tasks = successes }, archive: true, compress: compress);
+        var successTimeline = hasAccountASuccess
+            ? new[] { Note(goals[3], successes[1].Id, ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")
+                { ResetIntentId = scenario == "stale-generation-success" ? "old-reset-intent" : "reset-intent",
+                    HoldPlacedAt = exhaustion.CompletedAt }), successStartedAt) }
+            : Array.Empty<ProgressEventSnapshot>();
+        await fixture.WriteAsync(goals[3] with { Status = GoalStatus.Superseded, Tasks = successes, Timeline = successTimeline },
+            archive: true, compress: compress);
         if (scenario is "completed" or "inflight")
         {
             var task = goals[4].Tasks[0] with { LastDispatch = Dispatch(At.AddMinutes(6), "account-a"),
                 LastVerification = scenario == "completed" ? Verification(At.AddMinutes(7), ProviderFailureKind.Unknown) : null };
             await fixture.WriteAsync(goals[4] with { Status = GoalStatus.Completed, Tasks = [task],
                 Timeline = [Note(goals[4], task.Id,
-                    ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")), At.AddMinutes(5))] },
+                    ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")
+                        { ResetIntentId = "reset-intent", HoldPlacedAt = exhaustion.CompletedAt }), At.AddMinutes(5))] },
                 archive: true, compress: compress);
         }
         if (scenario == "equal-time")
@@ -84,10 +99,21 @@ public sealed class SqliteAttentionProjectionTests
             Assert.Equal("exhaustion-receipt", hold.Hold.EvidenceReceipt);
             Assert.Equal("operator", hold.Schedule!.ResetSource);
             Assert.Equal(resetAt, hold.Schedule.ResetAt);
+            Assert.Equal("reset-intent", hold.Schedule.ResetIntentId);
             if (scenario == "operator") Assert.Equal(new GoalId(goals[2].Id), hold.Schedule.AdmittedGoalId);
             if (scenario == "invalidated") Assert.Null(hold.Schedule.AdmittedGoalId);
             if (scenario == "completed") { Assert.Equal(2, hold.Schedule.Attempt); Assert.Equal("inconclusive", hold.Schedule.LastProbeOutcome); }
             if (scenario == "inflight") Assert.True(hold.Schedule.ProbeInFlight);
+            if (scenario is "predue-success" or "stale-generation-success")
+            {
+                Assert.Equal(1, hold.Schedule.Attempt);
+                Assert.Equal(resetAt, hold.Schedule.NextProbeAt);
+            }
+            if (scenario == "unverified-success")
+            {
+                Assert.Equal(2, hold.Schedule.Attempt);
+                Assert.Equal(At.AddMinutes(65), hold.Schedule.NextProbeAt);
+            }
         }
         Assert.Equal(scenario is "completed" or "inflight" or "equal-time" ? 4 : 3, projection.Reads.ArchivePayloadsRead);
         Assert.Equal(projection.Reads.ArchivePayloadsRead, projection.Reads.ArchivePayloadsDecoded);

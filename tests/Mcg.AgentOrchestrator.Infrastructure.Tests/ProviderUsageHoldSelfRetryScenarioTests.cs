@@ -12,9 +12,11 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
 {
     private const string Exhausted = "API error (status 402 Payment Required): Grok Build usage balance exhausted";
 
-    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    public void NoAlternate_RetriesHeldBindingWaitsForProbeAndClearsOnSuccess()
+    [InlineData(true)]
+    [InlineData(false)]
+    public void NoAlternate_RetriesHeldBindingWaitsForProbeAndClearsOnSuccess(bool verifiedSuccess)
     {
         using var scenario = new Scenario();
         var goal = scenario.Incident();
@@ -46,8 +48,20 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         scenario.AssertPrimary(goal, probe: true);
         Assert.Equal(goal.Tasks.Single().Id, Assert.Single(scenario.ProbeNotes()).TaskId);
         scenario.At("2026-10-17T11:40:00Z");
-        scenario.Finish(goal, 0, "Success", "");
-        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+        scenario.Finish(goal, 0, "Success", "", verifiedSuccess: verifiedSuccess);
+        var verification = scenario.Current(goal).Tasks.Single().LastVerification!;
+        Assert.True(verification.Succeeded);
+        Assert.Equal(ProviderFailureKind.Unknown, verification.ProviderFailureKind);
+        Assert.Equal(verifiedSuccess, verification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal(!verifiedSuccess,
+            ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out var hold));
+        if (!verifiedSuccess)
+        {
+            var schedule = ProviderBudgetHoldSchedules.Evaluate(scenario.Kernel.Goals, hold, scenario.Clock.UtcNow);
+            Assert.Equal(2, schedule.Attempt);
+            Assert.Equal("inconclusive", schedule.LastProbeOutcome);
+            Assert.Equal(scenario.Clock.UtcNow.AddMinutes(60), schedule.NextProbeAt);
+        }
         Assert.Equal(2, scenario.PrimaryDispatches());
         Assert.DoesNotContain(scenario.Current(goal).Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
         Assert.Empty(scenario.Escalations);
@@ -181,7 +195,8 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
             scenario.Kernel.RecordTaskDispatch(success.Id, success.Tasks.Single().Id,
                 new("grok-cli", "fixture", scenario.Workspace.ResolveExecutionDirectory(success.Id), scenario.Clock.UtcNow, ProviderName: "xAI"));
             scenario.At("2026-10-17T11:08:20Z");
-            scenario.Finish(success, 0, "Success", "");
+            scenario.Finish(success, 0, "Success", "", verifiedSuccess: true);
+            Assert.True(scenario.Current(success).Tasks.Single().LastVerification!.CompletionVerdictVerifiedSuccess);
             Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         }
         scenario.At("2026-10-17T11:09:00Z");
@@ -304,14 +319,15 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
             Finish(goal, 1, stdout, stderr);
             return Current(goal);
         }
-        internal void Finish(Goal goal, int exit, string stdout, string stderr, TaskId? taskId = null)
+        internal void Finish(Goal goal, int exit, string stdout, string stderr, TaskId? taskId = null, bool verifiedSuccess = false)
         {
             goal = Current(goal);
             var task = taskId is { } id ? goal.Tasks.Single(item => item.Id == id) : goal.Tasks.Single();
             var dispatch = task.LastDispatch!;
             var kind = WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(exit, stdout, stderr));
             Kernel.RecordTaskVerification(goal.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory, exit,
-                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt));
+                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt,
+                CompletionVerdictVerifiedSuccess: verifiedSuccess));
             if (task.LastProcess is { } process)
                 Kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process with { CompletedAt = Clock.UtcNow, ExitCode = exit }, verification: null);
             if (exit == 0) return;

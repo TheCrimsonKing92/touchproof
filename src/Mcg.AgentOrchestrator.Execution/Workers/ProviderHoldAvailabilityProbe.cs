@@ -3,7 +3,10 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record ProviderHoldProbeResult(string Outcome, string Reason);
+public sealed record ProviderHoldProbeResult(string Outcome, string Reason)
+{
+    public ProviderFailureKind FailureKind => ProviderBudgetHoldSchedules.ClassifyOutcome(Outcome);
+}
 
 public interface IProviderHoldAvailabilityProbe
 {
@@ -45,6 +48,7 @@ public sealed class ProviderHoldAvailabilityProbe(WorkerProfileCatalog profiles,
             if (result.TimedOut || result.CaptureLimited) return new("failed", result.TimedOut ? "timeout" : "output-capture-limited");
             var provider = WorkerProviderCatalog.Default().ResolveProfile(dispatch.WorkerName);
             var failure = provider.ParseOutcome(new(result.ExitCode, result.StandardOutput, result.StandardError));
+            if (failure == ProviderFailureKind.AuthenticationRequired) return new("authentication-required", "provider-sign-in-required");
             if (failure == ProviderFailureKind.BudgetExhausted) return new("exhausted", "provider-budget-exhausted");
             var answer = result.StandardOutput.Trim();
             if (provider.Identity.UsesCodexExitFileBehavior &&

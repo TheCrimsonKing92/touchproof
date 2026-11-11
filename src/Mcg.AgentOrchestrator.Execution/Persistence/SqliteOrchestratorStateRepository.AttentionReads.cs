@@ -119,7 +119,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 var timeline = AttentionElements(root, "Timeline").Select(evt => new ProgressEvent(
                         new GoalId(id), ReadAttentionField<string>(evt, "TaskId") is { } taskId ? new TaskId(taskId) : null,
                         ReadAttentionField<ProgressKind>(evt, "Kind"), ReadAttentionField<string>(evt, "Message")!,
-                        ReadAttentionField<DateTimeOffset>(evt, "OccurredAt")))
+                        ReadAttentionField<DateTimeOffset>(evt, "OccurredAt"),
+                        OperatorIntentCreatedAt: ReadAttentionField<DateTimeOffset?>(evt, "OperatorIntentCreatedAt")))
                     .Where(evt => evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
                         ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled ||
                         ProviderBudgetHoldSchedules.TryParseProbe(evt, out _) || ProviderBudgetHoldSchedules.TryParseReset(evt, out _) ||

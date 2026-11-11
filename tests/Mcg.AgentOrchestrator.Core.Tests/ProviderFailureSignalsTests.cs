@@ -30,6 +30,42 @@ public sealed class ProviderFailureSignalsTests
         Assert.True(ProviderFailureSignals.IsRecoverableProviderAuthenticationFailure(verification));
     }
 
+    [Theory]
+    [InlineData("", "```text\nERROR: Not signed in\n```", "")]
+    [InlineData("```text\nERROR: Not signed in\n```", "", "")]
+    [InlineData("", "WORKER_RESULT:\nERROR: Not signed in\nEND_WORKER_RESULT", "")]
+    [InlineData("", "    ERROR: Not signed in", "")]
+    [InlineData("Example diagnostic:\nERROR: Not signed in", "", "")]
+    [InlineData("ERROR: Not signed in", "", "ERROR: Not signed in")]
+    [InlineData("", "```text\nERROR: Not signed in\n```\nError: invalid API key", "Error: invalid API key")]
+    [InlineData("", "WORKER_RESULT:\nERROR: Not signed in\nEND_WORKER_RESULT\nError: invalid API key", "Error: invalid API key")]
+    public void AuthenticationFallback_PreservesDiagnosticContext(
+        string stdout, string stderr, string expectedLine)
+    {
+        var verification = FailedRecord(stdout, stderr);
+        var expected = expectedLine.Length > 0;
+
+        Assert.Equal(expected, ProviderAuthenticationEvidence.IsRequired(new(1, stdout, stderr)));
+        Assert.Equal(expected, ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var line));
+        Assert.Equal(expectedLine, line);
+        Assert.Equal(expected, ProviderFailureSignals.IsRecoverableProviderAuthenticationFailure(verification));
+    }
+
+    [Theory]
+    [InlineData("```text\nERROR: Not signed in\n```", false)]
+    [InlineData("Error: invalid API key", true)]
+    [InlineData(null, false)]
+    public void AuthenticationFallback_UsesAuthoritativeDispatchContext(string? stderr, bool expected)
+    {
+        var verification = new TaskVerificationRecord("opaque command", "C:\\repo", 1, "", "ERROR: Not signed in",
+            CompletedAt, FullStandardError: stderr, StandardErrorIsAuthoritative: false,
+            EvidenceSource: VerificationEvidenceSource.Dispatch, DispatchAttemptAt: CompletedAt);
+
+        Assert.Equal(expected, ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var line));
+        Assert.Equal(expected ? stderr : string.Empty, line);
+        Assert.Equal(expected, ProviderFailureSignals.IsRecoverableProviderAuthenticationFailure(verification));
+    }
+
     [Fact]
     public void ModelRejection_UnsupportedModel_PreservesBaseline()
     {
