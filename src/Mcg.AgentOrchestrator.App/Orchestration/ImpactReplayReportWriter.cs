@@ -48,7 +48,6 @@ internal static class ImpactReplayReportWriter
         if (abandoned.Length == 0) text.AppendLine("None.");
         foreach (var group in abandoned) text.AppendLine($"- {Cell(group.Key)}: {group.Count()}");
         text.AppendLine();
-        ImpactReplayUnboundedSelectionReportWriter.Append(text, report.Attempts);
         text.AppendLine("## Misses");
         text.AppendLine();
         var misses = report.Attempts.SelectMany(attempt => attempt.FailingClasses.Where(failure => failure.IsMiss)
@@ -160,6 +159,7 @@ internal static class ImpactReplayReportWriter
                         $"inputs: {Cell(string.Join(", ", guard.TriggerPaths))}; {Cell(guard.Reason)}");
             }
         }
+        ImpactReplayUnboundedSelectionReportWriter.Append(text, report.Attempts);
         return text.ToString();
     }
 

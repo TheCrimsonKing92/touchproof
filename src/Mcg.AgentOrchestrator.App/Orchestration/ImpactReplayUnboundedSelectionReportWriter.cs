@@ -12,6 +12,7 @@ internal static class ImpactReplayUnboundedSelectionReportWriter
             .GroupBy(attempt => attempt.DegradationKind!)
             .OrderBy(group => group.Key, StringComparer.Ordinal).ToArray();
         if (groups.Length == 0) return;
+        text.AppendLine();
         text.AppendLine("## Unbounded selections for bound abandonments");
         text.AppendLine();
         foreach (var group in groups)
