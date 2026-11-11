@@ -185,8 +185,9 @@ internal static class PromptContextFormatter
         var priorCompletedTasks = goalTasks
             .TakeWhile(t => t.Id != taskId)
             .Where(t => t.Status == WorkTaskStatus.Completed && t.LastVerification is not null)
-            .TakeLast(3)
             .ToList();
+        var recentTasks = priorCompletedTasks.TakeLast(3).ToHashSet();
+        priorCompletedTasks = priorCompletedTasks.Where(task => task.RequiredRole == AgentRole.Planner || recentTasks.Contains(task)).ToList();
 
         if (priorCompletedTasks.Count == 0)
         {
@@ -197,7 +198,10 @@ internal static class PromptContextFormatter
         foreach (var priorTask in priorCompletedTasks)
         {
             lines.Add($"### {priorTask.RequiredRole}: {TrimPromptTitle(priorTask.Description)}");
-            lines.Add(TrimEvidenceBlock(priorTask.LastVerification!.StandardOutput, complexity));
+            lines.Add(priorTask.RequiredRole == AgentRole.Planner
+                ? priorTask.LastVerification!.AuthoritativeStandardOutput ?? throw new InvalidOperationException(
+                    $"Complete inline Planner evidence unavailable for task {priorTask.Id.Value}; a preview cannot replace the durable plan.")
+                : TrimEvidenceBlock(priorTask.LastVerification!.StandardOutput, complexity));
         }
         lines.Add(string.Empty);
         return lines;

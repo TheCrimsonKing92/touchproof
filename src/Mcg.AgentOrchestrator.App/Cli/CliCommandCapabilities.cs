@@ -37,6 +37,7 @@ internal static class CliCommandCapabilities
             return CliCommandCapability.Execution;
 
         return QueryCommands.Contains(args[0]) ||
+               CliExperimentReplayCommand.IsQuery(args) ||
                CliFleetAttentionQueryCommand.IsCommand(args) ||
                CliFleetCapacityQueryCommand.IsCommand(args) ||
                CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args) ||
