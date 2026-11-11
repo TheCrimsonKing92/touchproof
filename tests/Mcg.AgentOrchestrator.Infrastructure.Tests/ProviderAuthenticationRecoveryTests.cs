@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -57,6 +58,13 @@ public sealed class ProviderAuthenticationRecoveryTests
         Assert.Equal("inconclusive", row.Schedule!.LastProbeOutcome);
         Assert.Equal(authAt, row.Schedule.LastActionableFailureAt);
         Assert.Equal(fixture.Clock.UtcNow, row.Schedule.LastProbeAt);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ProviderUsageHoldJson.Row(row)));
+        Assert.Equal("inconclusive", json.RootElement.GetProperty("lastProbe").GetString());
+        Assert.Equal(fixture.Clock.UtcNow, json.RootElement.GetProperty("lastProbeAt").GetDateTimeOffset());
+        Assert.Equal(nameof(ProviderFailureKind.AuthenticationRequired), json.RootElement.GetProperty("lastActionableFailure").GetString());
+        Assert.Equal(authAt, json.RootElement.GetProperty("lastActionableFailureAt").GetDateTimeOffset());
+        Assert.Equal(row.Diagnosis, json.RootElement.GetProperty("diagnosis").GetString());
+        Assert.Equal(row.Hold.PlacedAt, json.RootElement.GetProperty("placedAt").GetDateTimeOffset());
         var snapshot = ConductorStatusSnapshotReader.Read(fixture.Workspace, null, fixture.Clock.UtcNow,
             now: fixture.Clock.UtcNow, fleetSummaryExpected: false) with { ProviderHolds = [row] };
         using var statusOutput = new OwnerConsoleStructuredWriter();

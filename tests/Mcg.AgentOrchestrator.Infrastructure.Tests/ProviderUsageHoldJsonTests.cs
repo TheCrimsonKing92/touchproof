@@ -11,8 +11,10 @@ public sealed class ProviderUsageHoldJsonTests
     private const string Key = "xai::<provider-default>";
     private const string Exhausted = "API error (status 402 Payment Required): Grok Build usage balance exhausted";
     private static readonly DateTimeOffset Start = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
-    private static readonly string[] Fields = ["bindingKey", "provider", "sourceGoalId", "sourceTaskId", "placedAt", "evidence",
+    private static readonly string[] LegacyFields = ["bindingKey", "provider", "sourceGoalId", "sourceTaskId", "placedAt", "evidence",
         "scheduleAvailable", "attempt", "nextProbeAt", "resetSource", "resetAt", "probeInFlight", "admittedGoalId", "admittedTaskId", "lastProbe", "resetCommand"];
+    private static readonly string[] DiagnosticFields = ["lastProbeAt", "lastActionableFailure", "lastActionableFailureAt", "diagnosis", "resetIntentId"];
+    private static readonly string[] Fields = [.. LegacyFields, .. DiagnosticFields];
 
     [Fact]
     public async Task HeldBinding_StatusAndAttentionEmitIdenticalOrderedRows()
@@ -36,6 +38,11 @@ public sealed class ProviderUsageHoldJsonTests
         Assert.Equal(projected.Schedule.ResetSource, row.GetProperty("resetSource").GetString());
         Assert.Equal(JsonValueKind.Null, row.GetProperty("lastProbe").ValueKind);
         Assert.Equal($"provider-reset {Key} <ISO-8601 instant> --text-file <path>", row.GetProperty("resetCommand").GetString());
+        Assert.Equal(projected.Hold.PlacedAt, row.GetProperty("lastProbeAt").GetDateTimeOffset());
+        Assert.Equal(nameof(ProviderFailureKind.BudgetExhausted), row.GetProperty("lastActionableFailure").GetString());
+        Assert.Equal(projected.Hold.PlacedAt, row.GetProperty("lastActionableFailureAt").GetDateTimeOffset());
+        Assert.Equal(projected.Diagnosis, row.GetProperty("diagnosis").GetString());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("resetIntentId").ValueKind);
         var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath);
         var output = InfrastructureTestSupport.CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(
             ["attention", "--json"], repository, fixture.Workspace, new FixedTime()));
@@ -109,8 +116,11 @@ public sealed class ProviderUsageHoldJsonTests
         var row = json.RootElement;
         Assert.Equal(Fields, row.EnumerateObject().Select(property => property.Name));
         Assert.False(row.GetProperty("scheduleAvailable").GetBoolean());
-        foreach (var field in new[] { "attempt", "nextProbeAt", "resetSource", "resetAt", "probeInFlight", "admittedGoalId", "admittedTaskId", "lastProbe" })
+        foreach (var field in new[] { "attempt", "nextProbeAt", "resetSource", "resetAt", "probeInFlight", "admittedGoalId", "admittedTaskId", "lastProbe",
+                     "lastProbeAt", "lastActionableFailure", "lastActionableFailureAt", "resetIntentId" })
             Assert.Equal(JsonValueKind.Null, row.GetProperty(field).ValueKind);
+        Assert.Equal(held.Diagnosis, row.GetProperty("diagnosis").GetString());
+        Assert.Equal($"provider-reset {Key} <ISO-8601 instant> --text-file <path>", row.GetProperty("resetCommand").GetString());
     }
 
     public class QueryProbe : DispatchProxy
