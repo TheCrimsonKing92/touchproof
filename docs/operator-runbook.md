@@ -113,6 +113,20 @@ At each meaningful operator checkpoint, report what reached main since the previ
 
 This discipline comes from the September 2026 dogfood failure: completed branches accumulated behind reciprocal test failures and acceptance-owned criteria rejected at review, while the driving agent spent rounds improving diagnostics and expanding work. The lesson is to restore the landing path and its ownership rules, not to count activity as delivery.
 
+<a id="token-efficiency"></a>
+## Token efficiency
+
+This contract applies to Codex, Claude and every orchestrated role, including drivers and reviewers. Reduce total attributable tokens per accepted landing, including driver work, delegated review, retries and corrections, without degrading results, outputs, correctness, safety or evidence quality. Smaller prompts are not success when they cause more work. Preserve existing ownership, permissions, independent review and deterministic gates.
+
+- **Account accurately.** Character counts are a context-size proxy, never billed tokens. Missing usage is unknown, not zero. Preserve cached/fresh and reasoning/output overlap semantics; do not double count overlapping usage. Lower cost does not establish correctness.
+- **Expand evidence progressively.** Read compact current state first, then relevant evidence. Keep full required plans, criteria, unresolved findings, negative evidence and owner decisions accessible within existing permissions. Never silently truncate required information or promote historical claims to current authority.
+- **Bound investigations and commands.** Inspect the command contract before an unfamiliar invocation. Narrow paths, patterns and output before execution; avoid repeated broad surveys, full-file/tool dumps and rereading resolved history without changed evidence. Before retrying, identify what changed. Finish bounded investigations and retain a compact checkpoint before switching work.
+- **Keep handoffs current.** Carry one authoritative current contract, explicit owners, live findings, exact candidate identities and evidence locations. Keep stable shared instructions concise in this canonical home, linked from both harness entry points; reference them instead of duplicating a growing policy appendix in each brief.
+- **Package independent review.** Give reviewers scoped requirements, candidate identities, live findings and evidence locations with access to the full required evidence. Ask them to assess requirements independently, without asking them to confirm a preferred verdict. Preserve required cross-family review and the normal review and acceptance path.
+- **Use the appropriate mechanism.** Prefer deterministic receipt validation, routing and packaging for mechanical work; use models for design, interpretation and substantive review.
+- **Compare quality before changing workflow.** Do not globally lower model effort, downgrade models, remove roles, weaken tests or relax acceptance to save tokens. Model/effort or workflow changes require a bounded comparison of token measurements alongside first-attempt success, correction rounds, escaped defects and operator interventions. This documentation policy requires no live benchmark, operator observation or new persistent owner-evidence hold before landing.
+- **Own intake.** Always assign an epic before dispatch and verify membership after creation.
+
 <a id="driver-takeover"></a>
 ## Driver takeover and stale owner instructions
 

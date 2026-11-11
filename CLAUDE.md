@@ -3,8 +3,8 @@
 <!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
 Owns: Claude Code harness operating guidance.
 Counterpart: AGENTS.md owns shared repository discipline plus Codex harness operating guidance.
-Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
-Driver takeover home: docs/operator-runbook.md#driver-takeover owns handoff expiry of owner intake/pacing instructions and the stop-and-ask rule when a remembered instruction conflicts with a current request; both harnesses follow it.
+Rule: Shared edits update BOTH AGENTS.md and CLAUDE.md contract blocks/anchor lists, or move the content to docs/operator-runbook.md or another shared home.
+Driver takeover home: docs/operator-runbook.md#driver-takeover governs owner intake/pacing expiry at handoff and stop-and-ask on remembered/current instruction conflicts; both harnesses follow it.
 Managed .NET test execution home: docs/operator-runbook.md owns the repository-safe managed-runner command and the native-apphost prohibition; counterpart files and worker skills point there instead of inventing test launch commands.
 Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
 Shared anchors:
@@ -18,6 +18,8 @@ Shared anchors:
 - operating-the-goal-loop
 - safety
 - evidence
+Shared external anchors:
+- [token-efficiency](docs/operator-runbook.md#token-efficiency)
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
 
 Attention is scarce. Preserve it.
