@@ -18,10 +18,24 @@ internal sealed record AcceptanceProcessRequest
     public TimeSpan? ProgressInterval { get; init; } = null;
     public TimeSpan? CapturePublicationInterval { get; init; } = null;
     public bool StopOnCaptureLimit { get; init; } = false;
+    internal Action<string, string, Task>? CaptureObserver { get; init; }
     public bool? KeepCaptureFiles { get; init; } = null;
     public Action<int>? ResumeObserver { get; init; } = null;
     public bool ResolveBareCommand { get; init; }
     internal IReadOnlyDictionary<string, string?>? ChildEnvironmentOverrides { get; init; }
     internal JunitCommandEnvironmentInputs? CommandEnvironment { get; init; }
     internal bool SuppressDiagnosticCaptures { get; init; }
+
+    internal Action? ObserveCaptureLimit(string stdoutPath, string stderrPath, Action? onLimitReached)
+    {
+        if (CaptureObserver is null) return onLimitReached;
+        // Each use of the request gets an observational task, never a stop token.
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CaptureObserver(stdoutPath, stderrPath, observed.Task);
+        return () =>
+        {
+            onLimitReached?.Invoke();
+            observed.TrySetResult();
+        };
+    }
 }
