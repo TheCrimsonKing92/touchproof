@@ -3,8 +3,8 @@
 <!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
 Owns: shared repository discipline plus Codex harness operating guidance.
 Counterpart: CLAUDE.md owns Claude Code harness operating guidance and links back to AGENTS.md for shared discipline.
-Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
-Driver takeover home: docs/operator-runbook.md#driver-takeover owns handoff expiry of owner intake/pacing instructions and the stop-and-ask rule when a remembered instruction conflicts with a current request; both harnesses follow it.
+Rule: Shared-discipline edits must update BOTH harness counterpart blocks and shared-anchor lists, or move to docs/operator-runbook.md or another shared home.
+Driver takeover home: docs/operator-runbook.md#driver-takeover governs owner intake/pacing expiry at handoff and stop-and-ask on remembered/current instruction conflicts; both harnesses follow it.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -27,7 +27,6 @@ Prefer short, decision-changing output over comprehensive dumps. Show what chang
 > **Operating the orchestrator — driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the canonical conductor-first guide, including the stuck-goal playbook (symptom → command) and the state/store map. This file covers output/diagnosis/spec discipline and architecture invariants — read it alongside the runbook, not instead of it.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
-> **Token efficiency for every harness and role:** Follow the shared [token-efficiency contract](docs/operator-runbook.md#token-efficiency).
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
 > **Assigning a verdict, terminal state, circuit trip, escalation, or retry-vs-fail choice?** Use [`dispositive-decision-discipline`](docs/dispositive-decision-discipline.md). One check: *could I write the justification for this outcome from what is in scope right here?* If not, the discriminating evidence was discarded upstream and the decision is a guess.
 

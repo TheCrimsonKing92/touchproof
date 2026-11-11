@@ -3,8 +3,8 @@
 <!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
 Owns: Claude Code harness operating guidance.
 Counterpart: AGENTS.md owns shared repository discipline plus Codex harness operating guidance.
-Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
-Driver takeover home: docs/operator-runbook.md#driver-takeover owns handoff expiry of owner intake/pacing instructions and the stop-and-ask rule when a remembered instruction conflicts with a current request; both harnesses follow it.
+Rule: Shared-discipline edits must update BOTH harness counterpart blocks and shared-anchor lists, or move to docs/operator-runbook.md or another shared home.
+Driver takeover home: docs/operator-runbook.md#driver-takeover governs owner intake/pacing expiry at handoff and stop-and-ask on remembered/current instruction conflicts; both harnesses follow it.
 Managed .NET test execution home: docs/operator-runbook.md owns the repository-safe managed-runner command and the native-apphost prohibition; counterpart files and worker skills point there instead of inventing test launch commands.
 Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
 Shared anchors:
@@ -29,7 +29,6 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 > **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
-> **Token efficiency for every harness and role:** Follow the shared [token-efficiency contract](docs/operator-runbook.md#token-efficiency).
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
 > **Writing acceptance criteria?** Assign each criterion to a capable evidence owner using the shared [`role-capability-matrix`](docs/role-capability-matrix.md) before creating the goal.
 > **Writing a brief, retry feedback, or a clarification answer — especially a second correction to the same worker?** Use [`worker-guidance-discipline`](docs/worker-guidance-discipline.md). A prohibition invites variants and an adjective invites interpretation; give a decision procedure the worker can run on its own output, or point at an exemplar already in the repo.
