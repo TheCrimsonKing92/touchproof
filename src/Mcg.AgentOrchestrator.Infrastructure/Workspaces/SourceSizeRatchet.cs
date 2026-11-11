@@ -146,7 +146,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
             // Goal 871a6f45 adds seven lines to open the attributed-failure routing hold between retry
             // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1654),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1650),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -574,7 +574,7 @@ internal static class SourceSizeRatchet
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
-            new SourceClassCeiling("ConductorDriver", 14140, 70),
+            new SourceClassCeiling("ConductorDriver", 14136, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
