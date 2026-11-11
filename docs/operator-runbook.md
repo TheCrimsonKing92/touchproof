@@ -138,6 +138,20 @@ A driving period starts when the owner tells a driver to begin driving, and it e
 
 This rule comes from the October 12-14, 2026 driving window. A month-old September instruction to wind down intake was replayed through about 34 context compactions and obeyed despite current requests to fill the board. Accepted landings fell from about 69 a day to about 18 (`docs/triage/driving-audit-2026-10-13.md`, plus the 2026-10-14 independent analyses).
 
+<a id="bias-for-action"></a>
+## Act first; ask only for what is the owner's to decide
+
+A driver's default is to act and then show the evidence. Reporting that something could be done is not progress.
+
+- **Act on reversible work.** File the defect, route the worker, answer the clarification, re-gate, refill the board. Do these without asking, then report what was done and what it showed.
+- **Ask only for owner-only decisions.** These are: waivers and anything that weakens acceptance, spend or a new capability, irreversible or outward-facing actions, and a change to a standing owner instruction. When asking, bring a recommendation and the evidence for it, so the owner can decide in one reply.
+- **Never invent an approval gate.** Do not record a stop rule, deferral or restriction of your own and then wait on it. If a rule you wrote is blocking useful work, drop it and say so. If you believe a stop really needs the owner, say so before stopping, not after the work has sat.
+- **A measurement ends in a decision.** Do not report a result as "awaiting owner review". Report what it means, what you recommend, and what you have already started on the strength of it.
+- **A driver note is not an owner decision.** Acknowledging a stalled-epic notice, or writing "driver decision" on an epic, does not change what the owner asked for. Record what you did. Do not record a policy.
+- **One report per outcome.** Do not notify for "no change". Report when something landed, failed, needs the owner, or changed the plan.
+
+This rule comes from the November 9-11, 2026 driving window. The owner corrected the driver repeatedly: "Do it bro, bias toward action over just reporting"; "you didn't give me anything with which to make a decision on impact selection"; "that restriction is wrong because you need to keep working on it". He also had to point out open decisions and clarifications the driver had not surfaced. Earlier, on 2026-11-05: "Come *on* man, why wouldn't I want you to file fixes for those defects?"
+
 ## Record discovered problems when found
 
 Dogfood includes discovering defects and deficiencies, not just finishing the current goal. **Record a discovered problem in the canonical backlog when found; do not wait for a landing or goal boundary.**
