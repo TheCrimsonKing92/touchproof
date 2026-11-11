@@ -29,6 +29,9 @@ internal static class OrchestratorArtifactRegistry
         Source("backlog.db", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("dogfood-log.db", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("experiments.db", "App/Orchestration/OrchestratorWorkspace.cs"),
+        Source("experiment-replay.db", "Execution/Persistence/ExperimentReplayStore.cs"),
+        Source("experiment-replay", "App/Orchestration/ExperimentReplayRunner.cs",
+            note: "Content-addressed corpus/run evidence; retained with experiment-replay.db references. Disposable checkouts live under the owned temp root."),
         Source("portfolio.db", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("semantic-acceptance.jsonl", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("agents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
@@ -162,7 +165,7 @@ internal static class OrchestratorArtifactRegistry
         {
             "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" or "merge-train-evidence" or "cohort-acceptance.db.artifacts" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
             "logs" => RetentionKind.KeepDays,
-            "goal-events" or "goal-operations" => RetentionKind.KeepForever,
+            "goal-events" or "goal-operations" or "experiment-replay" => RetentionKind.KeepForever,
             _ when pattern.EndsWith(".db", StringComparison.Ordinal) || pattern.EndsWith(".json", StringComparison.Ordinal) => RetentionKind.KeepForever,
             _ => RetentionKind.Unmanaged
         };

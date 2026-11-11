@@ -18,6 +18,8 @@ public sealed class StoreSchemaSourceAttribute(string storeName, string sourceFi
 
 public static class StoreSchemaRegistry
 {
+    public static StoreSchemaEntry ExperimentReplay { get; } =
+        new("experiment-replay", "src/Mcg.AgentOrchestrator.Execution/Persistence/ExperimentReplayStore.cs", "experiment-replay.db", "review", 1);
     private const string Persistence = "src/Mcg.AgentOrchestrator.Execution/Persistence/";
     private const string Conductor = "src/Mcg.AgentOrchestrator.App/Orchestration/";
 
@@ -89,6 +91,7 @@ public static class StoreSchemaRegistry
     [
         Portfolio,
         Experiments,
+        ExperimentReplay,
         Backlog,
         OperatorIntents,
         OperatorLessons,

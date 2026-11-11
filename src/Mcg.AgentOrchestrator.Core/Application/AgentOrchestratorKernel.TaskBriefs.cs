@@ -249,7 +249,7 @@ public sealed partial class AgentOrchestratorKernel
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity)}",
+            $"Goal: {(goal.RefinedSpec is null ? PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity) : CurrentSpecificationProjection.ProjectObjective(declarationContext.Objective, goal.RefinedSpec))}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach orchestrator state.",
@@ -377,29 +377,7 @@ public sealed partial class AgentOrchestratorKernel
                 if (goal.CriterionEvidenceObligations.Any(item => item.PlannerSources is { Count: > 0 }))
                     specLines.Add("Only execution evidence is deferred. Reviewer must independently pass source, safety and preserved-behavior review, including compound criteria; any source defect remains blocking.");
             }
-            if (refinedSpec.Decisions.Count > 0)
-            {
-                specLines.Add(string.Empty);
-                specLines.Add("Decisions:");
-                foreach (var decision in refinedSpec.Decisions)
-                    specLines.Add($"- {decision.Question} → {decision.Choice} ({decision.Rationale})");
-            }
-            var authoritativeClarifications = refinedSpec.AuthoritativeClarificationAnswerHistory;
-            if (authoritativeClarifications.Count > 0)
-            {
-                specLines.Add(string.Empty);
-                specLines.Add("Clarification answer provenance:");
-                foreach (var answer in authoritativeClarifications)
-                {
-                    var answeredUnder = answer.BriefVersion is { } briefVersion
-                        ? $"brief v{briefVersion}"
-                        : "an unknown brief version";
-                    specLines.Add(
-                        $"- {answer.Id} (answered under {answeredUnder}; " +
-                        $"current brief v{goal.AuthoritativeBrief.Version}): {PromptContextFormatter.TrimPromptBlock(answer.Text)}");
-                }
-            }
-            specLines.Add(string.Empty);
+            CurrentSpecificationBriefDetails.AppendTo(specLines, refinedSpec, goal.AuthoritativeBrief.Version);
             segments.Add(TaskBriefSegment.Projected("goal/refined-spec.json", specLines));
         }
 
