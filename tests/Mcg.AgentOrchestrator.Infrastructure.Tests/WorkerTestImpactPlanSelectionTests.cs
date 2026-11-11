@@ -196,7 +196,7 @@ public sealed class WorkerTestImpactPlanSelectionTests
             var actual = WorkerTestImpactPlanSelection.ScopeToManifest(SyntheticPlan(), root, manifestPath);
 
             Assert.Empty(actual.Checks);
-            Assert.Contains("checks scoped to dotnet-test projects", actual.Summary);
+            Assert.Contains("declares no test checks (dotnet-test or crosswalk-test); no project checks derived", actual.Summary);
             Assert.DoesNotContain("missing", actual.Summary);
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }

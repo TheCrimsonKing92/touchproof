@@ -176,7 +176,7 @@ public sealed class GoalTargetImpactPlanScopeTests
         Assert.False(actual.RequiresBuild);
         Assert.Empty(actual.Checks);
         AssertMetadataEqual(plan, actual);
-        Assert.Contains("declares no dotnet-test projects; no project checks derived", actual.Summary);
+        Assert.Contains("declares no test checks (dotnet-test or crosswalk-test); no project checks derived", actual.Summary);
     }
 
     [Fact]

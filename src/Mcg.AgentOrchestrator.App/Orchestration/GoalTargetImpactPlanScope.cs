@@ -21,7 +21,7 @@ internal static class GoalTargetImpactPlanScope
     internal static RepositoryTestImpactPlan Scope(
         RepositoryTestImpactPlan plan, string worktreePath, string manifestPath)
     {
-        var checks = WorkerManifestTestProjectReader.ReadChecks(manifestPath);
+        var checks = WorkerManifestTestCheckReader.Read(manifestPath);
         var displayPath = string.IsNullOrWhiteSpace(manifestPath)
             ? "(unspecified)"
             : WorkerAcceptanceManifestDisplayPath.Render(worktreePath, manifestPath);
@@ -36,30 +36,28 @@ internal static class GoalTargetImpactPlanScope
             };
         }
 
-        var scoped = ManifestDeclaredTestProjects.From(checks.Select(check => check.Project)).Filter(plan);
+        var scoped = checks.Filter(plan);
         if (scoped.Checks.Count > 0)
         {
             return scoped with
             {
-                Summary = $"{plan.Summary}; checks scoped to dotnet-test projects declared by {displayPath}"
+                Summary = $"{plan.Summary}; {checks.ScopedSummary(displayPath)}"
             };
         }
 
-        if (checks.Count == 0)
+        if (checks.Checks.Count == 0)
         {
             return scoped with
             {
-                Summary = $"acceptance manifest at {displayPath} declares no dotnet-test projects; no project checks derived"
+                Summary = checks.NoChecksSummary(displayPath)
             };
         }
 
         return plan with
         {
             RequiresBuild = true,
-            Checks = checks.Select(check => new RepositoryTestImpactCheck(
-                check.Name, ["dotnet", "test", "--project", check.Project],
-                $"Declared dotnet-test check from {displayPath}.")).ToArray(),
-            Summary = $"no change-scoped checks for this target; using the manifest's declared test checks from {displayPath}"
+            Checks = checks.Checks.Select(check => check.ToImpactCheck(displayPath)).ToArray(),
+            Summary = checks.FallbackSummary(displayPath)
         };
     }
 }

@@ -3,7 +3,7 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Scopes gate impact checks to the loaded manifest's declared projects.</summary>
+/// <summary>Scopes gate impact checks to the loaded manifest's declared test checks.</summary>
 internal static class ManifestScopedImpactPlan
 {
     internal static RepositoryTestImpactPlan? PlanChangeScoped(
@@ -31,14 +31,20 @@ internal static class ManifestScopedImpactPlan
         string worktreePath,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
     {
-        var plan = RepositoryTestImpactPlanner.Plan(summary, worktreePath);
-        var declared = ManifestDeclaredTestProjects.From(manifestChecks
-            .Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
-            .Select(check => check.Project));
+        return Scope(RepositoryTestImpactPlanner.Plan(summary, worktreePath), manifestChecks);
+    }
+
+    internal static RepositoryTestImpactPlan Scope(
+        RepositoryTestImpactPlan plan, IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
+    {
+        var declared = new ManifestDeclaredTestCheckSet(manifestChecks
+            .Where(check => ManifestTestCheckKinds.Canonicalize(check.Type) is not null)
+            .Select(check => new ManifestDeclaredTestCheck(check.Name,
+                ManifestTestCheckKinds.Canonicalize(check.Type)!, check.Project, check.Arguments)));
 
         // Built-in declarations retain this repository's existing planning policy.
         // No-build plans carry non-executable evidence rather than project checks.
-        return declared.DeclaresAnyBuiltInTestProject || !plan.RequiresBuild
+        return declared.DotnetProjects.DeclaresAnyBuiltInTestProject || !plan.RequiresBuild
             ? plan
             : declared.Filter(plan);
     }
