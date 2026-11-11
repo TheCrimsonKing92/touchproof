@@ -4,6 +4,8 @@ This is the long-term display plan for the Control plane epic, based on source a
 `e28f1bbf8`. It recommends one display form per owner question, with separately
 landable increments. This goal adds documentation and its maintenance test only.
 
+Apply the canonical [console responsiveness contract](operator-runbook.md#console-responsiveness) to every console display slice alongside existing resource, retention and correctness requirements.
+
 ## Inventory
 
 The console pins Terminal.Gui to 2.5.0 at

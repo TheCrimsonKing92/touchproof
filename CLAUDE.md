@@ -26,7 +26,8 @@ Attention is scarce. Preserve it.
 
 Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.md](AGENTS.md), at the anchors listed in the counterpart contract above; do not duplicate those sections here.
 
-> **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
+> **Orchestrator operation:** [Runbook](docs/operator-runbook.md) — conductor procedure, stuck-goal playbook, state/store map.
+> **Console changes:** Apply the [responsiveness contract](docs/operator-runbook.md#console-responsiveness).
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.

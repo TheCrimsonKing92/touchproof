@@ -1,5 +1,28 @@
 # Operator Runbook
 
+## Console responsiveness
+
+Owner requirement, 2026-11-10: the Doherty Threshold of **400 ms is the maximum tolerable user-visible console latency**. This is an absolute ceiling for each interaction, not an average or p95 target. It covers navigation, opening details, changing selection or project, search/filter, copy, submitting decisions/commands, manual refresh and visible state updates, including console actions that invoke typed intents. This policy establishes a product requirement; it does not claim current empirical compliance or establish a separate latency contract for the typed agent interface.
+
+Measure from user input to the first **correct usable rendered result**, including queueing, loading and rendering. A backend response, empty shell, spinner or stale result is not completion. For visible state updates, retain the source-change/event timestamp and the first correct rendered-observation timestamp. Report discovery/polling delay separately as well as the full source-to-render delay; starting the clock at discovery must not hide earlier waiting.
+
+Record representative cold and warm behavior, identifying the candidate, environment, dataset, interaction and observation method. Report sample count, median, p95, maximum and every observed breach of 400 ms. Do not silently discard slow observations or average them away. Improvement relative to a slow baseline does not satisfy the absolute limit. No finite sample proves a universal maximum: retain coverage and measurement limitations honestly.
+
+Every path observed above 400 ms requires explicit remediation. Prefer eliminating avoidable work and waiting, scoped reads, reuse and correct invalidation. Preserve correctness, fresh data, selection identity, error behavior, existing CPU, memory, resource and retention requirements, deterministic gates and required review. Existing console performance work applies this ceiling alongside those requirements.
+
+If completion within 400 ms is impossible, document the concrete constraint, affected interaction, measured attempts to reduce the delay and a reviewed workaround. Within 400 ms the workaround must provide a genuinely useful response, preserve context and keep navigation responsive while unavoidable work continues. Useful partial results, an explicit asynchronous operation with accurate progress/status, cancellation where safe and recoverable errors may support that design. An indefinite Loading message or spinner alone is unacceptable. Identify unfinished work and record actual final completion time separately; do not relabel acknowledgment as completed work or present stale data as current.
+
+Each exception/workaround must be specific and evidence-backed, with observable UX acceptance criteria, a named owner responsible for remediation and an identified Reviewer responsible for checking the constraint, evidence and workaround. It grants no blanket exemption or automatic timeout extension. Escalate genuine product tradeoffs to the owner; routine measurements do not require escalation.
+
+Evidence ownership when applying this policy:
+
+- **Developer** owns implementation and cheap deterministic regression-test authoring where applicable.
+- **Acceptance** runs those tests.
+- **Reviewer** checks the contract and evidence, including workaround acceptance criteria.
+- **Operator** owns actual interactive end-to-end measurements. Worker criteria must not require evidence only a future Operator observation can supply.
+
+This documentation slice is verified by document review, link verification and diff review. It adds no runtime implementation, instrumentation, configuration flag, model call or heavy test suite, and requires no current measurements or future Operator evidence to accept the documentation. Existing review and acceptance gates remain intact.
+
 ## Atomic live task graph repair
 
 Use the [task graph inbox contract](cli-reference.md#task-graph-repair-inbox) for insertion and ordered repair. Submission acknowledges only durable inbox intake. Poll the returned intent id until Applied or Rejected; a bare replay returns that same operation even after restart. A distinct later identical insertion needs a fresh explicit idempotency key.
