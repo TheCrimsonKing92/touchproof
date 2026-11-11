@@ -25,9 +25,10 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
                 var started = DateTimeOffset.UtcNow;
                 kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
                     "codex-cli", "inspect", repo, started, BaseCommit: candidate));
-                kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
-                    "inspect", repo, 0, RoleReportEvidenceClosureTests.RoleOutput("pass"), string.Empty,
-                    started.AddSeconds(1), WorkerResultPresent: true));
+                // Prepare the round directly so the earlier per-criterion closure cannot consume this wait.
+                reviewer.RecordVerification(new TaskVerificationRecord(
+                    "inspect", repo, 0, RoleReportEvidenceClosureTests.RoleOutput("pass", "met"), string.Empty,
+                    started.AddSeconds(1), WorkerResultPresent: true, ReviewedCommit: candidate));
                 kernel.ReportWorkerTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Pass round recorded.");
                 Assert.Equal(candidate, reviewer.LastVerification!.ReviewedCommit);
             }
@@ -233,9 +234,10 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
                 var started = new DateTimeOffset(2026, 10, 29, 5, 0, 0, TimeSpan.Zero);
                 kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                     "codex-cli", "inspect", worktree, started, BaseCommit: reviewed));
-                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-                    "inspect", worktree, 0, RoleReportEvidenceClosureTests.RoleOutput("pass"), string.Empty,
-                    started.AddSeconds(1), WorkerResultPresent: true));
+                // Exercise landing-time report closure rather than recording-time verdict closure.
+                task.RecordVerification(new TaskVerificationRecord(
+                    "inspect", worktree, 0, RoleReportEvidenceClosureTests.RoleOutput("pass", "met"), string.Empty,
+                    started.AddSeconds(1), WorkerResultPresent: true, ReviewedCommit: reviewed));
                 kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Pass round recorded.");
                 Assert.Equal(reviewed, task.LastVerification!.ReviewedCommit);
             }
