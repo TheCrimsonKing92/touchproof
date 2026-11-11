@@ -4,6 +4,170 @@ using Xunit;
 // Parallel-safe: each case owns its filesystem root and in-memory labels; no native ACL writes.
 public sealed class WorkerSandboxPreparerMediumDescendantTests
 {
+    [Theory]
+    [InlineData("medium", false)]
+    [InlineData("medium", true)]
+    [InlineData("missing", false)]
+    [InlineData("missing", true)]
+    [InlineData("native-error", false)]
+    [InlineData("native-error", true)]
+    [InlineData("unlabeled", false)]
+    [InlineData("unlabeled", true)]
+    [InlineData("unknown", false)]
+    [InlineData("unknown", true)]
+    [InlineData("io-error", false)]
+    [InlineData("io-error", true)]
+    [InlineData("access-denied", false)]
+    [InlineData("access-denied", true)]
+    [InlineData("budget", false)]
+    [InlineData("budget", true)]
+    public void Prepare_FailedLabelWithUnprovenDescendants_RecoversWithoutReceipt(
+        string failure, bool hadReceipt)
+    {
+        using var tree = new TestTree();
+        var project = tree.Directory("src", "Project");
+        var preparer = new WorkerSandboxPreparer(tree.Labels,
+            maxDescendantEntries: failure == "budget" ? 0 : 2048);
+        if (hadReceipt)
+            Assert.False(preparer.Prepare(tree.Root, tree.Sandbox).RequiresRecovery);
+        else
+            tree.Labels.SetIntegrity(tree.Root, "(OI)(CI)L", recursive: true);
+        tree.Labels.QueryOverride = path => path != project ? null : failure switch
+        {
+            "medium" => new(true, false, true, Medium: true),
+            "missing" => new(false, false, false),
+            "native-error" => new(true, true, true, NativeQueryError: 5),
+            "unlabeled" => new(true, false, false, Unlabeled: true),
+            "unknown" => new(true, false, false),
+            "io-error" => throw new IOException("Injected label read failure"),
+            "access-denied" => throw new UnauthorizedAccessException("Injected label read denial"),
+            "budget" => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(failure))
+        };
+        tree.Labels.FailLowWrites = true;
+        tree.Labels.SetCalls.Clear();
+        var expected = failure switch
+        {
+            "medium" or "unlabeled" => WorktreeDescendantIntegrityScanOutcome.MediumDescendant,
+            "budget" => WorktreeDescendantIntegrityScanOutcome.BudgetExceeded,
+            _ => WorktreeDescendantIntegrityScanOutcome.Incomplete
+        };
+        Assert.Equal(expected, WorktreeDescendantIntegrityScan.Scan(
+            tree.Root, tree.Labels, failure == "budget" ? 0 : 2048).Outcome);
+
+        var result = preparer.Prepare(tree.Root, tree.Sandbox);
+
+        Assert.True(result.RequiresRecovery);
+        Assert.False(result.PrepReceiptHit);
+        var action = Assert.IsType<WorkerSandboxPrepRecoverableAction>(result.RecoveryAction);
+        Assert.Equal(tree.Root, action.FailedRoot);
+        Assert.Equal(tree.Root, action.Worktree);
+        Assert.Equal(tree.Sandbox, action.SandboxRoot);
+        Assert.True(action.RequiresRecursiveRemediation);
+        Assert.Contains($"Descendant integrity: {expected};", action.Reason);
+        Assert.False(System.IO.File.Exists(Path.Combine(tree.Root, WorkerSandboxPreparer.ReceiptFileName)));
+        Assert.Equal(hadReceipt, System.IO.File.Exists(Path.Combine(tree.Root, WorkerSandboxPreparer.MarkerFileName)));
+        Assert.Equal((tree.Root, WorkerSandboxPreparer.LowInheritableLevel, true),
+            Assert.Single(tree.Labels.SetCalls));
+        Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).RequiresRecovery);
+        Assert.False(System.IO.File.Exists(Path.Combine(tree.Root, WorkerSandboxPreparer.ReceiptFileName)));
+    }
+
+    [Fact]
+    public void Prepare_FailedRepair_InvalidatesReceiptEvenIfDescendantsLaterBecomeLow()
+    {
+        using var tree = new TestTree();
+        var project = tree.Directory("project");
+        var preparer = new WorkerSandboxPreparer(tree.Labels);
+        preparer.Prepare(tree.Root, tree.Sandbox);
+        tree.Labels.SetIntegrity(project, "(OI)(CI)M", recursive: false);
+        tree.Labels.FailLowWrites = true;
+        Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).RequiresRecovery);
+        tree.Labels.FailLowWrites = false;
+        tree.Labels.SetIntegrity(project, "(OI)(CI)L", recursive: false);
+        tree.Labels.FailLowWrites = true;
+        tree.Labels.SetCalls.Clear();
+
+        var result = preparer.Prepare(tree.Root, tree.Sandbox);
+
+        Assert.False(result.RequiresRecovery);
+        Assert.False(result.PrepReceiptHit);
+        Assert.Equal((tree.Root, WorkerSandboxPreparer.LowInheritableLevel, true),
+            Assert.Single(tree.Labels.SetCalls));
+        Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).PrepReceiptHit);
+    }
+
+    [Fact]
+    public void Prepare_FailedLabelWithPreparedDescendants_PublishesReusableReceipt()
+    {
+        using var tree = new TestTree();
+        tree.Directory("src", "Project");
+        var file = tree.File("src", "Project", "source.cs");
+        var git = tree.Directory(".git", "objects");
+        var scratch = tree.Directory(".mcg-sandbox", "private");
+        tree.Labels.SetIntegrity(tree.Root, "(OI)(CI)L", recursive: true);
+        foreach (var path in new[] { file, git, scratch })
+            tree.Labels.SetIntegrity(path, "(OI)(CI)M", recursive: true);
+        tree.Labels.FailLowWrites = true;
+        tree.Labels.SetCalls.Clear();
+        tree.Labels.Queries.Clear();
+        var preparer = new WorkerSandboxPreparer(tree.Labels);
+
+        var result = preparer.Prepare(tree.Root, tree.Sandbox);
+
+        Assert.False(result.RequiresRecovery);
+        Assert.False(result.PrepReceiptHit);
+        Assert.False(result.WorktreeRecursiveRelabel);
+        Assert.False(result.SandboxRecursiveRelabel);
+        Assert.True(System.IO.File.Exists(Path.Combine(tree.Root, WorkerSandboxPreparer.ReceiptFileName)));
+        Assert.True(System.IO.File.Exists(Path.Combine(tree.Sandbox, WorkerSandboxPreparer.ReceiptFileName)));
+        foreach (var path in new[] { file, git, scratch })
+        {
+            Assert.DoesNotContain(path, tree.Labels.Queries);
+            Assert.True(tree.Labels.Query(path).Medium);
+        }
+        Assert.Equal(new[] { (tree.Root, WorkerSandboxPreparer.LowInheritableLevel, true),
+            (tree.Sandbox, WorkerSandboxPreparer.LowInheritableLevel, false) }, tree.Labels.SetCalls);
+        tree.Labels.SetCalls.Clear();
+        Assert.True(preparer.Prepare(tree.Root, tree.Sandbox).PrepReceiptHit);
+        Assert.Empty(tree.Labels.SetCalls);
+    }
+
+    [Fact]
+    public void ApplySandbox_FailedRecursiveRepair_HoldsWritableLaunch()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Skip("Requires Windows sandbox preparation.");
+        using var tree = new TestTree();
+        var project = tree.Directory("src", "Project");
+        tree.Labels.SetIntegrity(tree.Root, "(OI)(CI)L", recursive: true);
+        tree.Labels.SetIntegrity(project, "(OI)(CI)M", recursive: false);
+        tree.Labels.FailLowWrites = true;
+        tree.Labels.SetCalls.Clear();
+        var phases = new List<string>();
+        var start = new System.Diagnostics.ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
+        start.Environment.Clear();
+        start.ArgumentList.Add("Write-Output worker-started");
+        var parameters = new DispatchProcessHost.DispatchRunParameters(
+            "Write-Output worker-started", tree.Root, Path.Combine(tree.Root, "out.log"),
+            Path.Combine(tree.Root, "err.log"), Path.Combine(tree.Root, "exit.txt"), null,
+            false, SandboxLowIntegrity: true, SandboxWorktreeWritable: true);
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            DispatchProcessHost.ApplyWorkerSandbox(start, parameters,
+                new WorkerSandboxPreparer(tree.Labels), (phase, _, _) => phases.Add(phase),
+                protectWorkspaceBoundary: _ => Assert.Fail("Protection reached after failed preparation."),
+                protectGitMetadata: _ => Assert.Fail("Protection reached after failed preparation."),
+                providerEnvironmentReader: _ => null, sandboxFileSystem: new NoGitFileSystem()));
+
+        Assert.Contains("Descendant integrity: MediumDescendant;", error.Message);
+        Assert.Equal(new[] { "prepare-roots" }, phases);
+        Assert.Equal("Write-Output worker-started", Assert.Single(start.ArgumentList));
+        Assert.False(System.IO.File.Exists(Path.Combine(tree.Root, WorkerSandboxPreparer.ReceiptFileName)));
+        Assert.False(System.IO.File.Exists(Path.Combine(tree.Sandbox, DispatchProcessHost.LowIntegritySetupArtifactName)));
+        Assert.Equal((tree.Root, WorkerSandboxPreparer.LowInheritableLevel, true),
+            Assert.Single(tree.Labels.SetCalls));
+    }
+
     [Fact]
     public void Prepare_NormalizedDescendantsUnderLowAncestors_RecursivelyRestoresLow()
     {
@@ -235,6 +399,13 @@ public sealed class WorkerSandboxPreparerMediumDescendantTests
             Assert.True(tree.Labels.Query(path).Medium, path);
     }
 
+    private sealed class NoGitFileSystem : IWorkerSandboxFileSystem
+    {
+        public bool FileExists(string path) => false;
+        public bool DirectoryExists(string path) => false;
+        public string ReadAllText(string path) => throw new InvalidOperationException("No Git metadata in fixture.");
+    }
+
     private sealed class TestTree : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(),
@@ -263,6 +434,7 @@ public sealed class WorkerSandboxPreparerMediumDescendantTests
         internal List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
         internal List<string> Queries { get; } = [];
         internal Func<string, IntegrityLabelState?>? QueryOverride { get; set; }
+        internal bool FailLowWrites { get; set; }
 
         public IntegrityLabelState Query(string path)
         {
@@ -282,6 +454,7 @@ public sealed class WorkerSandboxPreparerMediumDescendantTests
         public bool SetIntegrity(string path, string level, bool recursive)
         {
             SetCalls.Add((path, level, recursive));
+            if (FailLowWrites && level.EndsWith('L')) return false;
             if (recursive)
             {
                 var prefix = path + Path.DirectorySeparatorChar;

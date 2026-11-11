@@ -7,6 +7,32 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Records only the obligations owned by a successful full gate; other evidence still blocks landing.
 internal static partial class AcceptanceCriterionEvidence
 {
+    internal static CriterionEvidenceObligation[] OperatorPreLandingBlockers(Goal goal, string? candidateSha) =>
+        goal.GetLandingPrerequisiteObligations(candidateSha)
+            .Where(item => item.Owner == CriterionEvidenceOwner.Operator && item.Phase == CriterionEvidencePhase.PreLanding)
+            .OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
+
+    internal static ConductorAdvanceOutcome.Held CreateRepeatGateHold(
+        Goal goal, string candidateSha, ConductorParallelAcceptanceAttempt attempt,
+        IReadOnlyList<CriterionEvidenceObligation> blockers)
+    {
+        var detail = string.Join(", ", blockers.Select(item =>
+            $"{item.DisplayLabel}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
+        var reason = $"Repeat full acceptance deferred pending Operator PreLanding evidence: {detail}. " +
+            "Next actor=Operator; action=criterion-evidence-record. Historical pass does not attest current main.";
+        return new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason,
+            StableIdentity: HoldIdentity(goal, candidateSha))
+        {
+            Decision = new PolicyDecisionRecord("criterion-evidence-admission", "Hold", 1,
+                "operator-prelanding-repeat-gate", reason, Array.AsReadOnly<PolicyDecisionFact>(
+                [new PolicyDecisionFact("goalId", goal.Id.Value), new PolicyDecisionFact("candidateSha", candidateSha),
+                    new PolicyDecisionFact("briefVersion", goal.AuthoritativeRefinedSpecVersion!.BriefVersion.ToString()),
+                    new PolicyDecisionFact("attemptId", attempt.AttemptId), new PolicyDecisionFact("historicalMainSha", attempt.MainHeadSha!),
+                    new PolicyDecisionFact("obligationIds", string.Join(",", blockers.Select(item => item.Id))),
+                    new PolicyDecisionFact("nextActor", "Operator"), new PolicyDecisionFact("nextAction", "criterion-evidence-record")]))
+        };
+    }
+
     // Called only with a coordinator-validated exact-pair full pass, while both
     // receipt writer and goal mutation custody are held. This phase never rebinds.
     internal static bool RecordExactReplayEvidence(
