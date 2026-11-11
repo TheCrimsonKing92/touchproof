@@ -15,7 +15,7 @@ public sealed class ProviderAuthenticationRecoveryTests
     public async Task AuthenticationThenUnknownThenAvailable_PersistsTruthfulLifecycle(int width)
     {
         using var fixture = new ProviderHoldStandaloneProbeTests.Fixture("failed");
-        fixture.Kernel.CancelGoal(fixture.Source.Id, "Retain the exhausted source for recovery.");
+        Assert.Equal(GoalStatus.Failed, fixture.Source.Status);
         var kernel = new AgentOrchestratorKernel(fixture.Clock);
         kernel.ProviderHoldHistory.Retain(fixture.Source, kernel.Goals);
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
@@ -100,7 +100,7 @@ public sealed class ProviderAuthenticationRecoveryTests
         Assert.Empty(ProviderUsageHoldView.Read(kernel.ProviderHoldScope, fixture.Clock.UtcNow));
         Assert.Empty(ProviderUsageHoldReader.ReadWorkspace(fixture.Workspace, fixture.Clock.UtcNow));
         var recovered = await repository.LoadAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(GoalStatus.Cancelled, recovered.GetGoal(fixture.Source.Id).Status);
+        Assert.Equal(GoalStatus.Failed, recovered.GetGoal(fixture.Source.Id).Status);
         Assert.Equal(3, calls);
         Assert.Empty(responses);
     }
@@ -117,6 +117,7 @@ public sealed class ProviderAuthenticationRecoveryTests
     [InlineData("The test expects Not signed in", ProviderFailureKind.Unknown)]
     [InlineData("The test expects ERROR: Your access token could not be refreshed because your refresh token was already used.", ProviderFailureKind.Unknown)]
     [InlineData("```text\nERROR: Your access token could not be refreshed because your refresh token was already used.\n```", ProviderFailureKind.Unknown)]
+    [InlineData("```text\nERROR: Not signed in\n```", ProviderFailureKind.Unknown)]
     [InlineData("WORKER_RESULT:\nNot signed in\nEND_WORKER_RESULT", ProviderFailureKind.Unknown)]
     [InlineData("API error (status 402 Payment Required): Grok Build usage balance exhausted", ProviderFailureKind.BudgetExhausted)]
     public void Adapter_UsesAuthoritativeFailureEvidence(string stderr, ProviderFailureKind expected)
@@ -124,5 +125,9 @@ public sealed class ProviderAuthenticationRecoveryTests
         var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
         Assert.Equal(expected, provider.ParseOutcome(new(1, "", stderr)));
         Assert.Equal(ProviderFailureKind.Unknown, provider.ParseOutcome(new(0, "AVAILABLE", stderr)));
+        var verification = new TaskVerificationRecord("fixture", "C:\\repo", 1, "", stderr,
+            new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+        Assert.Equal(expected == ProviderFailureKind.AuthenticationRequired,
+            ProviderFailureSignals.IsRecoverableProviderAuthenticationFailure(verification));
     }
 }

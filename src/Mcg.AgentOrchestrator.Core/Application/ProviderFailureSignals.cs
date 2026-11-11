@@ -306,9 +306,6 @@ public static class ProviderFailureSignals
             IsApiErrorOverloadLine(text);
     }
 
-    private static bool ContainsProviderAuthenticationText(string text) =>
-        ProviderAuthenticationEvidence.IsRequired(new(1, "", text));
-
     private static bool ContainsProviderModelRejectionText(string text)
     {
         return (text.Contains("model", StringComparison.OrdinalIgnoreCase) ||
@@ -372,20 +369,13 @@ public static class ProviderFailureSignals
         }
     }
 
-    internal static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
-    {
-        foreach (var candidate in GetProviderSignalLines(verification))
-        {
-            if (ContainsProviderAuthenticationText(candidate))
-            {
-                line = candidate;
-                return true;
-            }
-        }
-
-        line = string.Empty;
-        return false;
-    }
+    internal static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line) =>
+        ProviderAuthenticationEvidence.TryGetRequiredLine(
+            new(verification.ExitCode,
+                string.Join("\n", DispatchEvidenceSummaries.EnumerateEvidenceLines(
+                    verification, includeStandardOutput: true, includeStandardError: false)),
+                string.Join("\n", DispatchEvidenceSummaries.EnumerateEvidenceLines(
+                    verification, includeStandardOutput: false, includeStandardError: true))), out line);
 
     internal static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
     {

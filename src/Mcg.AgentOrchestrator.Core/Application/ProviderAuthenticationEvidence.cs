@@ -10,13 +10,23 @@ public static class ProviderAuthenticationEvidence
         @"\A(?:(?:ERROR|API Error|Error|\[grok(?:-cli)?\])[: ]+)*(?:No auth credentials for cli-chat-proxy\b.*|Missing (?:authentication |auth )?credentials\b.*|Not signed in\b.*|Failed to authenticate\b.*|authentication failed\b.*|invalid (?:api key|credentials|access token|authentication credentials)\b.*|(?:credentials|access token|authentication token) (?:have |has |is )?expired\b.*|(?:API Error:?\s*|API error \(status )?401\b.*|(?:Your )?access token could not be refreshed\b.*|refresh token was already used\b.*|refresh_token_reused\b.*|Please (?:sign|log) in(?: again)?[.!]?)\z",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    public static bool IsRequired(WorkerProviderOutcome outcome)
+    public static bool IsRequired(WorkerProviderOutcome outcome) => TryGetRequiredLine(outcome, out _);
+
+    internal static bool TryGetRequiredLine(WorkerProviderOutcome outcome, out string line)
     {
+        line = string.Empty;
         if (outcome.ExitCode == 0) return false;
-        if (TrustedLines(outcome.StandardError).Any(IsDiagnostic)) return true;
+        foreach (var candidate in TrustedLines(outcome.StandardError))
+        {
+            if (!IsDiagnostic(candidate)) continue;
+            line = candidate;
+            return true;
+        }
         // Plain stdout is trusted only when the whole response is a refusal, not an answer quoting one.
         var output = outcome.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        return output.Length > 0 && output.All(IsDiagnostic);
+        if (output.Length == 0 || !output.All(IsDiagnostic)) return false;
+        line = output[0];
+        return true;
     }
 
     private static bool IsDiagnostic(string line)
