@@ -28,6 +28,7 @@ public sealed class OwnerConsoleCandidateRevisionTests
     [InlineData("locked")]
     [InlineData("symbolic")]
     [InlineData("config")]
+    [InlineData("headerless-packed")]
     public void UncertainRefUsesExactGitFallbackAndMissingResultRemainsRetryable(string shape)
     {
         using var repo = new Repository(false);
@@ -37,6 +38,12 @@ public sealed class OwnerConsoleCandidateRevisionTests
         if (shape == "locked") File.WriteAllText(repo.RefPath + ".lock", "pending");
         if (shape == "symbolic") File.WriteAllText(repo.RefPath, "ref: refs/heads/other\n");
         if (shape == "config") File.AppendAllText(Path.Combine(repo.Common, "config"), "[unknown]\nvalue = true\n");
+        if (shape == "headerless-packed")
+        {
+            File.Delete(repo.RefPath);
+            File.WriteAllText(Path.Combine(repo.Common, "packed-refs"),
+                new string('a', 40) + " refs/heads/" + GoalWorktrees.BranchName(repo.Goal) + "\n");
+        }
         var calls = 0;
         string? Fallback(string directory, string reference)
         {
@@ -73,7 +80,8 @@ public sealed class OwnerConsoleCandidateRevisionTests
         }
         internal void Write(string id, bool packed)
         {
-            if (packed) File.WriteAllText(Path.Combine(Common, "packed-refs"), id + " refs/heads/" + GoalWorktrees.BranchName(Goal) + "\n");
+            if (packed) File.WriteAllText(Path.Combine(Common, "packed-refs"),
+                "# pack-refs with: peeled fully-peeled sorted\n" + id + " refs/heads/" + GoalWorktrees.BranchName(Goal) + "\n");
             else File.WriteAllText(RefPath, id + "\n");
         }
         public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);

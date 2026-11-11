@@ -29,7 +29,6 @@ internal static class OwnerConsoleSizeBaseline
         "OwnerConsoleViewModelBuilder.cs::OwnerConsoleViewModelBuilder.BuildBoardAsync",
         "OwnerExperimentDecisionFlow.cs::OwnerExperimentDecisionFlow.RunAsync",
         "OwnerFleetDiagram.cs::OwnerFleetDiagram.Render",
-        "OwnerQuestionReadModel.cs::OwnerQuestionReadModel.ReadAsync",
         "OwnerQuestionResolutionReader.cs::OwnerQuestionResolutionReader.ListForGoalAsync"
     }.ToFrozenSet(StringComparer.Ordinal);
 }
