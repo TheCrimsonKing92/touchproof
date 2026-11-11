@@ -1124,6 +1124,8 @@ The Operator owns this real-world check after focused Acceptance receipts pass:
 
 ### General operating discipline
 
+- **Keep artifacts independently useful.** Retain labels, tests, comments, and UI components for the behavior, information, or live constraint they contribute. Use affirmative current-contract guidance and keep removal history in scoped review evidence. Authors, Planners, Developers, Testers, and Reviewers apply the shared [decision procedure and live-invariant exceptions](test-design-discipline.md#tautological-labels-tests-comments-and-ui-components-are-considered-harmful).
+
 - **Carry standing provider authorization forward.** The operator has authorized repository submissions to configured providers, including Anthropic and Grok, for orchestrator work: source, paths, commit IDs and test evidence (broadened and reiterated 2026-10-19: "ALL submissions to Anthropic, Grok, etc. are explicitly allowed. Do not ask again"). Ordinary review payload changes, task boundaries and context compaction do not reset that authorization. If automatic approval review rejects an authorized review, report the existing authorization and concrete review scope when resolving that tool failure; continue unaffected implementation and validation. Do not park goals or ask the operator for the same permission again. Credentials must never be included in prompts or logs. This guidance does not disable platform approval controls or authorize unrelated disclosures.
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
