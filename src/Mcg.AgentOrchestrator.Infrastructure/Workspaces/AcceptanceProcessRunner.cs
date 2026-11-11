@@ -6,6 +6,29 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceProcessRunner
 {
+    internal static bool StopsOnCaptureLimit(string runClass) =>
+        string.Equals(runClass, GateHeartbeatRunClass.FocusedEvidence, StringComparison.Ordinal);
+
+    internal static Task<CommandResult> RunProcessAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan timeout,
+        long captureLimitBytes,
+        string runClass,
+        Action<SpawnProcessIdentity>? commandIdentityObserver,
+        CancellationToken cancellationToken,
+        CancellationToken timeoutSignal,
+        Action<string, string, Task>? captureObserver,
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver,
+        TimeSpan? capturePublicationInterval = null) =>
+        RunProcessAsync(
+            arguments, workingDirectory, timeout, forceUtf8ConsoleOutput: false,
+            cancellationToken, commandIdentityObserver: commandIdentityObserver,
+            timeoutSignal: timeoutSignal, cleanupObserver: cleanupObserver,
+            engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = captureLimitBytes },
+            stopOnCaptureLimit: StopsOnCaptureLimit(runClass), captureObserver: captureObserver,
+            capturePublicationInterval: capturePublicationInterval);
+
     internal static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -123,7 +146,8 @@ internal static class AcceptanceProcessRunner
         Action<int>? resumeObserver = null,
         bool resolveBareCommand = false,
         JunitCommandEnvironmentInputs? commandEnvironment = null,
-        bool suppressDiagnosticCaptures = false) =>
+        bool suppressDiagnosticCaptures = false,
+        Action<string, string, Task>? captureObserver = null) =>
         await AcceptanceCheckProcessInvoker.RunAsync(
             arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput, cancellationToken,
             timeoutSignal, registrationIdentityReader, new AcceptanceProcessRequest
@@ -147,6 +171,7 @@ internal static class AcceptanceProcessRunner
                 ResolveBareCommand = resolveBareCommand,
                 CommandEnvironment = commandEnvironment,
                 SuppressDiagnosticCaptures = suppressDiagnosticCaptures || commandEnvironment is not null,
+                CaptureObserver = captureObserver,
             }).ConfigureAwait(false);
 
     internal static class ProcessInvokerAccess
