@@ -25,9 +25,13 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
                 var started = DateTimeOffset.UtcNow;
                 kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
                     "codex-cli", "inspect", repo, started, BaseCommit: candidate));
-                kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
-                    "inspect", repo, 0, RoleReportEvidenceClosureTests.RoleOutput("pass"), string.Empty,
-                    started.AddSeconds(1), WorkerResultPresent: true));
+                // Prepare the round directly so the earlier per-criterion closure cannot consume this wait.
+                reviewer.RecordVerification(new TaskVerificationRecord(
+                    "inspect", repo, 0, RoleReportEvidenceClosureTests.RoleOutput("pass", "met"), string.Empty,
+                    started.AddSeconds(1), WorkerResultPresent: true, ReviewedCommit: candidate,
+                    DispatchStartedAt: started));
+                Assert.Equal(VerificationTerminalContractStatus.Valid,
+                    WorkerResultBlockers.AssessSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
                 kernel.ReportWorkerTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Pass round recorded.");
                 Assert.Equal(candidate, reviewer.LastVerification!.ReviewedCommit);
             }
@@ -233,9 +237,13 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
                 var started = new DateTimeOffset(2026, 10, 29, 5, 0, 0, TimeSpan.Zero);
                 kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                     "codex-cli", "inspect", worktree, started, BaseCommit: reviewed));
-                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-                    "inspect", worktree, 0, RoleReportEvidenceClosureTests.RoleOutput("pass"), string.Empty,
-                    started.AddSeconds(1), WorkerResultPresent: true));
+                // Exercise landing-time report closure rather than recording-time verdict closure.
+                task.RecordVerification(new TaskVerificationRecord(
+                    "inspect", worktree, 0, RoleReportEvidenceClosureTests.RoleOutput("pass", "met"), string.Empty,
+                    started.AddSeconds(1), WorkerResultPresent: true, ReviewedCommit: reviewed,
+                    DispatchStartedAt: started));
+                Assert.Equal(VerificationTerminalContractStatus.Valid,
+                    WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification!).Status);
                 kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Pass round recorded.");
                 Assert.Equal(reviewed, task.LastVerification!.ReviewedCommit);
             }
@@ -251,6 +259,7 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
             ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory,
                 goal, candidate, ProspectiveEvidenceGateFixture.PassingRows);
             Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             // The retighten touches shared infrastructure; permit that independent ownership gate
             // so this fixture tests whether the owner evidence waits allow landing.
@@ -375,12 +384,13 @@ public sealed class LandingExecutorRoleReportEvidenceTests : Xunit.IClassFixture
         GoalWorktrees.Ensure(repo, goal.Id);
         GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance", candidate, main,
             "Passed candidate gate", DateTimeOffset.UtcNow.AddMinutes(-1));
-        var wait = kernel.RequestHumanInputDeduplicated(goal.Id, null, "Provide Developer report",
+        var wait = kernel.RequestHumanInputDeduplicated(goal.Id, developer.Id, "Provide Developer report",
             kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: owner,
             plannerIdentity: new PlannerEvidenceIdentity(goal.Id.Value, developer.Id.Value,
                 goal.AuthoritativeBrief.Version, 1, "developer-report"),
             plannerEvidence: new PlannerEvidencePayload(1, "developer-report", "post-implementation", owner,
                 "Deferred report", "Developer owns; Acceptance executes", null, null, null)).Request;
+        Assert.Equal(wait.TaskId?.Value, wait.PlannerIdentity!.RequestingTaskId);
         return (workspace, kernel, goal, wait, candidate);
     }
 }
