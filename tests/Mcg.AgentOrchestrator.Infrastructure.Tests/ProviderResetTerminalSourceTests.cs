@@ -217,6 +217,7 @@ public sealed class ProviderResetTerminalSourceTests
         await fixture.Initialize();
         var intent = await fixture.Queue();
         fixture.Coordinator().ExecuteWorkspacePending(fixture.Kernel);
+        fixture.Clock.UtcNow = fixture.Schedule().NextProbeAt;
         fixture.Succeed();
         var recorder = new ProviderResetRetainedSourceRecorder(() =>
             throw new InvalidOperationException("Repository must not be opened for scope replay."));
