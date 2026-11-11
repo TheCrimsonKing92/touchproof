@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ConductorLandingBlockerRecorder
 {
-    private static readonly IReadOnlyDictionary<string, (string Actor, string Verb)> NextActions =
+    internal static readonly IReadOnlyDictionary<string, (string Actor, string Verb)> NextActions =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)
         {
             ["multi-repository-landing-failed"] = ("operator", "repair-multi-repository-landing"),
@@ -14,6 +14,7 @@ internal static class ConductorLandingBlockerRecorder
             ["multi-repository-acceptance-pending"] = ("conductor", "next-tick"),
             ["multi-repository-landing-blocked"] = ("conductor", "next-tick"),
             ["criterion-evidence-hold"] = ("evidence-owner", "criterion-evidence-record"),
+            ["operator-prelanding-repeat-gate"] = ("Operator", "criterion-evidence-record"),
             ["acceptance-apparatus-hold"] = ("operator", "acceptance-retry"),
             ["environmental-apparatus-hold"] = ("operator", "acceptance-retry"),
             ["evidence-mutation-lease-hold"] = ("conductor", "next-tick"),

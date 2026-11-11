@@ -7,12 +7,73 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Owns application of reconciled passes; receipt custody and current-goal checks remain in the driver.
 internal static class PassedAcceptanceReceiptReplay
 {
+    internal static ConductorAdvanceResult? TryHoldRepeatSoloAcceptance(
+        Goal goal, ConductorAutonomyPolicy policy, AcceptanceEngineHealthSnapshot? health,
+        ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        Func<Goal, ConductorParallelAcceptanceCandidate> readCandidate,
+        Func<Goal, string, IDisposable?> tryAcquireMutationLease,
+        Func<Goal, ConductorAdvanceResult> leaseHeld,
+        string? executionDirectory, bool isConductorTick)
+    {
+        if (goal.Status is not (GoalStatus.Verified or GoalStatus.Verifying) ||
+            MultiRepositoryGoal.Applies(goal) ||
+            policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate ||
+            ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(goal.Status, health) ||
+            AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, null).Length == 0 ||
+            !coordinator.HasPassedReconciledReceipt(goal.Id.Value) ||
+            coordinator.GetUnreconciledAttempts([goal.Id.Value]).Count != 0)
+            return null;
+
+        // Record the decision only while holding the same goal mutation custody as replay.
+        using var mutation = tryAcquireMutationLease(goal, GoalOperationJournal.RepeatGateDeferralOperation);
+        if (mutation is null)
+        {
+            var result = leaseHeld(goal);
+            var held = (ConductorAdvanceOutcome.Held)result.Outcome;
+            var decision = VerifyingStagePolicy.Evaluate(new(GoalLifecycleState.Verified, isConductorTick,
+                goal.Status, ReplacementLeaseAvailable: false, ReplacementLeaseReason: held.Reason));
+            return result with { Outcome = held with { Decision = decision.ToRecord() } };
+        }
+        var candidate = readCandidate(goal);
+        if (string.IsNullOrWhiteSpace(candidate.BranchHeadSha)) return null;
+        goal = candidate.Goal;
+        var blockers = AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, candidate.BranchHeadSha);
+        if (blockers.Length == 0) return null;
+        var pass = coordinator.ReadHistoricalFullPass(candidate);
+        if (pass is null) return null;
+        var directory = executionDirectory ??
+            throw new InvalidOperationException("Repeat gate deferral requires a durable execution directory.");
+        GoalOperationJournal.RepeatGateDeferred(directory, goal, pass, blockers);
+        return new ConductorAdvanceResult(goal.Id.Value, candidate.GoalPrefix, policy.Name,
+            AcceptanceCriterionEvidence.CreateRepeatGateHold(goal, candidate.BranchHeadSha, pass, blockers));
+    }
+
+    internal static ConductorAdvanceResult? LandingHold(Goal goal, ConductorAutonomyPolicy policy,
+        Func<ConductorAdvanceResult?> ownerHold, Func<bool> apparatusHold,
+        Func<string?, string?, string> formatCandidate)
+    {
+        if (ownerHold() is { } ownerResult) return ownerResult;
+        if (!apparatusHold()) return null;
+        var failure = goal.LatestAcceptanceFailure!;
+        var decision = VerifiedAdmissionPolicy.Evaluate(new VerifiedAdmissionFacts(goal.Status)
+        {
+            ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
+            ApparatusMainSha = failure.MainHeadSha ?? "unknown",
+            ApparatusCandidate = formatCandidate(failure.BranchHeadSha, failure.MainHeadSha)
+        });
+        return new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
+                StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
+            { Decision = decision.ToRecord() });
+    }
+
     internal sealed record LandingOperations(
         Func<ConductorParallelAcceptanceCandidate, ConductorAdvanceResult?> Rebase,
         Func<(string? BranchHeadSha, string? MainHeadSha)> ResolveHeads,
         Func<ConductorParallelAcceptanceCandidate, AcceptanceVerificationSummary, AcceptanceMainAdvanceDisposition> Carry,
         Func<ConductorParallelAcceptanceCandidate, AcceptanceVerificationSummary, ConductorAdvanceResult> Land,
-        Action<ConductorParallelAcceptanceAttempt, string?> RecordLanding);
+        Action<ConductorParallelAcceptanceAttempt, string?> RecordLanding,
+        Func<ConductorParallelAcceptanceAttempt, bool> WasRepeatGateDeferred);
 
     internal static ConductorAdvanceResult? Apply(
         ConductorParallelAcceptanceAttemptDecision decision,
@@ -27,6 +88,11 @@ internal static class PassedAcceptanceReceiptReplay
         var current = operations.ResolveHeads();
         if (original.BranchHeadSha != current.BranchHeadSha || original.MainHeadSha != current.MainHeadSha)
         {
+            // Only an actual deferral owns the historical pass. Satisfied Operator
+            // prerequisites outside that path retain normal carry classification.
+            if (!string.Equals(original.MainHeadSha, current.MainHeadSha, StringComparison.OrdinalIgnoreCase) &&
+                operations.WasRepeatGateDeferred(decision.Attempt))
+                return null;
             var disposition = operations.Carry(original, acceptance);
             if (disposition is not (AcceptanceMainAdvanceDisposition.Unchanged or AcceptanceMainAdvanceDisposition.Disjoint))
                 return null; // Fresh validation still goes through ordinary capacity admission.
@@ -59,6 +125,14 @@ internal static class PassedAcceptanceReceiptReplay
             results[goal.Id.Value] = new ParallelLandingOutcome(circuitHold, null);
             recordProgress(
                 $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={health!.Health}",
+                changedGoalLines);
+            return true;
+        }
+        if (driver.TryHoldRepeatSoloAcceptance(goal, policy, health) is { } repeatHold)
+        {
+            results[goal.Id.Value] = new ParallelLandingOutcome(repeatHold, null);
+            var held = (ConductorAdvanceOutcome.Held)repeatHold.Outcome;
+            recordProgress($"ADMISSION tick={tick} result=held reason={held.Decision!.DiscriminatingEvidence} goal={goal.Id.Value[..8]} gatesLaunched=0",
                 changedGoalLines);
             return true;
         }

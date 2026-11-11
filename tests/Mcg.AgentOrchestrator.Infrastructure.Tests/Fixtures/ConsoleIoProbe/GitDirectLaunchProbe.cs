@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -16,9 +15,7 @@ internal static class GitDirectLaunchProbe
         try
         {
             var shim = HandleListProcessLauncher.ResolveApplication("git");
-            var cache = (Lazy<GitExecutable.GitInstallation?>)typeof(GitExecutable)
-                .GetField("Installation", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
-            var cacheCreatedBefore = cache.IsValueCreated;
+            var cacheCreatedBefore = GitExecutable.IsInstallationCreated;
             // No kill-on-close limit: this job contains the measurement host itself.
             using var job = Windows.CreateJobObjectW(IntPtr.Zero, null);
             if (job.IsInvalid || !Windows.AssignProcessToJobObject(job, Windows.GetCurrentProcess()))
@@ -73,7 +70,7 @@ internal static class GitDirectLaunchProbe
             File.WriteAllText(reportPath, JsonSerializer.Serialize(new
             {
                 error = (string?)null, shim, consoleWindow, consoleProcessCount,
-                cacheCreatedBefore, cacheCreatedAfter = cache.IsValueCreated,
+                cacheCreatedBefore, cacheCreatedAfter = GitExecutable.IsInstallationCreated,
                 before, after = Total(job), image, flags, result.ExitCode, result.Output, gitError = result.Error,
                 result.DrainTimedOut, result.ProcessStarted,
                 execMarkers, hookMarkers, rebaseDirectoryExists

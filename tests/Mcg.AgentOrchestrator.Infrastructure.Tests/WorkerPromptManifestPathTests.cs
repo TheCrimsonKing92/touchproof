@@ -111,10 +111,7 @@ public sealed class WorkerPromptManifestPathTests
 
     private static IReadOnlyList<string> OriginalRequirements(TaskComplexity complexity)
     {
-        var type = typeof(AgentOrchestratorKernel).Assembly.GetType(
-            "Mcg.AgentOrchestrator.Core.SdlcRolePromptRequirements", throwOnError: true)!;
-        var build = type.GetMethod("Build", [typeof(AgentRole), typeof(TaskComplexity)])!;
-        return (IReadOnlyList<string>)build.Invoke(null, [AgentRole.Reviewer, complexity])!;
+        return SdlcRolePromptRequirements.Build(AgentRole.Reviewer, complexity);
     }
 
     private sealed class ManifestFixture : IDisposable

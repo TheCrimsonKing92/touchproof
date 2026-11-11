@@ -9,9 +9,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class HostCapacitySlotGitCensusCallerChainTests
 {
     private const string Prefix = "test:HostCapacitySlotGitCensusCallerChainTests.";
-    private static readonly Action<Action<string>, string[]> Notify = typeof(GitCli)
-        .GetMethod("NotifyLaunch", BindingFlags.NonPublic | BindingFlags.Static)!
-        .CreateDelegate<Action<Action<string>, string[]>>();
+    private static readonly Action<Action<string>, string[]> Notify = GitCli.NotifyLaunch;
 
     [Theory]
     [InlineData("noncapturing")]

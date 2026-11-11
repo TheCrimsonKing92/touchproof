@@ -146,7 +146,8 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
         clock.UtcNow = DateTimeOffset.Parse("2026-10-17T11:08:00Z");
         var kind = WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(0, "Success", ""));
         kernel.RecordTaskVerification(source.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory, 0,
-            "Success", "", clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt));
+            "Success", "", clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt,
+            CompletionVerdictVerifiedSuccess: true));
         kernel.RecordTaskProcessRefreshed(source.Id, task.Id,
             process with { CompletedAt = clock.UtcNow, ExitCode = 0 }, verification: null);
         Assert.True(task.LastVerification!.Succeeded);
@@ -384,7 +385,8 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
             var dispatch = task.LastDispatch!;
             var kind = WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(exit, stdout, stderr));
             Kernel.RecordTaskVerification(goal.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory, exit,
-                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt));
+                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt,
+                CompletionVerdictVerifiedSuccess: exit == 0));
             if (task.LastProcess is { } process)
                 Kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process with { CompletedAt = Clock.UtcNow, ExitCode = exit }, verification: null);
             if (exit != 0)

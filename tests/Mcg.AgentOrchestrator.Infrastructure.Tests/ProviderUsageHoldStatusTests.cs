@@ -26,7 +26,9 @@ public sealed class ProviderUsageHoldStatusTests
         Assert.True(index > 0);
         Assert.Contains(" | intents=1 |", lines[index - 1]);
         Assert.Equal($"  {Key} | attempt=1 | next_probe=2026-10-17T11:38:00.0000000+00:00 | reset_source=backoff | last_probe=none | source={source.Id.Value[..8]}/{source.Tasks.Single().Id.Value[..8]}", lines[index + 1]);
-        Assert.Equal("Owner directives: 0 active", lines[index + 2]);
+        var row = Assert.Single(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, new FixedTime().GetUtcNow()));
+        Assert.Equal($"    diagnosis: {row.Diagnosis}", lines[index + 2]);
+        Assert.Equal("Owner directives: 0 active", lines[index + 3]);
         Assert.Contains("Non-terminal goals: 0", lines);
 
         fixture.Reset(source);

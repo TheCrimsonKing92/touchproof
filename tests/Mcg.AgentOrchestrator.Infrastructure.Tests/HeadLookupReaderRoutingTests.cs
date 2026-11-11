@@ -13,18 +13,18 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
     private readonly List<string> repositories = [];
     private CliExecutionContext? cliContext;
 
-    public static TheoryData<Type, string> Helpers => new()
+    public static TheoryData<Type, Func<HeadLookupReaderRoutingTests, string?, string?>> Helpers => new()
     {
-        { typeof(ConductorDriver), "TryResolveGitHead" },
-        { typeof(GoalAcceptanceStatusProjector), "TryResolveHead" },
-        { typeof(CliCommandHandlers), "TryResolveGitHead" },
-        { typeof(ProgressiveReviewGlanceCoordinator), "TryResolveHead" },
-        { typeof(ProgressiveReviewSteeringCoordinator), "TryResolveHead" }
+        { typeof(ConductorDriver), (_, path) => ConductorDriver.TryResolveGitHead(path!) },
+        { typeof(GoalAcceptanceStatusProjector), (_, path) => GoalAcceptanceStatusProjector.TryResolveHead(path!) },
+        { typeof(CliCommandHandlers), (fixture, path) => CliCommandHandlers.TryResolveGitHead(fixture.Context(), path) },
+        { typeof(ProgressiveReviewGlanceCoordinator), (_, path) => ProgressiveReviewGlanceCoordinator.TryResolveHead(path!) },
+        { typeof(ProgressiveReviewSteeringCoordinator), (_, path) => ProgressiveReviewSteeringCoordinator.TryResolveHead(path!) }
     };
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_CommittedRepository_MatchesRevParse(Type helper, string method)
+    public void Resolve_CommittedRepository_MatchesRevParse(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method)
     {
         var repo = CreateRepository();
         Assert.Equal(Oracle(repo), Resolve(helper, method, repo));
@@ -32,7 +32,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_NonRepository_PreservesPreviousFailureValue(Type helper, string method)
+    public void Resolve_NonRepository_PreservesPreviousFailureValue(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method)
     {
         var expected = BeforeRouting(helper, root);
         Assert.Equal(helper == typeof(CliCommandHandlers) ? string.Empty : null, expected);
@@ -46,7 +46,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_MissingAndUnbornPaths_PreservesPreviousFailureValue(Type helper, string method)
+    public void Resolve_MissingAndUnbornPaths_PreservesPreviousFailureValue(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method)
     {
         var missing = Path.Combine(root, "missing");
         Assert.Equal(BeforeRouting(helper, missing), Resolve(helper, method, missing));
@@ -58,7 +58,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_ExternalCommit_ReturnsUpdatedHead(Type helper, string method)
+    public void Resolve_ExternalCommit_ReturnsUpdatedHead(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method)
     {
         var repo = CreateRepository();
         var first = Oracle(repo);
@@ -73,7 +73,7 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
 
     [Theory]
     [MemberData(nameof(Helpers))]
-    public void Resolve_FiftyCalls_LaunchesNoGitProcess(Type helper, string method)
+    public void Resolve_FiftyCalls_LaunchesNoGitProcess(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method)
     {
         var repo = CreateRepository();
         var expected = Oracle(repo);
@@ -102,20 +102,9 @@ public sealed class HeadLookupReaderRoutingTests : IDisposable
         Assert.Null(GitRevisionReader.Shared.GetReader(repo));
     }
 
-    private string? Resolve(Type helper, string method, string? path)
+    private string? Resolve(Type helper, Func<HeadLookupReaderRoutingTests, string?, string?> method, string? path)
     {
-        var target = helper.GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(target);
-        object?[] arguments = helper == typeof(CliCommandHandlers) ? [Context(), path] : [path];
-        try
-        {
-            return (string?)target.Invoke(null, arguments);
-        }
-        catch (TargetInvocationException ex) when (ex.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-            throw;
-        }
+        return method(this, path);
     }
 
     private CliExecutionContext Context() => cliContext ??= new CliExecutionContext(

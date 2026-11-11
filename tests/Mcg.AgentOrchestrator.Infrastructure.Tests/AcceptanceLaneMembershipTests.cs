@@ -312,10 +312,8 @@ public sealed class AcceptanceLaneMembershipTests
             typeof(PassedMergeTrainReceiptHoldTests),
             typeof(MergeTrainBisectSlotLossTests),
             typeof(GoalWorktreeTestsRebaseRegistryAwareMerge),
-            typeof(GoalWorktreeTestsFollowerWorkspace),
             typeof(RuntimeAssemblyArchitectureTests),
             typeof(TesterCascadeDispatchTests),
-            typeof(FollowerGateAcceptanceStoreTests),
             typeof(AcceptanceCohortPartitionSlotsBusyDeferralTests)
         };
 

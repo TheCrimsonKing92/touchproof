@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
+    internal ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
     private readonly Dictionary<string, GroupedGateAttemptOverlap> _groupedGateAdmissionHolds = new(StringComparer.Ordinal);
 
     internal IReadOnlyCollection<GroupedGateAttemptOverlap> GroupedGateAdmissionHolds =>
@@ -44,7 +44,6 @@ internal sealed partial class ConductorDriver
         foreach (var recorded in coordinator.ReadAll())
         {
             var attempt = recorded;
-            if (attempt.Kind == "follower") continue;
             if (!attempt.Members.Any(member => selectedIds.Contains(member.GoalId))) continue;
 
             var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision, _integrationBranch);
@@ -117,7 +116,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private CohortGateRun StartGroupedGateAttempt(
+    internal CohortGateRun StartGroupedGateAttempt(
         string kind,
         IReadOnlyList<GateReadyCandidateProjection> members,
         string mainRevision,
@@ -161,7 +160,6 @@ internal sealed partial class ConductorDriver
             if (!coordinator.ReservesCapacity(attempt))
                 run.Completion.TrySetResult();
         }
-        StopInvalidatedFollowerGates();
     }
 
     private void RestoreRunningGroupedGateAttempts()
@@ -200,16 +198,6 @@ internal sealed partial class ConductorDriver
                 if (_cohortGateRuns.Values.Any(run =>
                     string.Equals(run.AttemptMetadataPath, current.MetadataPath, StringComparison.Ordinal)))
                     continue;
-                if (current.Kind == "follower")
-                {
-                    RequireFollowerMembers(current);
-                    var followerRun = CreateFollowerGateRun(current);
-                    var followerKey = FollowerGateRunKey(current);
-                    if (_cohortGateRuns.ContainsKey(followerKey)) followerKey += $"|{current.AttemptId}";
-                    if (!_cohortGateRuns.TryAdd(followerKey, followerRun))
-                        throw new InvalidOperationException($"Grouped gate registry key '{followerKey}' is already owned.");
-                    continue;
-                }
                 var memberIds = current.Members.Select(member => member.GoalId)
                     .ToHashSet(StringComparer.Ordinal);
                 var key = current.Kind == "train"
@@ -268,7 +256,6 @@ internal sealed partial class ConductorDriver
     private (bool Known, string? Difference) InspectRestoredGroupedGateIdentity(
         ConductorGroupedGateAttempt attempt)
     {
-        if (attempt.Kind == "follower") return InspectRestoredFollowerGateIdentity(attempt);
         if (_cohortKernel is null || _cohortWorkspace is null) return (false, null);
         var policy = ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath);
         var goalsById = _cohortKernel.Goals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
@@ -321,11 +308,6 @@ internal sealed partial class ConductorDriver
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
                 gateOnly: true, expectedGateIdentity: attempt.IdentityValue, outerAttemptId: attempt.AttemptId);
             return MergeTrainChildOutcome.From(result);
-        }
-        else if (attempt.Kind == "follower")
-        {
-            RunFollowerGateBody(attempt);
-            return null;
         }
         else
         {

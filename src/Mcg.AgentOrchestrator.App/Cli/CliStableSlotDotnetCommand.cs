@@ -148,7 +148,7 @@ internal static class CliStableSlotDotnetCommand
             ? Path.GetFullPath(defaultResultsDirectory)
             : Path.GetFullPath(configuredResultsDirectory, Path.GetFullPath(workspaceRoot));
 
-    private static string? ReadOption(IReadOnlyList<string> parts, string option)
+    internal static string? ReadOption(IReadOnlyList<string> parts, string option)
     {
         for (var index = 3; index < parts.Count - 1; index++)
         {

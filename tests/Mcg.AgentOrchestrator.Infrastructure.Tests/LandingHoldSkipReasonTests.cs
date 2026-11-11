@@ -81,7 +81,7 @@ public sealed class LandingHoldSkipReasonTests
         using var fixture = new Fixture();
         var scenario = fixture.CreateScenario();
         // Record after the review so the test exercises landing's role-report closure.
-        fixture.CompleteReviewer(scenario);
+        fixture.CompleteReviewer(scenario, "met");
         var wait = fixture.CreateWait(scenario, "reviewer");
 
         var result = fixture.Evaluate(scenario.Goal);
@@ -89,7 +89,31 @@ public sealed class LandingHoldSkipReasonTests
         Assert.Null(result.HoldDescription);
         Assert.True(wait.IsCompleted);
         Assert.Contains("ROLE_REPORT_EVIDENCE owner=reviewer", wait.Answer);
+        Assert.Contains("criterion_index=0 evidence=Reviewed current source contract", wait.Answer);
         Assert.Contains("verdict=pass", wait.Answer);
+    }
+
+    [Theory]
+    [InlineData("not-verifiable")]
+    [InlineData("not-met")]
+    public void ReviewerPassWithoutMet_IndividualAndGroupedKeepWait(string verdict)
+    {
+        using var fixture = new Fixture();
+        var scenario = fixture.CreateScenario();
+        fixture.CompleteReviewer(scenario, verdict);
+        Assert.True(WorkerResultBlockers.TryFindPassVerdict(scenario.Reviewer.LastVerification));
+        var wait = fixture.CreateWait(scenario, "reviewer");
+
+        var result = fixture.Evaluate(scenario.Goal);
+        var grouped = LandingExecutor.DescribeGroupedPendingHumanInput(
+            fixture.Kernel, [scenario.Goal], fixture.Workspace, _ => fixture.Candidate);
+
+        var reason = $"criterion-verdict-not-met:criterion_index=0 verdict={verdict}";
+        AssertHeld(wait, result.HoldDescription, reason);
+        AssertHeld(wait, grouped, reason);
+        Assert.False(wait.IsCompleted);
+        Assert.Null(wait.Answer);
+        Assert.Empty(wait.AnswerHistory);
     }
 
     [Fact]
@@ -100,7 +124,7 @@ public sealed class LandingHoldSkipReasonTests
         var reviewerGoal = fixture.CreateScenario();
         fixture.WriteGate(developerGoal.Goal);
         fixture.WriteGate(reviewerGoal.Goal);
-        fixture.CompleteReviewer(reviewerGoal);
+        fixture.CompleteReviewer(reviewerGoal, "met");
         var developerWait = fixture.CreateWait(developerGoal, "developer");
         var reviewerWait = fixture.CreateWait(reviewerGoal, "reviewer");
         Assert.False(developerWait.IsCompleted);
@@ -224,14 +248,14 @@ public sealed class LandingHoldSkipReasonTests
         internal (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines)
             Evaluate(Goal goal) => LandingExecutor.EvaluatePendingHumanInput(Kernel, goal, Workspace, Candidate);
 
-        internal void CompleteReviewer(Scenario scenario)
+        internal void CompleteReviewer(Scenario scenario, string criterionVerdict)
         {
             var started = DispatchTime.AddSeconds(2);
             Kernel.RecordTaskDispatch(scenario.Goal.Id, scenario.Reviewer.Id,
                 new TaskDispatchRecord("codex-cli", "review", Root, started, BaseCommit: Candidate));
             var output = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
                 "tests: deferred - GateProofTests", "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
-                "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"not-verifiable\",\"evidence\":\"Acceptance executes\"}]",
+                $"criteria_verdicts: [{{\"criterion_index\":0,\"verdict\":\"{criterionVerdict}\",\"evidence\":\"Reviewed current source contract; Acceptance executes deferred tests\"}}]",
                 "verdict: pass", "model_fit: fixture/model - adequate - inspection", "skills: none", "confidence: high", "END_WORKER_RESULT");
             Kernel.RecordTaskVerification(scenario.Goal.Id, scenario.Reviewer.Id,
                 new TaskVerificationRecord("review", Root, 0, output, string.Empty,

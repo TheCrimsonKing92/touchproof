@@ -10,7 +10,7 @@ public sealed class GroupedAdmissionPrepAttributionTests(ITestOutputHelper outpu
     [
         "prep-cohort-receipts", "prep-train-reconcile", "prep-projection", "prep-census", "prep-plan-receipt",
         "prep-cohort-members", "prep-obligation-filter", "prep-merge-conflict", "prep-approval-hold",
-        "prep-train-receipts", "prep-follower-receipts", "prep-oldest-waiter", "prep-retry-priority",
+        "prep-train-receipts", "prep-oldest-waiter", "prep-retry-priority",
         "prep-interaction-keys", "prep-probe-backoff"
     ];
 
@@ -25,7 +25,6 @@ public sealed class GroupedAdmissionPrepAttributionTests(ITestOutputHelper outpu
     [InlineData("prep-merge-conflict")]
     [InlineData("prep-approval-hold")]
     [InlineData("prep-train-receipts")]
-    [InlineData("prep-follower-receipts")]
     [InlineData("prep-oldest-waiter")]
     [InlineData("prep-retry-priority")]
     [InlineData("prep-interaction-keys")]

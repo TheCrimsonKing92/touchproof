@@ -16,6 +16,27 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         TryReadLatest(goalId) is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Passed,
             ReconciledAt: not null, RegateRequestedAt: null };
 
+    // Historical proof can defer scheduling across main drift, but cannot authorize
+    // landing. Keep the existing receipt and test-evidence checks under writer custody.
+    internal ConductorParallelAcceptanceAttempt? ReadHistoricalFullPass(ConductorParallelAcceptanceCandidate candidate)
+    {
+        var goalId = candidate.Goal.Id.Value;
+        if (!HasPassedReconciledReceipt(goalId)) return null;
+        var directory = Path.Combine(_rootDirectory, goalId);
+        using var custody = _tryAcquireAttemptWriterLease(directory, TimeSpan.Zero);
+        if (custody is null) return null;
+        var latest = TryReadLatest(goalId);
+        if (latest is null) return null;
+        var attempt = ReadCanonicalAttempt(latest.MetadataPath, goalId);
+        if (!HasReplayProof(attempt, candidate.Goal) || !HasSameReplayScope(attempt, candidate) ||
+            !string.Equals(attempt.BranchHeadSha, candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var original = ConductorParallelAcceptanceCandidate.Create(candidate.Goal, attempt.SlotIndex,
+            attempt.ScopePaths!, attempt.BranchHeadSha, attempt.MainHeadSha);
+        var run = ReadPassedReplayRun(attempt, original);
+        return run is not null && HasPassingReplayTestEvidence(attempt, run.Acceptance!) ? attempt : null;
+    }
+
     internal bool TryInvalidatePassedReceipt(Goal goal, string expectedAttemptId, string expectedCandidate,
         ConductorEvidenceSupersessionCause cause, string detail, Func<string?> currentCandidate)
     {
@@ -70,6 +91,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             version.Spec.BehavioralContract, version.Spec.AcceptanceCriteria,
             version.Spec.VerificationClass, version.Spec.Decisions,
             version.Spec.OperatorOwnedAcceptanceCriteria, version.Spec.AcceptanceGateOwnedAcceptanceCriteria,
+            // Supported waivers change authority without creating a refined-spec version.
+            EffectiveCriteria = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
             Tasks = goal.Tasks.OrderBy(task => task.Id.Value, StringComparer.Ordinal).Select(task => new
             {
                 task.Id, task.Description, task.RequiredRole, task.Status, task.VerificationPlan,
@@ -86,7 +109,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             }),
             Obligations = goal.CriterionEvidenceObligations.OrderBy(item => item.Id, StringComparer.Ordinal)
                 .Select(item => new { item.Id, item.CriterionVersion, item.CriterionIndex,
-                    item.Criterion, item.Owner, item.RequiredScope,
+                    item.Criterion, item.Owner, item.RequiredScope, item.Phase, item.ObservationScope,
                     item.ReplacementObligationId, item.ReplacementOwner })
         };
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(

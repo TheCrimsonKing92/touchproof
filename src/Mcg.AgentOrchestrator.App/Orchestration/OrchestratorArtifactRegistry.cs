@@ -62,7 +62,7 @@ internal static class OrchestratorArtifactRegistry
         Source("test-reuse-shadow", "Infrastructure/Workspaces/AcceptanceTestReuseShadow.cs"),
         Source("cohort-acceptance.db", "App/Orchestration/ConductorDriver.cs"),
         Source("merge-train-acceptance.db", "App/Orchestration/ConductorDriver.cs"),
-        Source("follower-gate-acceptance.db", "App/Orchestration/ConductorDriver.FollowerGates.cs"),
+        Retired("follower-gate-acceptance.db", "Follower gate writer removed; existing database remains unmanaged and untouched."),
         Source("judge-panel.db", "App/Orchestration/ConductorJudgePanelHost.Default.cs"),
         Source("collaboration-items.db", "Execution/Persistence/CollaborationItemStore.Storage.cs"),
         Source("operator-directives.db", "Execution/Persistence/SqliteOperatorDirectiveStore.cs"),

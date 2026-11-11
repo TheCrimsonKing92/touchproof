@@ -178,7 +178,7 @@ public sealed class RoleReportEvidenceClosureTestsReviewerExecutor
     private static void RecordReviewer(AgentOrchestratorKernel kernel, Goal goal, TaskSpec reviewer,
         string verdict, string blockers, string reviewed, WorkTaskStatus status, DateTimeOffset started)
     {
-        var output = RoleReportEvidenceClosureTests.RoleOutput(verdict)
+        var output = RoleReportEvidenceClosureTests.RoleOutput(verdict, "met")
             .Replace("blockers: none", $"blockers: {blockers}", StringComparison.Ordinal);
         kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
             "codex-cli", "inspect", "C:\\fixture", started, BaseCommit: reviewed));

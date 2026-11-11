@@ -50,6 +50,9 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
         {
             var fixture = CreateAcceptedCandidate(repo, "src/candidate-only.txt", "candidate");
             var receipt = SeedReplayReceipt(fixture);
+            Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(fixture.Goal.CriterionEvidenceObligations).State);
+            Assert.Null(fixture.Driver.TryHoldRepeatSoloAcceptance(fixture.Goal, ConductorAutonomyPolicy.Conservative));
+            Assert.False(GoalOperationJournal.HasRepeatGateDeferral(repo, fixture.Goal, receipt));
             AppendCommit(repo, "src/unrelated-lane.txt", "racing landing");
             var currentMain = ReadGit(repo, "rev-parse", "main");
             if (alreadyRebased)
@@ -114,6 +117,9 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
             var fixture = CreateAcceptedCandidate(repo, "src/candidate-only.txt",
                 baseline.Replace("base-1", "candidate-1", StringComparison.Ordinal));
             var receipt = SeedReplayReceipt(fixture);
+            Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(fixture.Goal.CriterionEvidenceObligations).State);
+            Assert.Null(fixture.Driver.TryHoldRepeatSoloAcceptance(fixture.Goal, ConductorAutonomyPolicy.Conservative));
+            Assert.False(GoalOperationJournal.HasRepeatGateDeferral(repo, fixture.Goal, receipt));
             if (missingScope)
                 File.WriteAllText(receipt.MetadataPath, System.Text.Json.JsonSerializer.Serialize(
                     receipt with { ReconciledAt = DateTimeOffset.UtcNow, ScopePaths = null }));

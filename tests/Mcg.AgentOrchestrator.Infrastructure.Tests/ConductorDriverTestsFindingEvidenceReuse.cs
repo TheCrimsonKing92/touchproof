@@ -498,9 +498,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         var receipt = new FindingEvidenceReceipt("receipt", "candidate-a", request, true, true, "control",
             Arms: [new(FindingEvidenceArm.Candidate, "candidate-a", FindingEvidenceArmDisposition.Green, true, true, "control")],
             RequestDispositions: [new("control", "request-identity", disposition)]);
-        var method = typeof(ConductorDriver).GetMethod("IsReusableGreenFindingEvidenceReceipt",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        Assert.Equal(false, method.Invoke(null, [receipt, "candidate-a", "basis"]));
+        Assert.False(ConductorDriver.IsReusableGreenFindingEvidenceReceipt(receipt, "candidate-a", "basis"));
     }
 
     [Xunit.Theory]

@@ -7,9 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CurrentBranchInProcessReadTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("current-branch-read-").FullName;
-    private static readonly Func<string, string?> GetCurrentBranchName = typeof(GoalWorktrees)
-        .GetMethod("GetCurrentBranchName", BindingFlags.Static | BindingFlags.NonPublic, [typeof(string)])!
-        .CreateDelegate<Func<string, string?>>();
+    private static readonly Func<string, string?> GetCurrentBranchName = GoalWorktrees.GetCurrentBranchName;
 
     [Fact]
     public void MainCheckout_MatchesGitWithoutLaunchingProcesses()

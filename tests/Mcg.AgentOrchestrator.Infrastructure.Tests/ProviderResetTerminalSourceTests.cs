@@ -217,6 +217,7 @@ public sealed class ProviderResetTerminalSourceTests
         await fixture.Initialize();
         var intent = await fixture.Queue();
         fixture.Coordinator().ExecuteWorkspacePending(fixture.Kernel);
+        fixture.Clock.UtcNow = fixture.Schedule().NextProbeAt;
         fixture.Succeed();
         var recorder = new ProviderResetRetainedSourceRecorder(() =>
             throw new InvalidOperationException("Repository must not be opened for scope replay."));
@@ -350,7 +351,8 @@ public sealed class ProviderResetTerminalSourceTests
             Kernel.ActivateGoal(goal.Id, Agents);
             Kernel.RecordTaskDispatch(goal.Id, goal.Tasks.Single().Id, new("grok-cli", "grok", Root, Clock.UtcNow, ProviderName: "xAI"));
             Clock.UtcNow = Clock.UtcNow.AddMinutes(1);
-            Kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id, new("grok", Root, 0, "Success", "", Clock.UtcNow));
+            Kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id, new("grok", Root, 0, "Success", "", Clock.UtcNow,
+                CompletionVerdictVerifiedSuccess: true));
             Assert.False(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(Kernel.ProviderHoldScope, Binding, out _));
         }
 

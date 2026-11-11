@@ -4,6 +4,8 @@ This census covers distinct backing sources consumed by `src/Mcg.AgentOrchestrat
 
 The console reads one workspace's stores. Its plain header and full-screen title identify that workspace as `home` or its registered project name. This identity is separate from host-row ownership.
 
+Read/refresh optimizations must apply the canonical [console responsiveness contract](operator-runbook.md#console-responsiveness) while preserving workspace identity, freshness and existing resource and retention requirements.
+
 ## Board, decision and metadata reuse
 
 The full-screen host owns its readers for one console instance. `SqliteStoreChangeObservation` retains a read-only connection and compares `PRAGMA data_version` on that connection, observing commits from other connections/processes, including WAL commits. A connection epoch and Windows volume/file identity distinguish reopened or replaced databases. No read transaction spans observations. Unsupported identity, unreadable/corrupt stores and ambiguous replacement return unknown and disable reuse; confirmed absence is checked again on every observation. Database-wide invalidation is deliberately conservative where no authoritative row-level signal exists.

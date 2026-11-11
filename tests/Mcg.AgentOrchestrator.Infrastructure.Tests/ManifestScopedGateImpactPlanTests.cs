@@ -192,22 +192,14 @@ public sealed class ManifestScopedGateImpactPlanTests
 
     private static IReadOnlyList<AcceptanceManifestCheck> RequiredChecks(
         string root, IReadOnlyList<AcceptanceManifestCheck> manifest) =>
-        Assert.IsAssignableFrom<IReadOnlyList<AcceptanceManifestCheck>>(InvokeGateMethod(
-            "BuildRequiredPolicyChecks", [root, new[] { CoreSourcePath }, manifest]));
+        GoalAcceptanceVerifier.BuildRequiredPolicyChecks(root, new[] { CoreSourcePath }, manifest);
 
     private static IReadOnlyList<AcceptanceManifestCheck>? ChangeScopedChecks(
         string root, AcceptanceManifestCheck solution, IReadOnlyList<AcceptanceManifestCheck> effective,
         IReadOnlyList<AcceptanceManifestCheck> manifest, PolicyShardPlan shardPlan) =>
         // Parameter order: root, solution, effective checks, raw manifest checks, changes, plan, lanes.
-        (IReadOnlyList<AcceptanceManifestCheck>?)InvokeGateMethod("BuildChangeScopedChecks",
-            [root, solution, effective, manifest, new[] { CoreSourcePath }, shardPlan, Array.Empty<AcceptanceTestLane>()]);
+        GoalAcceptanceVerifier.BuildChangeScopedChecks(root, solution, effective, manifest, new[] { CoreSourcePath }, shardPlan, Array.Empty<AcceptanceTestLane>());
 
-    private static object? InvokeGateMethod(string name, object?[] arguments)
-    {
-        var method = typeof(GoalAcceptanceVerifier).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-        return method.Invoke(null, arguments);
-    }
 
     private static AcceptanceManifestCheck TestCheck(string name, string project) =>
         new() { Name = name, Type = "dotnet-test", Project = project, Arguments = ["--verbosity", "minimal"] };

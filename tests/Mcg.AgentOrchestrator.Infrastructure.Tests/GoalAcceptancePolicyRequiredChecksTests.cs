@@ -38,18 +38,14 @@ public sealed class GoalAcceptancePolicyRequiredChecksTests
 
         // Exercise the composition seam with an explicit plan so ambient shard switches cannot
         // force a full plan and mask the distinction between required and manifest checks.
-        var compose = typeof(GoalAcceptanceVerifier).GetMethod(
-            "BuildPolicyEffectiveChecks", BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(compose);
-        var result = compose.Invoke(null,
-        [
+        var result = GoalAcceptanceVerifier.BuildPolicyEffectiveChecks(
             string.Empty,
             new AcceptanceManifestCheck[] { manifestCore, manifestInfrastructure },
             changedPaths,
             new AcceptanceManifestCheck[] { requiredCore, requiredExecution, absentCheck, nonTestCheck },
             shardPlan,
             null
-        ]);
+        );
         var checks = Assert.IsAssignableFrom<IReadOnlyList<AcceptanceManifestCheck>>(result);
 
         Assert.Contains(requiredCore, checks);

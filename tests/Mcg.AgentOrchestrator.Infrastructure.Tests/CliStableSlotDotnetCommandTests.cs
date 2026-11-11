@@ -54,21 +54,16 @@ public sealed class CliStableSlotDotnetCommandTests
     [Fact]
     public void ReadOption_ScansOnlyOptionsAfterTheProjectWithFollowingValues()
     {
-        var readOption = typeof(CliStableSlotDotnetCommand).GetMethod(
-            "ReadOption", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.NotNull(readOption);
         string[] parts =
         [
             "stable-slot-dotnet", "mtp-test", "tests/Sample.Tests/Sample.Tests.csproj",
             "--filter", "Alpha", "--RESULTS-DIRECTORY", "out"
         ];
 
-        Assert.Equal("Alpha", readOption.Invoke(null, [parts, "--filter"]));
-        Assert.Equal("out", readOption.Invoke(null, [parts, "--results-directory"]));
-        Assert.Null(readOption.Invoke(null,
-            [new[] { "stable-slot-dotnet", "mtp-test", "--filter", "Alpha" }, "--filter"]));
-        Assert.Null(readOption.Invoke(null,
-            [new[] { "stable-slot-dotnet", "mtp-test", "tests/Sample.Tests/Sample.Tests.csproj", "--no-build", "--filter" }, "--filter"]));
+        Assert.Equal("Alpha", CliStableSlotDotnetCommand.ReadOption(parts, "--filter"));
+        Assert.Equal("out", CliStableSlotDotnetCommand.ReadOption(parts, "--results-directory"));
+        Assert.Null(CliStableSlotDotnetCommand.ReadOption(new[] { "stable-slot-dotnet", "mtp-test", "--filter", "Alpha" }, "--filter"));
+        Assert.Null(CliStableSlotDotnetCommand.ReadOption(new[] { "stable-slot-dotnet", "mtp-test", "tests/Sample.Tests/Sample.Tests.csproj", "--no-build", "--filter" }, "--filter"));
     }
 
     [Fact]

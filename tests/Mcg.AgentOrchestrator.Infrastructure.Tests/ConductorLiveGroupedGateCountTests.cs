@@ -11,7 +11,6 @@ public sealed class ConductorLiveGroupedGateCountTests : ConductorBatchLoopTests
     [Xunit.Theory]
     [Xunit.InlineData("train")]
     [Xunit.InlineData("cohort")]
-    [Xunit.InlineData("follower")]
     public void RunningAttempt_LiveForeignOwner_CountsAsOne(string kind)
     {
         var root = CreateTempDirectory("live-grouped-gate");

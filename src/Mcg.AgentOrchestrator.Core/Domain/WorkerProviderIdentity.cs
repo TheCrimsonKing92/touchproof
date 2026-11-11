@@ -19,7 +19,8 @@ public enum ProviderFailureKind
     RateLimit,
     Sandbox1312,
     Connectivity,
-    BudgetExhausted
+    BudgetExhausted,
+    AuthenticationRequired
 }
 
 public sealed record WorkerProviderIdentity(

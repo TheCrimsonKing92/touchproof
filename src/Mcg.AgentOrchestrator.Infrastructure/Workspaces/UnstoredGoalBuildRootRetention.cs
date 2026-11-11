@@ -71,7 +71,8 @@ internal sealed class UnstoredGoalBuildRootRetention(
                     Keep(UnstoredGoalBuildRootKeepReason.RegisteredOwnedRoot);
                     continue;
                 }
-                if (Directory.Exists(Path.Combine(root, "lease")))
+                var leaseAbsent = false;
+                if (Directory.Exists(Path.Combine(root, "lease")) && !(leaseAbsent = IsLeaseFileAbsent(root)))
                 {
                     if (!TryReadLease(root, name, out var owner, out var lastUsed, out var repository))
                     {
@@ -105,7 +106,7 @@ internal sealed class UnstoredGoalBuildRootRetention(
                             IgnoreInaccessible = false
                         }).Any(entry => entry.LastWriteTimeUtc > cutoff.UtcDateTime))
                     {
-                        Keep(UnstoredGoalBuildRootKeepReason.WithinWindow);
+                        Keep(leaseAbsent ? UnstoredGoalBuildRootKeepReason.LeaseAbsent : UnstoredGoalBuildRootKeepReason.WithinWindow);
                         continue;
                     }
                 }
@@ -167,6 +168,22 @@ internal sealed class UnstoredGoalBuildRootRetention(
                     OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                     return true;
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return false;
+    }
+
+    private bool IsLeaseFileAbsent(string root)
+    {
+        var folder = Path.Combine(root, "lease");
+        if (!IsContainedDirectory(folder)) return false;
+        try
+        {
+            File.GetAttributes(Path.Combine(folder, "lease.json"));
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return false;

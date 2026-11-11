@@ -50,10 +50,10 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
 
         TickReceipt("operator", duringAdmission: driver =>
         {
-            admissionHasTickContext = PrivateField(driver, "_conductorTickKernel").GetValue(driver) is not null &&
-                (int)PrivateField(driver, "_conductorTick").GetValue(driver)! == 1;
+            admissionHasTickContext = driver._conductorTickKernel is not null &&
+                (int)driver._conductorTick == 1;
             seedCount++;
-            PrivateField(driver, "_buildServerShutdownRanThisTick").SetValue(driver, true);
+            driver._buildServerShutdownRanThisTick = true;
             var parentPresent = true;
             parentGuard = new SliceBatchParentExecutionGuard(() => parentPresent ? [child] : []);
             parentGuard.BeginTick();
@@ -83,16 +83,12 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
         CaptureTickState(ConductorDriver driver, Goal parent)
     {
         var admission = driver.SliceBatchAdmissionEvaluator!;
-        return ((bool)PrivateField(driver, "_buildServerShutdownRanThisTick").GetValue(driver)!,
+        return ((bool)driver._buildServerShutdownRanThisTick,
             driver.SliceBatchParentExecutionGuard!.IsSliceBatchParent(parent),
-            ((HashSet<GoalId>)PrivateField(admission, "_admittedThisTick").GetValue(admission)!).Count,
-            ((Dictionary<GoalId, IReadOnlyList<string>?>)PrivateField(admission, "_observedPathsThisTick")
-                .GetValue(admission)!).Count);
+            ((HashSet<GoalId>)admission._admittedThisTick).Count,
+            ((Dictionary<GoalId, IReadOnlyList<string>?>)admission._observedPathsThisTick).Count);
     }
 
-    private static FieldInfo PrivateField(object target, string name) =>
-        target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException($"Missing per-tick state field {name}.");
 
     private static string[] Members(string receipt) =>
         receipt.Split("members=", StringSplitOptions.None)[1].Split(' ')[0].Split(',');
@@ -132,7 +128,7 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
             getFacts: goal =>
             {
                 if (goal.Id == walkProbeId && admissionObserved && !walkObserved && driver is not null &&
-                    PrivateField(driver, "_conductorTickKernel").GetValue(driver) is not null)
+                    driver._conductorTickKernel is not null)
                 {
                     walkObserved = true;
                     duringGoalWalk?.Invoke(driver);
@@ -144,8 +140,8 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
             getLandingFileScopes: goal => paths[goal.Id], isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector);
         // Prove each input is ready before the tick adds the pending-wait exclusion.
-        Assert.Null(PrivateField(driver, "_cohortKernel").GetValue(driver));
-        Assert.Null(PrivateField(driver, "_conductorTickKernel").GetValue(driver));
+        Assert.Null(driver._cohortKernel);
+        Assert.Null(driver._conductorTickKernel);
         Assert.All(goals, goal => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
             driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative)));
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>

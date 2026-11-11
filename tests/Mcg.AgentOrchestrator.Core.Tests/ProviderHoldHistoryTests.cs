@@ -75,7 +75,7 @@ public sealed class ProviderHoldHistoryTests
     }
 
     [Fact]
-    public void SeedCandidates_IndexedHistory_SelectsNewestLaterProviderSuccess()
+    public void SeedCandidates_IndexedHistory_IncludesInterveningProviderEvidence()
     {
         var rows = new[]
         {
@@ -86,11 +86,30 @@ public sealed class ProviderHoldHistoryTests
             Row("working", "Anthropic", 3, exhausted: true),
             Row("c", "Anthropic", 2)
         };
-        Assert.Equal(new[] { "a", "b", "z" }, ProviderHoldHistory.SeedCandidates(rows,
+        Assert.Equal(new[] { "a", "b", "later", "older", "z" }, ProviderHoldHistory.SeedCandidates(rows,
             new HashSet<string>(["working"], StringComparer.Ordinal)));
-        Assert.Equal(new[] { "a", "b", "working" }, ProviderHoldHistory.SeedCandidates(rows,
+        Assert.Equal(new[] { "a", "b", "later", "older", "working" }, ProviderHoldHistory.SeedCandidates(rows,
             new HashSet<string>(["z"], StringComparer.Ordinal)));
         Assert.Empty(ProviderHoldHistory.SeedCandidates([Row("success", "xAI", 20)], new HashSet<string>()));
+    }
+
+    [Fact]
+    public void SeedCandidates_FailedChecksSurviveLaterExhaustion()
+    {
+        var rows = new[]
+        {
+            Row("source", "xAI", 1, exhausted: true),
+            Row("auth", "xAI", 2) with { Outcome = WorkTaskStatus.Failed,
+                OutcomeRule = "provider-authentication", OutcomeClass = TaskOutcomeClass.Environmental },
+            Row("inconclusive", "xAI", 3) with { Outcome = WorkTaskStatus.Failed,
+                OutcomeRule = null, OutcomeClass = TaskOutcomeClass.UnknownEra },
+            Row("later-exhaustion", "xAI", 4, exhausted: true),
+            Row("other-provider", "OpenAI", 5)
+        };
+        var candidates = ProviderHoldHistory.SeedCandidates(rows, new HashSet<string>());
+        Assert.Contains("auth", candidates);
+        Assert.Contains("inconclusive", candidates);
+        Assert.DoesNotContain("other-provider", candidates);
     }
 
     [Fact]
@@ -131,7 +150,7 @@ public sealed class ProviderHoldHistoryTests
         kernel.RecordTaskVerification(goal.Id, task.Id, new("fixture", @"C:\fixture", success ? 0 : 1,
             "", success ? "" : "Provider budget exhausted.", at.AddMinutes(1),
             ProviderFailureKind: success ? ProviderFailureKind.Unknown : ProviderFailureKind.BudgetExhausted,
-            DispatchStartedAt: at));
+            DispatchStartedAt: at, CompletionVerdictVerifiedSuccess: success));
         return goal;
     }
 

@@ -158,9 +158,7 @@ public sealed class ScopedLockSnapshotOverrideTests
     // Exercise only the snapshot consumer: public attribution may use unrelated global hooks and OS probes.
     private static BuildLockAttribution AttributeSnapshot()
     {
-        var method = typeof(LockAttribution).GetMethod("AttributeFromProcessSnapshot", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-        return Assert.IsType<BuildLockAttribution>(method.Invoke(null, [LockedPath, null]));
+        return LockAttribution.AttributeFromProcessSnapshot(LockedPath, null);
     }
 
     private static void AssertHolder(int processId)
@@ -172,9 +170,7 @@ public sealed class ScopedLockSnapshotOverrideTests
 
     private static Func<ProcessCommandLineSnapshot> GetProvider()
     {
-        var property = typeof(LockAttribution).GetProperty("ProcessCommandLineSnapshotProvider", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(property);
-        return Assert.IsType<Func<ProcessCommandLineSnapshot>>(property.GetValue(null));
+        return LockAttribution.ProcessCommandLineSnapshotProvider;
     }
 
     private static void AssertDefaultProvider() =>

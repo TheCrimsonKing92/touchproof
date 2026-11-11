@@ -13,7 +13,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private static string? TryResolveGitHead(string path)
+    internal static string? TryResolveGitHead(string path)
         => GitRevisionReader.Shared.TryResolve(path, "HEAD", out var head) ? head : null;
 
     private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(

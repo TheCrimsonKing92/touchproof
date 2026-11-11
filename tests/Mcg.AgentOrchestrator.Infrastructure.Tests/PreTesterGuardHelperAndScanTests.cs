@@ -228,6 +228,50 @@ public sealed class PreTesterGuardHelperAndScanTests
                 $"PRE_TESTER_GUARD_SELECTED class={selection.TestClass} ", StringComparison.Ordinal)));
     }
 
+    [Theory]
+    [InlineData("src/A/B.cs", true)]
+    [InlineData("tests/A/B.cs", true)]
+    [InlineData("src/A/B.txt", false)]
+    [InlineData("other/A.cs", false)]
+    public void SnapshotScanUsesRecursiveCsharpDependency(string path, bool selected)
+    {
+        using var fixture = new SourceFixture();
+        fixture.Declare("""
+            [Fact] public void Scans() {
+                var snapshot = RepositorySourceSnapshotCache.Get(root);
+                snapshot.EnumerateFiles(Path.Combine(root, "src"));
+                snapshot.EnumerateFiles(Path.Combine(root, "tests"));
+            }
+            """);
+        fixture.AssertSelection(path, selected ? "scan" : null);
+    }
+
+    [Fact]
+    public void UnrelatedEnumerateFilesDoesNotBecomeSnapshotDependency()
+    {
+        using var fixture = new SourceFixture();
+        fixture.Declare("""
+            [Fact] public void Scans() {
+                var snapshot = Other.Get(root);
+                snapshot.EnumerateFiles(Path.Combine(root, "src"));
+            }
+            """);
+        fixture.AssertSelection("src/A.cs", null);
+    }
+
+    [Theory]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TesterRoleFocusNoWorkerTestExecutionTests.cs", true)]
+    [InlineData("config/production-member-reflection-exemptions.json", true)]
+    [InlineData("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerArtifactWriter.cs", true)]
+    [InlineData("config/unrelated.json", false)]
+    public void ReflectionGuardTracksEveryRealInput(string path, bool selected)
+    {
+        var result = new PreTesterChangedFileGuardClasses().SelectWithProvenance(
+            VerifiedRepositoryRoot.Find(), [path], "reflection-inputs");
+        Assert.Equal(selected, result.Selection.Selections.Any(selection =>
+            selection.TestClass == nameof(ProductionMemberReflectionGuardTests)));
+    }
+
     private sealed class SourceFixture : IDisposable
     {
         private readonly string _root = ConductorDriverTests.CreateTempDirectory();

@@ -48,7 +48,8 @@ public sealed class ProviderUsageHoldViewTests
         var success = fixture.NewGoal();
         fixture.Dispatch(success, Start.AddMinutes(2));
         fixture.Kernel.RecordTaskVerification(success.Id, success.Tasks.Single().Id,
-            Verification(Start.AddMinutes(3)) with { ExitCode = 0, StandardError = "", ProviderFailureKind = ProviderFailureKind.Unknown });
+            Verification(Start.AddMinutes(3)) with { ExitCode = 0, StandardError = "", ProviderFailureKind = ProviderFailureKind.Unknown,
+                CompletionVerdictVerifiedSuccess = true });
         Assert.Empty(fixture.Read());
     }
 

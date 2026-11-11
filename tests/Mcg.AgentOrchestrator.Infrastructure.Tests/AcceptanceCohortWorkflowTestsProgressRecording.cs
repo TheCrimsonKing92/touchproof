@@ -34,19 +34,12 @@ public sealed class AcceptanceCohortWorkflowTestsProgressRecording : AcceptanceC
             var conductLogPath = Path.Combine(root, "fairness-decision.jsonl");
             var writer = new ConductEventLogWriter(conductLogPath);
             var loop = new ConductorBatchLoop();
-            var emit = typeof(ConductorBatchLoop).GetMethod(
-                "EmitAcceptanceCohortFairnessDecision",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(emit);
-            var writerContextField = typeof(ConductorBatchLoop).GetField(
-                "CurrentConductEventLogWriter",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            var writerContext = Assert.IsType<AsyncLocal<ConductEventLogWriter?>>(writerContextField?.GetValue(null));
+            var writerContext = ConductorBatchLoop.CurrentConductEventLogWriter;
             var previousWriter = writerContext.Value;
             try
             {
                 writerContext.Value = writer;
-                emit.Invoke(loop, [decision]);
+                loop.EmitAcceptanceCohortFairnessDecision(decision);
             }
             finally
             {

@@ -37,8 +37,8 @@ public sealed class CliStableSlotDotnetCommandOwnershipTests
         Assert.False(owner.IsNested);
         Assert.True(owner.IsNotPublic);
         Assert.Equal("Mcg.AgentOrchestrator.App.Cli", owner.Namespace);
-        string[] internalMethods = ["Run", "ShouldBuildMtpProject", "ResolveResultsDirectory", "TranslateMtpFilter", "RunProcess"];
-        string[] privateMethods = ["RunMtpTest", "ReadOption"];
+        string[] internalMethods = ["Run", "ShouldBuildMtpProject", "ResolveResultsDirectory", "TranslateMtpFilter", "RunProcess", "ReadOption"];
+        string[] privateMethods = ["RunMtpTest"];
         foreach (var name in internalMethods.Concat(privateMethods))
         {
             var method = Assert.IsAssignableFrom<MethodInfo>(Assert.Single(owner.GetMember(name, DeclaredStatic)));

@@ -33,7 +33,8 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
                     return Task.FromResult<(bool, GoalSnapshot?, (bool, GoalSnapshot?))>((false, null, (true, stored)));
 
                 scratch.RecordTaskNote(hold.SourceGoalId, hold.SourceTaskId,
-                    ProviderBudgetHoldSchedules.FormatReset(new(payload.BindingKey, payload.ResetAt, intent.Id)));
+                    ProviderBudgetHoldSchedules.FormatReset(new(payload.BindingKey, payload.ResetAt, intent.Id)),
+                    operatorIntentCreatedAt: intent.CreatedAt);
                 var saved = scratch.ExportGoalSnapshot(hold.SourceGoalId);
                 return Task.FromResult<(bool, GoalSnapshot?, (bool, GoalSnapshot?))>((true, saved, (false, saved)));
             }).GetAwaiter().GetResult();
@@ -59,7 +60,16 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
                 var scratch = new AgentOrchestratorKernel(new FixedClock(now));
                 scratch.ReplaceGoalWithSnapshot(stored);
                 // The transaction validates the source generation again before writing the observation.
-                if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scratch.ProviderHoldScope, hold.BindingKey, out var current) || current != hold)
+                // Replace the retained source with its transactional copy, preserving all other binding evidence.
+                var scope = kernel.ProviderHoldScope.Where(goal => goal.Id != hold.SourceGoalId)
+                    .Append(scratch.GetGoal(hold.SourceGoalId)).ToArray();
+                if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scope, hold.BindingKey, out var current) || current != hold)
+                    return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
+                var observation = new ProgressEvent(hold.SourceGoalId, hold.SourceTaskId, ProgressKind.TaskNote, note, now);
+                var schedule = ProviderBudgetHoldSchedules.Evaluate(scope, current, now);
+                if (!ProviderBudgetHoldSchedules.TryParseStandaloneResult(observation, out var check) ||
+                    !ProviderBudgetHoldSchedules.IsApplicable(check, ProviderBudgetHoldSchedules.LatestReset(scope, hold.BindingKey)) ||
+                    check.Due != schedule.NextProbeAt || check.Attempt != schedule.Attempt || check.ResetIntentId != schedule.ResetIntentId)
                     return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
                 scratch.RecordTaskNote(hold.SourceGoalId, hold.SourceTaskId, note);
                 var saved = scratch.ExportGoalSnapshot(hold.SourceGoalId);

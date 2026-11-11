@@ -100,7 +100,8 @@ public abstract class ConductorBatchLoopTests
         Func<DateTimeOffset>? utcNow = null,
         string? executionDirectory = null,
         Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null,
-        bool mergeTrainsEnabled = true) =>
+        bool mergeTrainsEnabled = true,
+        IGoalAcceptanceVerifier? cohortAcceptanceVerifier = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -144,7 +145,8 @@ public abstract class ConductorBatchLoopTests
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
             utcNow: utcNow,
             executionDirectory: executionDirectory,
-            readAcceptanceEngineHealth: readAcceptanceEngineHealth)
+            readAcceptanceEngineHealth: readAcceptanceEngineHealth,
+            cohortAcceptanceVerifier: cohortAcceptanceVerifier)
         {
             MergeTrainsFeatureEnabled = mergeTrainsEnabled
         };

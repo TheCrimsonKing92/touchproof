@@ -146,7 +146,7 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
             // Goal 871a6f45 adds seven lines to open the attributed-failure routing hold between retry
             // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1654),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1650),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -237,7 +237,7 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe includes parked goals only in owned-attempt reconciliation, keeping
             // them outside admission candidates at the existing batch selection boundary.
             // b596bd5a: grouped workspace-probe backoff exclusion adds 5 lines, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 814), // def5cd48: conflict escalation before width admission.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 812), // Goal 1f6500ae: follower admission and receipt carry removed.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -574,7 +574,8 @@ internal static class SourceSizeRatchet
             // route (+7 lines); extracting only this glue would split that invariant. No new partial file.
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
-            new SourceClassCeiling("ConductorDriver", 14140, 70),
+            // Follower removal integrated with direct test seams: measured 13753 lines in 68 partial files.
+            new SourceClassCeiling("ConductorDriver", 13751, 68),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -642,7 +643,7 @@ internal static class SourceSizeRatchet
             // Goal 6a072b2d extracts three static helpers; measured 7406 lines in 20 partials, no headroom.
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
             // Goal 0bc1199a: one added receipt-site binding line across the existing partials.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6623, 17),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6621, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -716,7 +717,8 @@ internal static class SourceSizeRatchet
             // Goal 38a48117 exempts the review owner at the existing hold-tracking call;
             // the added comment explains why the tracker still needs the hold record.
             // Goal bc361051: seven wiring lines preserve typed progress facts; no new partial or headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 8894, 54),
+            // Follower removal integrated with main: measured 8792 lines in 53 partial files.
+            new SourceClassCeiling("ConductorBatchLoop", 8792, 53),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

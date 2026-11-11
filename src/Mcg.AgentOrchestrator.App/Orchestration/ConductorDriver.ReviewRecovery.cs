@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private bool TryObserveReviewContractRecovery(
+    internal bool TryObserveReviewContractRecovery(
         Goal goal,
         out FailedGoalFindingObservation observation)
     {
@@ -105,7 +105,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private bool TryObserveVerifyingFindingRecovery(
+    internal bool TryObserveVerifyingFindingRecovery(
         Goal goal,
         ConductorAutonomyPolicy policy,
         IReadOnlyList<string> landingFileScopes,

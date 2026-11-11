@@ -108,6 +108,12 @@ internal static class CliConductorStatusReader
                     new("next", "Next probe at", row.Schedule?.NextProbeAt.ToString("O")), new("attempt", "Attempt", row.Schedule?.Attempt.ToString(CultureInfo.InvariantCulture)),
                     new("reset", "Reset source", row.Schedule?.ResetSource), new("probe", "Last probe outcome", row.Schedule?.LastProbeOutcome)));
                 output.WriteLine(ProviderUsageHoldView.FormatStatusLine(row));
+                if (row.Diagnosis is { } diagnosis)
+                {
+                    if (output is OwnerConsoleStructuredWriter diagnosed) diagnosed.Mark(OwnerConsoleFieldSnapshot.Create(row.Hold.BindingKey,
+                        new("binding", "Binding", row.Hold.BindingKey), new("diagnosis", "Diagnosis", diagnosis)));
+                    output.WriteLine($"    diagnosis: {diagnosis}");
+                }
             }
         }
     }

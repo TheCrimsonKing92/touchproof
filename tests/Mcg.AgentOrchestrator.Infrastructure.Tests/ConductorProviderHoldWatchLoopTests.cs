@@ -69,10 +69,24 @@ public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output
         var placed = Assert.Single(fixture.Events());
         Assert.Equal("provider-hold-placed", placed.EventKind);
         Assert.Equal(fixture.Source.Id.Value, placed.GoalId);
-        fixture.Succeed();
+        fixture.Succeed(verifiedSuccess: true);
         fixture.Run(1);
         var events = fixture.Events();
         Assert.Equal(new[] { "provider-hold-placed", "provider-hold-restored" }, events.Select(evt => evt.EventKind));
+    }
+
+    [Fact]
+    public void Run_UnverifiedSuccess_RetainsHoldWithoutRestoration()
+    {
+        using var workspace = new ConductorVerbStartTests.Fixture();
+        var fixture = new WatchFixture(workspace.Workspace, exhausted: true);
+        fixture.Run(2);
+        var placed = Assert.Single(fixture.Events());
+        Assert.Equal("provider-hold-placed", placed.EventKind);
+        fixture.Succeed();
+        fixture.Run(1);
+        Assert.Equal("provider-hold-placed", Assert.Single(fixture.Events()).EventKind);
+        Assert.Single(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
     }
 
     [Fact]
@@ -173,13 +187,15 @@ public sealed class ConductorProviderHoldWatchLoopTests(ITestOutputHelper output
             Loop = NewLoop();
         }
 
-        internal void Succeed()
+        internal void Succeed(bool verifiedSuccess = false)
         {
             Clock.UtcNow = Clock.UtcNow.AddMinutes(1);
             var task = Source.Tasks.Single();
             Kernel.RecordTaskVerification(Source.Id, task.Id, new("fixture", _workspace.ExecutionDirectory, 0, "Success", "",
-                Clock.UtcNow, DispatchStartedAt: task.LastDispatch!.DispatchedAt));
-            Assert.Empty(ProviderUsageHoldView.Read(Kernel.ProviderHoldScope, Clock.UtcNow));
+                Clock.UtcNow, DispatchStartedAt: task.LastDispatch!.DispatchedAt,
+                CompletionVerdictVerifiedSuccess: verifiedSuccess));
+            if (verifiedSuccess) Assert.Empty(ProviderUsageHoldView.Read(Kernel.ProviderHoldScope, Clock.UtcNow));
+            else Assert.Single(ProviderUsageHoldView.Read(Kernel.ProviderHoldScope, Clock.UtcNow));
         }
 
         internal void Restart() => Loop = NewLoop();

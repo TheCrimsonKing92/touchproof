@@ -47,7 +47,7 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.ExperimentReplay, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.OperatorDirectives, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.OperatorDirectives, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal("operator-directives", StoreSchemaRegistry.OperatorDirectives.StoreName);
         Assert.Equal(1, StoreSchemaRegistry.OperatorDirectives.CurrentVersion);
         Assert.Equal("operator-directives.db", StoreSchemaRegistry.OperatorDirectives.Database);
@@ -76,10 +76,8 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("board-fill.db", StoreSchemaRegistry.BoardFill.Database);
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBoardFillDraftStore.cs",
             StoreSchemaRegistry.BoardFill.SourceFile);
-        Assert.Equal(1, StoreSchemaRegistry.FollowerGateAcceptance.CurrentVersion);
         Assert.Equal(1, StoreSchemaRegistry.Experiments.CurrentVersion);
         Assert.Equal("experiments.db", StoreSchemaRegistry.Experiments.Database);
-        Assert.Equal("follower-gate-acceptance.db", StoreSchemaRegistry.FollowerGateAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.ProgressiveReviewSteering.CurrentVersion);
         Assert.Equal("progressive-review-steering.db", StoreSchemaRegistry.ProgressiveReviewSteering.Database);
         Assert.Equal(1, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.CurrentVersion);

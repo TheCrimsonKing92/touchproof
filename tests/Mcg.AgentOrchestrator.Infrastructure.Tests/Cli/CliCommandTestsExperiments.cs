@@ -351,7 +351,7 @@ public sealed class CliCommandTestsExperiments : CliTaskQueryTestSupport
             var json = JsonSerializer.SerializeToNode(FlagSpec(), ExperimentStore.JsonOptions)!;
             var target = json["intervention"]!["flagTarget"]!.AsObject();
             if (fault == "property") target["propertyName"] = "maxCriterionRetries";
-            if (fault == "case") target["propertyName"] = "FollowerGatesEnabled";
+            if (fault == "case") target["propertyName"] = "BuildGcConserveMemory";
             if (fault == "file-kind") target["fileKind"] = "remote-executor";
             if (fault == "non-config") json["intervention"]!["kind"] = "policy";
             if (fault == "prior") target["priorValue"] = false;
@@ -393,7 +393,7 @@ public sealed class CliCommandTestsExperiments : CliTaskQueryTestSupport
     private static ExperimentSpec FlagSpec() => Spec() with
     {
         Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial a boolean policy flag",
-            new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true))
+            new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true))
     };
 
     private static ExperimentSpec WithMetrics(ExperimentSpec spec, string metric, string guardrail) => spec with

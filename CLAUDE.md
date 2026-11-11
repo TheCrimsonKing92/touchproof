@@ -3,8 +3,8 @@
 <!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
 Owns: Claude Code harness operating guidance.
 Counterpart: AGENTS.md owns shared repository discipline plus Codex harness operating guidance.
-Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
-Driver takeover home: docs/operator-runbook.md#driver-takeover owns handoff expiry of owner intake/pacing instructions and the stop-and-ask rule when a remembered instruction conflicts with a current request; both harnesses follow it.
+Rule: Shared edits update BOTH AGENTS.md and CLAUDE.md contract blocks/anchor lists, or move the content to docs/operator-runbook.md or another shared home.
+Driver takeover home: docs/operator-runbook.md#driver-takeover governs owner intake/pacing expiry at handoff and stop-and-ask on remembered/current instruction conflicts; both harnesses follow it.
 Managed .NET test execution home: docs/operator-runbook.md owns the repository-safe managed-runner command and the native-apphost prohibition; counterpart files and worker skills point there instead of inventing test launch commands.
 Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
 Shared anchors:
@@ -18,13 +18,16 @@ Shared anchors:
 - operating-the-goal-loop
 - safety
 - evidence
+Shared external anchors:
+- [token-efficiency](docs/operator-runbook.md#token-efficiency)
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
 
 Attention is scarce. Preserve it.
 
 Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.md](AGENTS.md), at the anchors listed in the counterpart contract above; do not duplicate those sections here.
 
-> **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
+> **Orchestrator operation:** [Runbook](docs/operator-runbook.md) — conductor procedure, stuck-goal playbook, state/store map.
+> **Console changes:** Apply the [responsiveness contract](docs/operator-runbook.md#console-responsiveness).
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
