@@ -4,14 +4,28 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerQuestionReadModel
+internal sealed record OwnerQuestionStateSnapshot(IReadOnlyDictionary<string, GoalStatus> Goals,
+    IReadOnlySet<string> AwaitingVerification, IReadOnlyList<OwnerQuestionCandidate> Candidates);
+
+internal sealed record OwnerQuestionCandidate(
+    OwnerQuestion Question, DateTimeOffset CreatedAt, bool BlocksActiveWork = true);
+
+internal sealed class OwnerQuestionReadModelState(
+    IOrchestratorStateQueries state, OwnerConsoleRefreshGoalSnapshots? snapshots)
 {
+    private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, OwnerQuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
+    internal int TerminalHoldCount => _terminalHolds.Count;
+
+    internal void ClearTerminalHolds()
+    {
+        _terminalHolds.Clear();
+        _terminalUpdatedAt.Clear();
+    }
+
     // State questions depend only on the state store. Collaboration-only commits must
     // not hydrate every goal again on the independent decision-first refresh path.
-    private sealed record StateQuestions(IReadOnlyDictionary<string, GoalStatus> Goals,
-        IReadOnlySet<string> AwaitingVerification, IReadOnlyList<QuestionCandidate> Candidates);
-
-    private async Task<StateQuestions> ReadStateAsync(
+    internal async Task<OwnerQuestionStateSnapshot> ReadAsync(
         IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)
     {
         var terminal = metadata.Where(item => IsTerminal(item.Status)).ToArray();
@@ -29,7 +43,7 @@ internal sealed partial class OwnerQuestionReadModel
             .Where(goal => GoalLifecycle.ResolveState(goal) == GoalLifecycleState.AwaitingVerification)
             .Select(goal => goal.Id.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var item in terminal) goals[item.Id] = Enum.Parse<GoalStatus>(item.Status, ignoreCase: true);
-        var candidates = new List<QuestionCandidate>();
+        var candidates = new List<OwnerQuestionCandidate>();
         // The hydrated kernel owns request repair/sweeping for non-terminal goals. Detached rows
         // supply terminal and orphan requests, while retaining main's stable request order and ties.
         var detached = requests.Where(request => !loadedIds.Contains(request.GoalId)).ToArray();
@@ -46,7 +60,7 @@ internal sealed partial class OwnerQuestionReadModel
         {
             if (goal.CurrentHold is { } hold &&
                 hold.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase))
-                candidates.Add(new QuestionCandidate(new OwnerQuestion(hold.Identity, goal.Id.Value,
+                candidates.Add(new OwnerQuestionCandidate(new OwnerQuestion(hold.Identity, goal.Id.Value,
                     OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt));
         }
         candidates.AddRange(_terminalHolds.Values);
@@ -72,11 +86,35 @@ internal sealed partial class OwnerQuestionReadModel
                 changedTerminalIds.Select(id => new GoalId(id)).ToArray(), cancellationToken);
             foreach (var id in changedTerminalIds) _terminalHolds.Remove(id);
             foreach (var hold in holds.Where(hold => changedTerminalIds.Contains(hold.GoalId)))
-                _terminalHolds[hold.GoalId] = new QuestionCandidate(new OwnerQuestion(hold.Identity, hold.GoalId,
+                _terminalHolds[hold.GoalId] = new OwnerQuestionCandidate(new OwnerQuestion(hold.Identity, hold.GoalId,
                     OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt);
             foreach (var item in terminal.Where(item => changedTerminalIds.Contains(item.Id)))
                 _terminalUpdatedAt[item.Id] = item.UpdatedAt;
         }
     }
 
+    private static bool IsTerminal(string status) =>
+        Enum.TryParse<GoalStatus>(status, ignoreCase: true, out var parsed) &&
+        parsed is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static OwnerQuestionCandidate RequestCandidate(HumanInputRequest request, AuthorOwnerQuestionHold? author)
+    {
+        var matches = author is { TargetKind: nameof(OperatorAnswerTargetKind.HumanInput) } &&
+            string.Equals(author.TargetId, request.Id.Value, StringComparison.OrdinalIgnoreCase);
+        return new(new OwnerQuestion(request.Id.Value, request.GoalId.Value, OwnerQuestionKind.HumanInput,
+            request.Question, BlastRadius: matches ? author!.BlastRadius : null,
+            ProposedDefault: matches && string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer)
+                ? author!.Recommendation : request.SuggestedDefaultAnswer), request.RequestedAt,
+            HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind));
+    }
+
+    private static string StewardQuestionText(string blocker)
+    {
+        const string marker = "question=";
+        var start = blocker.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0) return blocker;
+        start += marker.Length;
+        var end = blocker.IndexOf(" evidence=[", start, StringComparison.Ordinal);
+        return (end < 0 ? blocker[start..] : blocker[start..end]).Trim();
+    }
 }

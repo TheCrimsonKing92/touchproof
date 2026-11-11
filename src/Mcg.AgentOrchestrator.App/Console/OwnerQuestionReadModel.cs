@@ -4,21 +4,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed partial class OwnerQuestionReadModel(
+internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory,
     OwnerConsoleRefreshGoalSnapshots? snapshots = null, Func<string?>? changeMarker = null,
     Func<string?>? stateMarker = null) : IOwnerQuestionSource
 {
-    private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly OwnerQuestionReadModelState _stateReader = new(state, snapshots);
     private OwnerQuestionSnapshot? _snapshot;
     private string? _version;
     private long _revision;
-    private StateQuestions? _stateQuestions;
+    private OwnerQuestionStateSnapshot? _stateQuestions;
     private string? _stateVersion;
     private long _stateRevision = -1;
     internal (int Goals, int Candidates, int TerminalHolds) RetainedState =>
-        (_stateQuestions?.Goals.Count ?? 0, _stateQuestions?.Candidates.Count ?? 0, _terminalHolds.Count);
+        (_stateQuestions?.Goals.Count ?? 0, _stateQuestions?.Candidates.Count ?? 0, _stateReader.TerminalHoldCount);
 
     public void Invalidate() => Interlocked.Increment(ref _revision);
     private long _acceptedRevision = -1;
@@ -43,8 +42,8 @@ internal sealed partial class OwnerQuestionReadModel(
             _stateVersion = null;
             // UpdatedAt alone cannot validate request rows or a write retaining its timestamp.
             if (changeMarker is not null || stateMarker is not null)
-            { _terminalHolds.Clear(); _terminalUpdatedAt.Clear(); }
-            stateQuestions = await ReadStateAsync(
+                _stateReader.ClearTerminalHolds();
+            stateQuestions = await _stateReader.ReadAsync(
                 await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (stateVersion is not null && stateVersion == stateMarker?.Invoke() && revision == Interlocked.Read(ref _revision))
@@ -67,14 +66,14 @@ internal sealed partial class OwnerQuestionReadModel(
 
     internal async Task<OwnerQuestionSnapshot> ReadAsync(
         IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken) =>
-        await ReadCollaborationAsync(await ReadStateAsync(metadata, cancellationToken), cancellationToken);
+        await ReadCollaborationAsync(await _stateReader.ReadAsync(metadata, cancellationToken), cancellationToken);
 
-    private async Task<OwnerQuestionSnapshot> ReadCollaborationAsync(StateQuestions stateQuestions,
+    private async Task<OwnerQuestionSnapshot> ReadCollaborationAsync(OwnerQuestionStateSnapshot stateQuestions,
         CancellationToken cancellationToken)
     {
         var goals = stateQuestions.Goals;
         var awaitingVerificationGoals = stateQuestions.AwaitingVerification;
-        var candidates = new List<QuestionCandidate>(stateQuestions.Candidates);
+        var candidates = new List<OwnerQuestionCandidate>(stateQuestions.Candidates);
         var path = Path.Combine(orchestratorDirectory, "collaboration-items.db");
         if (File.Exists(path))
         {
@@ -86,7 +85,7 @@ internal sealed partial class OwnerQuestionReadModel(
                     item.CorrelationKey?.StartsWith(PassedGateHoldAttention.Prefix, StringComparison.Ordinal) == true)
                 {
                     if (goals.GetValueOrDefault(item.GoalId) == GoalStatus.Verified)
-                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                        candidates.Add(new OwnerQuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
                             OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
                     continue;
                 }
@@ -94,7 +93,7 @@ internal sealed partial class OwnerQuestionReadModel(
                     item.CorrelationKey?.StartsWith(AwaitingVerificationGateAttention.Prefix, StringComparison.Ordinal) == true)
                 {
                     if (awaitingVerificationGoals.Contains(item.GoalId))
-                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                        candidates.Add(new OwnerQuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
                             OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
                     continue;
                 }
@@ -102,18 +101,18 @@ internal sealed partial class OwnerQuestionReadModel(
                     item.CorrelationKey?.StartsWith(StalledEvidenceWaitAttention.Prefix, StringComparison.Ordinal) == true)
                 {
                     if (goals.GetValueOrDefault(item.GoalId) == GoalStatus.Verified)
-                        candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
+                        candidates.Add(new OwnerQuestionCandidate(new OwnerQuestion(item.Id, item.GoalId,
                             OwnerQuestionKind.PassedGateHold, item.Body, CanAnswer: false), item.RaisedAt));
                     continue;
                 }
                 if (OwnerExperimentReadingQuestion.From(item) is { } reading)
                 {
-                    candidates.Add(new QuestionCandidate(reading, item.RaisedAt));
+                    candidates.Add(new OwnerQuestionCandidate(reading, item.RaisedAt));
                     continue;
                 }
                 if (item.GoalId is null ||
                     !SpecClarificationKey.IsSpecClarification(item.CorrelationKey)) continue;
-                candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId!,
+                candidates.Add(new OwnerQuestionCandidate(new OwnerQuestion(item.Id, item.GoalId!,
                     OwnerQuestionKind.Clarification,
                     Field(item.Body, "Question:") ?? item.Subject,
                     Field(item.Body, "Blast radius:"),
@@ -126,9 +125,9 @@ internal sealed partial class OwnerQuestionReadModel(
     }
 
     private static OwnerQuestionSnapshot BuildSnapshot(IReadOnlyDictionary<string, GoalStatus> goals,
-        IReadOnlyList<QuestionCandidate> candidates)
+        IReadOnlyList<OwnerQuestionCandidate> candidates)
     {
-        var eligible = new List<QuestionCandidate>();
+        var eligible = new List<OwnerQuestionCandidate>();
         var hidden = new List<HiddenOwnerQuestion>();
         foreach (var candidate in candidates)
         {
@@ -160,24 +159,6 @@ internal sealed partial class OwnerQuestionReadModel(
             eligible.Select(candidate => candidate.Question).Where(live.Contains).ToArray(), hidden, raisedAt);
     }
 
-    private sealed record QuestionCandidate(
-        OwnerQuestion Question, DateTimeOffset CreatedAt, bool BlocksActiveWork = true);
-
-    private static bool IsTerminal(string status) =>
-        Enum.TryParse<GoalStatus>(status, ignoreCase: true, out var parsed) &&
-        parsed is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-    private static QuestionCandidate RequestCandidate(HumanInputRequest request, AuthorOwnerQuestionHold? author)
-    {
-        var matches = author is { TargetKind: nameof(OperatorAnswerTargetKind.HumanInput) } &&
-            string.Equals(author.TargetId, request.Id.Value, StringComparison.OrdinalIgnoreCase);
-        return new(new OwnerQuestion(request.Id.Value, request.GoalId.Value, OwnerQuestionKind.HumanInput,
-            request.Question, BlastRadius: matches ? author!.BlastRadius : null,
-            ProposedDefault: matches && string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer)
-                ? author!.Recommendation : request.SuggestedDefaultAnswer), request.RequestedAt,
-            HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind));
-    }
-
     internal static string? Field(string body, string label)
     {
         using var reader = new StringReader(body);
@@ -193,13 +174,4 @@ internal sealed partial class OwnerQuestionReadModel(
         return null;
     }
 
-    private static string StewardQuestionText(string blocker)
-    {
-        const string marker = "question=";
-        var start = blocker.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0) return blocker;
-        start += marker.Length;
-        var end = blocker.IndexOf(" evidence=[", start, StringComparison.Ordinal);
-        return (end < 0 ? blocker[start..] : blocker[start..end]).Trim();
-    }
 }
