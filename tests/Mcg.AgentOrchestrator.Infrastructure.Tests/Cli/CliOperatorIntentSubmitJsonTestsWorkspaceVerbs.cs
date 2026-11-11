@@ -130,7 +130,7 @@ public sealed class CliOperatorIntentSubmitJsonTestsWorkspaceVerbs : CliTaskQuer
                     .AddAsync(CliCommandTestsExperiments.Spec() with
                     {
                         Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial a conductor boolean",
-                            new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true))
+                            new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true))
                     });
                 fixture._experimentId = experiment.Id;
                 // AddAsync closes its unpooled connection; copy that database to preserve identity.

@@ -32,7 +32,7 @@ public sealed class ConductorExperimentFlagRevertControllerTests
         Assert.Equal($"operator-intent:{revert.Id}", decided.Decision!.Evidence);
         fixture.Tick();
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(revert).Status);
-        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
         Assert.False(controller.TryRevert(record, reading, ExperimentFlagTestFixture.Now));
         var restarted = new ConductorExperimentFlagRevertController(new ExperimentStore(fixture.Workspace.ExperimentStorePath),
             () => SqliteOperatorIntentStore.ForDirectories(fixture.Workspace.OrchestratorDirectory, fixture.Workspace.LogDirectory), fixture.Flags);
@@ -57,7 +57,7 @@ public sealed class ConductorExperimentFlagRevertControllerTests
         Assert.Single(fixture.Intents.ListForGoalAsync(OperatorIntentScopes.Workspace).GetAwaiter().GetResult()
             .Where(intent => intent.Verb == OperatorIntentVerbs.ExperimentRevertFlag));
         fixture.Tick();
-        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
     }
 
     [Fact]

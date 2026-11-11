@@ -86,17 +86,6 @@ public sealed class AttributedFailureDeveloperRouteTests
     }
 
     [Fact]
-    public void FollowerChargeRecordDeclines()
-    {
-        var kernel = new AgentOrchestratorKernel();
-        var goal = CompletedGoal(kernel);
-        kernel.BeginGoalAcceptanceVerification(goal.Id, "Reconciling follower gate receipt follower-red.");
-        Assert.True(kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["follower-gate"],
-            "Follower gate receipt follower-red failed after its leader landed exactly.", Candidate, Main));
-        Assert.Null(AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure));
-    }
-
-    [Fact]
     public void RepeatBoundUsesWholeTokensAndIsSharedAcrossSources()
     {
         var kernel = new AgentOrchestratorKernel();

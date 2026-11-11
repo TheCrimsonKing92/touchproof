@@ -74,7 +74,6 @@ public sealed record AcceptanceRunExecutionOptions(
     string? GateRunIdentity = null,
     Action<string>? RemoteLaneEventSink = null,
     bool CohortRemoteLanes = false,
-    AcceptanceFollowerPinnedBase? PinnedBase = null,
     string? ProjectHomeDirectory = null,
     string? IntegrationBranch = null,
     IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null,
@@ -599,8 +598,6 @@ public static partial class AcceptanceExecutionOwners
         }
 
         var identityResolvers = CreateGitIdentityResolvers(TrunkBranchName.Resolve(options.IntegrationBranch));
-        if (options.PinnedBase is { } pinnedBase)
-            identityResolvers = identityResolvers with { ResolveMainSha = path => ResolveFollowerPinnedMain(path, pinnedBase, TrunkBranchName.Resolve(options.IntegrationBranch)) };
         return CreateAttemptCore(
             worktreePath,
             goalId,
@@ -673,13 +670,6 @@ public static partial class AcceptanceExecutionOwners
             stableSlotIndex,
             Environment.ProcessId,
             options.LivenessCheckHint);
-        if (options.PinnedBase is { } pinnedBase &&
-            !identity.MainSha.Equals(pinnedBase.LeaderCandidateRevision, StringComparison.Ordinal))
-        {
-            throw new AcceptanceExecutionIdentityChangedException(
-                $"Acceptance run '{attemptId}' follower base is no longer pending or landed exactly.",
-                isChangedIdentity: identity.MainSha != "unavailable");
-        }
         return new(
             identity,
             settings,

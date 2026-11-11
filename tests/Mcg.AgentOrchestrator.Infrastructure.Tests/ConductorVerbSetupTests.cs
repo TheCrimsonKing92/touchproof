@@ -28,8 +28,6 @@ public sealed class ConductorVerbSetupTests
             Assert.Equal(expectedOutput, output.ToString());
             Assert.NotNull(SqliteProgressiveReviewSteeringStore.OpenReadOnly(
                 Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewSteering.Database)));
-            Assert.NotNull(FollowerGateAcceptanceStore.OpenReadOnly(
-                Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.FollowerGateAcceptance.Database)));
             Assert.NotNull(DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath));
             Assert.NotNull(CollaborationItemStore.OpenReadOnly(
                 Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.CollaborationItems.Database)));

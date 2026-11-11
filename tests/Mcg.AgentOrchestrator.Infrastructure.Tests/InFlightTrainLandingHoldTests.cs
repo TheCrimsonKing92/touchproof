@@ -25,12 +25,6 @@ public sealed class InFlightTrainLandingHoldTests
     }
 
     [Fact]
-    public void Describe_Follower_ReturnsNull()
-    {
-        Assert.Null(InFlightTrainLandingHold.Describe(Goal, Snapshot($"follower:{Guid.NewGuid():N}")));
-    }
-
-    [Fact]
     public void Describe_EmptySnapshot_ReturnsNull()
     {
         Assert.Null(InFlightTrainLandingHold.Describe(Goal, new ConductorAcceptanceCapacitySnapshot([])));

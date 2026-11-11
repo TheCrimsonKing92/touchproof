@@ -16,7 +16,6 @@ public sealed class OwnedChildProjectStateResolutionTests
     [InlineData("pre-review-evidence")]
     [InlineData("cohort")]
     [InlineData("train")]
-    [InlineData("follower")]
     public async Task NamedProjectRecordLoadsParentGoalWithoutTargetState(string kind)
     {
         using var fixture = new Fixture();

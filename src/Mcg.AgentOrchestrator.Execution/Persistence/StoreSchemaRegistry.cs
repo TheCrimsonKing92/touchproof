@@ -56,9 +56,6 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry MergeTrainAcceptance { get; } =
         new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", 2);
 
-    public static StoreSchemaEntry FollowerGateAcceptance { get; } =
-        new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStoreSetup.cs", "follower-gate-acceptance.db", "cohort", 1);
-
     public static StoreSchemaEntry MultiRepositoryLandings { get; } =
         new("multi-repository-landings", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MultiRepositoryLandingRecordStore.cs", "multi-repository-landings.db", "landing", null);
 
@@ -104,7 +101,6 @@ public static class StoreSchemaRegistry
         CohortAttributionRetractions,
         CohortSoloInheritedReceipts,
         MergeTrainAcceptance,
-        FollowerGateAcceptance,
         MultiRepositoryLandings,
         CollaborationItems,
         RunEvents,

@@ -11,7 +11,6 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
 {
     private const string MainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string BranchRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private const string OtherMainRevision = "cccccccccccccccccccccccccccccccccccccccc";
 
     [Fact]
     public void StartupRestoresOnlyLiveAttemptFromOverlappingFinishedHistory()
@@ -173,43 +172,6 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         Assert.False(fixture.Lease.Observe(binding).LeaseAbsent);
     }
 
-    [Theory]
-    [InlineData("completed", false)]
-    [InlineData("failed", false)]
-    [InlineData("completed", true)]
-    [InlineData("failed", true)]
-    public void FinishedFollowerDoesNotBlockItsLeader(string status, bool leased)
-    {
-        using var fixture = new Fixture();
-        var finished = fixture.Attempt("follower", ["a", "b"], leased);
-        Publish(finished, status);
-        var original = File.ReadAllBytes(finished.MetadataPath);
-        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
-
-        // A different main makes the next admission decision observable without creating a worktree.
-        var outcome = driver.StartFollowerGate(Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0],
-            ConductorAutonomyPolicy.Conservative);
-
-        Assert.IsType<FollowerGateStartOutcome.MainDiffers>(outcome);
-        Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
-        Assert.Equal(0, driver.CountLiveGroupedGateAttempts());
-        Assert.Equal(0, fixture.Launches);
-        Assert.Equal(original, File.ReadAllBytes(finished.MetadataPath));
-    }
-
-    [Fact]
-    public void LiveFollowerStillBlocksItsLeader()
-    {
-        using var fixture = new Fixture();
-        fixture.Attempt("follower", ["a", "b"]);
-        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
-
-        Assert.IsType<FollowerGateStartOutcome.LeaderHasFollower>(driver.StartFollowerGate(
-            Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0], ConductorAutonomyPolicy.Conservative));
-        Assert.Equal(1, driver.CountLiveGroupedGateAttempts());
-        Assert.Equal(0, fixture.Launches);
-    }
-
     [Fact]
     public void MissingLeaseIsDistinctAndLeaseRequiredCallersStillHold()
     {
@@ -225,13 +187,10 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
     [InlineData("cohort", false)]
     [InlineData("train", false)]
     [InlineData("cohort", true)]
-    [InlineData("follower", false)]
-    [InlineData("follower", true)]
     public void LiveOverlapHoldsAdmissionUntilPublishedSettlement(string secondKind, bool identical)
     {
         using var fixture = new Fixture();
-        var firstKind = secondKind == "follower" && identical ? "follower" : "cohort";
-        var first = fixture.Attempt(firstKind, ["a", "b"]);
+        var first = fixture.Attempt("cohort", ["a", "b"]);
         var second = fixture.Attempt(secondKind, identical ? ["a", "b"] : ["b", "c"]);
         var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
         var restored = new List<IReadOnlySet<string>>();
@@ -252,9 +211,6 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         driver.GetActiveCohortGateMemberGoalIds();
         Assert.Single(fixture.Events.Where(line => line.StartsWith("GROUPED_GATE_ATTEMPT_OVERLAP ", StringComparison.Ordinal)));
         StartGrouped(driver, ["x", "y"]); // disjoint admission must also be held
-        var followers = Projections(["x", "y"]);
-        Assert.IsType<FollowerGateStartOutcome.FollowerBusy>(driver.StartFollowerGate(
-            followers[0], followers[1], ConductorAutonomyPolicy.Conservative));
         Assert.Equal(0, fixture.Launches);
         Assert.Equal(2, fixture.Coordinator.ReadAll().Count());
         Assert.Contains(fixture.Events, line => line.StartsWith("GROUPED_GATE_ADMISSION_HOLD reason=grouped-gate-attempt-overlap", StringComparison.Ordinal));

@@ -59,15 +59,15 @@ public sealed class ExperimentFlagIntentSafetyTests
             " \"maxConcurrentPaidWorkers\": 1,\r\n" +
             " \"transitionMap\":" + JsonSerializer.Serialize(ConductorAutonomyPolicy.Conservative.TransitionMap
                 .ToDictionary(entry => entry.Key.ToString(), entry => entry.Value.ToString())) + ",\r\n" +
-            " \"followerGatesEnabled\" : false, // experiment flag\r\n" +
-            " \"unknown\": { \"followerGatesEnabled\": false } }\r\n";
-        Assert.False(ConductorAutonomyPolicy.ParseJson(json).FollowerGatesEnabled);
+            " \"buildGcConserveMemory\" : false, // experiment flag\r\n" +
+            " \"unknown\": { \"buildGcConserveMemory\": false } }\r\n";
+        Assert.False(ConductorAutonomyPolicy.ParseJson(json).BuildGcConserveMemory);
         File.WriteAllText(fixture.PolicyPath, json);
         var record = fixture.Add();
         var apply = fixture.Submit(record.Id);
         fixture.Tick();
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(apply).Status);
-        Assert.Equal(json.Replace("\"followerGatesEnabled\" : false", "\"followerGatesEnabled\" : true"),
+        Assert.Equal(json.Replace("\"buildGcConserveMemory\" : false", "\"buildGcConserveMemory\" : true"),
             File.ReadAllText(fixture.PolicyPath));
         fixture.Submit(record.Id, revert: true);
         fixture.Tick();
@@ -92,7 +92,7 @@ public sealed class ExperimentFlagIntentSafetyTests
             actor: actor, channel: channel, actorKind: actorKind);
         fixture.Tick();
         Assert.Equal(allowed ? OperatorIntentStatus.Applied : OperatorIntentStatus.Rejected, fixture.Result(intent).Status);
-        if (allowed) Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        if (allowed) Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
         else
         {
             Assert.Contains("steward-capability-boundary", fixture.Result(intent).Outcome);
@@ -111,7 +111,7 @@ public sealed class ExperimentFlagIntentSafetyTests
         Assert.Equal(OperatorIntentStatus.Rejected, fixture.Result(intent).Status);
         record = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
         Assert.False(record.Spec.Intervention.FlagTarget!.PriorValue);
-        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
         var controller = new ConductorExperimentFlagRevertController(fixture.Experiments,
             () => throw new InvalidOperationException("intent store must stay unopened"), fixture.Flags);
         var reading = new ExperimentReadingResult(0, new(99, ExperimentStopUnit.Goals), false, [], "revert", "fault path", true);

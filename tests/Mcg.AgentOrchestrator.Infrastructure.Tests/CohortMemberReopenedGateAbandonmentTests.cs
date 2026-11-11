@@ -167,7 +167,6 @@ public sealed class CohortMemberReopenedGateAbandonmentTests
     [Theory]
     [InlineData("outside")]
     [InlineData("priority")]
-    [InlineData("follower")]
     [InlineData("result")]
     [InlineData("empty-result")]
     [InlineData("partial-result")]
@@ -181,7 +180,7 @@ public sealed class CohortMemberReopenedGateAbandonmentTests
         var a = f.Goal();
         var b = f.Goal();
         var target = exclusion == "outside" ? f.Goal() : b;
-        var attempt = f.Group(exclusion == "follower" ? "follower" : "cohort", "excluded", a, b);
+        var attempt = f.Group("cohort", "excluded", a, b);
         if (exclusion == "result") File.WriteAllText(attempt.ResultPath, "{}");
         if (exclusion == "empty-result") File.WriteAllText(attempt.ResultPath, "");
         if (exclusion == "partial-result") File.WriteAllText(attempt.ResultPath, "{\"outcome\":");

@@ -159,61 +159,6 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
         finally { TryDeleteDirectory(root); }
     }
 
-    [Theory]
-    [InlineData(false, false, 1)]
-    [InlineData(true, false, 0)]
-    [InlineData(false, true, 0)]
-    public void SoloLeaderOrFollowerPreventsFollowerGateStart(bool leaderSolo, bool followerSolo, int expectedStarts)
-    {
-        using var isolated = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        using var liveProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
-        using var entered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
-        var root = CreateTempDirectory("isolation-follower");
-        Action wait = () => { };
-        try
-        {
-            var kernel = new AgentOrchestratorKernel();
-            var leader = VerifiedAt(kernel, "Leader", 0);
-            var follower = VerifiedAt(kernel, "Follower", 1);
-            if (leaderSolo) GoalIsolationCommands.Apply(kernel, leader.Id, GoalIsolation.Solo, "test", "setup");
-            if (followerSolo) GoalIsolationCommands.Apply(kernel, follower.Id, GoalIsolation.Solo, "test", "setup");
-            const string path = "src/Mcg.AgentOrchestrator.Core/Domain/FollowerGates.cs";
-            const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-            string Branch(GoalId id) => id.Value.PadRight(40, 'b');
-            var coordinator = ConductorBatchLoopTestsParallelAcceptance.ThreadedAcceptanceAttemptCoordinator(root, out wait);
-            var driver = MakeDriver(getFacts: _ => new(WorkspaceExists: true), classifyRisk: _ => ChangeRiskTier.DocsOnly,
-                getLandingFileScopes: _ => [path], isVerificationGateSatisfied: _ => true,
-                resolveAcceptanceHeads: item => (Branch(item.Id), main),
-                gateReadyCandidateProjector: new(id => new(Branch(id), main), _ => new(true, [path]), (_, _, _) => new(true)),
-                parallelAcceptanceAttemptCoordinator: coordinator,
-                runAcceptanceWithSlot: (_, _) =>
-                {
-                    entered.Set();
-                    Assert.True(release.Wait(TestHangGuard.Bound), "Leader acceptance release did not happen.");
-                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-                });
-            var policy = ConductorAutonomyPolicy.Permissive with { AcceptanceWidth = 2, FollowerGatesEnabled = true };
-            var candidate = Assert.IsType<ConductorParallelAcceptanceCandidate>(driver.TryBuildParallelAcceptanceCandidate(leader, policy, 0, out _));
-            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, coordinator.Evaluate(candidate, policy, driver.RunParallelLandingAcceptance).Kind);
-            Assert.True(entered.Wait(TestHangGuard.Bound), "Leader acceptance entered event did not happen.");
-            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running,
-                Assert.Single(coordinator.GetCapacityReservingAttempts([leader.Id.Value, follower.Id.Value])).Outcome);
-            kernel.BeginGoalAcceptanceVerification(leader.Id, "leader gate running");
-            var starts = 0;
-            driver.FollowerGateStartOverride = (_, _, _) => { starts++; return new FollowerGateStartOutcome.Started(null!); };
-            var lines = new List<string>();
-            new ConductorBatchLoop().Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
-                onTick: tick => lines.AddRange(tick.ProgressLines ?? []));
-            Assert.Equal(expectedStarts, starts);
-            if (leaderSolo)
-                Assert.Contains(lines, line => line.StartsWith("FOLLOWER_GATE ") && line.Contains("reason=leader-solo"));
-            if (leaderSolo || followerSolo)
-                Assert.DoesNotContain(lines, line => line.StartsWith("FOLLOWER_GATE ") && line.Contains("result=started"));
-        }
-        finally { release.Set(); wait(); TryDeleteDirectory(root); }
-    }
-
     private static Goal VerifiedAt(AgentOrchestratorKernel kernel, string name, int minute)
     {
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), name);

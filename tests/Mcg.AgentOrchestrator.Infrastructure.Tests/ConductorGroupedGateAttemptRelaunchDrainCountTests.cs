@@ -9,7 +9,6 @@ public sealed class ConductorGroupedGateAttemptRelaunchDrainCountTests : Conduct
     [Theory]
     [InlineData("cohort")]
     [InlineData("train")]
-    [InlineData("follower")]
     public void LeasedV1_CountSkipsWithoutWriting(string kind)
     {
         var root = CreateTempDirectory("drain-v1-count");
@@ -53,7 +52,6 @@ public sealed class ConductorGroupedGateAttemptRelaunchDrainCountTests : Conduct
     [Theory]
     [InlineData("cohort")]
     [InlineData("train")]
-    [InlineData("follower")]
     public void LiveLegacyOwner_StillBlocks(string kind)
     {
         var root = CreateTempDirectory("drain-v0-count");
