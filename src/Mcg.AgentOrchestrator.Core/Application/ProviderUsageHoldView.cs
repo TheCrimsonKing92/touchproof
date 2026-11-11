@@ -76,8 +76,7 @@ public static class ProviderUsageHoldView
 
     public static string FormatStatusLine(ProviderUsageHoldRow row)
     {
-        var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}" +
-            (row.Diagnosis is { } diagnosis ? $" | {diagnosis}" : "");
+        var source = $"source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}";
         if (row.OverdueSince is { } due && row.Schedule is { } overdue)
             return $"  {row.Hold.BindingKey} | state=probe-overdue | due={ProviderBudgetHoldSchedules.FormatInstant(due)} | balance=unverified since {ProviderBudgetHoldSchedules.FormatInstant(row.LastObservedAt ?? row.Hold.PlacedAt)} | attempt={overdue.Attempt} | next_probe={ProviderBudgetHoldSchedules.FormatInstant(due)} | reset_source={overdue.ResetSource} | last_probe={overdue.LastProbeOutcome} (historical) | {source}";
         return row.Schedule is { } schedule

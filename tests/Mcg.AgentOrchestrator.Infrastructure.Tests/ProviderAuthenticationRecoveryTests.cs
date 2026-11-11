@@ -57,7 +57,16 @@ public sealed class ProviderAuthenticationRecoveryTests
         Assert.Equal("inconclusive", row.Schedule!.LastProbeOutcome);
         Assert.Equal(authAt, row.Schedule.LastActionableFailureAt);
         Assert.Equal(fixture.Clock.UtcNow, row.Schedule.LastProbeAt);
-        var status = ProviderUsageHoldView.FormatStatusLine(row);
+        var snapshot = ConductorStatusSnapshotReader.Read(fixture.Workspace, null, fixture.Clock.UtcNow,
+            now: fixture.Clock.UtcNow, fleetSummaryExpected: false) with { ProviderHolds = [row] };
+        using var statusOutput = new OwnerConsoleStructuredWriter();
+        CliConductorStatusReader.Print(snapshot, statusOutput);
+        var status = statusOutput.ToString();
+        Assert.Contains($"    diagnosis: {row.Diagnosis}", status.Split(Environment.NewLine));
+        var diagnosisFields = Assert.Single(statusOutput.Build(null)!.Rows!.Values
+            .Where(fields => fields.Fields.Any(field => field.Key == "diagnosis")));
+        Assert.Equal(row.Hold.BindingKey, diagnosisFields.Identity);
+        Assert.Equal(row.Diagnosis, Assert.Single(diagnosisFields.Fields.Where(field => field.Key == "diagnosis")).Value);
         Assert.Contains("last confirmed: authentication-required", status);
         Assert.Contains("age 3600s", status);
         Assert.Contains("historical exhaustion:", status);
