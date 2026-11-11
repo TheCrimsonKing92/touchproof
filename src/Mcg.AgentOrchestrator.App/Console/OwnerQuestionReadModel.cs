@@ -6,13 +6,19 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory,
-    OwnerConsoleRefreshGoalSnapshots? snapshots = null, Func<string?>? changeMarker = null) : IOwnerQuestionSource
+    OwnerConsoleRefreshGoalSnapshots? snapshots = null, Func<string?>? changeMarker = null,
+    Func<string?>? stateMarker = null) : IOwnerQuestionSource
 {
     private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
     private OwnerQuestionSnapshot? _snapshot;
     private string? _version;
     private long _revision;
+    private StateQuestions? _stateQuestions;
+    private string? _stateVersion;
+    private long _stateRevision = -1;
+    internal (int Goals, int Candidates, int TerminalHolds) RetainedState =>
+        (_stateQuestions?.Goals.Count ?? 0, _stateQuestions?.Candidates.Count ?? 0, _terminalHolds.Count);
 
     public void Invalidate() => Interlocked.Increment(ref _revision);
     private long _acceptedRevision = -1;
@@ -29,9 +35,26 @@ internal sealed class OwnerQuestionReadModel(
             return _snapshot;
         _version = null;
         _snapshot = null;
-        // UpdatedAt alone cannot validate request rows or a write retaining its timestamp.
-        if (changeMarker is not null) { _terminalHolds.Clear(); _terminalUpdatedAt.Clear(); }
-        var snapshot = await ReadAsync(await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
+        var stateVersion = stateMarker?.Invoke();
+        var stateQuestions = _stateQuestions;
+        if (stateVersion is null || stateVersion != _stateVersion || revision != _stateRevision || stateQuestions is null)
+        {
+            _stateQuestions = null;
+            _stateVersion = null;
+            // UpdatedAt alone cannot validate request rows or a write retaining its timestamp.
+            if (changeMarker is not null || stateMarker is not null)
+            { _terminalHolds.Clear(); _terminalUpdatedAt.Clear(); }
+            stateQuestions = await ReadStateAsync(
+                await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (stateVersion is not null && stateVersion == stateMarker?.Invoke() && revision == Interlocked.Read(ref _revision))
+            {
+                _stateQuestions = stateQuestions;
+                _stateVersion = stateVersion;
+                _stateRevision = revision;
+            }
+        }
+        var snapshot = await ReadCollaborationAsync(stateQuestions, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (version is not null && version == changeMarker?.Invoke() && revision == Interlocked.Read(ref _revision))
         {
@@ -43,6 +66,15 @@ internal sealed class OwnerQuestionReadModel(
     }
 
     internal async Task<OwnerQuestionSnapshot> ReadAsync(
+        IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken) =>
+        await ReadCollaborationAsync(await ReadStateAsync(metadata, cancellationToken), cancellationToken);
+
+    // State questions depend only on the state store. Collaboration-only commits must
+    // not hydrate every goal again on the independent decision-first refresh path.
+    private sealed record StateQuestions(IReadOnlyDictionary<string, GoalStatus> Goals,
+        IReadOnlySet<string> AwaitingVerification, IReadOnlyList<QuestionCandidate> Candidates);
+
+    private async Task<StateQuestions> ReadStateAsync(
         IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)
     {
         var terminal = metadata.Where(item => IsTerminal(item.Status)).ToArray();
@@ -101,6 +133,15 @@ internal sealed class OwnerQuestionReadModel(
                     OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt));
         }
         candidates.AddRange(_terminalHolds.Values);
+        return new(goals, awaitingVerificationGoals, candidates);
+    }
+
+    private async Task<OwnerQuestionSnapshot> ReadCollaborationAsync(StateQuestions stateQuestions,
+        CancellationToken cancellationToken)
+    {
+        var goals = stateQuestions.Goals;
+        var awaitingVerificationGoals = stateQuestions.AwaitingVerification;
+        var candidates = new List<QuestionCandidate>(stateQuestions.Candidates);
         var path = Path.Combine(orchestratorDirectory, "collaboration-items.db");
         if (File.Exists(path))
         {

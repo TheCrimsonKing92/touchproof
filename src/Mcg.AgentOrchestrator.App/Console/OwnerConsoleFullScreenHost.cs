@@ -71,7 +71,7 @@ internal static class OwnerConsoleFullScreenHost
             // The inner SQLite snapshot is reusable; onboarding files/registry remain conservatively read.
             // Do not join a board generation whose state token may predate a question read.
             IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(
-                state, workspace.OrchestratorDirectory, changeMarker: QuestionVersion));
+                state, workspace.OrchestratorDirectory, changeMarker: QuestionVersion, stateMarker: stateChanges.Observe));
             if (boardSource is not null)
                 questions = new OnboardingQuestionSource(questions, boardSource.InScopeProjects, clock,
                     () => coalescer?.Request(null, OwnerConsoleRefreshScope.All), boardSource.HasLandedAsync);
@@ -98,9 +98,7 @@ internal static class OwnerConsoleFullScreenHost
                 gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots,
                 candidateGate: goal =>
                 {
-                    var head = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify",
-                        $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}");
-                    return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
+                    return (Candidate: OwnerConsoleCandidateRevision.Read(workspace.ExecutionDirectory, goal.Id),
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
                 }, boardMarker: stateChanges.Observe, epicMarker: portfolioChanges.Observe);
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
