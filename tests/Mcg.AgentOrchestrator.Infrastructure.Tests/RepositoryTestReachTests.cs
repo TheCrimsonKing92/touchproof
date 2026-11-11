@@ -8,6 +8,7 @@ public sealed class RepositoryTestReachTests
     [Theory]
     [InlineData(1)]
     [InlineData(100)]
+    [InlineData(1001)]
     public void TwoHopReach_ReturnsEveryConsumerBeyondPlannerClassCap(int count)
     {
         using var fixture = new RepositoryFixture();
@@ -18,8 +19,8 @@ public sealed class RepositoryTestReachTests
         var reach = RepositoryTestReach.TryReadReachableTestClasses(fixture.Root, [RepositoryFixture.Source]);
         Assert.NotNull(reach);
         Assert.Equal(Enumerable.Range(0, count).Select(index => $"Consumer{index}Tests").Order(), reach.Order());
-        if (count == 100)
-            Assert.Equal("Abandoned", ReaderOutcome(fixture.Root));
+        Assert.Equal(count > ReverseDependencyTestImpactReader.MaximumSelectedTestClasses
+            ? "Abandoned" : "Resolved", ReaderOutcome(fixture.Root));
     }
 
     [Fact]
