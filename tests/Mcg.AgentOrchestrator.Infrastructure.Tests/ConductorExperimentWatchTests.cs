@@ -251,7 +251,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
         {
             Seed(workspace);
             var spec = Spec() with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
-                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+                new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true)) };
             if (trigger == "revert") spec = spec with { DecisionRule = new([new("rounds-per-landing", ">", 0)], [new("rounds-per-landing", "<", 0)]) };
             if (trigger == "guardrail") spec = spec with { Guardrail = BreachedSpec(99).Guardrail,
                 StopRule = new(99, ExperimentStopUnit.Goals) };
@@ -283,7 +283,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
                 Assert.Equal($"experiment-flag-keep-{record.Id}", item.Id);
                 Assert.Equal(BacklogItemStatus.Open, item.Status);
                 Assert.Contains(record.Id, item.Body);
-                Assert.Contains("followerGatesEnabled", item.Body);
+                Assert.Contains("buildGcConserveMemory", item.Body);
                 Assert.Contains("True", item.Body);
                 Assert.Equal(before, File.ReadAllBytes(path));
                 var decided = experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
@@ -299,7 +299,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
                 Assert.Equal($"operator-intent:{revert.Id}", experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Decision!.Evidence);
                 OperatorIntentCoordinator.CreateDefault(workspace).ExecuteWorkspacePending(new AgentOrchestratorKernel());
                 using var restored = JsonDocument.Parse(File.ReadAllText(path));
-                Assert.False(restored.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
+                Assert.False(restored.RootElement.GetProperty("buildGcConserveMemory").GetBoolean());
                 Assert.Equal(OperatorIntentStatus.Applied, intents.GetAsync(revert.Id).GetAwaiter().GetResult()!.Status);
             }
         });
@@ -316,7 +316,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             Seed(workspace);
             var experiments = new ExperimentStore(workspace.ExperimentStorePath);
             var spec = Spec() with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
-                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+                new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true)) };
             var record = experiments.AddAsync(spec).GetAwaiter().GetResult();
             experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
             var manual = experiments.AddAsync(Spec()).GetAwaiter().GetResult();
@@ -349,7 +349,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             var record = experiments.AddAsync(Spec() with
             {
                 Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
-                    new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true))
+                    new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true))
             }).GetAwaiter().GetResult();
             experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
             var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
@@ -376,7 +376,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
         {
             Seed(workspace);
             var spec = BreachedSpec(99) with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
-                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+                new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true)) };
             var experiments = new ExperimentStore(workspace.ExperimentStorePath);
             var record = experiments.AddAsync(spec).GetAwaiter().GetResult();
             experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();

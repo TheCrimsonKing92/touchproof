@@ -24,7 +24,7 @@ public sealed class ConductorExperimentFlagKeepControllerTests
         var item = AssertConfirmed(fixture, record);
         Assert.Equal(BacklogItemStatus.Open, item.Status);
         Assert.Contains(record.Id, item.Body);
-        Assert.Contains("followerGatesEnabled", item.Body);
+        Assert.Contains("buildGcConserveMemory", item.Body);
         Assert.Contains("True", item.Body);
         Assert.Contains("permanent", item.Title);
         Assert.Contains("remove the flag", item.Title);

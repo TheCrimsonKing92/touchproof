@@ -138,7 +138,7 @@ public sealed class ConductorExperimentFlagSettleTests
     {
         Baseline = new(ExperimentBaselineKind.AlternatingGates),
         Intervention = new(ExperimentInterventionKind.ConfigFlag, "toggle", new(
-            ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true, false))
+            ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true, false))
     }, ExperimentFlagTestFixture.Now, ExperimentOutcomeState.Open, null);
 
     private static ExperimentHostLedgers Ledgers(ExperimentRecord record, bool applied) => new(

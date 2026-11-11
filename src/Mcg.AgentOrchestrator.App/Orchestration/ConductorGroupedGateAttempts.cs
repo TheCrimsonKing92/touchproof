@@ -589,29 +589,6 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         return true;
     }
 
-    internal bool Invalidate(ConductorGroupedGateAttempt attempt, FollowerGateInvalidReason reason)
-    {
-        if (attempt.Kind != "follower" || attempt.Members.Count != 2)
-            throw new ArgumentException("Only follower attempts can be invalidated with a follower reason.", nameof(attempt));
-        var wireReason = FollowerGateBindingRule.WireName(reason);
-        var invalidated = WithMetadataLock(attempt.MetadataPath, () =>
-        {
-            var current = Read(attempt.MetadataPath);
-            if (current.ReconciledAt is not null || current.Outcome != "Running" ||
-                File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath) || !StopHolder(current, wireReason)) return false;
-            Save(current with
-            {
-                ReconciledAt = _utcNow(), Outcome = "Reconciled",
-                Detail = $"follower-invalidated:{wireReason}"
-            });
-            return true;
-        });
-        if (invalidated)
-            _event?.Invoke($"FOLLOWER_GATE_INVALIDATED leader={attempt.Members[0].GoalId} " +
-                $"follower={attempt.Members[1].GoalId} reason={wireReason}");
-        return invalidated;
-    }
-
     internal bool CancelForOperator(ConductorGroupedGateAttempt attempt, string intentId) =>
         StopRunningAttempt(attempt, $"operator-gate-cancel:{intentId}", $"refused:operator-cancelled intent={intentId}");
 
