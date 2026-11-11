@@ -21,8 +21,8 @@ internal static class ProviderHoldHistoryStartupSeed
             var candidates = ProviderHoldHistory.SeedCandidates(rows,
                 kernel.Goals.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal));
             if (candidates.Count == 0) return;
-            var evidence = repository.ReadProviderHoldSeedEvidenceAsync(candidates.Select(id => new GoalId(id)).ToArray())
-                .GetAwaiter().GetResult();
+            var evidence = ProviderHoldSeedEvidenceRead.TryRead(repository,
+                candidates.Select(id => new GoalId(id)).ToArray());
             var required = ProviderHoldSeedPruning.RequiredGoals(candidates, evidence, kernel.ProviderHoldHistory, kernel.Goals);
             var loaded = required.Count == 0 ? new AgentOrchestratorKernel() :
                 repository.LoadGoalsAsync(required.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult();

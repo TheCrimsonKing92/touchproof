@@ -144,6 +144,52 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=73 retained=0 goals= elapsedMs=\d+ loaded=0$", Assert.Single(lines));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Apply_EvidenceReadFailure_LoadsAllCandidatesAndPreservesOracle(bool recovered)
+    {
+        var repository = new Repository
+        {
+            BeforeEvidence = () => Task.FromException(new JsonException("Malformed sparse evidence."))
+        };
+        repository.AddObservation("bbbbbbbb000000000000000000000000", 1, success: recovered);
+        var candidates = ProviderHoldHistory.SeedCandidates(repository.Rows, new HashSet<string>(StringComparer.Ordinal));
+        var oracle = new ProviderHoldHistory();
+        oracle.Retain(repository.Stored.Goals, []);
+        if (recovered) Assert.Empty(oracle.Retained);
+        else Assert.NotEmpty(oracle.Retained);
+        var kernel = new AgentOrchestratorKernel();
+        var lines = new List<string>();
+
+        ProviderHoldHistorySeed.Apply(kernel, repository, lines.Add);
+
+        Assert.Equal(candidates.OrderBy(id => id), repository.EvidenceIds.OrderBy(id => id));
+        Assert.Equal(candidates.OrderBy(id => id), repository.RequestedIds.OrderBy(id => id));
+        Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
+        Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
+            ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=2 retained=\d+ goals=.* elapsedMs=\d+ loaded=2$", Assert.Single(lines));
+    }
+
+    [Fact]
+    public void Apply_EvidenceReadCancellation_PreservesFailureWithoutFullLoad()
+    {
+        var repository = new Repository
+        {
+            BeforeEvidence = () => Task.FromException(new OperationCanceledException("Evidence read cancelled."))
+        };
+        var kernel = new AgentOrchestratorKernel();
+        var lines = new List<string>();
+
+        ProviderHoldHistorySeed.Apply(kernel, repository, lines.Add);
+
+        Assert.Single(repository.EvidenceIds);
+        Assert.Empty(repository.RequestedIds);
+        Assert.Empty(kernel.ProviderHoldHistory.Retained);
+        Assert.Equal("PROVIDER_HOLD_HISTORY seed-failed: OperationCanceledException: Evidence read cancelled.", Assert.Single(lines));
+    }
+
     [Fact]
     public void Apply_RecoveryPrunesPreviouslyRetainedSourceToo()
     {
