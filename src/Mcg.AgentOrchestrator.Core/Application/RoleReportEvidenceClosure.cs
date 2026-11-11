@@ -41,6 +41,7 @@ internal sealed class RoleReportEvidenceClosure(
                 string? gate = null;
                 var testsPass = false;
                 string? buildEvidence = null;
+                CriterionVerdict? reviewerVerdict = null;
                 var criterion = owner == "developer" && !buildReport
                     ? ReportCriterionLookup.Find(goal, request.PlannerIdentity) : null;
                 var reviewerExecuted = criterion is not null &&
@@ -59,6 +60,10 @@ internal sealed class RoleReportEvidenceClosure(
                     : owner == "developer" && !reviewerExecuted
                         ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
                         : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange, out testsPass);
+                if (reason is null && role == AgentRole.Reviewer && request.PlannerIdentity is not null)
+                    reason = task!.LastDispatch?.BriefVersion != goal.AuthoritativeBrief.Version
+                        ? "owner-brief-version-differs"
+                        : ReviewerVerdictEvidenceClosure.CriterionSkipReason(goal, request, task.LastVerification!, out reviewerVerdict);
                 if (reason is not null)
                 {
                     skipped.Add(request.Id, reason);
@@ -77,6 +82,8 @@ internal sealed class RoleReportEvidenceClosure(
                 var answer = $"ROLE_REPORT_EVIDENCE owner={owner} task={ownerTask.Id.Value} " +
                     $"criterion={request.PlannerIdentity!.CriterionIndex} candidate={Available(commit)} " +
                     $"landing_candidate={landingCandidateSha} worker_result_log={Available(log)}";
+                if (reviewerVerdict is not null)
+                    answer += $" criterion_index={reviewerVerdict.CriterionIndex} evidence={reviewerVerdict.Evidence[..Math.Min(400, reviewerVerdict.Evidence.Length)]}";
                 if (buildReport) answer += $" {buildEvidence}";
                 else if (reviewerExecuted) answer += " verdict=pass executor=reviewer";
                 else if (owner == "developer") answer += $" tests={tests} gate={gate}";

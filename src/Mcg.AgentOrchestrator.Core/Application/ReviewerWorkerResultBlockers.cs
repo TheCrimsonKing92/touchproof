@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record CriterionVerdict(
-    [property: JsonPropertyName("criterion_index")] int CriterionIndex,
+    [property: JsonPropertyName("criterion_index"), JsonRequired] int CriterionIndex,
     [property: JsonPropertyName("verdict")] string Verdict,
     [property: JsonPropertyName("evidence")] string Evidence);
 
@@ -308,7 +308,7 @@ public static partial class WorkerResultBlockers
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (parsed is null ||
                 parsed.Any(item =>
-                    item.CriterionIndex < 0 ||
+                    item is null || item.CriterionIndex < 0 ||
                     item.Verdict is not ("met" or "not-met" or "not-verifiable") ||
                     string.IsNullOrWhiteSpace(item.Evidence)))
             {
