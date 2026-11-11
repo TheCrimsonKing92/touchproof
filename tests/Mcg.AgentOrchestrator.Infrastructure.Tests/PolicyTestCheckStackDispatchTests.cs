@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -6,6 +7,79 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 public sealed class PolicyTestCheckStackDispatchTests
 {
     private const string CommandLine = "dotnet test --project tests/Sample.Tests/Sample.Tests.csproj";
+
+    [Theory]
+    [InlineData("crosswalk-test")]
+    [InlineData("CROSSWALK-TEST")]
+    public void ToManifestCheck_CrosswalkKind_PreservesIdentityAndArguments(string kind)
+    {
+        var input = new VerificationPolicyCheck("declared name", kind, true,
+            "crosswalk-test web id-one id-two", "manifest check");
+        var actual = Assert.IsType<AcceptanceManifestCheck>(
+            PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree", input));
+
+        Assert.Equal("declared name", actual.Name);
+        Assert.Equal("crosswalk-test", actual.Type);
+        Assert.Equal("web", actual.Project);
+        Assert.Equal(new[] { "id-one", "id-two" }, actual.Arguments);
+        Assert.Null(actual.Command);
+    }
+
+    [Fact]
+    public void ToManifestCheck_CrosswalkRoot_DefaultsToAllDiscoveredTests()
+    {
+        var input = new VerificationPolicyCheck("root", "crosswalk-test", true, " crosswalk-test ", "root check");
+        var actual = Assert.IsType<AcceptanceManifestCheck>(
+            PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree", input));
+        Assert.Null(actual.Project);
+        Assert.Empty(actual.Arguments);
+    }
+
+    [Theory]
+    [InlineData("crosswalk-test", "dotnet test")]
+    [InlineData("future-test", "crosswalk-test .")]
+    public void ToManifestCheck_UnknownKindOrMismatchedCrosswalk_ReturnsNull(string kind, string command)
+    {
+        Assert.Null(PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree",
+            new("unsupported", kind, true, command, "negative control")));
+    }
+
+    [Theory]
+    [InlineData("web", "id-one")]
+    [InlineData("web app", "id one")]
+    [InlineData("web app\\", "a \"quoted\" argument")]
+    [InlineData(" web app ", "\tid one\t")]
+    [InlineData("web", "")]
+    public void RequiredPolicy_CompiledCrosswalk_ReachesManifestDispatch(string project, string argument)
+    {
+        string[] arguments = [argument, "second id", @"folder\test\", "'literal'", ""];
+        var impact = new RepositoryTestImpactPlan(true, false, "crosswalk impact",
+            [new("declared crosswalk", ["crosswalk-test", project, .. arguments], "manifest check")]);
+        var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], impact);
+        policy = JsonSerializer.Deserialize<VerificationPolicy>(JsonSerializer.Serialize(policy))!;
+
+        Assert.True(policy.RequiresTests);
+        Assert.Equal("crosswalk-test", Assert.Single(policy.Checks).Kind);
+        var actual = Assert.Single(GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests("unused-worktree", policy));
+        Assert.Equal("declared crosswalk", actual.Name);
+        Assert.Equal("crosswalk-test", actual.Type);
+        Assert.Equal(project, actual.Project);
+        Assert.Equal(arguments, actual.Arguments);
+    }
+
+    [Fact]
+    public void RequiredPolicy_CompiledDotnet_PreservesExistingPolicyShape()
+    {
+        var impact = new RepositoryTestImpactPlan(true, false, "dotnet impact",
+            [new("unit", ["dotnet", "test", "--project", "unit.csproj"], "manifest check")]);
+        var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], impact);
+        var check = Assert.Single(policy.Checks);
+        Assert.Equal(JsonSerializer.Serialize(new
+        {
+            Name = "unit", Kind = "dotnet-test", Required = true,
+            CommandLine = "dotnet test --project unit.csproj", Reason = "manifest check"
+        }), JsonSerializer.Serialize(check));
+    }
 
     [Theory]
     [InlineData("dotnet-test")]
