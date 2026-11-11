@@ -5,7 +5,12 @@ public sealed record VerificationPolicyCheck(
     string Kind,
     bool Required,
     string CommandLine,
-    string Reason);
+    string Reason)
+{
+    // Executable tokens survive policy persistence independently of display text.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? CommandTokens { get; init; }
+}
 
 public sealed record VerificationPolicy(
     string Summary,
@@ -61,12 +66,7 @@ public static class VerificationPolicyCompiler
 
         foreach (var check in impact.Checks)
         {
-            checks.Add(new VerificationPolicyCheck(
-                check.Name,
-                check.Command.Count == 0 ? "no-op" : "dotnet-test",
-                check.Command.Count > 0,
-                check.CommandLine,
-                check.Reason));
+            checks.Add(ManifestTestPolicyCheck.FromImpactCheck(check));
         }
 
         if (role is AgentRole.Tester or AgentRole.Reviewer)
@@ -96,7 +96,7 @@ public static class VerificationPolicyCompiler
             .GroupBy(check => $"{check.Kind}:{check.Name}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
-        var requiresTests = distinct.Any(check => check.Required && check.Kind == "dotnet-test");
+        var requiresTests = distinct.Any(check => check.Required && ManifestTestCheckKinds.Canonicalize(check.Kind) is not null);
         var requiresHuman = distinct.Any(check => check.Required && check.Kind.StartsWith("manual", StringComparison.OrdinalIgnoreCase));
         var summary = requiresTests
             ? impact.Summary

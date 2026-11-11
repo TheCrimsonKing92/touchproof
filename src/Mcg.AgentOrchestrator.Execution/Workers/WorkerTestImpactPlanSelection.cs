@@ -23,7 +23,7 @@ internal static class WorkerTestImpactPlanSelection
         string workingDirectory,
         string manifestPath)
     {
-        var declared = WorkerManifestTestProjectReader.Read(manifestPath);
+        var declared = WorkerManifestTestCheckReader.Read(manifestPath);
         var displayPath = string.IsNullOrWhiteSpace(manifestPath)
             ? "(unspecified)"
             : WorkerAcceptanceManifestDisplayPath.Render(workingDirectory, manifestPath);
@@ -32,7 +32,7 @@ internal static class WorkerTestImpactPlanSelection
             // No-build plans carry non-executable evidence rather than project checks.
             return (plan.RequiresBuild ? declared.Filter(plan) : plan) with
             {
-                Summary = $"{plan.Summary}; checks scoped to dotnet-test projects declared by {displayPath}"
+                Summary = $"{plan.Summary}; {(declared.Checks.Count == 0 ? declared.NoChecksSummary(displayPath) : declared.ScopedSummary(displayPath))}"
             };
         }
 
