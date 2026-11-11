@@ -85,9 +85,8 @@ public sealed class ProviderResetGenerationTests
         fixture.Tick();
         Assert.Equal(0, fixture.Calls);
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
-        fixture.Kernel.RecordTaskVerification(waiting.Id, task.Id,
-            new("fixture", fixture.Workspace.ExecutionDirectory, exitCode, "AVAILABLE", "", fixture.Clock.UtcNow,
-                ProviderFailureKind: kind, DispatchStartedAt: fixture.Due, CompletionVerdictVerifiedSuccess: exitCode == 0));
+        CompleteTaskProbe(fixture, waiting, kind, success: exitCode == 0);
+        if (exitCode != 0) Assert.Equal(WorkTaskStatus.Failed, task.Status);
         var row = Row(fixture);
         Assert.False(row.Schedule!.ProbeInFlight);
         Assert.Equal(1, row.Schedule.Attempt);
@@ -281,6 +280,14 @@ public sealed class ProviderResetGenerationTests
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel, TestContext.Current.CancellationToken);
         var restored = await repository.LoadAsync(TestContext.Current.CancellationToken);
+        var resetEvents = fixture.Source.Timeline.Where(evt =>
+            ProviderBudgetHoldSchedules.TryParseReset(evt, out _)).ToArray();
+        Assert.Equal(2, resetEvents.Length);
+        var restoredResetEvents = restored.GetGoal(fixture.Source.Id).Timeline.Where(evt =>
+            ProviderBudgetHoldSchedules.TryParseReset(evt, out _)).ToArray();
+        Assert.Equal(resetEvents, restoredResetEvents);
+        Assert.Equal(issued, restoredResetEvents[0].OperatorIntentCreatedAt);
+        Assert.Equal(issued.AddMinutes(-1), restoredResetEvents[1].OperatorIntentCreatedAt);
         Assert.Equal(Row(fixture).Schedule, ProviderUsageHoldView.Read(restored.ProviderHoldScope, fixture.Clock.UtcNow)
             .Single(row => row.Hold.BindingKey == Binding).Schedule);
         var projection = await repository.ReadAttentionProjectionAsync(TestContext.Current.CancellationToken);
@@ -366,7 +373,7 @@ public sealed class ProviderResetGenerationTests
         fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(1);
         var latest = fixture.NewGoal();
         fixture.Exhaust(latest);
-        fixture.Kernel.CancelGoal(latest.Id, "Retain the latest source without reopening it.");
+        Assert.Equal(GoalStatus.Failed, latest.Status);
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(fixture.Workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel, TestContext.Current.CancellationToken);
         Assert.Equal(1, fixture.Kernel.EvictTerminalGoalAggregates([latest.Id]));
@@ -387,7 +394,7 @@ public sealed class ProviderResetGenerationTests
         Assert.Equal(1, calls);
         Assert.Empty(ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow));
         var stored = await repository.LoadAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(GoalStatus.Cancelled, stored.GetGoal(latest.Id).Status);
+        Assert.Equal(GoalStatus.Failed, stored.GetGoal(latest.Id).Status);
         Assert.Empty(ProviderUsageHoldView.Read(stored.ProviderHoldScope, fixture.Clock.UtcNow));
         var check = Assert.Single(stored.GetGoal(latest.Id).Timeline.Where(evt =>
             ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _)));

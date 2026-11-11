@@ -332,7 +332,8 @@ public sealed record ProgressEventSnapshot(
     OperatorIntentAppliedPayload? OperatorIntentApplied = null,
     HumanInputSupersededPayload? HumanInputSuperseded = null,
     ConductorTickOutcomePayload? TickOutcome = null,
-    ProgressFailurePayload? Failure = null);
+    ProgressFailurePayload? Failure = null,
+    DateTimeOffset? OperatorIntentCreatedAt = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,
