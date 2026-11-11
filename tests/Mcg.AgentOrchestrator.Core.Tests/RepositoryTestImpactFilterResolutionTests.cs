@@ -724,6 +724,8 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
+        Assert.Contains($"selection of {ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 2} test classes",
+            infrastructureCheck.Reason, StringComparison.Ordinal);
         Assert.Contains(
             $"{ReverseDependencyTestImpactReader.MaximumSelectedTestClasses}-test-class bound",
             infrastructureCheck.Reason,
