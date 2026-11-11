@@ -125,10 +125,32 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             var reviewed = string.IsNullOrWhiteSpace(verification.ReviewedCommit) ? "unavailable" : verification.ReviewedCommit.Trim();
             return $"candidate-differs reviewed={reviewed} expected={candidate}";
         }
-        if (!WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out _))
-            return "verdict-not-met";
-        verdict = verdicts.FirstOrDefault(item => item.CriterionIndex == identity.CriterionIndex - 1 && item.Verdict == "met");
-        return verdict is null ? "verdict-not-met" : null;
+        return CriterionSkipReason(goal, request, verification, out verdict) is null ? null : "verdict-not-met";
+    }
+
+    // Shared by round-report closure: an overall pass cannot replace this criterion's attestation.
+    internal static string? CriterionSkipReason(Goal goal, HumanInputRequest request,
+        TaskVerificationRecord verification, out CriterionVerdict? verdict)
+    {
+        verdict = null;
+        if (request.PlannerIdentity is not { } identity ||
+            ReportCriterionLookup.Find(goal, identity, out var index) is null)
+            return "criterion-unresolved";
+        if (identity.GoalId != goal.Id.Value || identity.RequestingTaskId != request.TaskId?.Value ||
+            request.PlannerEvidence is not { } payload || payload.CriterionIndex != identity.CriterionIndex ||
+            payload.EvidenceKey != identity.EvidenceKey ||
+            !string.Equals(payload.Owner?.Trim(), request.EvidenceOwner?.Trim(), StringComparison.OrdinalIgnoreCase))
+            return "criterion-binding-differs";
+        if (!WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out var diagnostic))
+            return $"criterion-verdict-invalid:{diagnostic}";
+        var matches = verdicts.Where(item => item.CriterionIndex == index).ToArray();
+        if (matches.Length == 0) return $"criterion-verdict-missing:criterion_index={index}";
+        if (matches.Length != 1)
+            return $"criterion-verdict-conflict:criterion_index={index} verdicts={string.Join(",", matches.Select(item => item.Verdict))}";
+        if (matches[0].Verdict != "met")
+            return $"criterion-verdict-not-met:criterion_index={index} verdict={matches[0].Verdict}";
+        verdict = matches[0];
+        return null;
     }
 
     private static string? GetTesterSkipReason(Goal goal, string candidate, out TaskSpec? tester)

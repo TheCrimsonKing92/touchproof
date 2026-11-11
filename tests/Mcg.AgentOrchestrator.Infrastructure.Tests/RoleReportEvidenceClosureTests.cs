@@ -430,16 +430,17 @@ public sealed class RoleReportEvidenceClosureTests
         scenario.Kernel.RecordTaskDispatch(scenario.Goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli", "verify", "C:\\fixture", started, BaseCommit: candidate));
         scenario.Kernel.RecordTaskVerification(scenario.Goal.Id, task.Id, new TaskVerificationRecord(
-            "verify", "C:\\fixture", 0, RoleOutput(verdict), string.Empty, started.AddSeconds(1), WorkerResultPresent: true));
+            "verify", "C:\\fixture", 0, RoleOutput(verdict, role == AgentRole.Reviewer ? "met" : "not-verifiable"),
+            string.Empty, started.AddSeconds(1), WorkerResultPresent: true));
         scenario.Kernel.ReportWorkerTaskProgress(scenario.Goal.Id, task.Id, status, "Role round adjudicated.");
         Assert.Equal(candidate, task.LastVerification!.ReviewedCommit);
         return task;
     }
 
-    internal static string RoleOutput(string verdict) =>
+    internal static string RoleOutput(string verdict, string criterionVerdict = "not-verifiable") =>
         string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
             "tests: deferred - GateProofTests", "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
-            "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"not-verifiable\",\"evidence\":\"Acceptance executes\"}]",
+            $"criteria_verdicts: [{{\"criterion_index\":0,\"verdict\":\"{criterionVerdict}\",\"evidence\":\"Reviewed source contract; Acceptance executes tests\"}}]",
             $"verdict: {verdict}", "model_fit: fixture/model - adequate - inspection", "skills: none", "confidence: high", "END_WORKER_RESULT");
 
     private sealed record Scenario(AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner,
