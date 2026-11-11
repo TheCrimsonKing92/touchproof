@@ -58,8 +58,10 @@ public sealed partial class GoalAcceptanceVerifier
         CancellationToken cancellationToken = default,
         CancellationToken timeoutSignal = default,
         Action<string, string, Task>? captureObserver = null,
-        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null) =>
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
+        TimeSpan? capturePublicationInterval = null) =>
         AcceptanceProcessRunner.RunProcessAsync(
             arguments, workingDirectory, timeout, captureLimitBytes, runClass,
-            commandIdentityObserver, cancellationToken, timeoutSignal, captureObserver, cleanupObserver);
+            commandIdentityObserver, cancellationToken, timeoutSignal, captureObserver, cleanupObserver,
+            capturePublicationInterval);
 }

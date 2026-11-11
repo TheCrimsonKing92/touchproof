@@ -19,13 +19,15 @@ internal static class AcceptanceProcessRunner
         CancellationToken cancellationToken,
         CancellationToken timeoutSignal,
         Action<string, string, Task>? captureObserver,
-        Action<AcceptanceProcessCleanupObservation>? cleanupObserver) =>
+        Action<AcceptanceProcessCleanupObservation>? cleanupObserver,
+        TimeSpan? capturePublicationInterval = null) =>
         RunProcessAsync(
             arguments, workingDirectory, timeout, forceUtf8ConsoleOutput: false,
             cancellationToken, commandIdentityObserver: commandIdentityObserver,
             timeoutSignal: timeoutSignal, cleanupObserver: cleanupObserver,
             engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = captureLimitBytes },
-            stopOnCaptureLimit: StopsOnCaptureLimit(runClass), captureObserver: captureObserver);
+            stopOnCaptureLimit: StopsOnCaptureLimit(runClass), captureObserver: captureObserver,
+            capturePublicationInterval: capturePublicationInterval);
 
     internal static async Task<CommandResult> RunProcessAsync(
         string[] arguments,

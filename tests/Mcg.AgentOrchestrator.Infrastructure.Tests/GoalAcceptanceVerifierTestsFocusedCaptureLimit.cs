@@ -138,12 +138,10 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         {
             var verifier = new GoalAcceptanceVerifier(async (arguments, workingDirectory, _, cancellationToken) =>
             {
-                processRun = AcceptanceProcessRunner.RunProcessAsync(
-                    arguments, workingDirectory, TimeSpan.FromSeconds(3), forceUtf8ConsoleOutput: false,
+                processRun = GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(
+                    arguments, workingDirectory, TimeSpan.FromSeconds(3), CapBytes, GateHeartbeatRunClass.Acceptance,
                     commandIdentityObserver: value => identity.TrySetResult(value),
                     cancellationToken: cancellationToken, timeoutSignal: timeoutSignal.Token,
-                    engineSettings: new AcceptanceGateEngineSettings { OutputCaptureLimitBytes = CapBytes },
-                    stopOnCaptureLimit: AcceptanceProcessRunner.StopsOnCaptureLimit(GateHeartbeatRunClass.Acceptance),
                     // Task.Delay rejects this interval after the real drain has written output.
                     capturePublicationInterval: faultCaptureDrain ? TimeSpan.MaxValue : null,
                     captureObserver: (stdout, stderr, limitReached) => captures.TrySetResult((stdout, stderr, limitReached)),
