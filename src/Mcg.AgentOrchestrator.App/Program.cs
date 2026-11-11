@@ -6,6 +6,11 @@ ProcessTreeGuiSuppression.InitializeProcessErrorMode();
 Mcg.AgentOrchestrator.App.Cli.CliTimingRecorder.Install(args);
 CliProtectedProcessEnvironment.EnsureProtectedPid();
 
+if (args.Length == 2 && args[0] == ExperimentReplayProcedure.Command)
+{
+    return await ExperimentReplayProcedure.RunAsync(args[1], CancellationToken.None);
+}
+
 if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand)
 {
     return CompletionBuildEvidenceCoordinator.RunChild(args);
@@ -272,6 +277,11 @@ try
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
     {
         return 0;
+    }
+
+    if (CliExperimentReplayCommand.IsCommand(startupArgs))
+    {
+        return ExitCompletedStartupCommand(await CliExperimentReplayCommand.RunAsync(startupArgs, workspace));
     }
 
     if (CliImpactReplayCommand.IsCommand(startupArgs))

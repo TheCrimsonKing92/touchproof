@@ -9,13 +9,17 @@ internal static class ImpactReplayAttemptSource
 
     internal static IReadOnlyList<ImpactReplayStoredAttempt> Read(string orchestratorDirectory,
         DateTimeOffset? since, ICollection<ImpactReplayDiagnostic> skipped,
-        IImpactReplaySink? observation = null, CancellationToken cancellationToken = default)
+        IImpactReplaySink? observation = null, CancellationToken cancellationToken = default,
+        Func<ConductorParallelAcceptanceAttempt, string, bool>? includeAttempt = null,
+        IReadOnlyCollection<string>? goalIds = null)
     {
         var directory = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
         var sink = observation ?? ImpactReplayNullSink.Instance;
         if (!Directory.Exists(directory)) { sink.InventoryDiscovered(0); return []; }
         var attempts = new List<ImpactReplayStoredAttempt>();
-        var inputPaths = Directory.EnumerateFiles(directory, "*.attempt.json", SearchOption.AllDirectories)
+        string[] directories = goalIds is null ? [directory] : goalIds.Select(id => Path.Combine(directory, id))
+            .Where(Directory.Exists).ToArray();
+        var inputPaths = directories.SelectMany(root => Directory.EnumerateFiles(root, "*.attempt.json", SearchOption.AllDirectories))
             .Order(StringComparer.Ordinal).ToArray();
         sink.InventoryDiscovered(inputPaths.Length);
         foreach (var path in inputPaths)
@@ -28,6 +32,8 @@ internal static class ImpactReplayAttemptSource
                     ?? throw new InvalidDataException("Null attempt receipt.");
                 if (since is { } start && attempt.StartedAt < start) continue;
                 if (attempt.Kind != "gate") { Skip("Not a solo gate attempt."); continue; }
+                // Replay import can reject unsupported provenance using metadata alone, before opening results/TRX.
+                if (includeAttempt is not null && !includeAttempt(attempt, path)) continue;
                 var resultPath = path[..^".attempt.json".Length] + ".result.json";
                 var result = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(File.ReadAllText(resultPath), Json)
                     ?? throw new InvalidDataException("Null result receipt.");
@@ -39,7 +45,7 @@ internal static class ImpactReplayAttemptSource
                 var paths = (attempt.TestResultPaths ?? []).Concat(result.Acceptance?.TestResultPaths ?? [])
                     .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).ToArray();
                 attempts.Add(new(attempt.AttemptId, attempt.GoalId, attempt.StartedAt, main!, branch!,
-                    Path.GetDirectoryName(path)!, paths, result.Acceptance?.FailedChecks ?? []));
+                    Path.GetDirectoryName(path)!, paths, result.Acceptance?.FailedChecks ?? [], path));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
             { Skip($"Unreadable attempt/result: {ex.Message}"); }

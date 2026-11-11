@@ -212,6 +212,22 @@ to writing tests.
 
 Use the held-attempt cross-tick fixture only for invariants that are cross-tick by nature: counters, markers, live attempts, deferral bookkeeping, and requeue state that must survive a tick boundary. It is never for convenience and never a substitute for a narrower single-tick unit test. Every such test must carry the `CrossTick` category and a 30-second timeout as a hang detector; assert ordering and state, never elapsed time. `ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks` is the worked example. Follow-on coverage for post-loop-stop auto-requeue (`0b81147a`), recovery-marker clearing, stale-dispatch escalation recovery, and the max-duration handoff/rebuild race belongs with each corresponding fix rather than in this harness slice.
 
+## Tautological labels, tests, comments, and UI components are considered harmful.
+
+Retain an artifact when it contributes independently useful behavior, information, or a meaningful constraint. Prefer affirmative guidance describing the surviving contract and current vocabulary. The Pink Elephant Principle is a practical heuristic: repeatedly mentioning a retired concept keeps it salient to humans and agents; it is not a universal empirical claim. Keep specific retired names and removal history in scoped migration/review evidence.
+
+Authors, Planners, Developers, Testers, and Reviewers apply this decision procedure:
+
+1. Name the user/system failure the artifact independently detects or prevents, and the behavior or information that changes if it is removed.
+2. If the only answer is that an old name must stay absent or a current name must appear verbatim, delete the artifact or retain the check only as one-time migration/review evidence. Do not add permanent guards solely to memorialize a deleted symbol, file, flag, component, or implementation spelling.
+3. For a claimed meaningful boundary, identify the violating behavior, live invariant, and owning seam. Prefer exercising the surviving observable contract there over repository grep, reflection, or exact-source strings. Historical assertions do not become architecture boundaries merely by relabeling them. Replace a removed test only when a distinct surviving contract needs coverage.
+
+Labels and UI components should help a user understand a state, distinction, or action; delete decoration that merely restates its context. Preserve accessible names, necessary units/disambiguation, genuine negative safety and authorization properties, explicit compatibility rejection contracts, and security/architecture boundaries that protect a live invariant. Explicit negative constraints remain appropriate for these boundaries.
+
+Production comments should explain a current invariant, non-obvious rationale, external constraint, or actionable limitation. Remove comments that merely paraphrase nearby code; rewrite obsolete implementation history around its surviving reason. Preserve subtle failure-mode explanations, protocol compatibility, security boundaries, and temporary workarounds with a live reason. Git history and scoped change records carry historical narratives. Inspect the directly related production seam during cleanup and change only clearly redundant or obsolete comments; this is not a mechanical purge.
+
+Keep required deterministic gates, declared test-removal procedures, and independent review intact. Do not automatically replace deleted tests or add self-referential policy tests, source censuses of this policy's wording, or tests asserting the deleted tests' absence.
+
 ## Reviewer Checklist
 
 - Reviewers must check new and changed tests against the `test-design-discipline` guidance before judging residual risk and acceptance readiness.

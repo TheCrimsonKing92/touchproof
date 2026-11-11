@@ -90,6 +90,20 @@ At each meaningful operator checkpoint, report what reached main since the previ
 
 This discipline comes from the September 2026 dogfood failure: completed branches accumulated behind reciprocal test failures and acceptance-owned criteria rejected at review, while the driving agent spent rounds improving diagnostics and expanding work. The lesson is to restore the landing path and its ownership rules, not to count activity as delivery.
 
+<a id="token-efficiency"></a>
+## Token efficiency
+
+This contract applies to Codex, Claude and every orchestrated role, including drivers and reviewers. Reduce total attributable tokens per accepted landing, including driver work, delegated review, retries and corrections, without degrading results, outputs, correctness, safety or evidence quality. Smaller prompts are not success when they cause more work. Preserve existing ownership, permissions, independent review and deterministic gates.
+
+- **Account accurately.** Character counts are a context-size proxy, never billed tokens. Missing usage is unknown, not zero. Preserve cached/fresh and reasoning/output overlap semantics; do not double count overlapping usage. Lower cost does not establish correctness.
+- **Expand evidence progressively.** Read compact current state first, then relevant evidence. Keep full required plans, criteria, unresolved findings, negative evidence and owner decisions accessible within existing permissions. Never silently truncate required information or promote historical claims to current authority.
+- **Bound investigations and commands.** Inspect the command contract before an unfamiliar invocation. Narrow paths, patterns and output before execution; avoid repeated broad surveys, full-file/tool dumps and rereading resolved history without changed evidence. Before retrying, identify what changed. Finish bounded investigations and retain a compact checkpoint before switching work.
+- **Keep handoffs current.** Carry one authoritative current contract, explicit owners, live findings, exact candidate identities and evidence locations. Keep stable shared instructions concise in this canonical home, linked from both harness entry points; reference them instead of duplicating a growing policy appendix in each brief.
+- **Package independent review.** Give reviewers scoped requirements, candidate identities, live findings and evidence locations with access to the full required evidence. Ask them to assess requirements independently, without asking them to confirm a preferred verdict. Preserve required cross-family review and the normal review and acceptance path.
+- **Use the appropriate mechanism.** Prefer deterministic receipt validation, routing and packaging for mechanical work; use models for design, interpretation and substantive review.
+- **Compare quality before changing workflow.** Do not globally lower model effort, downgrade models, remove roles, weaken tests or relax acceptance to save tokens. Model/effort or workflow changes require a bounded comparison of token measurements alongside first-attempt success, correction rounds, escaped defects and operator interventions. This documentation policy requires no live benchmark, operator observation or new persistent owner-evidence hold before landing.
+- **Own intake.** Always assign an epic before dispatch and verify membership after creation.
+
 <a id="driver-takeover"></a>
 ## Driver takeover and stale owner instructions
 
@@ -1109,6 +1123,8 @@ The Operator owns this real-world check after focused Acceptance receipts pass:
    a hold or loud stop failure, never a successful cancel receipt.
 
 ### General operating discipline
+
+- **Keep artifacts independently useful.** Retain labels, tests, comments, and UI components for the behavior, information, or live constraint they contribute. Use affirmative current-contract guidance and keep removal history in scoped review evidence. Authors, Planners, Developers, Testers, and Reviewers apply the shared [decision procedure and live-invariant exceptions](test-design-discipline.md#tautological-labels-tests-comments-and-ui-components-are-considered-harmful).
 
 - **Carry standing provider authorization forward.** The operator has authorized repository submissions to configured providers, including Anthropic and Grok, for orchestrator work: source, paths, commit IDs and test evidence (broadened and reiterated 2026-10-19: "ALL submissions to Anthropic, Grok, etc. are explicitly allowed. Do not ask again"). Ordinary review payload changes, task boundaries and context compaction do not reset that authorization. If automatic approval review rejects an authorized review, report the existing authorization and concrete review scope when resolving that tool failure; continue unaffected implementation and validation. Do not park goals or ask the operator for the same permission again. Credentials must never be included in prompts or logs. This guidance does not disable platform approval controls or authorize unrelated disclosures.
 
