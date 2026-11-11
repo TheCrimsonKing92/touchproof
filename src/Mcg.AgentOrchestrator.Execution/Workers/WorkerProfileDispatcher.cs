@@ -1896,7 +1896,8 @@ public static partial class WorkerProfileDispatcher
             ContextDeliveryMode? deliveryMode = null)
         {
             var identity = new LogicalArtifactIdentity(identityValue);
-            if (source != WorkerContextSemanticSource.DeferredNoChangeEvidence)
+            if (source != WorkerContextSemanticSource.DeferredNoChangeEvidence &&
+                identityValue != "goal/specification-history.json")
                 bytes = ApplyHumanInputRetractions(bytes, goalHumanInputRequests, clarificationAnswerHistory);
             var mode = deliveryMode ?? WorkerContextPackageBuilder.SelectDeliveryMode(kind);
             var priorSection = priorContextPackageReceipt?.Sections.FirstOrDefault(section =>
@@ -1931,7 +1932,8 @@ public static partial class WorkerProfileDispatcher
             observedSources?.Add(new SemanticSourceObservation(source, identity.Value));
         }
 
-        AddSource(WorkerContextSemanticSource.GoalObjective, "goal/objective.md", ContextArtifactKind.TaskObjective, Encoding.UTF8.GetBytes(goal.Objective));
+        var objectiveChanged = WorkerSpecificationArtifacts.AddObjective(goal,
+            (source, identity, kind, bytes, mode) => AddSource(source, identity, kind, bytes, deliveryMode: mode));
         AddSource(WorkerContextSemanticSource.TaskDescription, "task/description.md", ContextArtifactKind.RoleOutputContract, Encoding.UTF8.GetBytes(task.Description));
         AddSource(
             WorkerContextSemanticSource.TaskMetadata,
@@ -1954,30 +1956,8 @@ public static partial class WorkerProfileDispatcher
             "task/criterion-retry-feedback.json",
             ContextArtifactKind.AcceptanceCriteria,
             JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback));
-        if (goal.RefinedSpec is { } refinedSpec)
-        {
-            AddSource(
-                WorkerContextSemanticSource.RefinedSpec,
-                "goal/refined-spec.json",
-                ContextArtifactKind.AcceptanceCriteria,
-                JsonSerializer.SerializeToUtf8Bytes(new
-                {
-                    refinedSpec.BehavioralContract,
-                    refinedSpec.AcceptanceCriteria,
-                    VerificationClass = refinedSpec.VerificationClass.ToString(),
-                    refinedSpec.Decisions,
-                    refinedSpec.OpenQuestions,
-                    refinedSpec.OperatorOwnedAcceptanceCriteria,
-                    ClarificationAnswerHistory = refinedSpec.AuthoritativeClarificationAnswerHistory.Select(answer => new
-                    {
-                        answer.Id,
-                        answer.Text,
-                        Origin = answer.Origin.ToString(),
-                        answer.SupersededByAnswerId,
-                        answer.BriefVersion
-                    }).ToArray()
-                }));
-        }
+        WorkerSpecificationArtifacts.AddSpecification(goal, objectiveChanged,
+            (source, identity, kind, bytes, mode) => AddSource(source, identity, kind, bytes, deliveryMode: mode));
         if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
         {
             AddSource(
