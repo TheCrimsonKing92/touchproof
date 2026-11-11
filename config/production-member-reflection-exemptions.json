@@ -72,22 +72,6 @@
     "Reason": "The sink MethodInfo is compared against compiled IL operands to detect forbidden persistence callers. It is never invoked."
   },
   {
-    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorTickPushRetirementTests.cs",
-    "Callable": "ConductorTickPushRetirementTests.TickPusherDeclaresOnlyStoreCallbackAndRecordingSurface()",
-    "Api": "GetMethod",
-    "Member": "CreateStoreCallback",
-    "Receiver": "type",
-    "Reason": "type is typeof(ConductorTickPusher). Pins declared callback/record signatures and retired surface metadata without executing either member."
-  },
-  {
-    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorTickPushRetirementTests.cs",
-    "Callable": "ConductorTickPushRetirementTests.TickPusherDeclaresOnlyStoreCallbackAndRecordingSurface()",
-    "Api": "GetMethod",
-    "Member": "TryRecord",
-    "Receiver": "type",
-    "Reason": "type is typeof(ConductorTickPusher). Pins declared callback/record signatures and retired surface metadata without executing either member."
-  },
-  {
     "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkDirectInvocationTests.cs",
     "Callable": "CrosswalkDirectInvocationTests.ListAndRun_SeparateArguments_PreserveEveryId()",
     "Api": "GetProperty",
