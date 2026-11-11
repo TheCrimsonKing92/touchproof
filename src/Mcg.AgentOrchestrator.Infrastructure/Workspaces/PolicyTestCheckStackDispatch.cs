@@ -10,9 +10,19 @@ internal static class PolicyTestCheckStackDispatch
         string worktreePath,
         VerificationPolicyCheck check)
     {
-        if (check.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+        var kind = ManifestTestCheckKinds.Canonicalize(check.Kind);
+        if (kind == ManifestTestCheckKinds.Dotnet)
         {
             return DotnetTestCheckTranslator.TryFromCommandLine(worktreePath, check.Name, check.CommandLine);
+        }
+
+        if (kind == ManifestTestCheckKinds.Crosswalk &&
+            ManifestTestCheckKinds.TryReadCrosswalkCommand(check.CommandLine, out var project, out var arguments))
+        {
+            return new AcceptanceManifestCheck
+            {
+                Name = check.Name, Type = kind, Project = project, Arguments = arguments
+            };
         }
 
         return null;

@@ -8,6 +8,58 @@ public sealed class PolicyTestCheckStackDispatchTests
     private const string CommandLine = "dotnet test --project tests/Sample.Tests/Sample.Tests.csproj";
 
     [Theory]
+    [InlineData("crosswalk-test")]
+    [InlineData("CROSSWALK-TEST")]
+    public void ToManifestCheck_CrosswalkKind_PreservesIdentityAndArguments(string kind)
+    {
+        var input = new VerificationPolicyCheck("declared name", kind, true,
+            "crosswalk-test web id-one id-two", "manifest check");
+        var actual = Assert.IsType<AcceptanceManifestCheck>(
+            PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree", input));
+
+        Assert.Equal("declared name", actual.Name);
+        Assert.Equal("crosswalk-test", actual.Type);
+        Assert.Equal("web", actual.Project);
+        Assert.Equal(new[] { "id-one", "id-two" }, actual.Arguments);
+        Assert.Null(actual.Command);
+    }
+
+    [Fact]
+    public void ToManifestCheck_CrosswalkRoot_DefaultsToAllDiscoveredTests()
+    {
+        var input = new VerificationPolicyCheck("root", "crosswalk-test", true, " crosswalk-test ", "root check");
+        var actual = Assert.IsType<AcceptanceManifestCheck>(
+            PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree", input));
+        Assert.Null(actual.Project);
+        Assert.Empty(actual.Arguments);
+    }
+
+    [Theory]
+    [InlineData("crosswalk-test", "dotnet test")]
+    [InlineData("future-test", "crosswalk-test .")]
+    public void ToManifestCheck_UnknownKindOrMismatchedCrosswalk_ReturnsNull(string kind, string command)
+    {
+        Assert.Null(PolicyTestCheckStackDispatch.ToManifestCheck("unused-worktree",
+            new("unsupported", kind, true, command, "negative control")));
+    }
+
+    [Fact]
+    public void RequiredPolicy_CompiledCrosswalk_ReachesManifestDispatch()
+    {
+        var impact = new RepositoryTestImpactPlan(true, false, "crosswalk impact",
+            [new("declared crosswalk", ["crosswalk-test", "web", "id-one"], "manifest check")]);
+        var policy = VerificationPolicyCompiler.Compile(AgentRole.Developer, "tests", "tests", null, [], impact);
+
+        Assert.True(policy.RequiresTests);
+        Assert.Equal("crosswalk-test", Assert.Single(policy.Checks).Kind);
+        var actual = Assert.Single(GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests("unused-worktree", policy));
+        Assert.Equal("declared crosswalk", actual.Name);
+        Assert.Equal("crosswalk-test", actual.Type);
+        Assert.Equal("web", actual.Project);
+        Assert.Equal(new[] { "id-one" }, actual.Arguments);
+    }
+
+    [Theory]
     [InlineData("dotnet-test")]
     [InlineData("DOTNET-TEST")]
     public void ToManifestCheck_DotnetKind_MatchesAllTranslatorFields(string kind)

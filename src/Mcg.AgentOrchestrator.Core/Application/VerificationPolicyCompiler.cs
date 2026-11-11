@@ -63,7 +63,7 @@ public static class VerificationPolicyCompiler
         {
             checks.Add(new VerificationPolicyCheck(
                 check.Name,
-                check.Command.Count == 0 ? "no-op" : "dotnet-test",
+                check.Command.Count == 0 ? "no-op" : ManifestTestCheckKinds.FromCommand(check.Command) ?? ManifestTestCheckKinds.Dotnet,
                 check.Command.Count > 0,
                 check.CommandLine,
                 check.Reason));
@@ -96,7 +96,7 @@ public static class VerificationPolicyCompiler
             .GroupBy(check => $"{check.Kind}:{check.Name}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
-        var requiresTests = distinct.Any(check => check.Required && check.Kind == "dotnet-test");
+        var requiresTests = distinct.Any(check => check.Required && ManifestTestCheckKinds.Canonicalize(check.Kind) is not null);
         var requiresHuman = distinct.Any(check => check.Required && check.Kind.StartsWith("manual", StringComparison.OrdinalIgnoreCase));
         var summary = requiresTests
             ? impact.Summary
