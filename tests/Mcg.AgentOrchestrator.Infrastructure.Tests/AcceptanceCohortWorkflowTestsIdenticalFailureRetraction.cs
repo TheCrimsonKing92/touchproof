@@ -101,18 +101,14 @@ public sealed class AcceptanceCohortWorkflowTestsIdenticalFailureRetraction : Ac
             new string('d', 40), "later-manifest");
         scenario.Store.SaveGateReceipt(new AcceptanceCohortReceipt("interrupted-receipt", identity,
             AcceptanceCohortGateOutcome.Failed, DateTimeOffset.Parse("2026-10-04T03:15:00Z"), 0, ["red"], 1, []));
-        var method = typeof(ConductorDriver).GetMethod("SaveCohortPartitionAttribution",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
         var runner = new PartitionRunner(indeterminate: true);
         var failedWriter = new ConductEventLogWriter(scenario.Workspace.ConductEventsLogPath,
             beforeRequiredEventDrain: () => throw new IOException("controlled event-write failure"));
-        AcceptanceCohortReceipt Invoke(ConductEventLogWriter log) => Assert.IsType<AcceptanceCohortReceipt>(
-            method.Invoke(scenario.Driver, [scenario.Store, identity, members, "later-pair",
+        AcceptanceCohortReceipt Invoke(ConductEventLogWriter log) => scenario.Driver.SaveCohortPartitionAttribution(scenario.Store, identity, members, "later-pair",
                 new[] { TestIdentity }, runner.RunFull(members[0], 0, identity, log, default),
-                runner.RunFull(members[1], 1, identity, log, default), log, null]));
+                runner.RunFull(members[1], 1, identity, log, default), log, null);
 
-        var fault = Assert.Throws<TargetInvocationException>(() => Invoke(failedWriter));
-        Assert.IsType<IOException>(fault.InnerException);
+        Assert.Throws<IOException>(() => Invoke(failedWriter));
         Assert.Equal(AcceptanceCohortAttributionOutcome.NotApplicable,
             scenario.Store.TryReadReceipt(identity.Value)!.Attribution);
         Assert.DoesNotContain($"{a.GoalId.Value}:{a.CandidateRevision}", scenario.Store.ReadAttributedMemberKeys());

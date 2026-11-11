@@ -49,7 +49,7 @@ internal sealed partial class ConductorDriver
             cohortFailingTests, firstFull, secondFull, writer);
     }
 
-    private AcceptanceCohortReceipt SaveCohortPartitionAttribution(CohortAcceptanceStore store,
+    internal AcceptanceCohortReceipt SaveCohortPartitionAttribution(CohortAcceptanceStore store,
         AcceptanceCohortIdentity identity, IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
         string pairFingerprint, IReadOnlyList<string> cohortFailingTests,
         AcceptanceCohortPartitionReceipt first, AcceptanceCohortPartitionReceipt second,

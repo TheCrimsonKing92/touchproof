@@ -716,7 +716,7 @@ private static string FormatConductToken(string value) =>
 private static string FormatConductEventChecks(IEnumerable<string> checks) =>
     string.Join(",", checks.Select(check => check.Replace(' ', '_').Replace('\t', '_').Replace('\r', '_').Replace('\n', '_')));
 
-private static string? TryResolveGitHead(CliExecutionContext context, string? path)
+internal static string? TryResolveGitHead(CliExecutionContext context, string? path)
 {
     if (string.IsNullOrWhiteSpace(path))
         return null;

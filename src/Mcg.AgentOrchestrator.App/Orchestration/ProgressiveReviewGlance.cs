@@ -1456,7 +1456,7 @@ Corrective direction:
     private static string HashLines(IReadOnlyList<string> values) =>
         HashText(string.Join("\n", values));
 
-    private static string? TryResolveHead(string? worktree)
+    internal static string? TryResolveHead(string? worktree)
     {
         if (string.IsNullOrWhiteSpace(worktree))
             return null;

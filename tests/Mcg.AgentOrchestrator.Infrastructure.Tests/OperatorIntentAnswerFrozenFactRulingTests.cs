@@ -51,13 +51,9 @@ public sealed class OperatorIntentAnswerFrozenFactRulingTests
         Xunit.Assert.True(fixture.Request.IsCompleted);
         Xunit.Assert.Equal(Ruling, fixture.Request.Answer);
 
-        var section = typeof(FrozenFactRuling).Assembly.GetType(
-            "Mcg.AgentOrchestrator.Core.FrozenFactRulingBriefSection", throwOnError: true)!;
-        var render = section.GetMethod("Render", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var lines = (IReadOnlyList<string>)render.Invoke(null,
-            [fixture.Kernel.HumanInputRequests, fixture.Goal.Id, AgentRole.Reviewer])!;
-        var instruction = (string)section.GetField("ReviewerInstruction",
-            BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
+        var lines = FrozenFactRulingBriefSection.Render(
+            fixture.Kernel.HumanInputRequests, fixture.Goal.Id, AgentRole.Reviewer);
+        var instruction = FrozenFactRulingBriefSection.ReviewerInstruction;
         Xunit.Assert.Contains("Frozen classes: ConductorBatchLoopTestsSelfHandoffDrainCap, RepositoryChangeClassifierDispatchHandlingPathsTests", lines);
         Xunit.Assert.Contains(instruction, lines);
     }

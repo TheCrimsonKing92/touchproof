@@ -223,7 +223,7 @@ internal sealed partial class ConductorDriver
             { Decision = FailedGoalRecoveryDecisionRecords.ReconcileBeforeFailureHandling(decision.Identity, reconciledReason) });
     }
 
-    private FailedGoalRecoveryFacts BuildFailedGoalRecoveryFacts(
+    internal FailedGoalRecoveryFacts BuildFailedGoalRecoveryFacts(
         Goal goal,
         ConductorAutonomyPolicy policy,
         GoalLifecycleState state)

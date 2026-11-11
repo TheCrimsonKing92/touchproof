@@ -99,7 +99,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Dictionary<string, long> _tickPhaseElapsedMs = new(StringComparer.Ordinal);
     private readonly Action<string>? _janitorialPhaseProbe;
     private readonly Func<long> _janitorialTimestamp;
-    private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
+    internal static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
 
     private readonly Func<AgentOrchestratorKernel, DateTimeOffset, IReadOnlyList<GoalId>>? _providerHoldProbe;

@@ -5,9 +5,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: fixture-owned repositories and AsyncLocal Git runner overrides.
 public sealed class LandingExecutorRefFileResolutionTests
 {
-    private static readonly Func<string, string, string?> TryResolveBranch = Helper<string?>("TryResolveBranch");
-    private static readonly Func<string, string, string> ResolveRef = Helper<string>("ResolveRef");
-    private static readonly Func<string, string, bool> BranchExists = Helper<bool>("BranchExists");
+    private static readonly Func<string, string, string?> TryResolveBranch = LandingExecutor.TryResolveBranch;
+    private static readonly Func<string, string, string> ResolveRef = LandingExecutor.ResolveRef;
+    private static readonly Func<string, string, bool> BranchExists = LandingExecutor.BranchExists;
 
     [Theory]
     [InlineData(false)]
@@ -99,7 +99,4 @@ public sealed class LandingExecutorRefFileResolutionTests
         return path;
     }
 
-    private static Func<string, string, T> Helper<T>(string name) =>
-        typeof(LandingExecutor).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!
-            .CreateDelegate<Func<string, string, T>>();
 }
