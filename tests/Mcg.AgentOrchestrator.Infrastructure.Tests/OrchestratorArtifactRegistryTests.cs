@@ -69,6 +69,7 @@ public sealed class OrchestratorArtifactRegistryTests
         Assert.Equal(RetentionKind.KeepDays, logs.Retention);
         Assert.Equal(StorageRetentionMaintenance.WorkerDeletionAge, logs.RetentionAge);
         Assert.Equal(RetentionKind.KeepForever, Assert.IsType<Entry>(Classify("goal-events")).Retention);
+        Assert.Equal(RetentionKind.KeepForever, Assert.IsType<Entry>(Classify("experiment-replay")).Retention);
         Assert.Null(Classify("lane-reuse-shadow"));
     }
 
