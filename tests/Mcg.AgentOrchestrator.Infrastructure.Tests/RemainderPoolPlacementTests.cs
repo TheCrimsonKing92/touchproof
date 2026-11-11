@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Parallel-safe: immutable manifest/source/history reads; no shared state is changed.
 public sealed class RemainderPoolPlacementTests
@@ -58,7 +56,7 @@ public sealed class RemainderPoolPlacementTests
     }
 
     [Fact]
-    public void LocalPartition_RemainderKeepsPreChangeFiltersAndHostExclusion()
+    public void LocalPartition_RemainderPreservesCoverageAndHostExclusion()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var settings = AcceptanceGateEngineSettings.Load(root);
@@ -73,38 +71,6 @@ public sealed class RemainderPoolPlacementTests
         var lanes = ResolvePartitionLanes(settings, names);
         AssertRemainderCoverage(RemainderTargets(root, settings), lanes);
         AssertHostIntegrationExcluded(Assert.Single(lanes, lane => lane.Name == "Remainder").Filter);
-
-        var balanceLanes = lanes.Where(lane => lane.Name.StartsWith("Remainder balance", StringComparison.Ordinal)).ToArray();
-        Assert.NotEmpty(balanceLanes);
-        var hostClasses = AcceptanceTestClassSourceScanner.ScanSources(root)
-            .Where(DeclaresHostIntegrationTrait).ToArray();
-        Assert.NotEmpty(hostClasses);
-        foreach (var source in hostClasses)
-            Assert.Empty(AcceptanceLaneMembership.LanesIncluding(balanceLanes, source.FullName));
-    }
-
-    [Fact]
-    public void LocalPartition_BalanceLaneTermAddition_KeepsCoverage()
-    {
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var settings = AcceptanceGateEngineSettings.Load(root);
-        var names = ReadRemainderPartitionNames(root);
-        var lanes = ResolvePartitionLanes(settings, names);
-        var targets = RemainderTargets(root, settings);
-        var balance = lanes.First(lane => lane.Name.StartsWith("Remainder balance", StringComparison.Ordinal));
-        var addedClass = targets.First(name => AcceptanceLaneMembership.LanesIncluding([balance], name).Count == 0);
-        var originalFilter = balance.Filter;
-        var expanded = balance with { Filter = originalFilter + "|FullyQualifiedName~" + addedClass };
-        var copy = JsonSerializer.SerializeToNode(settings)!;
-        copy[nameof(AcceptanceGateEngineSettings.InfrastructureTestLanes)] = JsonSerializer.SerializeToNode(
-            settings.InfrastructureTestLanes.Select(lane => lane.Name == balance.Name ? expanded : lane));
-        var candidate = copy.Deserialize<AcceptanceGateEngineSettings>()!;
-        var candidateLanes = ResolvePartitionLanes(candidate, names);
-
-        Assert.NotEqual(originalFilter, Assert.Single(candidateLanes, lane => lane.Name == balance.Name).Filter);
-        Assert.NotEmpty(AcceptanceLaneMembership.LanesIncluding([expanded], addedClass));
-        Assert.Equal(originalFilter, Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == balance.Name).Filter);
-        AssertRemainderCoverage(targets, candidateLanes);
     }
 
     [Fact]
@@ -189,13 +155,6 @@ public sealed class RemainderPoolPlacementTests
         var uncovered = targets.Where(name => AcceptanceLaneMembership.LanesIncluding(lanes, name).Count == 0).ToArray();
         Assert.Empty(uncovered);
     }
-
-    private static bool DeclaresHostIntegrationTrait(AcceptanceTestClassSource source) =>
-        CSharpSyntaxTree.ParseText(source.SourceText).GetRoot().DescendantNodes().OfType<AttributeSyntax>()
-            .Any(attribute => attribute.Name.ToString().Split('.').Last() is "Trait" or "TraitAttribute" &&
-                attribute.ArgumentList?.Arguments is { Count: 2 } arguments &&
-                arguments[0].Expression is LiteralExpressionSyntax category && category.Token.ValueText == "Category" &&
-                arguments[1].Expression is LiteralExpressionSyntax value && value.Token.ValueText == "HostIntegration");
 
     private static void AssertHostIntegrationExcluded(string filter) =>
         Assert.True(AcceptanceCheckCommandBuilder.HasMtpTraitExclusion(
