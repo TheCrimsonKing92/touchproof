@@ -373,15 +373,32 @@ internal sealed class WorkerSandboxPreparer(
         }
 
         var recursive = allowRecursiveMigration;
-        if (!labeler.SetIntegrity(path, LowInheritableLevel, recursive))
+        var nativeResult = labeler is IcaclsIntegrityLabeler native
+            ? native.SetIntegrityWithDiagnostics(path, LowInheritableLevel, recursive)
+            : null;
+        var labeled = nativeResult?.Succeeded ?? labeler.SetIntegrity(path, LowInheritableLevel, recursive);
+        if (!labeled)
         {
-            if (IsAlreadyLowInheritable(path))
+            // A failed repair cannot leave stale proof reusable on the next preparation.
+            File.Delete(ReceiptPath(path));
+            var root = labeler.Query(path);
+            var rootPrepared = root.Exists && root.Low && root.Inheritable &&
+                !root.Medium && !root.Unlabeled && root.NativeQueryError is null;
+            var descendants = recursive && rootPrepared
+                ? WorktreeDescendantIntegrityScan.Scan(path, labeler, maxDescendantEntries)
+                : null;
+            if (rootPrepared && (!recursive ||
+                descendants?.Outcome == WorktreeDescendantIntegrityScanOutcome.Prepared))
             {
                 WritePreparationFiles(path, path == sandboxRoot ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot : path, sandboxRoot);
                 return new WorkerSandboxPreparationResult(false, false);
             }
 
             var reason = $"Failed to apply inheritable Low integrity label to '{path}'.";
+            if (descendants is not null)
+                reason += $" Descendant integrity: {descendants.Outcome}; path={descendants.Path}.";
+            if (nativeResult is not null)
+                reason += $" Native label command: {nativeResult.Diagnostic}";
             if (!reusedWorktree)
             {
                 throw new InvalidOperationException(reason);

@@ -2237,6 +2237,114 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact]
+    public void ApplySandbox_FailedRecursivePrep_HoldsLaunchUntilSanctionedRepair()
+    {
+        AcceptanceGateIntegrityTestSupport.RequireWindows();
+        if (GetCurrentProcessIntegrityRid() < MediumIntegrityRid)
+            Assert.Skip("Requires a Medium integrity host for native preparation and Low-token control.");
+        var root = Directory.CreateTempSubdirectory("failed-recursive-prep-").FullName;
+        try
+        {
+            var repo = Path.Combine(root, "repo");
+            var worktree = Path.Combine(root, "worktree");
+            CreateLinkedWorktree(repo, worktree);
+            var source = Directory.CreateDirectory(Path.Combine(worktree, "src")).FullName;
+            var project = Directory.CreateDirectory(Path.Combine(source, "Project")).FullName;
+            var existing = Path.Combine(project, "source.txt");
+            var created = Path.Combine(project, "created.txt");
+            var outside = Path.Combine(root, "outside.txt");
+            var gitConfig = Path.Combine(repo, ".git", "config");
+            File.WriteAllText(existing, "fixture");
+            File.WriteAllText(outside, "protected");
+            var gitBytes = File.ReadAllBytes(gitConfig);
+            var labels = new IcaclsIntegrityLabeler();
+            Assert.True(labels.SetIntegrity(root, "(OI)(CI)M", recursive: true));
+            var sandbox = Path.Combine(worktree, ".mcg-sandbox");
+            var preparer = new WorkerSandboxPreparer(labels);
+            Assert.False(preparer.Prepare(worktree, sandbox).RequiresRecovery);
+            Assert.True(preparer.Prepare(worktree, sandbox).PrepReceiptHit);
+            AcceptanceGateIntegrityNormalizer.Normalize(worktree);
+            foreach (var ancestor in new[] { worktree, source })
+                Assert.True(labels.SetIntegrity(ancestor, "(OI)(CI)L", recursive: false));
+            Assert.True(labels.Query(worktree).Low);
+            Assert.True(labels.Query(project).Medium);
+            Assert.True(labels.Query(existing).Medium);
+            Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+            var phases = new List<string>();
+            var failedCalls = 0;
+            // A deterministic failing child leaves real MIC state intact and supplies exit diagnostics.
+            var failedLabels = new IcaclsIntegrityLabeler(info =>
+            {
+                failedCalls++;
+                Assert.Equal("icacls", info.FileName);
+                Assert.Equal(new[] { "/setintegritylevel", "(OI)(CI)L", "/T" }, info.ArgumentList.Skip(1));
+                info.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+                info.ArgumentList.Clear();
+                info.ArgumentList.Add("/d");
+                info.ArgumentList.Add("/c");
+                info.ArgumentList.Add("echo injected-label-failure 1>&2 & exit /b 5");
+                info.Environment.Clear();
+                info.Environment["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                return Process.Start(info);
+            });
+            var start = CreateSandboxStartInfo(worktree);
+            start.Environment.Clear();
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                DispatchProcessHost.ApplyWorkerSandbox(start, parameters,
+                    new WorkerSandboxPreparer(failedLabels), (phase, _, _) => phases.Add(phase),
+                    protectWorkspaceBoundary: _ => Assert.Fail("Protection reached after failed preparation."),
+                    protectGitMetadata: _ => Assert.Fail("Protection reached after failed preparation."),
+                    providerEnvironmentReader: _ => null));
+
+            Assert.Equal(1, failedCalls);
+            Assert.Contains("Descendant integrity: MediumDescendant;", error.Message);
+            Assert.Contains("\"exitCode\":5", error.Message);
+            Assert.Contains("injected-label-failure", error.Message);
+            Assert.Equal(new[] { "prepare-roots" }, phases);
+            Assert.Equal("Write-Output ok", start.ArgumentList.Last());
+            Assert.False(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+            Assert.False(File.Exists(Path.Combine(sandbox, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            Assert.False(File.Exists(created));
+            Assert.Equal("fixture", File.ReadAllText(existing));
+
+            var command = "$ErrorActionPreference='Stop'; " +
+                $"& '{EscapePowerShellSingleQuoted(Path.Combine(Environment.SystemDirectory, "whoami.exe"))}' /groups /fo csv /nh; " +
+                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(existing)}' -Value modified; " +
+                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(created)}' -Value created; " +
+                $"try {{ Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(outside)}' -Value changed; exit 7 }} " +
+                "catch { Write-Output outside-write-denied }; " +
+                $"try {{ Add-Content -LiteralPath '{EscapePowerShellSingleQuoted(gitConfig)}' -Value changed; exit 8 }} " +
+                "catch { Write-Output git-write-denied }";
+            var parametersPath = Path.Combine(root, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters with { Command = command });
+
+            Assert.Equal(0, DispatchProcessHost.Run(parametersPath));
+
+            AssertNativeExitArtifact(parameters.ExitCodePath, 0);
+            var output = File.ReadAllText(parameters.StdoutPath);
+            Assert.Contains(AcceptanceGateIntegrityTestSupport.LowSid, output);
+            Assert.DoesNotContain(AcceptanceGateIntegrityTestSupport.MediumSid, output);
+            Assert.Contains("outside-write-denied", output);
+            Assert.Contains("git-write-denied", output);
+            Assert.Equal("modified", File.ReadAllText(existing).Trim());
+            Assert.Equal("created", File.ReadAllText(created).Trim());
+            Assert.Equal("protected", File.ReadAllText(outside));
+            Assert.Equal(gitBytes, File.ReadAllBytes(gitConfig));
+            Assert.True(labels.Query(project).Low);
+            Assert.True(labels.Query(outside).Medium);
+            Assert.True(labels.Query(gitConfig).Medium);
+            Assert.True(labels.Query(Path.Combine(worktree, ".git")).Medium);
+            Assert.True(preparer.Prepare(worktree, sandbox).PrepReceiptHit);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_setup_keeps_linked_worktree_git_file_medium")]
     public void LowIntegritySetupKeepsLinkedWorktreeGitFileMedium()
     {

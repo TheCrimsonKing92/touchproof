@@ -575,7 +575,7 @@ internal static class SourceSizeRatchet
             // Goal 350ad330: acceptance and cohort projection guards plus attention reference; implementation is in dedicated types.
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
             // Follower removal integrated with direct test seams: measured 13753 lines in 68 partial files.
-            new SourceClassCeiling("ConductorDriver", 13753, 68),
+            new SourceClassCeiling("ConductorDriver", 13751, 68),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

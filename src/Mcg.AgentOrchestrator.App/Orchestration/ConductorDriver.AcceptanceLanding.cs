@@ -16,6 +16,21 @@ internal sealed partial class ConductorDriver
     internal static readonly TimeSpan DefaultNoTickAcceptancePollTimeout = TimeSpan.FromHours(2);
     private static readonly TimeSpan NoTickAcceptancePollInterval = TimeSpan.FromMilliseconds(100);
 
+    internal ConductorAdvanceResult? TryHoldRepeatSoloAcceptance(Goal goal, ConductorAutonomyPolicy policy,
+        AcceptanceEngineHealthSnapshot? health = null) =>
+        PassedAcceptanceReceiptReplay.TryHoldRepeatSoloAcceptance(GetCurrentGoal(goal), policy, health,
+            _parallelAcceptanceAttemptCoordinator, ReadAcceptanceCandidate, _tryAcquireEvidenceMutationLease,
+            current => ReplacementEvidenceMutationHeld(current, current.Id.Value[..8], policy),
+            _executionDirectory, _isConductorTick);
+
+    internal ConductorParallelAcceptanceCandidate ReadAcceptanceCandidate(Goal goal)
+    {
+        goal = GetCurrentGoal(goal);
+        var heads = _resolveAcceptanceHeads(goal);
+        return ConductorParallelAcceptanceCandidate.Create(goal, 0, _getLandingFileScopes(goal),
+            heads.BranchHeadSha, heads.MainHeadSha);
+    }
+
     internal ConductorAdvanceResult? TryReplayPassedAcceptance(Goal suppliedGoal, ConductorAutonomyPolicy policy)
     {
         var goal = GetCurrentGoal(suppliedGoal);
@@ -30,11 +45,7 @@ internal sealed partial class ConductorDriver
         // An active landing hold does not invalidate a passed gate. Validate its proof
         // under receipt custody before returning that hold, rather than queueing a gate.
         if (candidate is null)
-        {
-            var heldHeads = _resolveAcceptanceHeads(goal);
-            candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, _getLandingFileScopes(goal),
-                heldHeads.BranchHeadSha, heldHeads.MainHeadSha);
-        }
+            candidate = ReadAcceptanceCandidate(goal);
         using var mutation = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-receipt-replay");
         if (mutation is null)
             return ReplacementEvidenceMutationHeld(goal, candidate.GoalPrefix, policy);
@@ -52,9 +63,7 @@ internal sealed partial class ConductorDriver
         var circuitHold = PassedAcceptanceReceiptReplay.CircuitHold(goal, policy, _readAcceptanceEngineHealth());
         if (circuitHold is not null)
             return circuitHold;
-        var heads = _resolveAcceptanceHeads(goal);
-        candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, _getLandingFileScopes(goal),
-            heads.BranchHeadSha, heads.MainHeadSha);
+        candidate = ReadAcceptanceCandidate(goal);
         var operations = new PassedAcceptanceReceiptReplay.LandingOperations(
             original => RebaseBeforeMerge(goal, original.GoalPrefix, policy, out _),
             () => _resolveAcceptanceHeads(goal),
@@ -66,11 +75,16 @@ internal sealed partial class ConductorDriver
                     GoalOperationJournal.Completed(_executionDirectory, goal, "conductor:acceptance-receipt-replay",
                         $"attempt={attempt.AttemptId} gatesAvoided=1 " +
                         $"greenToLandingMs={(_utcNow() - (attempt.CompletedAt ?? attempt.StartedAt)).TotalMilliseconds:F0}", mainSha);
-            });
+            },
+            attempt => _executionDirectory is not null &&
+                GoalOperationJournal.HasRepeatGateDeferral(_executionDirectory, goal, attempt));
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
             decision =>
             {
-                if (ReplayLandingHold(goal, candidate.GoalPrefix, policy) is { } hold)
+                if (PassedAcceptanceReceiptReplay.LandingHold(goal, policy,
+                    () => HasActiveOwnerReviewHold(goal, out var sha, out var receipt)
+                        ? OwnerReviewHeld(goal, candidate.GoalPrefix, policy, sha, receipt!) : null,
+                    () => HasActiveApparatusHold(goal, out _), FormatAcceptanceCandidate) is { } hold)
                 {
                     var original = decision.Run!.Candidate;
                     var current = _resolveAcceptanceHeads(goal);
@@ -93,25 +107,6 @@ internal sealed partial class ConductorDriver
                 return AcceptanceCriterionEvidence.RecordExactReplayEvidence(current, decision.Attempt,
                     currentHeads, _cohortKernel ?? _conductorTickKernel);
             });
-    }
-
-    private ConductorAdvanceResult? ReplayLandingHold(Goal goal, string prefix, ConductorAutonomyPolicy policy)
-    {
-        if (HasActiveOwnerReviewHold(goal, out var sha, out var receipt))
-            return OwnerReviewHeld(goal, prefix, policy, sha, receipt!);
-        if (!HasActiveApparatusHold(goal, out _))
-            return null;
-        var failure = goal.LatestAcceptanceFailure!;
-        var decision = VerifiedAdmissionPolicy.Evaluate(new VerifiedAdmissionFacts(goal.Status)
-        {
-            ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
-            ApparatusMainSha = failure.MainHeadSha ?? "unknown",
-            ApparatusCandidate = FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)
-        });
-        return MakeResult(goal.Id.Value, prefix, policy,
-            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
-                StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
-            { Decision = decision.ToRecord() });
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
@@ -292,6 +287,9 @@ internal sealed partial class ConductorDriver
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, hold.Reason) { Owner = owner, Decision = hold.ToRecord() });
         }
+
+        if (_isConductorTick && this.TryHoldRepeatSoloAcceptance(GetCurrentGoal(goal), policy, _readAcceptanceEngineHealth()) is { } repeatHold)
+            return repeatHold;
 
         if (!_parallelAcceptanceEnabled)
         {

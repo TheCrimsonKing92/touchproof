@@ -57,7 +57,7 @@ public sealed class UnstoredGoalBuildRootRetentionTests : IDisposable
             registry.Register(root, OwnedRunRootPurpose.RunAttempt,
                 new SpawnProcessIdentity(999999, _now.AddDays(-30), Path.Combine(_temp, "dotnet.exe")),
                 "aaaa0001000000000000000000000000", null, _now.AddDays(-30));
-        if (shape == "missing-lease") File.Delete(Path.Combine(root, "lease", "lease.json"));
+        if (shape == "missing-lease") File.WriteAllText(Path.Combine(root, "lease", "lease.json"), "not json");
         if (shape == "wrong-prefix") EditLease(root, "goalId", JsonValue.Create("ffff0001000000000000000000000000"));
         if (shape == "missing-repository") EditLease(root, "repositoryRoot", null);
         if (shape == "recent-lease") EditLease(root, "lastUsedAt", JsonValue.Create(_now.AddDays(-1)));
