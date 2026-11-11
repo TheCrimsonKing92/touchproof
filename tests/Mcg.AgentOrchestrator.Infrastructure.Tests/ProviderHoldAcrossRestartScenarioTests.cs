@@ -52,7 +52,7 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
             restarted.Goals, scenario.Agents, scenario.Profiles, scenario.Clock.UtcNow).Verdict);
         var lines = new List<string>();
         ProviderHoldHistorySeed.Apply(restarted, scenario.Repository, lines.Add);
-        Assert.Equal($"PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={source.Id.Value[..8]}", Assert.Single(lines));
+        Assert.Matches($@"^PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={source.Id.Value[..8]} elapsedMs=\d+ loaded=1$", Assert.Single(lines));
         Assert.Equal(source.Id, Assert.Single(restarted.ProviderHoldHistory.Retained).Id);
         scenario.Rebuild(restarted);
         scenario.At("2026-10-17T11:14:00Z");
