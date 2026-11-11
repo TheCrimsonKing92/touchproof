@@ -35,7 +35,11 @@ internal sealed record ImpactReplayAttemptRecord(
     string? ClassLevelUnavailableReason = null,
     double? ClassLevelCpuSecondsSaved = null,
     string? ClassLevelCpuUnavailableReason = null,
-    ImpactReplayDeclaredGuardReport? DeclaredGuards = null)
+    ImpactReplayDeclaredGuardReport? DeclaredGuards = null,
+    int? UnboundedSelectedClassCount = null,
+    double? UnboundedNonFloorTestSecondsShare = null,
+    string? UnboundedClassCountUnavailableReason = null,
+    string? UnboundedDurationShareUnavailableReason = null)
 {
     public double ShareOfLanesSkipped => RanLanes.Count == 0 ? 0 : (double)SkippedLanes.Count / RanLanes.Count;
 }

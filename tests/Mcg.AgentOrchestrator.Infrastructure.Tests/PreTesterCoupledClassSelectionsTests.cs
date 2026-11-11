@@ -37,7 +37,9 @@ public sealed class PreTesterCoupledClassSelectionsTests
     {
         using var fixture = new Fixture();
         fixture.Write(Fixture.Source, "public class NewContract {}");
-        for (var index = 0; index < 97; index++) fixture.Test("Consumer" + index + "Tests", "NewContract");
+        fixture.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Consumers.cs",
+            string.Join("\n", Enumerable.Range(0, ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 1)
+                .Select(index => $"public class Consumer{index}Tests {{ [Fact] public void Works() {{ _ = new NewContract(); }} }}")));
         fixture.Test("TreeReaderTests", prefix: "[LiveTreeStructural]");
         fixture.Write("Directory.Build.props", "<Project />");
         var paths = broad ? new[] { "Directory.Build.props" } : [Fixture.Source];

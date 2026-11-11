@@ -155,6 +155,8 @@ internal class ImpactReplayExecutionSource
             ClassLevelCpuSecondsSaved: classLevel.CpuSecondsSaved,
             ClassLevelCpuUnavailableReason: classLevel.CpuUnavailableReason,
             DeclaredGuards: declaredGuards);
+        record = ImpactReplayUnboundedSelectionMeasurement.Apply(record, checkout, productionSources,
+            testSources, classes, guards, augmented.QualifiedClasses);
         return new(ImpactReplayCaseKind.Replayable, record, UnmappedClasses: attemptUnmappedClasses,
             Gained: augmented.Gained, GuardClasses: guards?.Classes.ToArray());
     }
