@@ -171,6 +171,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? ProjectName { get; init; }
     public string? ReplayContextFingerprint { get; init; }
     public string? EffectiveManifestIdentity { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AcceptanceDeveloperRoundLink? DeveloperRoundLink { get; init; }
     // Invalidating landing authority does not turn a successful gate into a failed attempt.
     public DateTimeOffset? RegateRequestedAt { get; init; }
     public string? ReplayResultFingerprint { get; init; }
@@ -2312,6 +2314,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,
+            DeveloperRoundLink = dispatchKind == GateDispatchKind ? AcceptanceDeveloperRoundLink.Capture(candidate) : null,
             ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
             EffectiveManifestIdentity = dispatchKind == GateDispatchKind && _executionDirectory is not null
                 ? AcceptanceAttemptManifestIdentity.Capture(

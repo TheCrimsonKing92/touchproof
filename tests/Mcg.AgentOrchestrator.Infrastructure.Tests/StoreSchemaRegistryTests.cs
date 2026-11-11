@@ -46,7 +46,7 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Database));
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
-        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
+        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.ExperimentReplay, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
             StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.OperatorDirectives, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal("operator-directives", StoreSchemaRegistry.OperatorDirectives.StoreName);
         Assert.Equal(1, StoreSchemaRegistry.OperatorDirectives.CurrentVersion);

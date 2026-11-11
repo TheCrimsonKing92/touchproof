@@ -722,6 +722,9 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
         ["--since", "--limit", "--out", "--floor", "--max-changed-source-files", "--status", "--checkpoint-file", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentReplay = new(
+        CliExperimentReplayCommand.Usage, "Operator-only fixed-sample paired replay of recorded Developer rounds.",
+        ["--registration", "--run", "--seed", "--value-bound", "--spec", "--json", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
     public const string ObligationRebindUsage = "Usage: obligation-rebind <goal-prefix> <OldClass> <NewClass> --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
         "       obligation-rebind <goal-prefix> --selector \"<old selector>\" --to \"<new selector>\" --text-file <path> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]\n" +
@@ -975,6 +978,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  impact-replay     Measure historical lane savings and missed failures.");
+        Console.WriteLine("  experiment-replay Import recorded rounds; register, execute and report the paired pilot.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
         Console.WriteLine("  backlog-add       Add a backlog item.");
@@ -1388,6 +1392,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase))
         {
             entry = ImpactReplay;
+            return true;
+        }
+        if (args[0].Equals("experiment-replay", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExperimentReplay;
             return true;
         }
         if (args[0].Equals("gate-cancel", StringComparison.OrdinalIgnoreCase))
