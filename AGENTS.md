@@ -3,7 +3,7 @@
 <!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
 Owns: shared repository discipline plus Codex harness operating guidance.
 Counterpart: CLAUDE.md owns Claude Code harness operating guidance and links back to AGENTS.md for shared discipline.
-Rule: Shared-discipline edits must update BOTH harness counterpart blocks and shared-anchor lists, or move to docs/operator-runbook.md or another shared home.
+Rule: Shared edits update BOTH AGENTS.md and CLAUDE.md contract blocks/anchor lists, or move the content to docs/operator-runbook.md or another shared home.
 Driver takeover home: docs/operator-runbook.md#driver-takeover governs owner intake/pacing expiry at handoff and stop-and-ask on remembered/current instruction conflicts; both harnesses follow it.
 Shared anchors:
 - output-discipline
