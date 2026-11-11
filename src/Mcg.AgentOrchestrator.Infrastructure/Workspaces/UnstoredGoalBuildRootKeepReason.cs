@@ -8,6 +8,7 @@ internal enum UnstoredGoalBuildRootKeepReason
     InspectionDeferred,
     RegisteredOwnedRoot,
     LeaseUnreadable,
+    LeaseAbsent,
     WithinWindow,
     ForeignStore,
     OwnerLive,
