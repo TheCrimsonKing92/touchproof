@@ -3,6 +3,39 @@ using Mcg.AgentOrchestrator.Core;
 // Parallel-safe: in-memory goals and fixed timestamps only.
 public sealed class ProviderHoldSeedPruningTests
 {
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData(@"C:\other-login", 2)]
+    public void RequiredGoals_UsesBindingEvidenceAndMatchesCanonicalRetain(string? credential, int expectedLoads)
+    {
+        var goals = Goals(credential);
+        var candidates = goals.Select(goal => goal.Id.Value).Order(StringComparer.Ordinal).ToArray();
+        var evidence = Evidence(goals);
+        var required = ProviderHoldSeedPruning.RequiredGoals(candidates, evidence, new(), []);
+        Assert.Equal(expectedLoads, required.Count);
+        if (expectedLoads > 0) Assert.Equal(candidates, required);
+    }
+
+    [Fact]
+    public void RequiredGoals_UnsupportedOrIncompleteEvidencePreservesFullLoadPath()
+    {
+        var goals = Goals(null);
+        var candidates = goals.Select(goal => goal.Id.Value).ToArray();
+        Assert.Equal(candidates, ProviderHoldSeedPruning.RequiredGoals(candidates, null, new(), []));
+        Assert.Equal(candidates, ProviderHoldSeedPruning.RequiredGoals(candidates, Evidence(goals).Take(1).ToArray(), new(), []));
+    }
+
+    private static IReadOnlyList<ProviderUsageGoalEvidence> Evidence(IReadOnlyCollection<Goal> goals) =>
+        goals.Select(goal =>
+        {
+            // The test assembly can use the canonical snapshot exporter; no storage is involved.
+            var row = goal.ToSnapshot();
+            return new ProviderUsageGoalEvidence(row.Id, row.Status,
+                row.Tasks.Select(task => new ProviderUsageTaskEvidence(task.Id, task.RequiredRole, task.Status,
+                    task.AssignedAgentId, task.LastDispatch, task.DispatchHistory ?? [], task.LastVerification,
+                    task.VerificationHistory ?? [], task.LatestProviderBudgetRecoveryAt)).ToArray(), goal.Timeline);
+        }).ToArray();
+
     [Fact]
     public void HistoryRows_IdenticalRecoveryRows_CanRequireDifferentRetainedSets()
     {

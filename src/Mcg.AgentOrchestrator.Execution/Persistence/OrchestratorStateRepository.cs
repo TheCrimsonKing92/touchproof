@@ -4,6 +4,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IOrchestratorStateQueries
 {
+    /// <summary>Candidate-only provider policy inputs, without full snapshot restoration.
+    /// Null means unsupported: callers must retain the full-load path.</summary>
+    Task<IReadOnlyList<ProviderUsageGoalEvidence>?> ReadProviderHoldSeedEvidenceAsync(
+        IReadOnlyCollection<GoalId> goalIds, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ProviderUsageGoalEvidence>?>(null);
+
     Task<GoalPromotionFact?> ReadPromotionFactAsync(GoalId goalId, CancellationToken cancellationToken = default) =>
         Task.FromResult<GoalPromotionFact?>(null);
 

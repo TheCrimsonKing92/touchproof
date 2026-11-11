@@ -572,6 +572,16 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ProviderUsageGoalEvidence>?> ReadProviderHoldSeedEvidenceAsync(
+        IReadOnlyCollection<GoalId> goalIds, CancellationToken cancellationToken = default)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var connection = OpenConnection();
+            return await ProviderHoldSeedEvidenceReader.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken);
+        }, cancellationToken);
+    }
+
     public async Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default)

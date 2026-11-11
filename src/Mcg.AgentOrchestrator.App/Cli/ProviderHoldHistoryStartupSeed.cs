@@ -21,10 +21,17 @@ internal static class ProviderHoldHistoryStartupSeed
             var candidates = ProviderHoldHistory.SeedCandidates(rows,
                 kernel.Goals.Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal));
             if (candidates.Count == 0) return;
-            var loaded = repository.LoadGoalsAsync(candidates.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult();
+            var evidence = repository.ReadProviderHoldSeedEvidenceAsync(candidates.Select(id => new GoalId(id)).ToArray())
+                .GetAwaiter().GetResult();
+            var required = ProviderHoldSeedPruning.RequiredGoals(candidates, evidence, kernel.ProviderHoldHistory, kernel.Goals);
+            var loaded = required.Count == 0 ? new AgentOrchestratorKernel() :
+                repository.LoadGoalsAsync(required.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult();
             var history = new ProviderHoldHistory();
-            history.CopyFrom(kernel.ProviderHoldHistory);
-            history.Retain(loaded.Goals, kernel.Goals);
+            if (required.Count > 0)
+            {
+                history.CopyFrom(kernel.ProviderHoldHistory);
+                history.Retain(loaded.Goals, kernel.Goals);
+            }
             var elapsedMs = Math.Max(0, time.GetElapsedTime(started).Ticks / TimeSpan.TicksPerMillisecond);
             var line = $"PROVIDER_HOLD_HISTORY candidates={candidates.Count} retained={history.Retained.Count} goals={string.Join(",", history.Retained.Select(goal => goal.Id.Value[..8]))} elapsedMs={elapsedMs.ToString(CultureInfo.InvariantCulture)} loaded={loaded.Goals.Count}";
             // Emission is part of seeding: a throwing sink must leave the kernel unchanged too.

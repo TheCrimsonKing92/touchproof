@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -9,9 +11,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ProviderHoldHistoryStartupSeedTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Apply_PendingRepository_EmitsProgressAndMeasuredSummary(bool blockLoad)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Apply_PendingRepository_EmitsProgressAndMeasuredSummary(int stage)
     {
         var script = new Script();
         var repository = new Repository();
@@ -22,7 +25,8 @@ public sealed class ProviderHoldHistoryStartupSeedTests
             entered.TrySetResult();
             await release.Task;
         }
-        if (blockLoad) repository.BeforeLoad = Block;
+        if (stage == 2) repository.BeforeLoad = Block;
+        else if (stage == 1) repository.BeforeEvidence = Block;
         else repository.BeforeRows = Block;
         var kernel = new AgentOrchestratorKernel();
         var summaryWhileActive = false;
@@ -120,6 +124,71 @@ public sealed class ProviderHoldHistoryStartupSeedTests
             ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, actual, now));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Apply_RecoveredProvider_PrunesAll73CandidatesBeforeFullLoad(bool compressed)
+    {
+        var repository = new Repository(empty: true) { Compressed = compressed };
+        for (var index = 0; index < 73; index++)
+            repository.AddObservation(index.ToString("x32"), index, success: index >= 8);
+        var oracle = new ProviderHoldHistory();
+        oracle.Retain(repository.Stored.Goals, []);
+        var kernel = new AgentOrchestratorKernel();
+        var lines = new List<string>();
+        ProviderHoldHistorySeed.Apply(kernel, repository, lines.Add);
+        Assert.Equal(73, repository.EvidenceIds.Count);
+        Assert.Empty(repository.RequestedIds);
+        Assert.Empty(oracle.Retained);
+        Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=73 retained=0 goals= elapsedMs=\d+ loaded=0$", Assert.Single(lines));
+    }
+
+    [Fact]
+    public void Apply_RecoveryPrunesPreviouslyRetainedSourceToo()
+    {
+        var repository = new Repository();
+        var kernel = new AgentOrchestratorKernel();
+        kernel.ProviderHoldHistory.Retain(repository.Stored.Goals, []);
+        Assert.Single(kernel.ProviderHoldHistory.Retained);
+        repository.AddObservation("bbbbbbbb000000000000000000000000", 1, success: true);
+        ProviderHoldHistorySeed.Apply(kernel, repository, _ => { });
+        Assert.Empty(kernel.ProviderHoldHistory.Retained);
+        Assert.Empty(repository.RequestedIds);
+    }
+
+    [Fact]
+    public void Apply_CredentialMismatchRetainsOriginalFullLoadAnswer()
+    {
+        var repository = new Repository();
+        repository.AddObservation("bbbbbbbb000000000000000000000000", 1, true, @"C:\other-login");
+        var oracle = new ProviderHoldHistory();
+        oracle.Retain(repository.Stored.Goals, []);
+        var kernel = new AgentOrchestratorKernel();
+        ProviderHoldHistorySeed.Apply(kernel, repository, _ => { });
+        Assert.Equal(2, repository.RequestedIds.Count);
+        Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
+        Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
+            ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void Apply_RecoveredProviderDoesNotPruneAnotherProvidersHold()
+    {
+        var repository = new Repository();
+        repository.AddObservation("bbbbbbbb000000000000000000000000", 1, true);
+        repository.AddObservation("cccccccc000000000000000000000000", 2, false, provider: "Anthropic");
+        var oracle = new ProviderHoldHistory();
+        oracle.Retain(repository.Stored.Goals, []);
+        var kernel = new AgentOrchestratorKernel();
+        ProviderHoldHistorySeed.Apply(kernel, repository, _ => { });
+        Assert.Equal(3, repository.RequestedIds.Count);
+        Assert.Single(oracle.Retained);
+        Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
+        Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
+            ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
+    }
+
     private static async Task WaitFor(Task task, string eventName)
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); }
@@ -185,23 +254,52 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         internal const string SourceId = "aaaaaaaa000000000000000000000000";
         internal readonly AgentOrchestratorKernel Stored = new();
         internal readonly List<string> RequestedIds = [];
+        internal readonly List<string> EvidenceIds = [];
         internal Func<Task>? BeforeRows;
+        internal Func<Task>? BeforeEvidence;
         internal Func<Task>? BeforeLoad;
         internal IReadOnlyList<ModelFitHistoryRow> Rows;
+        internal bool Compressed;
 
-        internal Repository()
+        internal Repository(bool empty = false)
         {
-            var at = DateTimeOffset.Parse("2026-10-17T11:07:00Z");
-            var source = Stored.CreateGoal(new GoalId(SourceId), "Archive hold",
-                [new TaskSpec(new TaskId("source-task"), "Verify fixture", AgentRole.Tester)]);
+            Rows = [];
+            if (!empty) AddObservation(SourceId, 0, success: false);
+        }
+
+        internal void AddObservation(string id, int index, bool success, string? credential = null, string provider = "xAI")
+        {
+            var at = DateTimeOffset.Parse("2026-10-17T11:07:00Z").AddMinutes(index * 10);
+            var source = Stored.CreateGoal(new GoalId(id), "Archive hold",
+                [new TaskSpec(new TaskId(id), "Verify fixture", AgentRole.Tester)]);
             Stored.ActivateGoal(source.Id, [new(new("tester"), "Tester", AgentRole.Tester,
-                new("xAI", "fixture", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey))]);
+                new(provider, "fixture", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey))]);
             var task = source.Tasks.Single();
-            Stored.RecordTaskDispatch(source.Id, task.Id, new("fixture", "fixture", @"C:\fixture", at, ProviderName: "xAI"));
-            Stored.RecordTaskVerification(source.Id, task.Id, new("fixture", @"C:\fixture", 1, "", "Provider budget exhausted.",
-                at.AddMinutes(1), ProviderFailureKind: ProviderFailureKind.BudgetExhausted, DispatchStartedAt: at));
-            Rows = [new(SourceId, task.Id.Value, AgentRole.Tester, "xAI", "fixture", null, null,
-                WorkTaskStatus.Failed, ModelFitHistory.Unknown, at.AddMinutes(1), TaskOutcomeRules.ProviderBudgetExhausted.Token)];
+            Stored.RecordTaskDispatch(source.Id, task.Id, new("fixture", "fixture", @"C:\fixture", at,
+                ProviderName: provider, ModelName: "fixture", ClaudeCredentialSourceDirectory: credential));
+            Stored.RecordTaskVerification(source.Id, task.Id, new("fixture", @"C:\fixture", success ? 0 : 1,
+                "", success ? "" : "Provider budget exhausted.", at.AddMinutes(1),
+                ProviderFailureKind: success ? ProviderFailureKind.Unknown : ProviderFailureKind.BudgetExhausted,
+                DispatchStartedAt: at, CompletionVerdictVerifiedSuccess: success));
+            Stored.ReportTaskProgress(source.Id, task.Id, success ? WorkTaskStatus.Completed : WorkTaskStatus.Failed, "Fixture outcome.");
+            Rows = ModelFitHistory.FromGoals(Stored.Goals);
+        }
+
+        public async Task<IReadOnlyList<ProviderUsageGoalEvidence>?> ReadProviderHoldSeedEvidenceAsync(
+            IReadOnlyCollection<GoalId> goalIds, CancellationToken cancellationToken = default)
+        {
+            EvidenceIds.AddRange(goalIds.Select(id => id.Value));
+            if (BeforeEvidence is { } before) await before();
+            var options = new JsonSerializerOptions();
+            options.Converters.Add(new JsonStringEnumConverter());
+            var result = new List<ProviderUsageGoalEvidence>();
+            foreach (var snapshot in Stored.ExportSnapshot().Goals.Where(goal => goalIds.Any(id => id.Value == goal.Id)))
+            {
+                var json = JsonSerializer.Serialize(snapshot, options);
+                result.Add(await ProviderHoldSeedEvidenceReader.ProjectAsync(snapshot.Id,
+                    Compressed ? GoalSnapshotArchiveCodec.Encode(json) : (object)json, options, cancellationToken));
+            }
+            return result;
         }
 
         public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
