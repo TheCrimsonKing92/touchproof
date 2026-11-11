@@ -13,8 +13,8 @@ internal static class AcceptanceAdmissionPathSet
         "ConductorGroupedGateAttempt", "ConductorLiveGroupedGateCount", "ConductorOrphanGateAttemptAdoption",
         "OwnedChildAttemptCoordinator", "ConductorBatchLoop.LiveAcceptanceAdmission",
         "ConductorBatchLoop.ParallelAcceptanceAdmission", "ConductorBatchLoop.FallbackAcceptance",
-        "ConductorBatchLoop.FollowerGateAdmission", "AcceptanceJobCustodian", "DurableAcceptanceJob",
-        "ConductorDriver.AcceptanceCohortExecution", "ConductorDriver.FollowerGates",
+        "AcceptanceJobCustodian", "DurableAcceptanceJob",
+        "ConductorDriver.AcceptanceCohortExecution",
         "ConductorDriver.GroupedGateAttempts", "ConductorDriver.MergeTrains",
         "StorageRetentionMaintenance.AcceptanceHolders"
     ];

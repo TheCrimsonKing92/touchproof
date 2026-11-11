@@ -50,7 +50,6 @@ public sealed record ConductorAutonomyPolicy(
     bool CascadeTesterCheapFirst = true,
     string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
     bool CascadeMechanicalReworkCheap = true,
-    bool FollowerGatesEnabled = false,
     bool AcceptanceChildrenOptOutExecutionThrottling = false,
     bool BuildGcConserveMemory = false,
     int BuildGcConserveMemoryLevel = 5,
@@ -257,7 +256,6 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
         sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeMechanicalReworkCheap\": {CascadeMechanicalReworkCheap.ToString().ToLowerInvariant()},");
-        sb.AppendLine($"  \"followerGatesEnabled\": {FollowerGatesEnabled.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"adoptedBuildPushEnabled\": {AdoptedBuildPushEnabled.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
@@ -421,14 +419,6 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException($"conductor-policy.json{src}: adoptedBuildPushEnabled must be a boolean.");
                 adoptedBuildPushEnabled = pushSwitch.GetBoolean();
             }
-            var followerGatesEnabled = false;
-            if (root.TryGetProperty("followerGatesEnabled", out var followerSwitch) &&
-                followerSwitch.ValueKind != JsonValueKind.Null)
-            {
-                if (followerSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                    throw new FormatException($"conductor-policy.json{src}: followerGatesEnabled must be a boolean.");
-                followerGatesEnabled = followerSwitch.GetBoolean();
-            }
 
             var cascadeMechanicalReworkCheap = true;
             if (root.TryGetProperty("cascadeMechanicalReworkCheap", out var mechanicalSwitch) &&
@@ -518,7 +508,6 @@ public sealed record ConductorAutonomyPolicy(
                 cascadeTesterCheapFirst,
                 cascadeCheapModelAlias,
                 cascadeMechanicalReworkCheap,
-                followerGatesEnabled,
                 childrenOptOutExecutionThrottling,
                 buildGcConserveMemory,
                 buildGcConserveMemoryLevel,

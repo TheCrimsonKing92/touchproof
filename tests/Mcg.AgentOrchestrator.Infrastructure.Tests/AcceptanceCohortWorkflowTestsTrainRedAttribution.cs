@@ -125,7 +125,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
             var verification = new AcceptanceVerificationResult(false, false, 1, "train failed",
                 Checks: [new AcceptanceCheckResult("train", false, 1, "train failed")],
                 TestResultPaths: receipt.GateTestResultPaths);
-            // Both cohort and follower gates call this shared classifier, outside train receipt resolution.
+            // Cohort gates call this shared classifier, outside train receipt resolution.
             Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
                 ConductorDriver.ClassifyCohortVerification(verification));
             var classified = ConductorDriver.ClassifyCohortVerificationResult(verification);

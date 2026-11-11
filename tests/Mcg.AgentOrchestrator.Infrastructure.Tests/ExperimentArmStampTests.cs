@@ -76,7 +76,7 @@ public sealed class ExperimentArmStampTests
         else
         {
             var json = JsonNode.Parse(File.ReadAllText(path))!;
-            if (!executors) json.AsObject().Remove("followerGatesEnabled");
+            if (!executors) json.AsObject().Remove("buildGcConserveMemory");
             else if (missing == "block") json.AsObject().Remove("focusedEvidence");
             else json["focusedEvidence"]!.AsObject().Remove("mode");
             File.WriteAllText(path, json.ToJsonString());

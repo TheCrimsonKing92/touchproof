@@ -34,7 +34,7 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
 
     internal static ExperimentSpec Spec(ExperimentFlagTarget? target = null) => new("Trial a conductor boolean",
         new(ExperimentInterventionKind.ConfigFlag, "Trial a conductor boolean",
-            target ?? new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)),
+            target ?? new(ExperimentFlagFileKind.ConductorPolicy, "buildGcConserveMemory", true)),
         new(ExperimentBaselineKind.BeforeAfterWindow, Now.AddDays(-2), Now.AddDays(-1)),
         ["rounds-per-landing", "landings-per-hour"],
         new("productive-rounds", new("productive-rounds", "<", -10)), new(2, ExperimentStopUnit.Goals),
@@ -43,7 +43,7 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
     internal static string PolicyJson(bool enabled = false)
     {
         var document = JsonNode.Parse(ConductorAutonomyPolicy.Conservative.ToJson())!;
-        document["followerGatesEnabled"] = enabled;
+        document["buildGcConserveMemory"] = enabled;
         document["zzOperatorNote"] = JsonNode.Parse("{\"nested\":[1,2,\"keep me\"]}");
         return document.ToJsonString();
     }

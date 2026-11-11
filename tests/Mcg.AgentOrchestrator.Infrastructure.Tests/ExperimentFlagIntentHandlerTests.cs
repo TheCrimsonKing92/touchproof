@@ -21,11 +21,11 @@ public sealed class ExperimentFlagIntentHandlerTests
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(intent).Status);
         Assert.Contains("tier=Mutate", fixture.Result(intent).Outcome);
         using var after = JsonDocument.Parse(File.ReadAllText(fixture.PolicyPath));
-        Assert.True(after.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
+        Assert.True(after.RootElement.GetProperty("buildGcConserveMemory").GetBoolean());
         Assert.Equal(before.RootElement.EnumerateObject().Select(p => p.Name), after.RootElement.EnumerateObject().Select(p => p.Name));
-        foreach (var property in before.RootElement.EnumerateObject().Where(p => p.Name != "followerGatesEnabled"))
+        foreach (var property in before.RootElement.EnumerateObject().Where(p => p.Name != "buildGcConserveMemory"))
             Assert.Equal(property.Value.GetRawText(), after.RootElement.GetProperty(property.Name).GetRawText());
-        Assert.True(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.True(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
         Assert.False(fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Spec.Intervention.FlagTarget!.PriorValue);
         var bytes = File.ReadAllBytes(fixture.PolicyPath);
         var timestamp = File.GetLastWriteTimeUtc(fixture.PolicyPath);
@@ -70,7 +70,7 @@ public sealed class ExperimentFlagIntentHandlerTests
             command.ExecuteNonQuery();
         }
         if (reason == "experiment-decided") fixture.Experiments.DecideAsync(record.Id, ExperimentOutcomeState.Confirmed, "receipt", "Keep").GetAwaiter().GetResult();
-        if (reason == "policy-file-invalid") File.WriteAllText(fixture.PolicyPath, "{\"name\":\"trial\",\"followerGatesEnabled\":\"true\"}");
+        if (reason == "policy-file-invalid") File.WriteAllText(fixture.PolicyPath, "{\"name\":\"trial\",\"buildGcConserveMemory\":\"true\"}");
         var before = File.ReadAllBytes(fixture.PolicyPath);
         var intent = fixture.Submit(reason == "experiment-not-found" ? new string('f', 32) : record.Id,
             assurance: reason == "tier-below-mutate" ? "unverified" : "local-process");
@@ -92,7 +92,7 @@ public sealed class ExperimentFlagIntentHandlerTests
         var revert = fixture.Submit(record.Id, revert: true);
         fixture.Tick();
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(revert).Status);
-        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
         var bytes = File.ReadAllBytes(fixture.PolicyPath);
         var replay = fixture.Submit(record.Id, revert: true);
         fixture.Tick();
@@ -105,7 +105,7 @@ public sealed class ExperimentFlagIntentHandlerTests
     {
         using var fixture = new ExperimentFlagTestFixture();
         var policy = JsonNode.Parse(ExperimentFlagTestFixture.PolicyJson())!.AsObject();
-        policy.Remove("followerGatesEnabled");
+        policy.Remove("buildGcConserveMemory");
         policy["unknown"] = 5;
         File.WriteAllText(fixture.PolicyPath, policy.ToJsonString());
         var record = fixture.Add();
@@ -115,7 +115,7 @@ public sealed class ExperimentFlagIntentHandlerTests
         fixture.Submit(record.Id, revert: true);
         fixture.Tick();
         using var document = JsonDocument.Parse(File.ReadAllText(fixture.PolicyPath));
-        Assert.False(document.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
+        Assert.False(document.RootElement.GetProperty("buildGcConserveMemory").GetBoolean());
         Assert.Equal(5, document.RootElement.GetProperty("unknown").GetInt32());
     }
 
@@ -127,6 +127,6 @@ public sealed class ExperimentFlagIntentHandlerTests
         var intent = fixture.Submit(record.Id);
         OperatorIntentCoordinator.CreateDefault(fixture.Workspace).ExecuteWorkspacePending(new AgentOrchestratorKernel());
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(intent).Status);
-        Assert.True(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.True(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).BuildGcConserveMemory);
     }
 }
