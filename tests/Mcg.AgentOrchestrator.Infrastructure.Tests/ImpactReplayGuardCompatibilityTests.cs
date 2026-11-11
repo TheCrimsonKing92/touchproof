@@ -47,8 +47,8 @@ public sealed class ImpactReplayGuardCompatibilityTests
     }
 
     [Theory]
-    [InlineData(95, "Resolved")]
-    [InlineData(96, "Abandoned")]
+    [InlineData(999, "Resolved")]
+    [InlineData(1000, "Abandoned")]
     public void Apply_DefaultCap_IncludesGuardsInDistinctCount(int existing, string expected)
     {
         var original = ReverseDependencyTestSelection.Resolved(Enumerable.Range(0, existing).Select(index => $"Sample.Existing{index}"));
@@ -58,8 +58,10 @@ public sealed class ImpactReplayGuardCompatibilityTests
         {
             Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);
             Assert.Empty(selected.TestClassNames);
+            Assert.Contains("1001 test classes", selected.Reason);
+            Assert.Contains("1000-test-class bound", selected.Reason);
         }
-        else Assert.Equal(96, selected.TestClassNames.Count);
+        else Assert.Equal(1000, selected.TestClassNames.Count);
     }
 
     [Fact]

@@ -11,10 +11,9 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
-    // The classifier closure resolved 63 consumer test classes on 2026-10-04. Keep a bounded focused
-    // filter with room for new tests before widening to the full Infrastructure suite; at 96 classes
-    // the filter stays well under the 8,191-character cmd.exe command-line limit.
-    internal const int MaximumSelectedTestClasses = 96;
+    // ReverseDependencySelectionTransportTests exercises the existing launcher response file at
+    // 1,000 classes. Keep this inclusive capacity bound independent of inline command-line length.
+    internal const int MaximumSelectedTestClasses = 1_000;
     // The Infrastructure test closure reached 4,012 tracked source files on 2026-10-18. Keep
     // bounded growth headroom; exceeding this cap abandons selection for the full suite.
     internal const int MaximumIndexedSourceFiles = 8_000;
@@ -219,13 +218,14 @@ internal static class ReverseDependencyTestImpactReader
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
+            var classBoundExceeded = false;
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
-                headroom = headroom with
+                if (!classBoundExceeded) headroom = headroom with
                 {
                     LargestFrontierSymbolCount = Math.Max(headroom.LargestFrontierSymbolCount!.Value, frontier.Length)
                 };
-                if (frontier.Length > headroom.FrontierSymbolCap)
+                if (!classBoundExceeded && frontier.Length > headroom.FrontierSymbolCap)
                 {
                     return ReverseDependencyTestSelection.Abandoned(
                         ReverseDependencyDegradationKind.FrontierSymbolBound,
@@ -233,7 +233,8 @@ internal static class ReverseDependencyTestImpactReader
                         receipt, headroom);
                 }
 
-                foreach (var symbol in frontier.Select(item => item.Name).Distinct(StringComparer.Ordinal))
+                foreach (var symbol in frontier.Select(item => item.Name).Distinct(StringComparer.Ordinal)
+                    .Where(_ => !classBoundExceeded))
                 {
                     if (declarationsByName.TryGetValue(symbol, out var declarations) &&
                         declarations.Length > 1 &&
@@ -279,13 +280,9 @@ internal static class ReverseDependencyTestImpactReader
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
                             .Select(declaration => declaration.Name));
 
-                    if (selectedTestClasses.Count > headroom.SelectedTestClassCap)
-                    {
-                        return ReverseDependencyTestSelection.Abandoned(
-                            ReverseDependencyDegradationKind.SelectedTestClassBound,
-                            $"Reverse-dependency selection exceeded the {headroom.SelectedTestClassCap}-test-class bound.",
-                            receipt, headroom with { SelectedTestClassCount = selectedTestClasses.Count });
-                    }
+                    // Preserve the first abandonment kind, but finish traversal to report a complete
+                    // count. Later frontier checks cannot replace this already-decided fallback.
+                    classBoundExceeded |= selectedTestClasses.Count > headroom.SelectedTestClassCap;
                 }
 
                 foreach (var consumer in consumers)
@@ -318,6 +315,13 @@ internal static class ReverseDependencyTestImpactReader
                     break;
                 }
             }
+
+            if (classBoundExceeded)
+                return ReverseDependencyTestSelection.Abandoned(
+                    ReverseDependencyDegradationKind.SelectedTestClassBound,
+                    ReverseDependencySelectedClassBoundReason.Render("Reverse-dependency",
+                        selectedTestClasses.Count, headroom.SelectedTestClassCap),
+                    receipt, headroom with { SelectedTestClassCount = selectedTestClasses.Count });
 
             return ReverseDependencyTestSelection.Resolved(selectedTestClasses, receipt,
                 headroom with { SelectedTestClassCount = selectedTestClasses.Count });

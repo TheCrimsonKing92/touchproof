@@ -159,6 +159,7 @@ internal static class ImpactReplayReportWriter
                         $"inputs: {Cell(string.Join(", ", guard.TriggerPaths))}; {Cell(guard.Reason)}");
             }
         }
+        ImpactReplayUnboundedSelectionReportWriter.Append(text, report.Attempts);
         return text.ToString();
     }
 

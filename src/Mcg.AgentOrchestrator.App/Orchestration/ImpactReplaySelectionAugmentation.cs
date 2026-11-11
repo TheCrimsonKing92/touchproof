@@ -38,7 +38,7 @@ internal static class ImpactReplaySelectionAugmentation
         var headroom = selection.Headroom is { } prior ? prior with { SelectedTestClassCount = count } : null;
         if (count > cap)
             return ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.SelectedTestClassBound,
-                $"Augmented replay selection exceeded the {cap}-test-class bound.", selection.CacheReceipt, headroom);
+                ReverseDependencySelectedClassBoundReason.Render("Augmented replay", count, cap), selection.CacheReceipt, headroom);
         return selection with { TestClassNames = names, Headroom = headroom };
     }
 }
