@@ -4,6 +4,8 @@ This census covers distinct backing sources consumed by `src/Mcg.AgentOrchestrat
 
 The console reads one workspace's stores. Its plain header and full-screen title identify that workspace as `home` or its registered project name. This identity is separate from host-row ownership.
 
+Read/refresh optimizations must apply the canonical [console responsiveness contract](operator-runbook.md#console-responsiveness) while preserving workspace identity, freshness and existing resource and retention requirements.
+
 ## Workspace reads
 
 | Source | Scope | Console read location and provenance |
