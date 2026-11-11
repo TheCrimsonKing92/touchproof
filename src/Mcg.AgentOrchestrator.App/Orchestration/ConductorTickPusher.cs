@@ -3,9 +3,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-/// <summary>
-/// Persists conductor batch-loop tick events in the run-event store.
-/// </summary>
 public static class ConductorTickPusher
 {
     internal const int MaxPersistedProgressLines = 32;
