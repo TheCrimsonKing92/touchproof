@@ -263,6 +263,8 @@ public sealed class ProviderResetGenerationTests
         fixture.Kernel.RecordTaskVerification(other.Id, task.Id, new("fixture", fixture.Workspace.ExecutionDirectory, 1,
             "", "API error (status 402 Payment Required): Grok Build usage balance exhausted", fixture.Clock.UtcNow,
             ProviderFailureKind: ProviderFailureKind.BudgetExhausted, DispatchStartedAt: fixture.Clock.UtcNow.AddSeconds(-1)));
+        fixture.Kernel.ReportTaskProgress(other.Id, task.Id, WorkTaskStatus.Failed, "Fixture provider check failed.");
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
         var otherBefore = ProviderUsageHoldView.Read(fixture.Kernel.ProviderHoldScope, fixture.Clock.UtcNow)
             .Single(row => row.Hold.BindingKey != Binding).Schedule;
         fixture.Clock.UtcNow = fixture.Due;
