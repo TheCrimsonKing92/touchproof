@@ -1,8 +1,8 @@
 # Full-screen scrolling diagnostic handoff
 
-This candidate adds opt-in observation and deterministic test source. Cause, live baseline,
-responsiveness bar and before/after improvement remain unestablished. No scrolling behavior fix
-is included. The shared view belongs to scrolling goal `2017d034`; repaint implementation stays
+This candidate adds opt-in observation and deterministic test source. Cause, live baseline
+and before/after improvement remain unestablished. The current responsiveness contract is linked
+below. No scrolling behavior fix is included. The shared view belongs to scrolling goal `2017d034`; repaint implementation stays
 serialized behind it, as recorded in the supplied goal timeline.
 
 ## Operator reproduction
@@ -29,10 +29,12 @@ entry/escape, first/last/empty panes, refresh/reordering and resize. Confirm the
 focus after each sequence. Observe progressive partial-frame painting in the same run and
 classify it as baseline or introduced; scrolling acceptance does not wait for the repaint fix.
 
-Record external timestamped input emission and visible updates. Choose numerical latency and
-accumulated-input-backlog limits from this reproduction **before** a behavior fix. Repeat the
-same scenario afterward. Store the baseline/bar and later comparison in the Operator evidence
-for `isolated-console-scroll-live-validation`; do not treat test results as live observation.
+Record external timestamped input emission and visible updates. Apply the canonical
+[console responsiveness contract](../operator-runbook.md#console-responsiveness); its absolute
+latency ceiling also applies to this performance work alongside existing resource and retention
+requirements. Choose accumulated-input-backlog limits from this reproduction **before** a behavior
+fix. Repeat the same scenario afterward. Store the baseline/bar and later comparison in the
+Operator evidence for `isolated-console-scroll-live-validation`; do not treat test results as live observation.
 
 ## Reading the trace
 
