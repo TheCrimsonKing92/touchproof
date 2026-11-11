@@ -58,6 +58,9 @@ public sealed class StaticWorkerProvider : IWorkerProvider
             return ProviderFailureKind.Unknown;
         }
 
+        if (ProviderAuthenticationEvidence.IsRequired(outcome))
+            return ProviderFailureKind.AuthenticationRequired;
+
         var providerStandardError = StripWorkerResultBlocks(outcome.StandardError);
         var text = StripWorkerResultBlocks(string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError));
         if (RecognizeBudgetExhaustion &&

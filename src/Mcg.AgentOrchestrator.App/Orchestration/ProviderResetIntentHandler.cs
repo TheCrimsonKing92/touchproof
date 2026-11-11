@@ -18,6 +18,6 @@ internal static class ProviderResetIntentHandler
         if (intent.GoalId != goal.Id.Value || intent.TaskId is null || !goal.Tasks.Any(task => task.Id.Value == intent.TaskId))
             throw new InvalidOperationException("provider-reset requires its source task in the walked goal.");
         kernel.RecordTaskNote(goal.Id, new TaskId(intent.TaskId), ProviderBudgetHoldSchedules.FormatReset(
-            new(payload.BindingKey, payload.ResetAt, intent.Id)));
+            new(payload.BindingKey, payload.ResetAt, intent.Id)), operatorIntentCreatedAt: intent.CreatedAt);
     }
 }

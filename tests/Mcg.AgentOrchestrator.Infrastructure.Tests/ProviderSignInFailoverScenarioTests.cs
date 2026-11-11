@@ -86,8 +86,9 @@ public sealed class ProviderSignInFailoverScenarioTests
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    [InlineData("Not signed in", false)]
+    [InlineData("Not signed in", true)]
     [InlineData("Error: Not signed in", true)]
+    [InlineData("The worker quoted: Not signed in", false)]
     public void ReplacementSignInFailureEscalatesWithoutReturningToSource(string stderr, bool recoverableAuthentication)
     {
         using var scenario = new Scenario();
@@ -97,6 +98,8 @@ public sealed class ProviderSignInFailoverScenarioTests
         scenario.Finish(goal, 1, "", stderr);
         Assert.Equal(recoverableAuthentication,
             ProviderFailureSignals.HasRecoverableProviderAuthenticationFailure(scenario.Current(goal).Tasks.Single()));
+        Assert.Equal(recoverableAuthentication ? ProviderFailureKind.AuthenticationRequired : ProviderFailureKind.Unknown,
+            scenario.Current(goal).Tasks.Single().LastVerification!.ProviderFailureKind);
         if (recoverableAuthentication) scenario.AssertAuthenticationFailure(goal);
 
         var outcome = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Tick(goal).Outcome);

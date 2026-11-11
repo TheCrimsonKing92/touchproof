@@ -41,7 +41,9 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         Assert.Equal(scenario.Clock.UtcNow, probe.Timestamp);
         Assert.Equal($"PROVIDER_HOLD_PROBE probe={source} due=2026-10-17T11:38:00.0000000+00:00 attempt=1 binding={Key}", probe.Detail);
         scenario.At("2026-10-17T11:40:00Z");
-        scenario.Finish(goal, 0, "Success", "");
+        scenario.Finish(goal, 0, "Success", "", verifiedSuccess: true);
+        Assert.True(scenario.Current(goal).Tasks.Single().LastVerification!.CompletionVerdictVerifiedSuccess);
+        Assert.False(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scenario.Kernel.ProviderHoldScope, Key, out _));
         var events = Events(scenario);
         Assert.Equal(3, events.Count);
         var restored = events[2];
@@ -50,6 +52,31 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         Assert.Equal(scenario.Clock.UtcNow, restored.Timestamp);
         Assert.Equal($"PROVIDER_HOLD_RESTORED source={source} placed_at=2026-10-17T11:08:00.0000000+00:00 held_seconds=1920 binding={Key}", restored.Detail);
         Assert.Equal(new[] { "Provider back: xai is accepting work again", "Provider check: trying one task on xai", "Provider paused: xai has no usage balance left" },
+            OwnerActivityNarrator.Narrate(events, _ => "").Select(row => row.Phrase));
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void UnverifiedSuccessfulProbe_RetainsHoldWithoutRestoration()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.Incident();
+        var hold = scenario.Hold;
+        scenario.At("2026-10-17T11:09:00Z");
+        scenario.Tick(goal);
+        scenario.At("2026-10-17T11:38:00Z");
+        scenario.Tick(goal);
+        scenario.AssertPrimary(goal, probe: true);
+        scenario.At("2026-10-17T11:40:00Z");
+        scenario.Finish(goal, 0, "Success", "");
+
+        var verification = scenario.Current(goal).Tasks.Single().LastVerification!;
+        Assert.True(verification.Succeeded);
+        Assert.False(verification.CompletionVerdictVerifiedSuccess);
+        Assert.Equal(hold, scenario.Hold);
+        var events = Events(scenario);
+        Assert.Equal(new[] { "provider-hold-placed", "provider-hold-probe" }, events.Select(evt => evt.EventKind));
+        Assert.Equal(new[] { "Provider check: trying one task on xai", "Provider paused: xai has no usage balance left" },
             OwnerActivityNarrator.Narrate(events, _ => "").Select(row => row.Phrase));
     }
 
@@ -219,14 +246,15 @@ public sealed class ProviderUsageHoldEventsScenarioTests
             Finish(goal, 1, stdout, stderr);
             return Current(goal);
         }
-        internal void Finish(Goal goal, int exit, string stdout, string stderr, TaskId? taskId = null)
+        internal void Finish(Goal goal, int exit, string stdout, string stderr, TaskId? taskId = null, bool verifiedSuccess = false)
         {
             goal = Current(goal);
             var task = taskId is { } id ? goal.Tasks.Single(item => item.Id == id) : goal.Tasks.Single();
             var dispatch = task.LastDispatch!;
             var kind = WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(exit, stdout, stderr));
             Kernel.RecordTaskVerification(goal.Id, task.Id, new(dispatch.Command, dispatch.WorkingDirectory, exit,
-                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt));
+                stdout, stderr, Clock.UtcNow, ProviderFailureKind: kind, DispatchStartedAt: dispatch.DispatchedAt,
+                CompletionVerdictVerifiedSuccess: verifiedSuccess));
             if (task.LastProcess is { } process)
                 Kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process with { CompletedAt = Clock.UtcNow, ExitCode = exit }, verification: null);
             if (exit == 0) { Observe(); return; }

@@ -173,9 +173,14 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ProviderEnvelope_CrossGoalArchivedResetAndProbe_NeedsNoFullLoads(bool compress)
+    [InlineData(false, 120, false)]
+    [InlineData(true, 120, false)]
+    [InlineData(false, -20, false)]
+    [InlineData(true, -20, false)]
+    [InlineData(false, -20, true)]
+    [InlineData(true, -20, true)]
+    public async Task ProviderEnvelope_CrossGoalArchivedResetAndProbe_NeedsNoFullLoads(
+        bool compress, int resetDelayMinutes, bool currentGeneration)
     {
         using var fixture = await Fixture.CreateAsync(4);
         var goals = fixture.Goals;
@@ -186,16 +191,23 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         await fixture.WriteGoalAsync(goals[0] with { Status = GoalStatus.Completed,
             Tasks = [goals[0].Tasks[0] with { LastDispatch = dispatch, LastVerification = verification }] },
             archive: true, compress: compress);
-        var resetAt = Now.AddHours(2);
+        var resetAt = Now.AddMinutes(resetDelayMinutes);
         const string binding = "claude::account-a";
         await fixture.WriteGoalAsync(goals[1] with { Status = GoalStatus.Cancelled, Timeline =
             [new(goals[1].Id, null, ProgressKind.TaskNote,
                 ProviderBudgetHoldSchedules.FormatReset(new(binding, resetAt, "intent")), Now.AddMinutes(-30))] },
             archive: true, compress: !compress);
+        var probeAt = Now.AddMinutes(-10);
+        var marker = new ProviderBudgetHoldSchedules.ProbeMarker(binding, resetAt, 1, "operator");
+        if (currentGeneration)
+        {
+            Assert.True(probeAt >= resetAt, "A current-generation admission must occur at or after the reset is due.");
+            marker = marker with { ResetIntentId = "intent", HoldPlacedAt = verification.CompletedAt };
+        }
         await fixture.WriteGoalAsync(goals[2] with { Status = GoalStatus.Active,
             Tasks = [goals[2].Tasks[0] with { Status = WorkTaskStatus.Assigned, AssignedAgentId = "agent" }], Timeline =
             [new(goals[2].Id, goals[2].Tasks[0].Id, ProgressKind.TaskNote,
-                ProviderBudgetHoldSchedules.FormatProbe(new(binding, resetAt, 1, "operator")), Now.AddMinutes(-10))] });
+                ProviderBudgetHoldSchedules.FormatProbe(marker), probeAt)] });
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, null, "Global", "Body");
         var probe = new QueryProbe(fixture.Queries);
         var context = await AttentionJsonReadContext.ReadAsync(probe, fixture.Workspace, Now);
@@ -203,8 +215,20 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.Empty(probe.Loads);
         var hold = Assert.Single(context.ProviderHolds);
         Assert.Equal(goals[0].Id, hold.Hold.SourceGoalId.Value);
-        Assert.Equal(resetAt, hold.Schedule!.NextProbeAt);
-        Assert.Equal(new GoalId(goals[2].Id), hold.Schedule.AdmittedGoalId);
+        Assert.Equal(verification.CompletedAt, hold.Hold.PlacedAt);
+        var schedule = Assert.IsType<ProviderBudgetHoldSchedule>(hold.Schedule);
+        Assert.Equal(resetAt, schedule.NextProbeAt);
+        Assert.Equal("intent", schedule.ResetIntentId);
+        if (currentGeneration)
+        {
+            Assert.Equal(new GoalId(goals[2].Id), schedule.AdmittedGoalId);
+            Assert.Equal(new TaskId(goals[2].Tasks[0].Id), schedule.AdmittedTaskId);
+        }
+        else
+        {
+            Assert.Null(schedule.AdmittedGoalId);
+            Assert.Null(schedule.AdmittedTaskId);
+        }
         Assert.Equal(2, probe.LastProjection!.Reads.ArchivePayloadsRead);
         var fallback = new QueryProbe(fixture.Queries) { Unsupported = true };
         AssertJsonEqual(Render(context), Render(await AttentionJsonReadContext.ReadAsync(fallback, fixture.Workspace, Now)));

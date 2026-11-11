@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-/// <summary>Read-only goal history retained only while it changes a provider hold answer.</summary>
+/// <summary>Read-only goal history retained while it changes a hold, diagnosis or probe schedule.</summary>
 public sealed class ProviderHoldHistory
 {
     private readonly SortedDictionary<string, Goal> _retained = new(StringComparer.Ordinal);
@@ -57,12 +57,13 @@ public sealed class ProviderHoldHistory
         var candidates = exhaustions.Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
         foreach (var provider in exhaustions.GroupBy(row => row.ProviderName, StringComparer.OrdinalIgnoreCase))
         {
-            var latestExhaustion = provider.Max(row => row.Timestamp);
-            var success = history.Where(row =>
+            // Diagnosis, attempts and intervening recoveries all affect the projection. Load
+            // the indexed candidates, then let Retain prune by the complete binding answer.
+            var firstExhaustion = provider.Min(row => row.Timestamp);
+            foreach (var row in history.Where(row =>
                     string.Equals(row.ProviderName, provider.Key, StringComparison.OrdinalIgnoreCase) &&
-                    row.OutcomeClass == TaskOutcomeClass.Success && row.Timestamp > latestExhaustion)
-                .OrderByDescending(row => row.Timestamp).ThenBy(row => row.GoalId, StringComparer.Ordinal).FirstOrDefault();
-            if (success is not null) candidates.Add(success.GoalId);
+                    row.Timestamp >= firstExhaustion))
+                candidates.Add(row.GoalId);
         }
         return candidates.Where(id => !workingGoalIds.Contains(id)).Order(StringComparer.Ordinal).ToArray();
     }
@@ -78,9 +79,9 @@ public sealed class ProviderHoldHistory
         return true;
     }
 
-    private static (string BindingKey, GoalId GoalId, TaskId TaskId, DateTimeOffset PlacedAt)? Answer(
+    private static ProviderBudgetHoldSchedule? Answer(
         IReadOnlyCollection<Goal> scope, string provider, string? credential) =>
         ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scope, provider, credential, out var hold)
-            ? (hold.BindingKey, hold.SourceGoalId, hold.SourceTaskId, hold.PlacedAt)
+            ? ProviderBudgetHoldSchedules.Evaluate(scope, hold, hold.PlacedAt)
             : null;
 }
