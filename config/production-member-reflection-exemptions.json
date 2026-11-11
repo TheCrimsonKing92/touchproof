@@ -1,0 +1,322 @@
+[
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Core.Tests/ConductorAutonomyPolicyTests.cs",
+    "Callable": "ConductorAutonomyPolicyTests.ConductorAutonomyPolicyValidationHasNoRetiredFocusedEvidenceCap()",
+    "Api": "GetProperty",
+    "Member": "MaxFocusedEvidenceRunsPerRound",
+    "Receiver": "typeof(ConductorAutonomyPolicy)",
+    "Reason": "Proves a retired setting has no public property; absence cannot be asserted by a direct call."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Core.Tests/ProjectModelJsonRoundTripTests.cs",
+    "Callable": "ProjectModelJsonRoundTripTests.TypesHaveSeparateFilesAndFactProvenance()",
+    "Api": "GetProperty",
+    "Member": "Confidence",
+    "Receiver": "type",
+    "Reason": "The foreach target list consists of production fact record typeof entries in this method. The assertion checks each record property type, not behavior."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Core.Tests/ProjectModelJsonRoundTripTests.cs",
+    "Callable": "ProjectModelJsonRoundTripTests.TypesHaveSeparateFilesAndFactProvenance()",
+    "Api": "GetProperty",
+    "Member": "Source",
+    "Receiver": "type",
+    "Reason": "The foreach target list consists of production fact record typeof entries in this method. The assertion checks each record property type, not behavior."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Core.Tests/TaskBriefTests.cs",
+    "Callable": "TaskBriefTests.BuildTaskBriefExposesTypedSourceBeforeLegacyProjection()",
+    "Api": "GetMethod",
+    "Member": "BuildTaskBriefSource",
+    "Receiver": "typeof(AgentOrchestratorKernel)",
+    "Reason": "Pins the public typed brief API return type; inspecting method metadata is the assertion, and no method is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceHermeticEnvironmentOwnershipTests.cs",
+    "Callable": "AcceptanceHermeticEnvironmentOwnershipTests.HermeticEnvironment_HasOneOwner()",
+    "Api": "GetMethod",
+    "Member": "ConfigureHermeticVerificationEnvironment",
+    "Receiver": "owner",
+    "Reason": "owner is typeof(AcceptanceHermeticEnvironment). This assertion checks declaration ownership and internal visibility after extraction; invocation would lose the metadata contract."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceHermeticEnvironmentOwnershipTests.cs",
+    "Callable": "AcceptanceHermeticEnvironmentOwnershipTests.HermeticEnvironment_HasOneOwner()",
+    "Api": "GetMethod",
+    "Member": "IsHermeticVerificationEnvironmentVariable",
+    "Receiver": "owner",
+    "Reason": "owner is typeof(AcceptanceHermeticEnvironment). This assertion checks declaration ownership and internal visibility after extraction; invocation would lose the metadata contract."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceHermeticEnvironmentOwnershipTests.cs",
+    "Callable": "AcceptanceHermeticEnvironmentOwnershipTests.HermeticEnvironment_HasOneOwner()",
+    "Api": "GetMethod",
+    "Member": "ResolvePerUserFolders",
+    "Receiver": "owner",
+    "Reason": "owner is typeof(AcceptanceHermeticEnvironment). This assertion checks declaration ownership and internal visibility after extraction; invocation would lose the metadata contract."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyTempRootCleanupFixture.cs",
+    "Callable": "AssemblyTempRootCleanupFixture.ResolveSharedGitReaders()",
+    "Api": "GetProperty",
+    "Member": "Shared",
+    "Receiver": "Type.GetType(\"Mcg.AgentOrchestrator.Infrastructure.GitRevisionReader, Mcg.AgentOrchestrator.Infrastructure\", throwOnError: false)",
+    "Reason": "Optional cleanup adapter: this fixture is linked into Execution.Tests without an Infrastructure reference. The dynamically loaded target contract explicitly names Infrastructure.GitRevisionReader and reads Shared only when that assembly is available; direct binding would break the documented optional-assembly boundary."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliWriterPersistenceBoundaryTests.cs",
+    "Callable": "CliWriterPersistenceBoundaryTests.Candidate_HasNoCallersOfCapturedGoalReplacement()",
+    "Api": "GetMethod",
+    "Member": "PersistSingleGoalSnapshot",
+    "Receiver": "typeof(CliPersistentStateRunner)",
+    "Reason": "The sink MethodInfo is compared against compiled IL operands to detect forbidden persistence callers. It is never invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkDirectInvocationTests.cs",
+    "Callable": "CrosswalkDirectInvocationTests.ListAndRun_SeparateArguments_PreserveEveryId()",
+    "Api": "GetProperty",
+    "Member": "Command",
+    "Receiver": "typeof(WorkerProcessDirectRunRequest)",
+    "Reason": "Asserts the request has no shell-command-string property, preserving the separated-argument API contract."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CrosswalkGateEntryPathResolutionTests.cs",
+    "Callable": "CrosswalkGateEntryPathResolutionTests.Constructor_WithoutCrosswalkResolver_IsRejectedNamingResolver()",
+    "Api": "GetProperty",
+    "Member": "CrosswalkExecutable",
+    "Receiver": "typeof(GoalAcceptanceVerifier)",
+    "Reason": "Inspects the CrosswalkExecutable setter accessibility to ensure callers cannot bypass constructor ownership; no setter is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/EpicDetailRequestBoundaryTests.cs",
+    "Callable": "EpicDetailRequestBoundaryTests.Method(Type,string)",
+    "Api": "GetMethod",
+    "Member": "name",
+    "Receiver": "type",
+    "Reason": "All callers pass explicit typeof production detail readers or this test fixture. MethodInfo is required for IL/state-machine call traversal and is never invoked by this helper."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/BackgroundDispatchRunnerProcessSnapshotTests.cs",
+    "Callable": "BackgroundDispatchRunnerProcessSnapshotTests.BuildDaemonKillReceivesDiscoveredIdentity()",
+    "Api": "GetMethod",
+    "Member": "TryKill",
+    "Receiver": "typeof(WorktreeBuildDaemonReaper)",
+    "Reason": "Pins the kill boundary parameter metadata to ProcessInspectionRecord; executing a kill would not prove this contract."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/AcceptanceCustodyProbe.cs",
+    "Callable": "AcceptanceCustodyProbe.Run(string,string)",
+    "Api": "GetMethod",
+    "Member": "Claim",
+    "Receiver": "type",
+    "Reason": "The fixture intentionally runs against old/new immutable App revisions. type is the explicitly named App AcceptanceGateExecutionLease type loaded above; reflection adapts the historical Claim signatures without rebuilding old revisions."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/AcceptanceCustodyProbe.cs",
+    "Callable": "AcceptanceCustodyProbe.Run(string,string)",
+    "Api": "GetMethod",
+    "Member": "CurrentGeneration",
+    "Receiver": "type",
+    "Reason": "The fixture intentionally runs against old/new immutable App revisions. type is the explicitly named App AcceptanceGateExecutionLease type loaded above; reflection adapts the historical Claim signatures without rebuilding old revisions."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/AcceptanceCustodyProbe.cs",
+    "Callable": "AcceptanceCustodyProbe.Run(string,string)",
+    "Api": "GetMethod",
+    "Member": "Reserve",
+    "Receiver": "type",
+    "Reason": "The fixture intentionally runs against old/new immutable App revisions. type is the explicitly named App AcceptanceGateExecutionLease type loaded above; reflection adapts the historical Claim signatures without rebuilding old revisions."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/AcceptanceCustodyProbe.cs",
+    "Callable": "AcceptanceCustodyProbe.Run(string,string)",
+    "Api": "GetProperty",
+    "Member": "CustodianIdentity",
+    "Receiver": "containment.GetType()",
+    "Reason": "The immutable-revision custody probe reads the App lease containment identity across versions after Claim; direct binding would defeat the documented old/new application compatibility experiment."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalFindTaskVisibilityTests.cs",
+    "Callable": "GoalFindTaskVisibilityTests.FindTask_IsPublic()",
+    "Api": "GetMethod",
+    "Member": "FindTask",
+    "Receiver": "typeof(Goal)",
+    "Reason": "Asserts public accessibility of the existing TaskId overload; metadata visibility is the tested behavior."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalGitRefFingerprintReaderTests.cs",
+    "Callable": "GoalGitRefFingerprintReaderTests.UnchangedMetadataHasEqualFingerprintsWithoutInvokingRunner()",
+    "Api": "GetMethod",
+    "Member": "TryRead",
+    "Receiver": "typeof(GoalGitRefFingerprintReader)",
+    "Reason": "The behavior is already called directly. This lookup separately asserts the fingerprint reader has exactly its two intended parameters."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/MtpTestRunnerScriptTests.cs",
+    "Callable": "MtpTestRunnerScriptTests.ManagedProjectTheoriesPlaceOnlyCoreCaseInOrdinaryTheory()",
+    "Api": "GetMethod",
+    "Member": "ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild",
+    "Receiver": "type",
+    "Reason": "The local Cases helper is called only with typeof the two Mtp test fixtures. It inspects xunit InlineData attributes to verify test relocation, never production behavior."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/MtpTestRunnerScriptTestsCompilerBoundary.cs",
+    "Callable": "MtpTestRunnerScriptTestsCompilerBoundary.CompilerFrontendsPreserveLongCacheIdentityAndReapOwnedDirectories(string)",
+    "Api": "GetMethod",
+    "Member": "Initialize",
+    "Receiver": "hookType",
+    "Reason": "hookType is StartupHook from the generated test startup-hook assembly loaded above. The fixture validates its CLR entrypoint signature; this is not a Mcg production assembly."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OwnerGoalDetailBoundaryTests.cs",
+    "Callable": "OwnerGoalDetailBoundaryTests.RenderAcceptsOnlySnapshotOutputAndTimeZone()",
+    "Api": "GetMethod",
+    "Member": "Render",
+    "Receiver": "typeof(OwnerConsoleGoalDetailFormatter)",
+    "Reason": "Checks the formatter parameter types to prohibit broad read dependencies; a direct invocation cannot assert the complete API shape."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PostLandingCanaryTests.cs",
+    "Callable": "PostLandingCanaryTests.AcceptanceGateDefaultsUnknownValuesToDeny()",
+    "Api": "GetProperty",
+    "Member": "AllowsAcceptance",
+    "Receiver": "typeof(AcceptanceEngineHealthSnapshot)",
+    "Reason": "Asserts the obsolete permissive property is absent; direct invocation cannot establish absence."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProcessSpawningCollectionSplitTests.cs",
+    "Callable": "ProcessSpawningCollectionSplitTests.MovedFactsHaveOnlyTheParallelLaneAndNewDeclaringClasses()",
+    "Api": "GetMethod",
+    "Member": "methodName",
+    "Receiver": "newType",
+    "Reason": "The deconstructed foreach table contains only explicit typeof old/new test fixtures. Metadata proves each moved fact exists exclusively in its assigned test class, not in production."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProcessSpawningCollectionSplitTests.cs",
+    "Callable": "ProcessSpawningCollectionSplitTests.MovedFactsHaveOnlyTheParallelLaneAndNewDeclaringClasses()",
+    "Api": "GetMethod",
+    "Member": "methodName",
+    "Receiver": "oldType",
+    "Reason": "The deconstructed foreach table contains only explicit typeof old/new test fixtures. Metadata proves each moved fact exists exclusively in its assigned test class, not in production."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProjectOwnerAnswerRecorderBoundaryTests.cs",
+    "Callable": "ProjectOwnerAnswerRecorderBoundaryTests.Method(Type,string)",
+    "Api": "GetMethod",
+    "Member": "name",
+    "Receiver": "type",
+    "Reason": "Callers pass explicit typeof owner-answer application seams or this fixture. This helper returns MethodInfo solely for compiled IL reachability assertions, without invoking it."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedFaultHookTests.cs",
+    "Callable": "ScopedFaultHookTests.HookDispatch_HasNoAssignableCompatibilitySurface(Type,string)",
+    "Api": "GetMethod",
+    "Member": "name",
+    "Receiver": "owner",
+    "Reason": "Theory rows explicitly identify production hook owners and member names. This metadata contract proves dispatch methods exist and assignable compatibility properties are absent; no reflected member is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedFaultHookTests.cs",
+    "Callable": "ScopedFaultHookTests.HookDispatch_HasNoAssignableCompatibilitySurface(Type,string)",
+    "Api": "GetProperty",
+    "Member": "name",
+    "Receiver": "owner",
+    "Reason": "Theory rows explicitly identify production hook owners and member names. This metadata contract proves dispatch methods exist and assignable compatibility properties are absent; no reflected member is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedOperatorInboxSeamTests.cs",
+    "Callable": "ScopedOperatorInboxSeamTests.RemovedHook_IsAbsentAndLiveSeamsHaveNoSetters()",
+    "Api": "GetProperty",
+    "Member": "BeforeAcceptanceRetryAppend",
+    "Receiver": "typeof(GoalOperationJournal)",
+    "Reason": "Pins lack of a setter on the scoped journal hook; reflection inspects API shape and does not invoke production behavior."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedOperatorInboxSeamTests.cs",
+    "Callable": "ScopedOperatorInboxSeamTests.RemovedHook_IsAbsentAndLiveSeamsHaveNoSetters()",
+    "Api": "GetProperty",
+    "Member": "BeforeLandingEscalationResolution",
+    "Receiver": "typeof(OperatorInbox)",
+    "Reason": "Pins removed hook absence and readonly metadata of remaining seams, which direct calls cannot establish."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedOperatorInboxSeamTests.cs",
+    "Callable": "ScopedOperatorInboxSeamTests.RemovedHook_IsAbsentAndLiveSeamsHaveNoSetters()",
+    "Api": "GetProperty",
+    "Member": "HoldStoreWriteAllText",
+    "Receiver": "typeof(OperatorInbox)",
+    "Reason": "Pins removed hook absence and readonly metadata of remaining seams, which direct calls cannot establish."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedOperatorInboxSeamTests.cs",
+    "Callable": "ScopedOperatorInboxSeamTests.RemovedHook_IsAbsentAndLiveSeamsHaveNoSetters()",
+    "Api": "GetProperty",
+    "Member": "HoldWriteBackoff",
+    "Receiver": "typeof(OperatorInbox)",
+    "Reason": "Pins removed hook absence and readonly metadata of remaining seams, which direct calls cannot establish."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedRemoteGitMirrorSeamTests.cs",
+    "Callable": "ScopedRemoteGitMirrorSeamTests.DeadSeams_AreRemoved(string)",
+    "Api": "GetProperty",
+    "Member": "name",
+    "Receiver": "typeof(RemoteGitMirror)",
+    "Reason": "Theory rows pin the removed UtcNow/StatusWriter properties as absent; a direct call cannot test a removed surface."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ScopedRemoteGitMirrorSeamTests.cs",
+    "Callable": "ScopedRemoteGitMirrorSeamTests.LiveSeams_HaveNoSetter(string)",
+    "Api": "GetProperty",
+    "Member": "name",
+    "Receiver": "typeof(RemoteGitMirror)",
+    "Reason": "Theory rows identify GitRunner/BackoffForAttempt and assert that metadata exposes no setter. Behavior tests already use direct scoped overrides."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestCoverageInvariantTests.cs",
+    "Callable": "TestCoverageInvariantTests.DiscoveryParser_ListReturningSurface_IsRetired()",
+    "Api": "GetMethod",
+    "Member": "ParseDiscoveredTests",
+    "Receiver": "typeof(TestCoverageInvariant)",
+    "Reason": "Asserts a retired list-returning parser surface is absent, which cannot be expressed as a direct call."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs",
+    "Callable": "WorkerDispatchTestsSandboxLowIntegrity.IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()",
+    "Api": "GetProperty",
+    "Member": "Options",
+    "Receiver": "typeof(IWorkerProvider)",
+    "Reason": "Asserts retired sandbox policy properties are absent from provider/capabilities API metadata; no behavior is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs",
+    "Callable": "WorkerDispatchTestsSandboxLowIntegrity.IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()",
+    "Api": "GetProperty",
+    "Member": "Sandbox",
+    "Receiver": "typeof(IWorkerProvider)",
+    "Reason": "Asserts retired sandbox policy properties are absent from provider/capabilities API metadata; no behavior is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs",
+    "Callable": "WorkerDispatchTestsSandboxLowIntegrity.IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()",
+    "Api": "GetProperty",
+    "Member": "Sandbox",
+    "Receiver": "typeof(WorkerCapabilities)",
+    "Reason": "Asserts retired sandbox policy properties are absent from provider/capabilities API metadata; no behavior is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs",
+    "Callable": "WorkerDispatchTestsSandboxLowIntegrity.IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()",
+    "Api": "GetProperty",
+    "Member": "SandboxMode",
+    "Receiver": "typeof(WorkerCapabilities)",
+    "Reason": "Asserts retired sandbox policy properties are absent from provider/capabilities API metadata; no behavior is invoked."
+  },
+  {
+    "Path": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs",
+    "Callable": "WorkerDispatchTestsSandboxLowIntegrity.WorkerSandboxOptionsHasNoProviderProperty()",
+    "Api": "GetProperty",
+    "Member": "Provider",
+    "Receiver": "typeof(WorkerSandboxOptions)",
+    "Reason": "Proves sandbox options no longer expose a provider property; a removed surface has no direct-call assertion."
+  }
+]

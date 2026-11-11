@@ -180,7 +180,7 @@ public static partial class GoalWorktrees
         return new GoalWorktreeChangedFilesResult(true, files, null);
     }
 
-    private static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
+    internal static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
         string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId, string mainHead)
     {
         if (!(GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{branch}", out var oldHead) ||
@@ -355,12 +355,12 @@ public static partial class GoalWorktrees
                 " | ",
                 value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    private static bool BranchExists(string executionDirectory, string branch)
+    internal static bool BranchExists(string executionDirectory, string branch)
     {
         return BranchExists(executionDirectory, branch, GitCli.DefaultTimeoutMilliseconds);
     }
 
-    private static bool BranchExists(string executionDirectory, string branch, int gitTimeoutMilliseconds)
+    internal static bool BranchExists(string executionDirectory, string branch, int gitTimeoutMilliseconds)
     {
         if (GitRevisionReader.TryConfirmBranchAbsent(executionDirectory, branch)) return false;
         if (GitRevisionReader.Shared.TryResolve(executionDirectory, $"refs/heads/{branch}", gitTimeoutMilliseconds, out _))
@@ -369,7 +369,7 @@ public static partial class GoalWorktrees
     }
 
 
-    private static string? GetCurrentBranchName(string executionDirectory)
+    internal static string? GetCurrentBranchName(string executionDirectory)
     {
         if (GitRevisionReader.TryReadCurrentBranch(executionDirectory, out var current)) return current;
         var result = GitCli.Run(executionDirectory, "branch", "--show-current");
@@ -516,12 +516,12 @@ public static partial class GoalWorktrees
         return result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void RequireGitWorkTree(string executionDirectory)
+    internal static void RequireGitWorkTree(string executionDirectory)
     {
         RequireGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
     }
 
-    private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
+    internal static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
     {
         if (GitRevisionReader.TryConfirmWorkTree(executionDirectory)) return;
         // Carry the probe evidence into the diagnostic. A bare "not a work tree" message cannot

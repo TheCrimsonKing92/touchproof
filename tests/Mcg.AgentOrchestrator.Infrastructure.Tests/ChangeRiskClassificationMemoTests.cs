@@ -201,9 +201,7 @@ public sealed class ChangeRiskClassificationMemoTests : AcceptanceCohortWorkflow
             var driver = new ConductorDriver(_kernel, OrchestratorWorkspace.ForDirectory(Repo),
                 FakeAcceptanceVerifier.Passed(), AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks);
-            var field = typeof(ConductorDriver).GetField("_classifyChangeRisk", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(field);
-            return Assert.IsType<Func<Goal, ChangeRiskTier?>>(field.GetValue(driver));
+            return driver._classifyChangeRisk;
         }
 
         internal string Commit(string relativePath)

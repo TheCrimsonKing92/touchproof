@@ -263,12 +263,9 @@ public sealed class AttributedFailureAutoRouteControlTests
         var policy = ConductorAutonomyPolicy.Permissive;
         // These unchanged methods are the original executor's seams. Invoking them directly
         // excludes both additions in ExecuteFailedGoalRecovery, including the discovery guard.
-        object Invoke(string name, object?[] arguments) =>
-            typeof(ConductorDriver).GetMethod(name, flags)!.Invoke(driver, arguments)!;
-        FailedGoalRecoveryFacts Facts() => (FailedGoalRecoveryFacts)Invoke("BuildFailedGoalRecoveryFacts",
-            [goal, policy, GoalLifecycleState.Failed]);
-        var landingScopes = (Func<Goal, IReadOnlyList<string>>)typeof(ConductorDriver)
-            .GetField("_getLandingFileScopes", flags)!.GetValue(driver)!;
+        FailedGoalRecoveryFacts Facts() => driver.BuildFailedGoalRecoveryFacts(
+            goal, policy, GoalLifecycleState.Failed);
+        var landingScopes = driver._getLandingFileScopes;
         var facts = Facts();
         var decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         FailedGoalFindingObservation? contract = null, finding = null;
@@ -279,17 +276,15 @@ public sealed class AttributedFailureAutoRouteControlTests
             if (decision.Action == FailedGoalRecoveryAction.ObserveReviewContract)
             {
                 Assert.False(contractCompleted);
-                object?[] arguments = [goal, FailedGoalFindingObservation.None];
-                if ((bool)Invoke("TryObserveReviewContractRecovery", arguments))
-                    contract = (FailedGoalFindingObservation)arguments[1]!;
+                if (driver.TryObserveReviewContractRecovery(goal, out var observedContract))
+                    contract = observedContract;
                 contractCompleted = true;
             }
             else
             {
                 Assert.False(findingCompleted);
-                object?[] arguments = [goal, policy, landingScopes(goal), FailedGoalFindingObservation.None];
-                if ((bool)Invoke("TryObserveVerifyingFindingRecovery", arguments))
-                    finding = (FailedGoalFindingObservation)arguments[3]!;
+                if (driver.TryObserveVerifyingFindingRecovery(goal, policy, landingScopes(goal), out var observedFinding))
+                    finding = observedFinding;
                 findingCompleted = true;
             }
             Assert.Equal(GoalLifecycleState.Failed, GoalLifecycle.ResolveState(goal));

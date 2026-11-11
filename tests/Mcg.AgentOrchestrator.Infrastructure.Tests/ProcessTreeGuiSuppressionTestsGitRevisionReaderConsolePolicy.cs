@@ -26,11 +26,7 @@ public sealed class ProcessTreeGuiSuppressionTestsGitRevisionReaderConsolePolicy
             ChildConsoleLaunchPolicy.PrepareDelayHookForTests = () => preparations++;
 
             reader = GitRevisionReader.ReaderProcess.Start(Path.Combine(root, ".git"));
-            // Inspect the reader's actual launch without adding a product test seam.
-            var field = typeof(GitRevisionReader.ReaderProcess).GetField("process",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(field);
-            var process = Assert.IsType<HandleListLaunchedProcess>(field.GetValue(reader));
+            var process = reader.process;
             Assert.Equal(expected, process.EffectiveCreationFlags);
             // Also detects a skipped Prepare on hosts where both policies select the same flags.
             Assert.Equal(1, preparations);

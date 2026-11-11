@@ -26,13 +26,6 @@ internal sealed partial class ConductorDriver
 
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
-    private sealed record CohortGateRun(
-        DateTimeOffset StartedAt,
-        IReadOnlySet<string> MemberGoalIds,
-        string PairFingerprint,
-        TaskCompletionSource Completion,
-        string? AttemptMetadataPath = null);
-
     internal sealed class EvidenceMutationLeaseUnavailableException(string message)
         : InvalidOperationException(message);
 
@@ -101,7 +94,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<Goal> _completeGoal;
     private readonly Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult> _writeEscalation;
     private readonly Action<Goal, GoalLifecycleState> _resolveParkedWaitEscalations;
-    private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
+    internal readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly ChangeRiskClassificationMemo _changeRiskMemo = new();
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
@@ -156,10 +149,10 @@ internal sealed partial class ConductorDriver
     private readonly List<(ConductorLandingReceipt Receipt, string TrainId, string ReceiptId)>
         _pendingRecoveredMergeTrainLandingReceipts = [];
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
-    private bool _buildServerShutdownRanThisTick;
+    internal bool _buildServerShutdownRanThisTick;
     private bool _isConductorTick;
     internal AgentOrchestratorKernel? _conductorTickKernel;
-    private int _conductorTick;
+    internal int _conductorTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink
@@ -226,7 +219,8 @@ internal sealed partial class ConductorDriver
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
         bool runAcceptanceAttemptsInCurrentProcess = false,
         Action<GoalSnapshot>? recordDurableGoalBaseline = null,
-        GoalWorktreeCleanupHooks? cleanupHooks = null, Func<DateTimeOffset>? utcNow = null)
+        GoalWorktreeCleanupHooks? cleanupHooks = null, Func<DateTimeOffset>? utcNow = null,
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -239,7 +233,7 @@ internal sealed partial class ConductorDriver
         _parallelAcceptanceEnabled = true;
         _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _workerBuildArtifactsPath = goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, _cohortCleanupHooks.BuildStorageRoot);
-        _parallelAcceptanceAttemptCoordinator = OwnedChildAttemptCoordinatorFactory.CreateGate(
+        _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator ?? OwnedChildAttemptCoordinatorFactory.CreateGate(
             workspace, _cohortCleanupHooks.BuildStorageRoot,
             RunParallelLandingAcceptancePreSlot, runAcceptanceAttemptsInCurrentProcess);
         _apparatusRedGate = new ApparatusRedGate(
@@ -1046,9 +1040,11 @@ internal sealed partial class ConductorDriver
         AgentOrchestratorKernel? findingStagnationKernel = null,
         Func<Goal, GoalEvidenceOperationScope?>? prepareMissingWorkspace = null,
         Func<Goal, PlannerBriefAmendmentRevisionPendingHold?>? getAmendmentRevisionPending = null,
-        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>? runAcceptanceVerificationWithOptions = null)
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary>? runAcceptanceVerificationWithOptions = null,
+        IGoalAcceptanceVerifier? cohortAcceptanceVerifier = null)
     {
         _prepareMissingWorkspace = prepareMissingWorkspace;
+        _cohortAcceptanceVerifier = cohortAcceptanceVerifier;
         _findingStagnationKernel = findingStagnationKernel;
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;

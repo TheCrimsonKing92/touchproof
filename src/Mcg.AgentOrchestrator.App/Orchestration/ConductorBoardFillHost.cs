@@ -9,7 +9,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly ConductorBoardFillDraftStore _store;
     private readonly Func<string, CancellationToken, AuthorBriefDraftOutcome> _draft;
     private readonly Func<IReadOnlyList<BacklogItem>> _backlog;
-    private readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
+    internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
     private readonly ConductEventLogWriter _events;
     private readonly Func<DateTimeOffset> _utcNow;

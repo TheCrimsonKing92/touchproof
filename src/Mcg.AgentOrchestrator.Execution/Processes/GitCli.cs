@@ -329,7 +329,7 @@ internal static class GitCli
         }
     }
 
-    private static void NotifyLaunch(Action<string> observer, string[] args)
+    internal static void NotifyLaunch(Action<string> observer, string[] args)
     {
         try { observer(args.Length > 0 ? args[0] : string.Empty); }
         catch (Exception) { /* Launch telemetry must not change the git result. */ }

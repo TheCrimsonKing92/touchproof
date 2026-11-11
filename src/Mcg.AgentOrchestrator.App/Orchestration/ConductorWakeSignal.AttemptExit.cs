@@ -69,7 +69,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
         }
     }
 
-    private void SignalIfTrackedAttemptExit(string path)
+    internal void SignalIfTrackedAttemptExit(string path)
     {
         lock (_trackedGate)
         {
@@ -78,7 +78,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
         }
     }
 
-    private bool TryMarkAttemptExitSignaled(string path)
+    internal bool TryMarkAttemptExitSignaled(string path)
     {
         var normalized = NormalizePath(path);
         lock (_trackedGate)

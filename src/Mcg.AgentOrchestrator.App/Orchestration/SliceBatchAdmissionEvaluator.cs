@@ -14,8 +14,8 @@ internal sealed class SliceBatchAdmissionEvaluator(
     SliceBatchSiblingDependencyCoordinator? siblingDependencies = null)
 {
     private const int MaximumScopeTextCharacters = 64_000;
-    private readonly HashSet<GoalId> _admittedThisTick = [];
-    private readonly Dictionary<GoalId, IReadOnlyList<string>?> _observedPathsThisTick = [];
+    internal readonly HashSet<GoalId> _admittedThisTick = [];
+    internal readonly Dictionary<GoalId, IReadOnlyList<string>?> _observedPathsThisTick = [];
     private readonly HashSet<string> _recordedPolicyDecisions = new(StringComparer.Ordinal);
 
     internal void BeginTick()

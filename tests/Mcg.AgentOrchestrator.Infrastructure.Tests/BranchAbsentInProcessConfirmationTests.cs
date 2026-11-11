@@ -296,11 +296,8 @@ public sealed class BranchAbsentInProcessConfirmationTests : IDisposable
     {
         var repo = CreateRepository();
         AssertProof(repo, "absent", true, false);
-        var branchExists = typeof(GoalWorktrees).GetMethod("BranchExists",
-            BindingFlags.Static | BindingFlags.NonPublic, [typeof(string), typeof(string), typeof(int)])!
-            .CreateDelegate<Func<string, string, int, bool>>();
         var launches = new LaunchRecording();
-        Assert.False(branchExists(repo, "absent", GitCli.DefaultTimeoutMilliseconds));
+        Assert.False(GoalWorktrees.BranchExists(repo, "absent", GitCli.DefaultTimeoutMilliseconds));
         launches.AssertNoLaunches();
     }
 
