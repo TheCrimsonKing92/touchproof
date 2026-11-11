@@ -11,13 +11,13 @@ internal interface IConductorWakeSignal : IDisposable
 
 internal sealed partial class FileSystemWatcherConductorWakeSignal : IConductorWakeSignal, IConductorAttemptExitWakeSignal
 {
-    private readonly SemaphoreSlim _signal = new(0, 1);
+    internal readonly SemaphoreSlim _signal = new(0, 1);
     private readonly Action<string> _warn;
-    private readonly FileSystemWatcher? _watcher;
+    internal readonly FileSystemWatcher? _watcher;
     private readonly string _watchDirectory;
     private readonly object _trackedGate = new();
     private HashSet<string> _trackedExitCodePaths = new(StringComparer.OrdinalIgnoreCase);
-    private int _signaled;
+    internal int _signaled;
     private int _watcherFailed;
     private int _scanWarningEmitted;
 
@@ -112,7 +112,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal : IConductorW
         return true;
     }
 
-    private void SignalIfTracked(string path)
+    internal void SignalIfTracked(string path)
     {
         if (!IsTracked(path))
         {
@@ -200,7 +200,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal : IConductorW
         }
     }
 
-    private void Signal()
+    internal void Signal()
     {
         if (Interlocked.Exchange(ref _signaled, 1) != 0)
         {

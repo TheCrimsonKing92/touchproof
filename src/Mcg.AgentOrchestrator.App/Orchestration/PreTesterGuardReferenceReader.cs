@@ -48,7 +48,8 @@ internal static class PreTesterGuardReferenceReader
         foreach (var call in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
             var read = IsCall(call, "File.ReadAllText", "System.IO.File.ReadAllText");
-            var scan = IsCall(call, "Directory.GetFiles", "System.IO.Directory.GetFiles",
+            var snapshotScan = IsSnapshotScan(call, method);
+            var scan = snapshotScan || IsCall(call, "Directory.GetFiles", "System.IO.Directory.GetFiles",
                 "Directory.EnumerateFiles", "System.IO.Directory.EnumerateFiles");
             if ((!read && !scan) || call.ArgumentList.Arguments.Count == 0) continue;
             var path = scan ? Argument(call, 0, "path") : call.ArgumentList.Arguments[0].Expression;
@@ -63,7 +64,7 @@ internal static class PreTesterGuardReferenceReader
             else
             {
                 var patternExpression = Argument(call, 1, "searchPattern");
-                var pattern = patternExpression is null ? "*" :
+                var pattern = snapshotScan ? "*.cs" : patternExpression is null ? "*" :
                     Scalar(patternExpression, method, bindings) is LiteralExpressionSyntax literal &&
                     literal.IsKind(SyntaxKind.StringLiteralExpression) ? literal.Token.ValueText : "*";
                 if (pattern.Contains('/') || pattern.Contains('\\')) continue;
@@ -71,9 +72,19 @@ internal static class PreTesterGuardReferenceReader
                 var optionName = option is null ? "" : Scalar(option, method, bindings).ToString()
                     .Replace("global::", "", StringComparison.Ordinal);
                 references.Add(new(testClass, "scan", segments, pattern,
-                    optionName is "SearchOption.AllDirectories" or "System.IO.SearchOption.AllDirectories"));
+                    snapshotScan || optionName is "SearchOption.AllDirectories" or "System.IO.SearchOption.AllDirectories"));
             }
         }
+    }
+
+    private static bool IsSnapshotScan(InvocationExpressionSyntax call, MethodDeclarationSyntax method)
+    {
+        if (call.Expression is not MemberAccessExpressionSyntax
+            { Expression: IdentifierNameSyntax receiver, Name.Identifier.ValueText: "EnumerateFiles" }) return false;
+        var locals = method.DescendantNodes().OfType<VariableDeclaratorSyntax>().Where(variable =>
+            variable.Identifier.ValueText == receiver.Identifier.ValueText && variable.SpanStart < call.SpanStart).ToArray();
+        return !Reassigned(method, receiver.Identifier.ValueText) && locals is [{ Initializer.Value: InvocationExpressionSyntax get }] &&
+            IsCall(get, "RepositorySourceSnapshotCache.Get");
     }
 
     private static string? HelperName(InvocationExpressionSyntax call, string className) => call.Expression switch

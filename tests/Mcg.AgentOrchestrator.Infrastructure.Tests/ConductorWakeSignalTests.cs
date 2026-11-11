@@ -13,11 +13,7 @@ public sealed class ConductorWakeSignalTests
             using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
             wakeSignal.UpdateTrackedExitArtifacts([tracked]);
 
-            var watcherField = typeof(FileSystemWatcherConductorWakeSignal).GetField(
-                "_watcher",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(watcherField);
-            var watcher = Assert.IsType<FileSystemWatcher>(watcherField.GetValue(wakeSignal));
+            var watcher = Assert.IsType<FileSystemWatcher>(wakeSignal._watcher);
 
             var onCreated = typeof(FileSystemWatcher).GetMethod(
                 "OnCreated",
@@ -47,12 +43,7 @@ public sealed class ConductorWakeSignalTests
             using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
             wakeSignal.UpdateTrackedExitArtifacts([tracked]);
 
-            var signalIfTracked = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
-                "SignalIfTracked",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(signalIfTracked);
-
-            signalIfTracked.Invoke(wakeSignal, [untracked]);
+            wakeSignal.SignalIfTracked(untracked);
             AssertSignalDrained(wakeSignal);
         }
         finally
@@ -134,14 +125,10 @@ public sealed class ConductorWakeSignalTests
         try
         {
             var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
-            var signal = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
-                "Signal",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(signal);
 
             wakeSignal.Dispose();
 
-            var exception = Record.Exception(() => signal.Invoke(wakeSignal, null));
+            var exception = Record.Exception(() => wakeSignal.Signal());
             Assert.Null(exception);
         }
         finally
@@ -152,17 +139,8 @@ public sealed class ConductorWakeSignalTests
 
     private static void AssertSignalDrained(FileSystemWatcherConductorWakeSignal wakeSignal)
     {
-        var signaled = typeof(FileSystemWatcherConductorWakeSignal).GetField(
-            "_signaled",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        var signal = typeof(FileSystemWatcherConductorWakeSignal).GetField(
-            "_signal",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(signaled);
-        Assert.NotNull(signal);
-        Assert.Equal(0, Assert.IsType<int>(signaled.GetValue(wakeSignal)));
-        Assert.Equal(0, Assert.IsType<SemaphoreSlim>(signal.GetValue(wakeSignal)).CurrentCount);
+        Assert.Equal(0, wakeSignal._signaled);
+        Assert.Equal(0, wakeSignal._signal.CurrentCount);
     }
 
     private static string CreateTempDirectory(string prefix)

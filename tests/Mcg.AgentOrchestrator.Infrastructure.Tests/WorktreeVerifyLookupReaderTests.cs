@@ -187,40 +187,25 @@ public sealed class WorktreeVerifyLookupReaderTests : IDisposable
 
     private static (bool Success, string Output) ResolveCommit(string repo, string sha)
     {
-        object?[] args = [repo, sha, null];
-        var result = Assert.IsType<bool>(Invoke("TryResolveCommit", args));
-        return (result, Assert.IsType<string>(args[2]));
+        var result = GoalWorktrees.TryResolveCommit(repo, sha, out var output);
+        return (result, output);
     }
 
     private static (bool Success, string Output) VerifyMerges(string repo, string baseline, string head)
     {
-        object?[] args = [repo, baseline, head, null];
-        var result = Assert.IsType<bool>(Invoke("TryVerifyIntegrationMergesClean", args));
-        return (result, Assert.IsType<string>(args[3]));
+        var result = GoalWorktrees.TryVerifyIntegrationMergesClean(repo, baseline, head, out var output);
+        return (result, output);
     }
 
     private static (bool Success, string Output) SquashEquivalence(string repo, string oldHead, string newHead)
     {
-        object?[] args = [repo, oldHead, newHead, "main", null];
-        var result = Assert.IsType<bool>(Invoke("TryComputeSquashEquivalence", args));
-        return (result, Assert.IsType<string>(args[4]));
+        var result = GoalWorktrees.TryComputeSquashEquivalence(repo, oldHead, newHead, "main", out var output);
+        return (result, output);
     }
 
     private static GoalWorktreeRebaseResult? SquashBranch(string repo, string branch, string main) =>
-        (GoalWorktreeRebaseResult?)Invoke("TrySquashMergeCommitsOntoBase",
-            [repo, repo, branch, "main", new GoalId(Guid.NewGuid().ToString("N")), main]);
+        GoalWorktrees.TrySquashMergeCommitsOntoBase(repo, repo, branch, "main", new GoalId(Guid.NewGuid().ToString("N")), main);
 
-    private static object? Invoke(string method, object?[] args)
-    {
-        var target = typeof(GoalWorktrees).GetMethod(method, BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(target);
-        try { return target.Invoke(null, args); }
-        catch (TargetInvocationException ex) when (ex.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-            throw;
-        }
-    }
 
     private static void AssertOneReader(string repo, Action check)
     {

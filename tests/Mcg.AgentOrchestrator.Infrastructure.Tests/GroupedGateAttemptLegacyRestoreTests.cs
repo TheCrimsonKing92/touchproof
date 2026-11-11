@@ -192,7 +192,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         using var fixture = new Fixture();
         var first = fixture.Attempt("cohort", ["a", "b"]);
         var second = fixture.Attempt(secondKind, identical ? ["a", "b"] : ["b", "c"]);
-        var driver = Driver(fixture.Coordinator, fixture.Root);
+        var driver = Driver(fixture.Coordinator, fixture.Root, new UnexpectedVerifier());
         var restored = new List<IReadOnlySet<string>>();
 
         Assert.Null(Record.Exception(() => driver.GetActiveCohortGateMemberGoalIds((ids, _) => restored.Add(ids))));
@@ -365,21 +365,16 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         }
     }
 
-    private static ConductorDriver Driver(ConductorGroupedGateAttemptCoordinator coordinator, string root)
+    private static ConductorDriver Driver(ConductorGroupedGateAttemptCoordinator coordinator, string root, IGoalAcceptanceVerifier? verifier = null)
     {
-        var driver = MakeDriver();
-        SetField(driver, "_groupedGateAttempts", coordinator);
-        SetField(driver, "_executionDirectory", root);
+        var driver = MakeDriver(executionDirectory: root, cohortAcceptanceVerifier: verifier);
+        driver._groupedGateAttempts = coordinator;
         return driver;
     }
 
-    private static void SetField(ConductorDriver driver, string name, object value) =>
-        typeof(ConductorDriver).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(driver, value);
-
     private static void StartGrouped(ConductorDriver driver, string[] members) =>
-        typeof(ConductorDriver).GetMethod("StartGroupedGateAttempt", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(driver, ["cohort", Projections(members), MainRevision, "tree", "manifest", "new-identity", "new-key",
-                ConductorAutonomyPolicy.Conservative]);
+        driver.StartGroupedGateAttempt("cohort", Projections(members), MainRevision, "tree", "manifest", "new-identity", "new-key",
+                ConductorAutonomyPolicy.Conservative);
 
     private static GateReadyCandidateProjection[] Projections(string[] ids, string mainRevision = MainRevision) => ids.Select(id =>
         new ConductorGroupedGateMember(id, BranchRevision, BranchRevision, ["src/" + id], [], ChangeRiskTier.Behavior)
@@ -444,5 +439,20 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
     private sealed class EmptyContainment : IDisposable
     {
         public void Dispose() { }
+    }
+
+    private sealed class UnexpectedVerifier : IGoalAcceptanceVerifier
+    {
+        public string ComputeEffectivePlanIdentity(string worktreePath, IReadOnlyList<string>? changedFiles = null) =>
+            throw new InvalidOperationException("Admission hold must precede plan computation.");
+
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(string worktreePath, GoalId? goalId,
+            IReadOnlyList<string>? changedFiles, int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner) => throw new InvalidOperationException("Unexpected gate execution.");
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(string worktreePath, GoalId? goalId,
+            string request, IAcceptanceFocusedVerificationOwner executionOwner, int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null, bool runBaselineArm = false) =>
+            throw new InvalidOperationException("Unexpected focused evidence.");
     }
 }

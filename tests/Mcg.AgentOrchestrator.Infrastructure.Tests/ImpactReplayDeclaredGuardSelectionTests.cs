@@ -8,6 +8,23 @@ using Microsoft.CodeAnalysis.CSharp;
 public sealed class ImpactReplayDeclaredGuardSelectionTests
 {
     [Fact]
+    public void ReflectionGuardRemainsSelectedDuringStructuralReplay()
+    {
+        var sources = Sources("""
+            [LiveTreeStructural]
+            public class ProductionMemberReflectionGuardTests {
+                [Fact] public void Scans() {}
+            }
+            """);
+        var selected = Apply(sources, ["src/NewProductionType.cs"], out var report,
+            [new AcceptanceTestClassDescriptor("ProductionMemberReflectionGuardTests", null)],
+            additionalClasses: ["ProductionMemberReflectionGuardTests"]);
+
+        Assert.Contains("ProductionMemberReflectionGuardTests", selected.TestClassNames);
+        Assert.Equal("live-tree-structural", Assert.Single(report.Selections).DependencyKind);
+    }
+
+    [Fact]
     public void Apply_UnchangedStructuralGuard_SelectsForUnrelatedTreeChange()
     {
         var sources = Sources("""

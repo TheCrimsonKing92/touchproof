@@ -240,10 +240,6 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
 
         internal void RebuildDriver(bool enableGrouped = false)
         {
-            Driver = new ConductorDriver(Kernel, Workspace, _verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: _cleanup.Hooks);
-            Driver.SuccessfulLandingSink = Landings.Add;
-            if (enableGrouped) Driver.EnableOwnedGroupedGateAttempts(_grouped);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Workspace.OrchestratorDirectory, "acceptance-gate-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, Repo,
                 isProcessAlive: pid => _liveProcesses.Contains(pid),
@@ -254,11 +250,10 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
                     _liveProcesses.Add(pid);
                     return new ConductorParallelAcceptanceOwnedProcessLaunchResult(pid);
                 }, buildStorageRoot: _cleanup.Hooks.BuildStorageRoot);
-            // Inject the existing coordinator seam without widening the goal's production scope.
-            var field = typeof(ConductorDriver).GetField("_parallelAcceptanceAttemptCoordinator",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(field);
-            field.SetValue(Driver, coordinator);
+            Driver = new ConductorDriver(Kernel, Workspace, _verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: _cleanup.Hooks, parallelAcceptanceAttemptCoordinator: coordinator);
+            Driver.SuccessfulLandingSink = Landings.Add;
+            if (enableGrouped) Driver.EnableOwnedGroupedGateAttempts(_grouped);
         }
 
         internal AcceptanceCohortReceipt SeedAttributedFailure(bool unrelatedTests = false)

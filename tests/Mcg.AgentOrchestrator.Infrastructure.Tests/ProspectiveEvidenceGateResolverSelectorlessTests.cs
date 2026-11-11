@@ -173,15 +173,9 @@ public sealed class ProspectiveEvidenceGateResolverSelectorlessTests
             names: named ? ["GateTests.Check"] : null, kind: kind);
         // Exercise the host-only overload with a valid receipt result: the shape guard
         // must still reject these waits independently of the receipt validator.
-        var authorization = typeof(AgentOrchestratorKernel).Assembly.GetType(
-            "Mcg.AgentOrchestrator.Core.PlannerHumanInputAnswerAuthorization", throwOnError: true)!;
-        var submit = authorization.GetMethod("SubmitHumanInput", BindingFlags.Static | BindingFlags.NonPublic);
-        Assert.NotNull(submit);
-
-        var exception = Assert.Throws<TargetInvocationException>(() =>
-            submit.Invoke(null, [f.Kernel, wait.Id, "Host receipt", (Func<int, bool>)(_ => true)]));
-
-        Assert.IsType<UnauthorizedAccessException>(exception.InnerException);
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            PlannerHumanInputAnswerAuthorization.SubmitHumanInput(
+                f.Kernel, wait.Id, "Host receipt", _ => true));
         Assert.False(wait.IsCompleted);
         Assert.Null(wait.Answer);
         Assert.Empty(wait.AnswerHistory);

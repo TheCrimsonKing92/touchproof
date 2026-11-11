@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static partial class RepositoryChangeClassifier
 {
-    private static readonly (string Directory, string Stem)[] DispatchResultHandlingPaths =
+    internal static readonly (string Directory, string Stem)[] DispatchResultHandlingPaths =
     [
         ("src/Mcg.AgentOrchestrator.Core/", "AgentOutputDirectives"),
         ("src/Mcg.AgentOrchestrator.Core/Application/", "DispatchFailureClassifier"),

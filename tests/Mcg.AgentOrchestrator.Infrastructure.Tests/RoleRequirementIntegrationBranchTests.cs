@@ -169,10 +169,7 @@ public sealed class RoleRequirementIntegrationBranchTests
 
     private static IReadOnlyList<string> Apply(IReadOnlyList<string> lines, string? branch)
     {
-        var type = typeof(AgentOrchestratorKernel).Assembly.GetType(
-            "Mcg.AgentOrchestrator.Core.RoleRequirementIntegrationBranch", throwOnError: true)!;
-        var method = type.GetMethod("Apply", [typeof(IReadOnlyList<string>), typeof(string)])!;
-        return (IReadOnlyList<string>)method.Invoke(null, [lines, branch])!;
+        return RoleRequirementIntegrationBranch.Apply(lines, branch);
     }
 
     private sealed class BriefFixture

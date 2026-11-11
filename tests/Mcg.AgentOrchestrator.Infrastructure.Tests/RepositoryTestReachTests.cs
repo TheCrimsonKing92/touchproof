@@ -85,20 +85,15 @@ public sealed class RepositoryTestReachTests
         Assert.DoesNotContain("GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedUnionReceipts", reach);
     }
 
-    // Core exposes only the reach API to this assembly. Reflect the reader to pin its
-    // default semantics without widening production internals visibility for a test.
-    private static readonly MethodInfo Reader = typeof(RepositoryTestReach).Assembly
-        .GetType("Mcg.AgentOrchestrator.Core.ReverseDependencyTestImpactReader", throwOnError: true)!
-        .GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic)!;
-
-    private static object ReadRaw(string root, bool? propagate) => Reader.Invoke(null,
-        [root, new[] { RepositoryFixture.Source }, true, Type.Missing, Type.Missing, Type.Missing,
-            propagate.HasValue ? propagate.Value : Type.Missing, Type.Missing])!;
+    // Pin the reader default and explicit reach semantics through compile-checked access.
+    private static ReverseDependencyTestSelection ReadRaw(string root, bool? propagate) => propagate.HasValue
+        ? ReverseDependencyTestImpactReader.Read(root, new[] { RepositoryFixture.Source }, true, propagateShippingSourceReach: propagate.Value)
+        : ReverseDependencyTestImpactReader.Read(root, new[] { RepositoryFixture.Source }, true);
 
     private static string ReaderOutcome(string root)
     {
         var result = ReadRaw(root, null);
-        return result.GetType().GetProperty("Outcome")!.GetValue(result)!.ToString()!;
+        return result.Outcome.ToString();
     }
 
     private static JsonElement ReadSelection(string root, bool? propagate)

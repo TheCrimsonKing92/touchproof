@@ -37,6 +37,41 @@ public sealed class PreTesterCoupledClassWiringTests
         Assert.Equal("green", scenario.Latest().Outcome);
     }
 
+    [Theory]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SomeTests.cs")]
+    [InlineData("config/production-member-reflection-exemptions.json")]
+    [InlineData("src/Mcg.AgentOrchestrator.Core/SomeProductionType.cs")]
+    public void ReflectionInputsReachRequestWithoutPaidStart(string changedPath)
+    {
+        using var scenario = new Scenario();
+        scenario.Paths = [changedPath];
+        scenario.Repository.Write(changedPath, changedPath.EndsWith(".cs", StringComparison.Ordinal)
+            ? "public class ChangedInput {}" : "[]");
+        // Omit the structural marker here so ordinary production content must select via
+        // snapshot dependencies, even when topology information is unavailable to the fixture.
+        scenario.Repository.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProductionMemberReflectionGuardTests.cs", """
+            public class ProductionMemberReflectionGuardTests {
+                [Fact] public void Scans() {
+                    var snapshot = RepositorySourceSnapshotCache.Get(root);
+                    snapshot.EnumerateFiles(Path.Combine(root, "src"));
+                    snapshot.EnumerateFiles(Path.Combine(root, "tests"));
+                    File.ReadAllText(Path.Combine(root, "config", "production-member-reflection-exemptions.json"));
+                }
+            }
+            """);
+
+        // Drive the production preflight seam through receipt composition, stopping before
+        // AdvanceOnce's normal paid-dispatch continuation after a green preflight.
+        Assert.False(scenario.Driver().TryRunDeveloperCompletionStructuralPreflight(
+            scenario.Goal, scenario.Goal.Id.Value, ConductorAutonomyPolicy.Conservative,
+            GoalLifecycleState.WorkspaceReady, out _));
+
+        Assert.Contains("Infrastructure.Tests:ProductionMemberReflectionGuardTests", Assert.Single(scenario.Requests), StringComparison.Ordinal);
+        Assert.Contains("Infrastructure.Tests:ProductionMemberReflectionGuardTests", scenario.Latest().Selections);
+        Assert.Equal("green", scenario.Latest().Outcome);
+        Assert.Equal(0, scenario.DispatchStarts);
+    }
+
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(false)]
@@ -76,7 +111,8 @@ public sealed class PreTesterCoupledClassWiringTests
     public void NewClassesStayInBalancedRemainderLanes()
     {
         var settings = AcceptanceGateEngineSettings.Load(VerifiedRepositoryRoot.Find());
-        var classes = new[] { typeof(PreTesterCoupledClassWiringTests), typeof(PreTesterCoupledClassSelectionsTests) }
+        var classes = new[] { typeof(PreTesterCoupledClassWiringTests), typeof(PreTesterCoupledClassSelectionsTests),
+            typeof(ProductionMemberReflectionGuardTests), typeof(ProductionMemberReflectionScannerTests) }
             .Select(type => new AcceptanceTestClassDescriptor(type.FullName!, null)).ToArray();
         var expanded = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, classes,
             new Dictionary<string, double>(), settings.BalancedLanePool!);
@@ -97,6 +133,7 @@ public sealed class PreTesterCoupledClassWiringTests
         internal Fixture Repository { get; }
         internal IReadOnlyList<string> Paths { get; set; } = [Fixture.Source];
         internal List<string> Requests { get; } = [];
+        internal int DispatchStarts { get; private set; }
         internal Scenario()
         {
             (Kernel, Goal) = SoftwareGoal("Pre-Tester coupled evidence");
@@ -131,7 +168,7 @@ public sealed class PreTesterCoupledClassWiringTests
                     Requests.Add(request);
                     return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(Root, request, CandidateSha);
                 },
-                dispatchAndStart: _ => DispatchStartOutcome.Started(),
+                dispatchAndStart: _ => { DispatchStarts++; return DispatchStartOutcome.Started(); },
                 recordFindingEvidenceRequest: (goalId, taskId, message) => Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
                 recordFindingEvidenceRun: (goalId, taskId, message) => Kernel.RecordFindingEvidenceRun(goalId, taskId, message),
                 executionDirectory: Root);

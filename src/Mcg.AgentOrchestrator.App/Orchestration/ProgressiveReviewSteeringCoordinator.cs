@@ -949,7 +949,7 @@ Evidence: {intent.MisdirectionEvidence}
         return $"codex exec --skip-git-repo-check{model}{reasoning} --sandbox workspace-write --cd {Quote(dispatch.WorkingDirectory)} resume {Quote(sessionId)} -";
     }
 
-    private static string? TryResolveHead(string worktree)
+    internal static string? TryResolveHead(string worktree)
     {
         try
         {

@@ -65,10 +65,7 @@ public sealed class RetiredInfrastructureFolderKeyTests
                 $"Retired Infrastructure folder contains files: {directory}");
         }
 
-        var field = typeof(RepositoryChangeClassifier).GetField(
-            "DispatchResultHandlingPaths", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(field);
-        var rows = Assert.IsType<(string Directory, string Stem)[]>(field.GetValue(null));
+        var rows = RepositoryChangeClassifier.DispatchResultHandlingPaths;
         Assert.NotEmpty(rows);
         foreach (var (directory, stem) in rows)
         {

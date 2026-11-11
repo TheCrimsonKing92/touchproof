@@ -8,10 +8,7 @@ public sealed class ConductorWakeSignalAttemptExitWindowTests
     {
         WithTrackedExit((signal, path) =>
         {
-            var mark = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
-                "TryMarkAttemptExitSignaled", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(mark);
-            Assert.True(Assert.IsType<bool>(mark.Invoke(signal, [path])));
+            Assert.True(signal.TryMarkAttemptExitSignaled(path));
 
             Assert.True(signal.Wait(TimeSpan.Zero));
             Assert.Equal(ConductorWakeReason.AttemptExit, signal.LastWakeReason);
@@ -25,10 +22,7 @@ public sealed class ConductorWakeSignalAttemptExitWindowTests
     {
         WithTrackedExit((signal, path) =>
         {
-            var callback = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
-                "SignalIfTrackedAttemptExit", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(callback);
-            callback.Invoke(signal, [path]);
+            signal.SignalIfTrackedAttemptExit(path);
 
             Assert.True(signal.Wait(TimeSpan.Zero));
             Assert.Equal(ConductorWakeReason.AttemptExit, signal.LastWakeReason);
@@ -42,10 +36,7 @@ public sealed class ConductorWakeSignalAttemptExitWindowTests
     {
         WithTrackedExit((signal, path) =>
         {
-            var callback = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
-                "SignalIfTrackedAttemptExit", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(callback);
-            callback.Invoke(signal, [path]);
+            signal.SignalIfTrackedAttemptExit(path);
             signal.UpdateTrackedExitArtifacts([]);
 
             Assert.True(signal.Wait(TimeSpan.Zero));

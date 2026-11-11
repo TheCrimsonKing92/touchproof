@@ -39,7 +39,7 @@ internal sealed partial class ConductorDriver
         _developerCompletionStructuralPreflightBound = bound;
     }
 
-    private bool TryRunDeveloperCompletionStructuralPreflight(
+    internal bool TryRunDeveloperCompletionStructuralPreflight(
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy,

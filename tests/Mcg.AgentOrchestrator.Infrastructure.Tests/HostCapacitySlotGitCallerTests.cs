@@ -27,8 +27,7 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         var budget = new HostCapacityTestBudget(1, _ => path);
         await using (var held = await budget.EnterAsync())
         {
-            var requireGitWorkTree = typeof(GoalWorktrees).GetMethod("RequireGitWorkTree",
-                BindingFlags.Static | BindingFlags.NonPublic, [typeof(string)])!.CreateDelegate<Action<string>>();
+            Action<string> requireGitWorkTree = GoalWorktrees.RequireGitWorkTree;
             requireGitWorkTree(repo);
             requireGitWorkTree(repo);
             CommitThroughHelper(repo, environment);
@@ -101,8 +100,7 @@ public sealed class HostCapacitySlotGitCallerTests(ITestOutputHelper output) : I
         var window = census.Open("forwarding")!;
         // Exercise the actual post-start notification boundary with a local target,
         // without replacing the observer used by concurrently running git launches.
-        var notify = typeof(GitCli).GetMethod("NotifyLaunch", BindingFlags.NonPublic | BindingFlags.Static)!
-            .CreateDelegate<Action<Action<string>, string[]>>();
+        Action<Action<string>, string[]> notify = GitCli.NotifyLaunch;
         notify(ForwardingObserver(census), ["rev-parse"]);
         var delta = window.Close()!;
         Assert.Equal(1, delta.Launches);

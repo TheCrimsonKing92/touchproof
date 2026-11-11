@@ -255,7 +255,7 @@ public static class GoalAcceptanceStatusProjector
             : new AcceptanceCandidate(branchHead, mainHead);
     }
 
-    private static string? TryResolveHead(string path)
+    internal static string? TryResolveHead(string path)
     {
         try
         {

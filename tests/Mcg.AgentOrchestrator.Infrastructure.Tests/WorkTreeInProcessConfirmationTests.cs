@@ -281,9 +281,7 @@ public sealed class WorkTreeInProcessConfirmationTests : IDisposable
     private static GitCli.GitResult Oracle(string directory) =>
         GitCli.Run(directory, "rev-parse", "--is-inside-work-tree");
 
-    private static void Require(string directory) => typeof(GoalWorktrees)
-        .GetMethod("RequireGitWorkTree", BindingFlags.Static | BindingFlags.NonPublic, [typeof(string)])!
-        .CreateDelegate<Action<string>>()(directory);
+    private static void Require(string directory) => GoalWorktrees.RequireGitWorkTree(directory);
 
     private string CreateRepository(string format = "sha1")
     {

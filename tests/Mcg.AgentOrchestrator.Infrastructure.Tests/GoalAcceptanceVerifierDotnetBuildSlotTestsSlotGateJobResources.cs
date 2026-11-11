@@ -29,18 +29,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             verifier.RunAsync(root));
 
         Assert.NotNull(exception);
-        Assert.Equal("AcceptanceGateEngineException", exception.GetType().Name);
+        var engineException = Assert.IsType<AcceptanceGateEngineException>(exception);
         Assert.Equal(
             "System.InvalidOperationException",
-            exception.GetType().GetProperty("FaultType")?.GetValue(exception));
+            engineException.FaultType);
         Assert.Equal(
             "check-execution",
-            exception.GetType().GetProperty("GatePhase")?.GetValue(exception));
+            engineException.GatePhase);
         Assert.Equal(
             "dotnet test",
-            exception.GetType().GetProperty("GateTarget")?.GetValue(exception));
+            engineException.GateTarget);
         var faultStack = Assert.IsType<string>(
-            exception.GetType().GetProperty("FaultStack")?.GetValue(exception));
+            engineException.FaultStack);
         Assert.Contains("owned process lifecycle failed", faultStack, StringComparison.Ordinal);
         Assert.Contains(nameof(ThrowUnexpectedRunnerFault), faultStack, StringComparison.Ordinal);
     }
