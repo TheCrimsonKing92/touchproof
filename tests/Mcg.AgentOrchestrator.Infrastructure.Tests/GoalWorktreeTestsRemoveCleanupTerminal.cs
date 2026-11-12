@@ -13,6 +13,210 @@ using Microsoft.Data.Sqlite;
 
 public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBase
 {
+    // Each archive case owns a seeded repository and uses the fixture's isolated cleanup hooks.
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RemoveTerminal_UnmergedTip_PreservesArchive(bool archiveAlreadyExists)
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, tip) = CreateCancelledUnmergedGoal(repo);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var archiveRef = $"refs/archive/goal/{goal.Id.Value}";
+            if (archiveAlreadyExists)
+            {
+                RunGit(repo, "update-ref", archiveRef, tip);
+            }
+
+            var result = RemoveTerminalWorktree(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete, result.Message);
+            Assert.False(BranchExists(repo, branch));
+            Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(repo, goal.Id)));
+            Assert.Equal(tip, RunGitOutput(repo, "rev-parse", "--verify", archiveRef).Trim());
+            Assert.Contains(archiveRef, result.Message, StringComparison.Ordinal);
+            Assert.Contains(tip, result.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RemoveTerminal_MergedTip_DoesNotMutateArchive(bool archiveAlreadyExists)
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, tip) = CreateCancelledUnmergedGoal(repo);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var archiveRef = $"refs/archive/goal/{goal.Id.Value}";
+            var existingTip = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            if (archiveAlreadyExists)
+            {
+                RunGit(repo, "update-ref", archiveRef, existingTip);
+            }
+
+            RunGit(repo, "merge", "--ff-only", branch);
+            Assert.Equal(0, RunGitExitCode(repo, "merge-base", "--is-ancestor", tip, "HEAD"));
+
+            var result = RemoveTerminalWorktree(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete, result.Message);
+            Assert.False(BranchExists(repo, branch));
+            if (archiveAlreadyExists)
+            {
+                Assert.Equal(existingTip, RunGitOutput(repo, "rev-parse", archiveRef).Trim());
+            }
+            else
+            {
+                Assert.NotEqual(0, RunGitExitCode(repo, "rev-parse", "--verify", archiveRef));
+            }
+            Assert.Equal($"Removed workspace and merged branch {branch}.", result.Message);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RemoveTerminal_ArchiveWriteFailure_KeepsBranchAtTip()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, tip) = CreateCancelledUnmergedGoal(repo);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var archiveRef = $"refs/archive/goal/{goal.Id.Value}";
+            // A parent ref prevents Git from creating any ref below that name.
+            var parentTip = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            RunGit(repo, "update-ref", "refs/archive/goal", parentTip);
+            Assert.Equal(parentTip, RunGitOutput(repo, "rev-parse", "refs/archive/goal").Trim());
+
+            var result = RemoveTerminalWorktree(repo, goal.Id, kernel);
+
+            Assert.False(result.IsComplete);
+            Assert.Contains(archiveRef, result.Message, StringComparison.Ordinal);
+            Assert.Contains("could not be written", result.Message, StringComparison.Ordinal);
+            Assert.Contains("update-ref", result.Message, StringComparison.Ordinal);
+            // This assertion fails if branch deletion precedes the failing archive write.
+            Assert.True(BranchExists(repo, branch));
+            Assert.Equal(tip, RunGitOutput(repo, "rev-parse", branch).Trim());
+            Assert.NotEqual(0, RunGitExitCode(repo, "rev-parse", "--verify", archiveRef));
+            Assert.Equal(parentTip, RunGitOutput(repo, "rev-parse", "refs/archive/goal").Trim());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RemoveTerminal_ConflictingArchive_KeepsBothTips()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, tip) = CreateCancelledUnmergedGoal(repo);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var archiveRef = $"refs/archive/goal/{goal.Id.Value}";
+            var existingTip = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual(tip, existingTip);
+            RunGit(repo, "update-ref", archiveRef, existingTip);
+
+            var result = RemoveTerminalWorktree(repo, goal.Id, kernel);
+
+            Assert.False(result.IsComplete);
+            Assert.Contains(archiveRef, result.Message, StringComparison.Ordinal);
+            Assert.Contains("already exists at a different tip", result.Message, StringComparison.Ordinal);
+            Assert.Contains(existingTip, result.Message, StringComparison.Ordinal);
+            Assert.Contains(tip, result.Message, StringComparison.Ordinal);
+            Assert.True(BranchExists(repo, branch));
+            Assert.Equal(tip, RunGitOutput(repo, "rev-parse", branch).Trim());
+            Assert.Equal(existingTip, RunGitOutput(repo, "rev-parse", archiveRef).Trim());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RemoveTerminal_UnresolvedTip_ReturnsIncomplete()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Missing branch",
+                [new TaskSpec(TaskId.New(), "Exercise stale branch facts.", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.CancelGoal(goal.Id, "Exercise stale branch facts.");
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+
+            var result = RemoveTerminalWorktree(repo, goal.Id, kernel,
+                hasRegisteredWorktree: false, hasBranch: true);
+
+            Assert.False(result.IsComplete);
+            Assert.Contains("resolving the branch tip", result.Message, StringComparison.Ordinal);
+            Assert.NotEqual(0, RunGitExitCode(repo, "rev-parse", "--verify", $"refs/archive/goal/{goal.Id.Value}"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void TerminalSweep_UnmergedTip_RecordsArchiveEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, tip) = CreateCancelledUnmergedGoal(repo);
+            var archiveRef = $"refs/archive/goal/{goal.Id.Value}";
+
+            var result = TerminalGoalSweep.Run(kernel, repo, TrunkBranchName.Default, goal.Id,
+                cleanupHooks: CreateIsolatedCleanupContext(repo).Hooks);
+
+            var sweptGoal = Assert.Single(result.Goals);
+            Assert.Equal(goal.Id, sweptGoal.GoalId);
+            Assert.Empty(sweptGoal.Blockers);
+            var repair = Assert.Single(sweptGoal.Repairs.Where(item => item.Kind == "terminal-worktree-cleanup"));
+            Assert.Contains(archiveRef, repair.Evidence, StringComparison.Ordinal);
+            Assert.Contains(tip, repair.Evidence, StringComparison.Ordinal);
+            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+            Assert.Equal(tip, RunGitOutput(repo, "rev-parse", archiveRef).Trim());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, string Tip) CreateCancelledUnmergedGoal(string repo)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Archive terminal branch",
+            [new TaskSpec(TaskId.New(), "Preserve unlanded work.", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var path = GoalWorktrees.Ensure(repo, goal.Id);
+        File.WriteAllText(Path.Combine(path, "unmerged.txt"), "Preserve this commit.");
+        RunGit(path, "add", "unmerged.txt");
+        RunGit(path, "commit", "-m", "Unmerged goal work");
+        var tip = RunGitOutput(path, "rev-parse", "HEAD").Trim();
+        Assert.Equal(40, tip.Length);
+        Assert.Equal(1, RunGitExitCode(repo, "merge-base", "--is-ancestor", tip, "HEAD"));
+        Assert.True(string.IsNullOrWhiteSpace(RunGitOutput(path, "status", "--porcelain")));
+        kernel.CancelGoal(goal.Id, "Exercise terminal branch archival.");
+        return (kernel, goal, tip);
+    }
 
     [Xunit.Fact(DisplayName = "GoalWorktrees_terminal_remove_deletes_long_path_and_prunes_registration")]
     public void GoalWorktreesTerminalRemoveDeletesLongPathAndPrunesRegistration()
