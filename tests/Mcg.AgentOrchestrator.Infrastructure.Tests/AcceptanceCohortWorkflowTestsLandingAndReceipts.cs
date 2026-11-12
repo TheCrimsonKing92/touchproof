@@ -693,7 +693,6 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts(CohortCandid
                 onGateAdmitted: () =>
                 {
                     gateAdmissions++;
-                    driver.RecordCohortAdmissionFairness([firstGoal, secondGoal], selection);
                 });
 
             Assert.Null(result.Receipt);

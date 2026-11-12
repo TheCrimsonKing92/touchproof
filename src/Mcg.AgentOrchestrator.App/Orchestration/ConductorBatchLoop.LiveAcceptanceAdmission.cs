@@ -270,11 +270,6 @@ internal sealed partial class ConductorBatchLoop
         activeAttemptSlotIndexes.Add(candidate.SlotIndex);
     }
 
-    private static string FormatCohortPairExclusions(
-        IReadOnlyList<ConductorAcceptanceCohortPairExclusion> exclusions) =>
-        string.Join(',', exclusions.Select(exclusion =>
-            $"{exclusion.FirstGoalId.Value[..8]}:{exclusion.SecondGoalId.Value[..8]}:{exclusion.Reason}"));
-
     private static ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         ConductorDriver driver,
         Goal goal,
