@@ -39,7 +39,7 @@ public sealed class SoloAttributedFailureRouteReplayTests
     }
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
-    public async Task ExhaustedActualAcceptanceBudgetHoldsUnseenSignature()
+    public async Task EarlierNonSoloRetriesDoNotCapUnseenSoloSignature()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce();
@@ -50,11 +50,11 @@ public sealed class SoloAttributedFailureRouteReplayTests
         await fixture.Restart();
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
-        Assert.Contains("solo-acceptance-retry-cap", held.Reason);
-        Assert.Empty(MarkerRetries(fixture.Goal));
-        Assert.Empty(fixture.Starts);
-        Assert.Equal(ConductorAutonomyPolicy.Permissive.MaxCriterionRetries, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.IsNotType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal,
+            ConductorAutonomyPolicy.Permissive with { AutomaticRetryOperatorRoutingHoldSeconds = 0 }).Outcome);
+        Assert.Single(MarkerRetries(fixture.Goal));
+        Assert.Single(fixture.Starts);
+        Assert.Equal(ConductorAutonomyPolicy.Permissive.MaxCriterionRetries + 1, fixture.Goal.AutomaticAcceptanceRetryCount);
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
