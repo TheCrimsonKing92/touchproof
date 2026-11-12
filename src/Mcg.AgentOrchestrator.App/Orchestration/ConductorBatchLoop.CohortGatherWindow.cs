@@ -47,7 +47,7 @@ internal sealed partial class ConductorBatchLoop
                     task.Status == WorkTaskStatus.Running && task.LastDispatch is not null))
             .ToArray();
         if (results.ContainsKey(ready.Id.Value) ||
-            !driver.AcceptanceCohortsEnabled ||
+            !driver.MergeTrainsEnabled ||
             acceptanceCensus.CaptureFailure is not null ||
             acceptanceCensus.OccupiedCount != 0 ||
             policy.AcceptanceCohortGatherWindowSeconds <= 0 ||
@@ -62,13 +62,17 @@ internal sealed partial class ConductorBatchLoop
         }
 
         var suppressedPairs = driver.ReadSuppressedGroupedPairs();
+        var ineligibleGoalIds = TrainIneligibleCriterionEvidenceGoalIds([ready]);
+        var attributedMemberKeys = driver.ReadCohortAttributedMemberKeys();
         var trainImplicatedKeys = driver.ReadTrainImplicatedMemberKeys();
         var partners = inReview
-            .Where(goal => ConductorAcceptanceCohortSelector.Select(
+            .Where(goal => ConductorMergeTrainSelector.Select(
                 [readyCandidate, new ConductorSpeculativeAcceptanceCandidate(
                     goal.Id, driver.ProjectInReviewCohortPartner(goal, policy))],
                 suppressedPairFingerprints: suppressedPairs,
-                trainImplicatedMemberKeys: trainImplicatedKeys).Selection is not null)
+                ineligibleGoalIds: ineligibleGoalIds,
+                attributedMemberKeys: attributedMemberKeys,
+                trainImplicatedMemberKeys: trainImplicatedKeys) is not null)
             .Select(goal => goal.Id.Value)
             .Order(StringComparer.Ordinal)
             .ToArray();

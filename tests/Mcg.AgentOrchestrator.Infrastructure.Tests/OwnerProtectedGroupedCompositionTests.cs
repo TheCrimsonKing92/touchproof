@@ -92,7 +92,8 @@ public sealed class OwnerProtectedGroupedCompositionTests
 
         Assert.NotNull(result);
         Assert.Equal([b.GoalId, c.GoalId, d.GoalId], result.Members.Select(member => member.GoalId));
-        Assert.Null(ConductorMergeTrainSelector.Select([protectedMember, b, c]));
+        var pair = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select([protectedMember, b, c]));
+        Assert.Equal([b.GoalId, c.GoalId], pair.Members.Select(member => member.GoalId));
     }
 
     [Fact]

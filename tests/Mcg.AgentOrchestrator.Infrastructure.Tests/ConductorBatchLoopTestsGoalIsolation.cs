@@ -11,7 +11,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
     public async Task PersistentCliIntentDefersItsTickThenTrainExcludesSoloWithoutGathering()
     {
         using var isolated = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        using var fixture = new GroupingFixture(4, trains: true);
+        using var fixture = new GroupingFixture(4);
         await fixture.Submit("solo");
         Assert.Equal(GoalIsolation.None, fixture.Goals[0].Isolation);
         // Scope the intent-only tick to A; B/C/D remain Verified for the first admitting tick.
@@ -38,7 +38,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
     public async Task SameNormalFixturesGroupOnlyWhenIsolationIsNone(bool train, bool solo)
     {
         using var isolated = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        using var fixture = new GroupingFixture(train ? 4 : 2, train);
+        using var fixture = new GroupingFixture(train ? 4 : 2);
         if (solo) { await fixture.Submit("solo"); fixture.Tick(fixture.Goals[0].Id.Value); }
         fixture.Tick();
         if (train)
@@ -51,7 +51,8 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
             Assert.Empty(fixture.Pairs);
             Assert.Contains(fixture.Goals[0].Id, fixture.Solos);
         }
-        else Assert.Equal(fixture.Goals.Select(goal => goal.Id), Assert.Single(fixture.Pairs));
+        else Assert.Equal(fixture.Goals.Select(goal => goal.Id), Assert.Single(fixture.Trains));
+        Assert.Empty(fixture.Pairs);
         if (solo)
             Assert.All(fixture.Trains.Concat(fixture.Pairs), members => Assert.DoesNotContain(fixture.Goals[0].Id, members));
     }
@@ -60,7 +61,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
     public async Task CriticalSoloKeepsSoloOrderAndNeverBecomesAGroupMember()
     {
         using var isolated = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        using var fixture = new GroupingFixture(4, trains: true);
+        using var fixture = new GroupingFixture(4);
         fixture.Kernel.SetGoalPriority(fixture.Goals[0].Id, GoalPriority.Critical, "test", "setup");
         await fixture.Submit("solo");
         fixture.Tick(fixture.Goals[0].Id.Value);
@@ -73,7 +74,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
     public async Task NoneIntentRestoresGroupingOnTheNextAdmittingTick()
     {
         using var isolated = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        using var fixture = new GroupingFixture(2, trains: false);
+        using var fixture = new GroupingFixture(2);
         await fixture.Submit("solo");
         fixture.Tick(fixture.Goals[0].Id.Value);
         Assert.Equal(GoalIsolation.Solo, fixture.Goals[0].Isolation);
@@ -81,7 +82,8 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
         fixture.Tick(fixture.Goals[0].Id.Value);
         Assert.Equal(GoalIsolation.None, fixture.Goals[0].Isolation);
         fixture.Tick();
-        Assert.Equal(fixture.Goals.Select(goal => goal.Id), Assert.Single(fixture.Pairs));
+        Assert.Equal(fixture.Goals.Select(goal => goal.Id), Assert.Single(fixture.Trains));
+        Assert.Empty(fixture.Pairs);
         Assert.All(await fixture.Store.ListForGoalAsync(fixture.Goals[0].Id.Value), intent => Assert.Equal(OperatorIntentStatus.Applied, intent.Status));
     }
 
@@ -183,7 +185,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
         private readonly SqliteOrchestratorStateRepository _repository;
         private readonly ConductorDriver _driver;
         private readonly ConductorBatchLoop _loop;
-        internal GroupingFixture(int count, bool trains)
+        internal GroupingFixture(int count)
         {
             Goals = Enumerable.Range(0, count).Select(index => VerifiedAt(Kernel, ((char)('A' + index)).ToString(), index)).ToArray();
             foreach (var goal in Goals)
@@ -197,17 +199,17 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
                 .ToDictionary(item => item.Id, item => (IReadOnlyList<string>)new[] { item.Path });
             const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             string Branch(GoalId id) => id.Value.PadRight(40, 'b');
-            _driver = MakeDriver(mergeTrainsEnabled: trains, getFacts: _ => new(WorkspaceExists: true), classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            _driver = MakeDriver(getFacts: _ => new(WorkspaceExists: true), classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 isVerificationGateSatisfied: _ => true, getLandingFileScopes: goal => paths[goal.Id],
                 resolveAcceptanceHeads: goal => (Branch(goal.Id), main),
                 gateReadyCandidateProjector: new(id => new(Branch(id), main), id => new(true, paths[id]), (_, _, _) => new(true)),
                 parallelAcceptanceAttemptCoordinator: new(Path.Combine(_root, "attempts"), TrunkBranchName.Default, runInline: true),
                 runAcceptanceWithSlot: (goal, _) => { Solos.Add(goal.Id); return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria; },
-                runMergeTrain: trains ? (selection, _, policy) =>
+                runMergeTrain: (selection, _, policy) =>
                 {
                     Trains.Add(selection.Members.Select(member => member.GoalId).ToArray());
                     return new(null, Results(selection.Members.Select(member => member.GoalId), policy), [], "outcome=passed");
-                } : null,
+                },
                 runAcceptanceCohort: (selection, _, policy) =>
                 {
                     Pairs.Add(selection.Members.Select(member => member.GoalId).ToArray());

@@ -27,7 +27,25 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
         Assert.Equal(0, scenario.SoloCalls);
         Assert.Equal(
             new[] { scenario.Ready.Id, scenario.Reviewing.Id }.OrderBy(id => id.Value),
-            scenario.CohortMembers!.OrderBy(id => id.Value));
+            scenario.TrainMembers!.OrderBy(id => id.Value));
+        Assert.Equal(0, scenario.CohortCalls);
+    }
+
+    [Xunit.Fact]
+    public void UnrefinedReadyGoalWithCompatibleRunningReviewerAdmitsSoloImmediately()
+    {
+        var scenario = new Scenario(refineReadyGoal: false);
+        Assert.Null(scenario.Kernel.GetGoal(scenario.Ready.Id).AuthoritativeRefinedSpecVersion);
+        Assert.Equal(WorkTaskStatus.Running,
+            scenario.Kernel.GetGoal(scenario.Reviewing!.Id).Tasks.Single().Status);
+
+        var tick = scenario.Tick();
+
+        Assert.Equal(new[] { scenario.Ready.Id }, scenario.SoloGoals);
+        Assert.Equal(1, scenario.SoloCalls);
+        Assert.Null(scenario.TrainMembers);
+        Assert.Equal(0, scenario.CohortCalls);
+        Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("outcome=gathering"));
     }
 
     [Xunit.Fact]
@@ -71,6 +89,17 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
         var scenario = new Scenario();
         var tick = scenario.Tick(ConductorAutonomyPolicy.Permissive with { AcceptanceCohortGatherWindowSeconds = 0 });
         Assert.Equal(1, scenario.SoloCalls);
+        Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("outcome=gathering"));
+    }
+
+    [Xunit.Fact]
+    public void DisabledTrainsAdmitSoloWithoutGathering()
+    {
+        var scenario = new Scenario(trainsEnabled: false);
+        var tick = scenario.Tick();
+        Assert.Equal(1, scenario.SoloCalls);
+        Assert.Null(scenario.TrainMembers);
+        Assert.Equal(0, scenario.CohortCalls);
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("outcome=gathering"));
     }
 
@@ -121,20 +150,25 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
         internal DateTimeOffset Now { get; set; } = DateTimeOffset.Parse("2026-09-28T14:00:00Z");
         internal int SoloCalls { get; private set; }
         internal List<GoalId> SoloGoals { get; } = [];
-        internal IReadOnlyList<GoalId>? CohortMembers { get; private set; }
+        internal IReadOnlyList<GoalId>? TrainMembers { get; private set; }
+        internal int CohortCalls { get; private set; }
         private readonly ConductorDriver _driver;
         private readonly ConductorBatchLoop _loop;
 
-        internal Scenario(bool includeReviewingGoal = true, bool includeExcludedReadyGoal = false)
+        internal Scenario(bool includeReviewingGoal = true, bool includeExcludedReadyGoal = false,
+            bool trainsEnabled = true, bool refineReadyGoal = true)
         {
             Kernel = new AgentOrchestratorKernel();
             Ready = CreateVerifiedSimpleGoal(Kernel,
                 "Update src/Mcg.AgentOrchestrator.Core/Application/GatherReady.cs");
+            if (refineReadyGoal)
+                MergeTrainAdmissionTestContext.Refine(Kernel, Ready);
             Paths[Ready.Id] = ["src/Mcg.AgentOrchestrator.Core/Application/GatherReady.cs"];
             if (includeReviewingGoal)
             {
                 Reviewing = GoalLifecycleCommands.CreateAndActivateSimpleGoal(Kernel, DefaultAgents(),
                     "Update tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs");
+                MergeTrainAdmissionTestContext.Refine(Kernel, Reviewing);
                 Paths[Reviewing.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs"];
                 ReplaceReviewerStatus(WorkTaskStatus.Running);
             }
@@ -150,6 +184,7 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
                 id => new GateReadyLandingScopeObservation(true, Paths[id]),
                 (_, _, _) => new GateReadyMergeTreeObservation(true));
             _driver = MakeDriver(
+                mergeTrainsEnabled: trainsEnabled,
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 runAcceptanceWithSlot: (goal, _) =>
                 {
@@ -161,10 +196,15 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
                 getLandingFileScopes: goal => Paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
                 gateReadyCandidateProjector: projector,
-                runAcceptanceCohort: (selection, _, policy) =>
+                runAcceptanceCohort: (_, _, _) =>
                 {
-                    CohortMembers = selection.Members.Select(member => member.GoalId).ToArray();
-                    return new ConductorAcceptanceCohortRunResult(
+                    CohortCalls++;
+                    throw new InvalidOperationException("New pair must use a merge train.");
+                },
+                runMergeTrain: (selection, _, policy) =>
+                {
+                    TrainMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                    return new ConductorMergeTrainRunResult(
                         null,
                         selection.Members.ToDictionary(
                             member => member.GoalId.Value,
@@ -173,9 +213,9 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
                                 member.GoalId.Value[..8],
                                 policy.Name,
                                 new ConductorAdvanceOutcome.Executed(
-                                    GoalLifecycleState.Verified, "admitted by cohort")),
+                                    GoalLifecycleState.Verified, "admitted by train")),
                             StringComparer.Ordinal),
-                        "outcome=passed");
+                        [], "outcome=passed");
                 });
             _loop = new ConductorBatchLoop(utcNow: () => Now);
         }

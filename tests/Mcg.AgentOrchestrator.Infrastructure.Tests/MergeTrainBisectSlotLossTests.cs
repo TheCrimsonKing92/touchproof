@@ -67,10 +67,11 @@ public sealed class MergeTrainBisectSlotLossTests(CohortCandidateTemplate templa
             Assert.NotNull(beforeLease);
             Assert.Equal(scenario.Key(0), Assert.Single(beforeLease));
             Assert.Equal(scenario.Key(0), Assert.Single(scenario.Driver.ReadTrainImplicatedMemberKeys()));
-            Assert.Null(ConductorMergeTrainSelector.Select(scenario.Selection.Members.Select(member =>
+            var remainder = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(scenario.Selection.Members.Select(member =>
                 new ConductorSpeculativeAcceptanceCandidate(member.GoalId,
                     new GateReadyCandidateProjectionResult.Ready(member))).ToArray(),
                 trainImplicatedMemberKeys: scenario.Driver.ReadTrainImplicatedMemberKeys()));
+            Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id), remainder.Members.Select(member => member.GoalId));
             Assert.Equal(1, scenario.Verifier.Inner.RunCount);
             Assert.Equal(Paths, Assert.Single(scenario.Verifier.Inner.ChangedFiles));
             Assert.Equal(mainBefore, RunGitOutput(scenario.Repo, "rev-parse", "main").Trim());

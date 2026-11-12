@@ -203,7 +203,8 @@ public sealed class GroupedAdmissionLandingHoldTests
         var selected = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(candidates));
         Assert.Equal(candidates.Skip(1).Select(candidate => candidate.GoalId),
             selected.Members.Select(member => member.GoalId));
-        Assert.Null(ConductorMergeTrainSelector.Select(candidates[..3]));
+        var pair = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(candidates[..3]));
+        Assert.Equal(candidates[1..3].Select(candidate => candidate.GoalId), pair.Members.Select(member => member.GoalId));
     }
 
     [Fact]

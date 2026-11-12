@@ -34,8 +34,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
             var b = Partner('2', ejected.MainRevision);
             var c = Partner('3', ejected.MainRevision);
             Assert.NotNull(ConductorMergeTrainSelector.Select([Candidate(ejected), a, b]));
-            Assert.Null(ConductorMergeTrainSelector.Select([Candidate(ejected), a, b],
-                trainImplicatedMemberKeys: keys));
+            var remainder = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(
+                [Candidate(ejected), a, b], trainImplicatedMemberKeys: keys));
+            Assert.Equal([a.GoalId, b.GoalId], remainder.Members.Select(member => member.GoalId));
             var train = ConductorMergeTrainSelector.Select([Candidate(ejected), a, b, c],
                 trainImplicatedMemberKeys: keys);
             Assert.Equal([a.GoalId, b.GoalId, c.GoalId], train!.Members.Select(member => member.GoalId));
@@ -103,7 +104,10 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(Cohort
                 Assert.Contains(cohort.Exclusions, exclusion =>
                     exclusion.Reason == ConductorAcceptanceCohortPairExclusionReason.SuppressedInteraction);
                 Assert.NotNull(ConductorMergeTrainSelector.Select([pair[0], pair[1], third]));
-                Assert.Null(ConductorMergeTrainSelector.Select([pair[0], pair[1], third], pairs));
+                var train = Assert.IsType<ConductorMergeTrainSelection>(
+                    ConductorMergeTrainSelector.Select([pair[0], pair[1], third], pairs));
+                Assert.Equal([pair[0].GoalId, third.GoalId], train.Members.Select(member => member.GoalId));
+                Assert.DoesNotContain(train.Members, member => member.GoalId == pair[1].GoalId);
             }
             // Suppression is specific to these candidates at this main, not an individual exclusion.
             var other = Partner('2', scenario.Selection.Members[0].MainRevision);

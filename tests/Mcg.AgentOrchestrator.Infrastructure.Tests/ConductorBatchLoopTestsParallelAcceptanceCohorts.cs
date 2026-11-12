@@ -19,6 +19,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var goals = Enumerable.Range(1, 3)
             .Select(index => CreateVerifiedSimpleGoal(kernel, $"Criterion evidence admission member {index}"))
             .ToArray();
+        MergeTrainAdmissionTestContext.Refine(kernel, goals[1..]);
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var branchRevisions = goals.ToDictionary(
             goal => goal.Id,
@@ -47,7 +48,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             goalId => new GateReadyCandidateRevisionPair(branchRevisions[goalId], mainRevision),
             goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
             (_, _, _) => new GateReadyMergeTreeObservation(true));
-        IReadOnlyList<GoalId>? cohortMembers = null;
+        IReadOnlyList<GoalId>? trainMembers = null;
+        var cohortCalls = 0;
         var trainCalls = 0;
         var ordinaryGoals = new List<GoalId>();
         var driver = MakeDriver(
@@ -62,15 +64,16 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector,
             resolveAcceptanceHeads: goal => (branchRevisions[goal.Id], mainRevision),
-            runMergeTrain: (_, _, _) =>
+            runAcceptanceCohort: (_, _, _) =>
+            {
+                cohortCalls++;
+                throw new InvalidOperationException("New pair must use a merge train.");
+            },
+            runMergeTrain: (selection, _, policy) =>
             {
                 trainCalls++;
-                return new ConductorMergeTrainRunResult(null, new Dictionary<string, ConductorAdvanceResult>(), [], "unexpected train");
-            },
-            runAcceptanceCohort: (selection, _, policy) =>
-            {
-                cohortMembers = selection.Members.Select(member => member.GoalId).ToArray();
-                return new ConductorAcceptanceCohortRunResult(
+                trainMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                return new ConductorMergeTrainRunResult(
                     null,
                     selection.Members.ToDictionary(
                         member => member.GoalId.Value,
@@ -80,7 +83,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                             policy.Name,
                             new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "admitted by cohort")),
                         StringComparer.Ordinal),
-                    "outcome=passed");
+                    [], "outcome=passed");
             });
 
         var summary = new ConductorBatchLoop().Run(
@@ -90,8 +93,9 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             NoStopPath(),
             maxIterations: 1);
 
-        Assert.Equal(0, trainCalls);
-        Assert.Equal(goals[1..].Select(goal => goal.Id), cohortMembers);
+        Assert.Equal(1, trainCalls);
+        Assert.Equal(goals[1..].Select(goal => goal.Id), trainMembers);
+        Assert.Equal(0, cohortCalls);
         Assert.Equal([goals[0].Id], ordinaryGoals);
         Assert.Equal(2, summary.Advanced);
         Assert.Equal(1, summary.Held);
@@ -163,14 +167,16 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
     public void LiveCensusFailureAfterCohortBlocksOrdinaryAdmissionAndRecordsReason()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, 3)
+        var goals = Enumerable.Range(0, 4)
             .Select(index => CreateVerifiedSimpleGoal(kernel, $"Census failure cohort member {index}"))
             .ToArray();
+        MergeTrainAdmissionTestContext.Refine(kernel, goals);
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
             [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CensusFailureFirst.cs"],
             [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CensusFailureSecond.cs"],
-            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/CensusFailureThird.cs"]
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/CensusFailureThird.cs"],
+            [goals[3].Id] = ["tests/Mcg.AgentOrchestrator.TestSupport/CensusFailureFourth.cs"]
         };
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var projector = new GateReadyCandidateProjector(
@@ -181,6 +187,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             (_, _, _) => new GateReadyMergeTreeObservation(true));
         var cohortCalls = 0;
         var ordinaryCalls = 0;
+        var trainCalls = 0;
         var probeCalls = 0;
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
         {
@@ -202,10 +209,15 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             getLandingFileScopes: goal => paths[goal.Id],
             isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector,
-            runAcceptanceCohort: (selection, _, policy) =>
+            runAcceptanceCohort: (_, _, _) =>
             {
                 cohortCalls++;
-                return new ConductorAcceptanceCohortRunResult(
+                throw new InvalidOperationException("New pair must use a merge train.");
+            },
+            runMergeTrain: (selection, _, policy) =>
+            {
+                trainCalls++;
+                return new ConductorMergeTrainRunResult(
                     null,
                     selection.Members.ToDictionary(
                         member => member.GoalId.Value,
@@ -217,7 +229,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                                 GoalLifecycleState.Verified,
                                 "cohort completed before census refresh")),
                         StringComparer.Ordinal),
-                    "outcome=passed");
+                    [], "outcome=passed");
             });
         BatchTickSummary? tick = null;
 
@@ -229,7 +241,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             maxIterations: 1,
             onTick: current => tick = current);
 
-        Assert.Equal(1, cohortCalls);
+        Assert.Equal(1, trainCalls);
+        Assert.Equal(0, cohortCalls);
         Assert.Equal(0, ordinaryCalls);
         Assert.Contains(tick!.ProgressLines!, line =>
             line.Contains("detail=live-census-unavailable", StringComparison.Ordinal) &&
@@ -425,6 +438,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var kernel = new AgentOrchestratorKernel();
         var first = CreateVerifiedSimpleGoal(kernel, "Update first advisory source");
         var second = CreateVerifiedSimpleGoal(kernel, "Update second advisory source");
+        MergeTrainAdmissionTestContext.Refine(kernel, first, second);
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
@@ -434,6 +448,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var acceptanceCalls = new List<string>();
         var landed = new List<string>();
         var cohortCalls = 0;
+        var trainCalls = 0;
         string? sharedReceiptId = null;
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var projector = new GateReadyCandidateProjector(
@@ -467,18 +482,23 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
                 gateReadyCandidateProjector: projector,
-                runAcceptanceCohort: (selection, goals, policy) =>
+                runAcceptanceCohort: (_, _, _) =>
                 {
                     cohortCalls++;
-                    var identity = AcceptanceCohortIdentity.Create(
-                        selection.BindMembers(),
+                    throw new InvalidOperationException("New pair must use a merge train.");
+                },
+                runMergeTrain: (selection, goals, policy) =>
+                {
+                    trainCalls++;
+                    var identity = MergeTrainIdentity.Create(
+                        selection.BindMembers().Select(member => member.WithRebasedHead(member.BranchRevision)).ToArray(),
                         mainRevision,
                         "dddddddddddddddddddddddddddddddddddddddd",
                         "manifest-v1");
-                    var receipt = new AcceptanceCohortReceipt(
+                    var receipt = new MergeTrainReceipt(
                         $"receipt-{identity.Value}",
                         identity,
-                        AcceptanceCohortGateOutcome.Passed,
+                        MergeTrainGateOutcome.Passed,
                         DateTimeOffset.UtcNow,
                         10,
                         [],
@@ -486,7 +506,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                         GateTestResultPaths: [Path.GetFullPath("production-cohort.trx")],
                         ValidForLanding: true);
                     sharedReceiptId = receipt.ReceiptId;
-                    return new ConductorAcceptanceCohortRunResult(
+                    return new ConductorMergeTrainRunResult(
                         receipt,
                         goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)).ToDictionary(
                             goal => goal.Id.Value,
@@ -498,7 +518,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                                     GoalLifecycleState.Verified,
                                     $"shared receipt {receipt.ReceiptId}")),
                             StringComparer.Ordinal),
-                        $"outcome=passed receipt={receipt.ReceiptId}");
+                        [], $"outcome=passed receipt={receipt.ReceiptId}");
                 });
 
             var summary = new ConductorBatchLoop(
@@ -516,7 +536,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                 .ToArray();
 
             Assert.Equal(2, summary.Advanced);
-            Assert.Equal(1, cohortCalls);
+            Assert.Equal(1, trainCalls);
+            Assert.Equal(0, cohortCalls);
             Assert.Empty(acceptanceCalls);
             Assert.Empty(landed);
             Assert.NotNull(sharedReceiptId);
@@ -541,6 +562,9 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var kernel = new AgentOrchestratorKernel();
         var first = CreateVerifiedSimpleGoal(kernel, "First infrastructure failure member");
         var second = CreateVerifiedSimpleGoal(kernel, "Second infrastructure failure member");
+        MergeTrainAdmissionTestContext.Refine(kernel, first, second);
+        var trainCalls = 0;
+        var cohortCalls = 0;
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
@@ -571,8 +595,18 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
                 gateReadyCandidateProjector: projector,
+                runMergeTrain: (selection, _, policy) =>
+                {
+                    trainCalls++;
+                    return new ConductorMergeTrainRunResult(null, selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(member.GoalId.Value, member.GoalId.Value[..8], policy.Name,
+                            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, "shared infrastructure failure receipt")),
+                        StringComparer.Ordinal), [], "outcome=InfrastructureFailure reason=trx-evidence-incoherent");
+                },
                 runAcceptanceCohort: (selection, goals, policy) =>
                 {
+                    cohortCalls++;
                     var identity = AcceptanceCohortIdentity.Create(
                         selection.BindMembers(),
                         mainRevision,
@@ -605,23 +639,25 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                         $"outcome={receipt.Outcome} receipt={receipt.ReceiptId}");
                 });
 
+            BatchTickSummary? tick = null;
             _ = new ConductorBatchLoop(
                 conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                maxIterations: 1);
-            var exit = File.ReadAllLines(logPath)
-                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
-                    line,
-                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
-                .Single(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
+                maxIterations: 1,
+                onTick: current => tick = current);
+            Assert.NotNull(tick);
+            var exit = Assert.Single(tick.ProgressLines!,
+                line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal));
 
-            var exitTokens = exit.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var exitTokens = exit.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             Assert.Contains("outcome=InfrastructureFailure", exitTokens);
             Assert.Contains("reason=trx-evidence-incoherent", exitTokens);
             Assert.DoesNotContain("reason=trx-evidence-incoherent-extra", exitTokens);
+            Assert.Equal(1, trainCalls);
+            Assert.Equal(0, cohortCalls);
             Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
         }
         finally
@@ -636,27 +672,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var faulted = RunCohortFaultTicks(CaptureGateEngineFault, runs: 1);
         var control = RunCohortFaultTicks(fault: null, runs: 1);
 
-        Assert.Null(faulted.LoopException);
-        var exitTokens = faulted.Lines
-            .Single(line => line.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal))
-            .Detail
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Contains("outcome=gate-fault", exitTokens);
-        Assert.Contains("fault=AcceptanceGateEngineException", exitTokens);
-
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            var memberLine = faulted.Lines.Single(line =>
-                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
-                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
-            Assert.Contains("result=held", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("fault=AcceptanceGateEngineException", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("classification=transient", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("failures=1/3", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("worker-process-registration-failed", memberLine.Detail, StringComparison.Ordinal);
-        }
-
-        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
+        AssertPairUsesTrain(faulted, runs: 1);
         Assert.Equal(control.StopReason, faulted.StopReason);
     }
 
@@ -676,23 +692,10 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         }
 
         var faulted = RunCohortFaultTicks(CaptureFault, runs: 1);
-        Assert.Null(faulted.LoopException);
-        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            var line = faulted.Lines.Single(record =>
-                record.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
-                record.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
-            Assert.Contains("result=escalated", line.Detail, StringComparison.Ordinal);
-            Assert.Contains("classification=terminal", line.Detail, StringComparison.Ordinal);
-            Assert.Contains("failures=0/3", line.Detail, StringComparison.Ordinal);
-            Assert.Contains("pid=4001", line.Detail, StringComparison.Ordinal);
-            Assert.Contains("protected=4001@100", line.Detail, StringComparison.Ordinal);
-        }
+        AssertPairUsesTrain(faulted, runs: 1);
     }
 
-    // The 2026-09-15 daemon exits: the exception was raised on the cohort gate's background thread and
-    // reached a later tick through the driver's completion. This drives that arrival end to end.
+    // A completed cohort fault does not make a new ready pair re-enter cohort admission.
     [Xunit.Fact]
     public void FaultedBackgroundCohortCompletion_IsResolvedInsideTheTickInsteadOfEndingIt()
     {
@@ -702,32 +705,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             arrival: CohortFaultArrival.BackgroundCompletion);
         var control = RunCohortFaultTicks(fault: null, runs: 1);
 
-        Assert.Null(faulted.LoopException);
-        var exitTokens = faulted.Lines
-            .Single(line => line.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal))
-            .Detail
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Contains("outcome=gate-fault", exitTokens);
-        Assert.Contains("fault=AcceptanceGateEngineException", exitTokens);
-        // The injected cohort runner was on its control-hold path, so the fault the tick resolved came from
-        // the driver returning the faulted background completion, not from a throw at the call site.
-        Assert.DoesNotContain(
-            faulted.Lines,
-            line => line.Detail.Contains("outcome=control-hold", StringComparison.Ordinal));
-
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            var memberLine = faulted.Lines.Single(line =>
-                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
-                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
-            Assert.Contains("result=held", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("fault=AcceptanceGateEngineException", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("classification=transient", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("failures=1/3", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("worker-process-registration-failed", memberLine.Detail, StringComparison.Ordinal);
-        }
-
-        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
+        AssertPairUsesTrain(faulted, runs: 1);
         Assert.Equal(control.StopReason, faulted.StopReason);
     }
 
@@ -739,21 +717,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
             arrival: CohortFaultArrival.BackgroundCompletion);
 
-        Assert.Null(faulted.LoopException);
-        var memberLines = faulted.Lines
-            .Where(line => line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal))
-            .Select(line => line.Detail)
-            .ToArray();
-        Assert.Contains(memberLines, detail =>
-            detail.Contains("result=held", StringComparison.Ordinal) &&
-            detail.Contains("failures=1/3", StringComparison.Ordinal));
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            Assert.Contains(memberLines, detail =>
-                detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal) &&
-                detail.Contains("result=escalated", StringComparison.Ordinal) &&
-                detail.Contains("failures=3/3", StringComparison.Ordinal));
-        }
+        AssertPairUsesTrain(faulted, runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap);
     }
 
     [Xunit.Fact]
@@ -763,24 +727,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             CaptureGateEngineFault,
             runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap);
 
-        Assert.Null(faulted.LoopException);
-        var memberLines = faulted.Lines
-            .Where(line => line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal))
-            .Select(line => line.Detail)
-            .ToArray();
-        Assert.Contains(memberLines, detail =>
-            detail.Contains("result=held", StringComparison.Ordinal) &&
-            detail.Contains("failures=1/3", StringComparison.Ordinal));
-        Assert.DoesNotContain(memberLines, detail =>
-            detail.Contains("result=escalated", StringComparison.Ordinal) &&
-            detail.Contains("failures=1/3", StringComparison.Ordinal));
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            Assert.Contains(memberLines, detail =>
-                detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal) &&
-                detail.Contains("result=escalated", StringComparison.Ordinal) &&
-                detail.Contains("failures=3/3", StringComparison.Ordinal));
-        }
+        AssertPairUsesTrain(faulted, runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap);
     }
 
     [Xunit.Fact]
@@ -790,16 +737,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             () => new InvalidOperationException("Acceptance cohort workspace ownership was already transferred."),
             runs: 1);
 
-        Assert.Null(faulted.LoopException);
-        foreach (var goalId in faulted.MemberGoalIds)
-        {
-            var memberLine = faulted.Lines.Single(line =>
-                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
-                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
-            Assert.Contains("result=escalated", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("classification=non-transient", memberLine.Detail, StringComparison.Ordinal);
-            Assert.Contains("fault=InvalidOperationException", memberLine.Detail, StringComparison.Ordinal);
-        }
+        AssertPairUsesTrain(faulted, runs: 1);
     }
 
     [Xunit.Fact]
@@ -883,20 +821,32 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         BackgroundCompletion
     }
 
+    private static void AssertPairUsesTrain(CohortFaultTickObservation observation, int runs)
+    {
+        Assert.Null(observation.LoopException);
+        Assert.Equal(0, observation.CohortCalls);
+        Assert.Equal(0, observation.SoloCalls);
+        Assert.Equal(runs, observation.Trains.Count);
+        Assert.All(observation.Trains, members => Assert.Equal(observation.MemberGoalIds, members));
+        Assert.Equal(observation.StatusesBefore, observation.StatusesAfter);
+        Assert.Equal(runs, observation.ProgressLines.Count(line => line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(observation.Lines, line => line.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
+    }
+
     private sealed record CohortFaultTickObservation(
         Exception? LoopException,
         string? StopReason,
         IReadOnlyList<ConductEventRecord> Lines,
+        IReadOnlyList<string> ProgressLines,
         IReadOnlyList<string> MemberGoalIds,
         IReadOnlyList<GoalStatus> StatusesBefore,
-        IReadOnlyList<GoalStatus> StatusesAfter);
+        IReadOnlyList<GoalStatus> StatusesAfter,
+        IReadOnlyList<IReadOnlyList<string>> Trains,
+        int CohortCalls,
+        int SoloCalls);
 
-    // Drives production cohort selection into a gate run that faults. A null fault is the held control.
-    // With CohortFaultArrival.BackgroundCompletion the cohort run itself never throws: a completed gate run
-    // whose completion carries the exception is published on the driver first, exactly as the background
-    // gate thread's SetException leaves it, and the tick has to reach that fault through the driver's own
-    // drain. A faulted tick ends the loop with no progress, so repeat faults are driven as successive
-    // one-tick runs over the same driver, which is where the per-pair transient-fault count lives.
+    // A new ready pair uses the train even when a cohort runner would fault. Background completions
+    // remain seeded on the driver; the direct-driver tests above retain their drain/fault coverage.
     private static CohortFaultTickObservation RunCohortFaultTicks(
         Func<Exception>? fault,
         int runs,
@@ -907,6 +857,11 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var kernel = new AgentOrchestratorKernel();
         var first = CreateVerifiedSimpleGoal(kernel, "First gate fault member");
         var second = CreateVerifiedSimpleGoal(kernel, "Second gate fault member");
+        MergeTrainAdmissionTestContext.Refine(kernel, first, second);
+        var trains = new List<IReadOnlyList<string>>();
+        var progressLines = new List<string>();
+        var cohortCalls = 0;
+        var soloCalls = 0;
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
             [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/FirstGateFault.cs"],
@@ -929,7 +884,11 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             };
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    soloCalls++;
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
                 land: goal => new LandingResult(
                     goal.Id.Value,
                     goal.Id.Value[..8],
@@ -941,11 +900,19 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
                 gateReadyCandidateProjector: projector,
-                // The synchronous-throw arrival throws from here; the background arrival leaves this runner
-                // on the control-hold path, so a tick that reports a gate fault can only have got it from
-                // the driver's own observation of the faulted background completion.
+                runMergeTrain: (selection, _, policy) =>
+                {
+                    trains.Add(selection.Members.Select(member => member.GoalId.Value).ToArray());
+                    return new ConductorMergeTrainRunResult(null, selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(member.GoalId.Value, member.GoalId.Value[..8], policy.Name,
+                            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, "train control hold")),
+                        StringComparer.Ordinal), [], "outcome=control-hold");
+                },
                 runAcceptanceCohort: (selection, goals, policy) =>
-                    fault is null || arrival == CohortFaultArrival.BackgroundCompletion
+                {
+                    cohortCalls++;
+                    return fault is null || arrival == CohortFaultArrival.BackgroundCompletion
                     ? new ConductorAcceptanceCohortRunResult(
                         Receipt: null,
                         goals
@@ -961,7 +928,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                                         "control hold")),
                                 StringComparer.Ordinal),
                         "outcome=control-hold")
-                    : throw fault());
+                    : throw fault();
+                });
 
             var backgroundSelection = new ConductorAcceptanceCohortSelection(
                 [
@@ -993,7 +961,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                     driver,
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: 1));
+                    maxIterations: 1,
+                    onTick: tick => progressLines.AddRange(tick.ProgressLines!)));
             }
 
             var lines = File.ReadAllLines(logPath)
@@ -1005,9 +974,10 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
                 loopException,
                 summary?.StopReason,
                 lines,
+                progressLines,
                 [first.Id.Value, second.Id.Value],
                 statusesBefore,
-                [kernel.GetGoal(first.Id).Status, kernel.GetGoal(second.Id).Status]);
+                [kernel.GetGoal(first.Id).Status, kernel.GetGoal(second.Id).Status], trains, cohortCalls, soloCalls);
         }
         finally
         {

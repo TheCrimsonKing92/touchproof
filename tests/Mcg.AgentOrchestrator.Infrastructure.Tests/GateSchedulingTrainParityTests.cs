@@ -18,14 +18,10 @@ public sealed class GateSchedulingTrainParityTests
         var conductor = ConductorMergeTrainSelector.Select(projections.Select(p =>
             new ConductorSpeculativeAcceptanceCandidate(p.GoalId, new GateReadyCandidateProjectionResult.Ready(p))).ToArray());
         var replay = GateSchedulingSimulator.ComposeTrain(projections.Select(p => new RecordedGateMember(
-            p.GoalId.Value, p.CandidateRevision, p.LandingPaths, p.ResourceKeys)).ToArray(), 3);
-        if (scenario == "two") { Assert.Null(conductor); Assert.Empty(replay); }
-        else
-        {
-            Assert.NotNull(conductor);
-            Assert.Equal(conductor.Members.Select(p => p.GoalId.Value), replay.Select(m => m.GoalId));
-            Assert.Equal("ACD".Select(BoardSimulationFixture.Id), replay.Select(m => m.GoalId));
-        }
+            p.GoalId.Value, p.CandidateRevision, p.LandingPaths, p.ResourceKeys)).ToArray(), scenario == "two" ? 2 : 3);
+        Assert.NotNull(conductor);
+        Assert.Equal(conductor.Members.Select(p => p.GoalId.Value), replay.Select(m => m.GoalId));
+        Assert.Equal((scenario == "two" ? "AB" : "ACD").Select(BoardSimulationFixture.Id), replay.Select(m => m.GoalId));
     }
 
     private static GateReadyCandidateProjection Ready(char goal, string path, string resource) => new(

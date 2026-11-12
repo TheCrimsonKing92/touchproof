@@ -149,7 +149,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandi
             Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
             var candidates = scenario.Selection.Members.Select(Candidate).ToArray();
             Assert.NotNull(ConductorMergeTrainSelector.Select(candidates));
-            Assert.Null(ConductorMergeTrainSelector.Select(candidates, trainImplicatedMemberKeys: keys));
+            var remainder = Assert.IsType<ConductorMergeTrainSelection>(
+                ConductorMergeTrainSelector.Select(candidates, trainImplicatedMemberKeys: keys));
+            Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id), remainder.Members.Select(member => member.GoalId));
             foreach (var pair in new[] { candidates.Take(2).ToArray(), candidates.Take(2).Reverse().ToArray() })
             {
                 Assert.NotNull(ConductorAcceptanceCohortSelector.Select(pair).Selection);

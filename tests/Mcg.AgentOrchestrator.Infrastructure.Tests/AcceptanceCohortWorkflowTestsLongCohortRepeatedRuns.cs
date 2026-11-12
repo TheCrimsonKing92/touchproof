@@ -57,15 +57,15 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
             theoryRows.Order(StringComparer.Ordinal));
 
         using var stopSiblings = new CancellationTokenSource();
-        using var cohortHeld = new ManualResetEventSlim();
+        using var trainHeld = new ManualResetEventSlim();
         var firstSiblingPass = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completedSiblingPasses = 0;
         var siblingLoad = Task.Run(async () =>
         {
             try
             {
-                Assert.True(cohortHeld.Wait(TimeSpan.FromMinutes(2)),
-                    "The first scenario did not signal its held cohort gate to sibling tests.");
+                Assert.True(trainHeld.Wait(TimeSpan.FromMinutes(2)),
+                    "The first scenario did not signal its held train gate to sibling tests.");
                 do
                 {
                     foreach (var test in siblingFacts)
@@ -73,7 +73,7 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
                         try { test(); }
                         catch (Exception ex)
                         {
-                            throw new InvalidOperationException($"Sibling {test.Method.Name} failed under cohort load.", ex);
+                            throw new InvalidOperationException($"Sibling {test.Method.Name} failed under train load.", ex);
                         }
                     }
                     foreach (var row in theoryRows)
@@ -81,7 +81,7 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
                         try { await siblingTheory(row); }
                         catch (Exception ex)
                         {
-                            throw new InvalidOperationException($"Sibling {siblingTheory.Method.Name}({row}) failed under cohort load.", ex);
+                            throw new InvalidOperationException($"Sibling {siblingTheory.Method.Name}({row}) failed under train load.", ex);
                         }
                     }
                     completedSiblingPasses++;
@@ -100,27 +100,27 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
             {
                 try
                 {
-                    AssertLongCohortGateLandsBothGoals(iteration, iteration == 1 ? ObserveSiblingOverlap : null);
+                    AssertLongTrainGateLandsBothGoals(iteration, iteration == 1 ? ObserveSiblingOverlap : null);
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException($"Long-cohort iteration {iteration}/20 failed.", ex);
+                    throw new InvalidOperationException($"Long-train iteration {iteration}/20 failed.", ex);
                 }
             }
         }
         finally
         {
             stopSiblings.Cancel();
-            cohortHeld.Set();
+            trainHeld.Set();
             await siblingLoad;
         }
-        Assert.True(completedSiblingPasses > 0, "No complete sibling test pass overlapped the cohort scenarios.");
+        Assert.True(completedSiblingPasses > 0, "No complete sibling test pass overlapped the train scenarios.");
 
         void ObserveSiblingOverlap()
         {
-            cohortHeld.Set();
+            trainHeld.Set();
             Assert.True(firstSiblingPass.Task.Wait(TimeSpan.FromMinutes(2)),
-                "Sibling tests did not complete their first pass while the cohort gate was held.");
+                "Sibling tests did not complete their first pass while the train gate was held.");
         }
     }
 }

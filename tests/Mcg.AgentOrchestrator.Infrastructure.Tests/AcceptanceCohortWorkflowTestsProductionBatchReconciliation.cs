@@ -12,7 +12,7 @@ public sealed class AcceptanceCohortWorkflowTestsProductionBatchReconciliation :
 {
     [Fact]
     public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
-        => AssertLongCohortGateLandsBothGoals();
+        => AssertLongTrainGateLandsBothGoals();
 
     [Fact]
     public void ProductionBatch_OrdinaryParallelAcceptanceStillStartsPromptlyAndReconcilesLater()

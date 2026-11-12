@@ -25,7 +25,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
 
             var candidates = selection.Members.Select(Candidate).ToArray();
             Assert.NotNull(ConductorMergeTrainSelector.Select(candidates));
-            Assert.Null(ConductorMergeTrainSelector.Select(candidates, trainImplicatedMemberKeys: keys));
+            var remainder = Assert.IsType<ConductorMergeTrainSelection>(
+                ConductorMergeTrainSelector.Select(candidates, trainImplicatedMemberKeys: keys));
+            Assert.Equal(goals.Skip(1).Select(goal => goal.Id), remainder.Members.Select(member => member.GoalId));
             var partner = Candidate(new GateReadyCandidateProjection(new GoalId(new string('f', 32)), GoalLifecycleState.Verified,
                 GateReadyVerificationState.Satisfied, ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
                 ["src/Partner.cs"], ["partner:f"], new GateReadyMergeEvidence(new string('f', 40), selection.Members[0].MainRevision,

@@ -45,7 +45,26 @@ public sealed class ConductorMergeTrainTests
         var first = Ready("11111111111111111111111111111111", "src/First.cs", "resource:first");
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
 
-        Assert.Null(ConductorMergeTrainSelector.Select([first, second]));
+        var selection = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select([first, second]));
+        Assert.Equal([first.GoalId, second.GoalId], selection.Members.Select(member => member.GoalId));
+    }
+
+    [Fact]
+    public void Selector_suppressed_pair_is_rejected_in_both_orders()
+    {
+        var first = Ready("11111111111111111111111111111111", "src/First.cs", "resource:first");
+        var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
+        var left = ((GateReadyCandidateProjectionResult.Ready)first.ProjectionResult).Projection;
+        var right = ((GateReadyCandidateProjectionResult.Ready)second.ProjectionResult).Projection;
+        var suppressed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            ConductorAcceptanceCohortSelector.PairFingerprint(left, right),
+            ConductorAcceptanceCohortSelector.PairFingerprint(right, left)
+        };
+
+        Assert.NotNull(ConductorMergeTrainSelector.Select([first, second]));
+        Assert.Null(ConductorMergeTrainSelector.Select([first, second], suppressed));
+        Assert.Null(ConductorMergeTrainSelector.Select([second, first], suppressed));
     }
 
     [Fact]

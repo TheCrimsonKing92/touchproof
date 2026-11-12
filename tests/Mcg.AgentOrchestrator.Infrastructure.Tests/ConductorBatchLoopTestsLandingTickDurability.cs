@@ -109,6 +109,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         var kernel = new AgentOrchestratorKernel();
         var first = CreateVerifiedSimpleGoal(kernel, "First cohort member");
         var second = CreateVerifiedSimpleGoal(kernel, "Second cohort member");
+        MergeTrainAdmissionTestContext.Refine(kernel, first, second);
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
@@ -130,11 +131,20 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
             isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector,
             resolveAcceptanceHeads: goal => (goal.Id.Value.PadRight(40, 'b')[..40], mainRevision),
-            runAcceptanceCohort: (selection, goals, policy) =>
+            runAcceptanceCohort: (_, _, _) => throw new InvalidOperationException("New pair must use a merge train."),
+            runMergeTrain: (selection, goals, policy) =>
             {
                 selectedMembers = selection.Members.Select(member => member.GoalId).ToArray();
                 foreach (var member in selectedMembers)
                 {
+                    var obligation = Assert.Single(kernel.GetGoal(member).CriterionEvidenceObligations);
+                    var candidateSha = member.Value.PadRight(40, 'b')[..40];
+                    obligation = kernel.MapCriterionEvidenceOwner(member, obligation.CriterionIndex,
+                        obligation.CriterionVersion, CriterionEvidenceOwner.Acceptance, "fixture",
+                        obligation.RequiredScope, expectedCandidateSha: candidateSha);
+                    kernel.RecordCriterionEvidence(member, obligation.Id, CriterionEvidenceOwner.Acceptance,
+                        candidateSha, "fake-passed-train", obligation.RequiredScope,
+                        passed: true, detail: "Fake train gate passed before landing.");
                     kernel.CompleteGoal(member, "Cohort landing, recording, and cleanup completed.");
                     driver!.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                         member.Value,
@@ -143,7 +153,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                             : paths[member],
                         mainRevision));
                 }
-                return new ConductorAcceptanceCohortRunResult(
+                return new ConductorMergeTrainRunResult(
                     null,
                     goals.Where(goal => selectedMembers.Contains(goal.Id)).ToDictionary(
                         goal => goal.Id.Value,
@@ -151,7 +161,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                             policy.Name, new ConductorAdvanceOutcome.Executed(
                                 GoalLifecycleState.Verified, "cohort landed")),
                         StringComparer.Ordinal),
-                    "outcome=passed");
+                    [], "outcome=passed");
             });
 
         new ConductorBatchLoop(
@@ -173,5 +183,11 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         Assert.Contains(second.Id, selectedMembers);
         Assert.Contains(first.Id, savedGoalIds);
         Assert.Contains(second.Id, savedGoalIds);
+        Assert.All(new[] { first.Id, second.Id }, member =>
+        {
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(member).Status);
+            Assert.Equal(CriterionEvidenceState.Satisfied,
+                Assert.Single(kernel.GetGoal(member).CriterionEvidenceObligations).State);
+        });
     }
 }

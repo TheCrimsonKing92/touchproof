@@ -5,7 +5,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Data.Sqlite;
 
 public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCohortWorkflowTests
 {
@@ -27,7 +26,7 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
         return new DrainedTeardown(drained, conditionName);
     }
 
-    private protected void AssertLongCohortGateLandsBothGoals(int iteration = 1, Action? whileGateHeld = null)
+    private protected void AssertLongTrainGateLandsBothGoals(int iteration = 1, Action? whileGateHeld = null)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
@@ -41,14 +40,21 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
             AddAcceptanceManifest(repo);
             File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
-            var firstGoal = CreateCompletedGoal(kernel, "First production cohort member", repo);
-            var secondGoal = CreateCompletedGoal(kernel, "Second production cohort member", repo);
-            _ = CreateWorktreeCandidate(
+            var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second production train member", repo);
+            var firstRevision = CreateWorktreeCandidate(
                 repo,
                 firstGoal.Id,
                 "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
                 "first");
-            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var secondRevision = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            foreach (var (goal, revision) in new[] { (firstGoal, firstRevision), (secondGoal, secondRevision) })
+            {
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The merge train full gate passes for this member"], VerificationClass.TestVerifiable, [], []));
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                    "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: revision);
+            }
             var verifier = new BlockingAcceptanceVerifier(
                 gateStarted,
                 gateRelease,
@@ -73,6 +79,8 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             fairnessStore.RecordOvertake(firstGoal.Id);
             fairnessStore.RecordOvertake(secondGoal.Id);
+            var trainStore = new MergeTrainAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
             var conductLogPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "cohort-nonblocking.jsonl");
             var intentStore = new SqliteOperatorIntentStore(
@@ -100,7 +108,7 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                         return;
                     }
 
-                    Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The controlled cohort verifier did not start.");
+                    Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The controlled train verifier did not start.");
                     intentStore.EnqueueAsync(new OperatorIntentRecord(
                         intentId,
                         "cohort-running-progress-key",
@@ -108,7 +116,7 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                         firstGoal.Id.Value,
                         firstGoal.Tasks.Single().Id.Value,
                         JsonSerializer.Serialize(
-                            new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "operator intent applied while cohort gate remained held"),
+                            new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "operator intent applied while train gate remained held"),
                             new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                         [],
                         "operator",
@@ -128,6 +136,12 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
             Assert.Empty(driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
                 [firstGoal.Id.Value, secondGoal.Id.Value]));
             Assert.Equal(0, heldSummary.Advanced);
+            Assert.Equal(0, fairnessStore.ReadOvertakeCount(firstGoal.Id));
+            Assert.Equal(0, fairnessStore.ReadOvertakeCount(secondGoal.Id));
+            Assert.Contains(ticks[0].ProgressLines!, line =>
+                line.StartsWith("ACCEPTANCE_TRAIN ", StringComparison.Ordinal) &&
+                line.Contains($"members={firstGoal.Id.Value[..8]},{secondGoal.Id.Value[..8]}", StringComparison.Ordinal) &&
+                line.Contains("outcome=inflight", StringComparison.Ordinal));
             var conductEvents = File.ReadAllLines(conductLogPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
                     line,
@@ -139,31 +153,31 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                     new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .Where(record => record.EventKind == "gate-progress")
                 .ToArray();
-            Assert.Equal(2, gateProgressEvents.Length);
-            Assert.Contains(gateProgressEvents, record => record.GoalId == firstGoal.Id.Value[..8]);
-            Assert.Contains(gateProgressEvents, record => record.GoalId == secondGoal.Id.Value[..8]);
+            // Train admission and the controlled verifier each report progress for both members.
+            Assert.Equal(4, gateProgressEvents.Length);
+            foreach (var goal in new[] { firstGoal, secondGoal })
+            {
+                Assert.Collection(gateProgressEvents.Where(record => record.GoalId == goal.Id.Value[..8]),
+                    record => Assert.Contains(" phase=execution-admitted ", record.Detail, StringComparison.Ordinal),
+                    record => Assert.Contains(" phase=controlled-cohort ", record.Detail, StringComparison.Ordinal));
+            }
             Assert.All(gateProgressEvents, record =>
             {
                 Assert.Contains($"members={firstGoal.Id.Value[..8]},{secondGoal.Id.Value[..8]}", record.Detail, StringComparison.Ordinal);
+                Assert.Contains("scope=merge-train", record.Detail, StringComparison.Ordinal);
                 Assert.DoesNotContain("goal=unknown", record.Detail, StringComparison.Ordinal);
             });
             var cohortEvents = conductEvents
                 .Where(record => record.EventKind == "acceptance-cohort")
                 .ToArray();
-            Assert.StartsWith("ACCEPTANCE_COHORT_ENTRY", cohortEvents[0].Detail, StringComparison.Ordinal);
-            Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
-            Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
-            var fairnessTransition = Assert.Single(cohortEvents.Where(record =>
-                record.Detail.StartsWith("ACCEPTANCE_COHORT_FAIRNESS_TRANSITION", StringComparison.Ordinal)));
-            Assert.Contains($"oldest={firstGoal.Id.Value}", fairnessTransition.Detail, StringComparison.Ordinal);
-            Assert.Contains("previous=1 resulting=0 oldest_admitted=True", fairnessTransition.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
             var inFlightTicks = cohortEvents
                 .Where(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_INFLIGHT", StringComparison.Ordinal))
                 .Select(record => record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                     .Single(token => token.StartsWith("tick=", StringComparison.Ordinal)))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            Assert.True(inFlightTicks.Length >= 2, "Expected in-flight cohort records from at least two completed ticks.");
+            Assert.True(inFlightTicks.Length >= 2, "Expected in-flight train records from at least two completed ticks.");
 
             whileGateHeld?.Invoke();
             gateRelease.Set();
@@ -175,9 +189,9 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                 readiness = ObserveLandingReadiness();
                 return readiness.Landable;
             }, TimeSpan.FromSeconds(30));
-            Assert.True(landable, $"Iteration {iteration}: cohort did not become landable: {readiness.Detail}");
+            Assert.True(landable, $"Iteration {iteration}: train did not become landable: {readiness.Detail}");
             Assert.NotNull(backgroundGate);
-            Assert.True(backgroundGate.Wait(TimeSpan.FromSeconds(10)), "The background cohort gate did not complete.");
+            Assert.True(backgroundGate.Wait(TimeSpan.FromSeconds(10)), "The background train gate did not complete.");
             Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             BatchTickSummary? landingTick = null;
             var landedSummary = new ConductorBatchLoop().Run(
@@ -200,41 +214,29 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
                 "Mcg.AgentOrchestrator.Infrastructure",
                 "First.cs")));
             Assert.True(File.Exists(Path.Combine(repo, "tests", "Second.cs")));
+            AssertNoMergeTrainWorkspaces(repo);
             AssertNoCohortWorkspaces(repo);
-            using var connection = new SqliteConnection(
-                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT COUNT(*), MIN(gate_exit_code), MAX(json_array_length(gate_test_result_paths_json))
-                FROM cohort_receipts;
-                """;
-            using var reader = command.ExecuteReader();
-            Assert.True(reader.Read());
-            Assert.Equal(1, reader.GetInt32(0));
-            Assert.Equal(0, reader.GetInt32(1));
-            Assert.Equal(1, reader.GetInt32(2));
+            Assert.Equal(1, verifier.RunCount);
+            var receipt = Assert.Single(trainStore.ReadReceiptsSince(DateTimeOffset.MinValue));
+            Assert.Equal(MergeTrainGateOutcome.Passed, receipt.Outcome);
+            Assert.Equal(0, receipt.GateExitCode);
+            Assert.Single(receipt.GateTestResultPaths);
+            Assert.Equal(new[] { firstGoal.Id, secondGoal.Id }, receipt.Identity.Members.Select(member => member.GoalId));
+            Assert.Contains(receipt.Identity.Value, trainStore.ReadFinalizedLandingTrainIds());
 
             (bool Landable, string Detail) ObserveLandingReadiness()
             {
-                using var receiptConnection = new SqliteConnection(
-                    $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")};Pooling=False");
-                receiptConnection.Open();
-                using var receiptCommand = receiptConnection.CreateCommand();
-                receiptCommand.CommandText =
-                    "SELECT COUNT(*), MIN(outcome), MIN(valid_for_landing) FROM cohort_receipts;";
-                using var receiptReader = receiptCommand.ExecuteReader();
-                Assert.True(receiptReader.Read());
-                var count = receiptReader.GetInt32(0);
-                var outcome = receiptReader.IsDBNull(1) ? "missing" : receiptReader.GetString(1);
-                var valid = !receiptReader.IsDBNull(2) && receiptReader.GetInt32(2) == 1;
+                var receipts = trainStore.ReadReceiptsSince(DateTimeOffset.MinValue);
+                var count = receipts.Count;
+                var outcome = receipts.FirstOrDefault()?.Outcome.ToString() ?? "missing";
+                var valid = receipts.FirstOrDefault()?.ValidForLanding == true;
                 var roots = driver.GetActiveAcceptanceCohortCapacity().ActiveRoots;
                 var membersActive = roots.Any(root =>
                     root.MemberGoalIds.Contains(firstGoal.Id.Value) || root.MemberGoalIds.Contains(secondGoal.Id.Value));
                 var detail = $"receipt_count={count} outcome={outcome} valid_for_landing={valid} " +
                     $"members_active={membersActive} active_roots=[{string.Join(';', roots.Select(root =>
                         $"{root.Key}:{string.Join(',', root.MemberGoalIds.Order(StringComparer.Ordinal))}"))}]";
-                return (count == 1 && outcome == nameof(AcceptanceCohortGateOutcome.Passed) && valid && !membersActive, detail);
+                return (count == 1 && outcome == nameof(MergeTrainGateOutcome.Passed) && valid && !membersActive, detail);
             }
         }
         finally
@@ -242,7 +244,7 @@ public abstract class AcceptanceCohortWorkflowBackgroundSupport : AcceptanceCoho
             gateRelease.Set();
             teardown = RemoveAfterObservedDrain(
                 () => driver is null || driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
-                "long-cohort background run completed before fixture removal",
+                "long-train background run completed before fixture removal",
                 TimeSpan.FromSeconds(30),
                 () => { if (File.Exists(trx)) File.Delete(trx); },
                 () => DeleteDirectory(repo));

@@ -383,6 +383,7 @@ internal sealed partial class ConductorBatchLoop
                 policy,
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
+            state.GroupedAdmissionOpen = trainRun.MemberResults.Count > 0;
             foreach (var member in trainRun.MemberResults)
                 state.Results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
             RecordParallelAcceptanceProgress(
@@ -418,14 +419,9 @@ internal sealed partial class ConductorBatchLoop
     {
         state.ForcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
-        if (!suppressNewAcceptanceAdmission() &&
-            state.TransientRetryPriorityGoal is null && state.InteractionOnlyPriorityGoal is null &&
-            cohortAdmission.IsAdmitted &&
-            driver.AcceptanceCohortsEnabled &&
-            state.CohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
-            !state.CohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
-                goal.Status,
-                _acceptanceEngineCircuit?.Read())))
+        if (PairTrainAdmission.CanAdmitTrain(state.GroupedAdmissionOpen, suppressNewAcceptanceAdmission(), cohortAdmission.IsAdmitted))
+            AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
+        if (PairTrainAdmission.CanAdmitNewCohort())
         {
             state.ForcedCohortPriority = driver.SelectForcedCohortCandidate(state.CohortEligible);
             var cohortDecision = SelectAndReportAcceptanceCohort(state.ProductionCandidates, state.LiveAttempts, state.ForcedCohortPriority, driver);

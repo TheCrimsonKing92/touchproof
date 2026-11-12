@@ -32,10 +32,9 @@ internal sealed record ConductorMergeTrainRunResult(
 
 internal static class ConductorMergeTrainSelector
 {
-    // Two compatible goals remain the existing production cohort's domain. A train starts at three,
-    // then may shrink to two only after conflict ejection or bounded RED bisection.
+    // New grouped admission starts at two members and prefers three when compatible.
     internal const int MinimumCompositionMembers = 2;
-    internal const int MinimumMembers = 3;
+    internal const int MinimumMembers = 2;
     internal const int MaximumMembers = 3;
 
     internal static ConductorMergeTrainSelection? Select(

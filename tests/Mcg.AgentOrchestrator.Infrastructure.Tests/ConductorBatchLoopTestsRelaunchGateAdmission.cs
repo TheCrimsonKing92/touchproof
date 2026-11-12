@@ -28,7 +28,7 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
         Assert.True(hold.IsDrainedAcknowledgement(fixture.Root));
         hold.Release(fixture.Root);
         fixture.Run();
-        if (grouped) Assert.Equal(1, fixture.CohortCalls);
+        if (grouped) Assert.Equal(1, fixture.TrainCalls);
         else Assert.Equal(fixture.WaitingGoals.Single().Id, Assert.Single(fixture.AcceptanceCalls));
     }
 
@@ -76,9 +76,10 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
         Assert.DoesNotContain("reason=self-relaunch-scheduled", output, StringComparison.Ordinal);
         if (grouped)
         {
-            Assert.Contains("ACCEPTANCE_COHORT_ENTRY tick=1", output, StringComparison.Ordinal);
-            Assert.Equal(1, fixture.CohortCalls);
-            Assert.Single(fixture.GroupedAttempts.ReadAll());
+            Assert.Contains("ACCEPTANCE_TRAIN tick=1", output, StringComparison.Ordinal);
+            Assert.Equal(1, fixture.TrainCalls);
+            Assert.Equal(0, fixture.CohortCalls);
+            Assert.Equal("train", Assert.Single(fixture.GroupedAttempts.ReadAll()).Kind);
         }
         else
         {
@@ -157,6 +158,7 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
         internal ConductorDriver Driver { get; }
         internal List<GoalId> AcceptanceCalls { get; } = [];
         internal int CohortCalls { get; private set; }
+        internal int TrainCalls { get; private set; }
         internal int Handoffs { get; private set; }
 
         internal AdmissionFixture(string landingPath, bool grouped)
@@ -167,6 +169,7 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
             _landingGoal = CreateVerifiedSimpleGoal(Kernel, "Land completed acceptance receipt");
             WaitingGoals = Enumerable.Range(0, grouped ? 2 : 1)
                 .Select(index => CreateVerifiedSimpleGoal(Kernel, $"Ready admission member {index}")).ToArray();
+            if (grouped) MergeTrainAdmissionTestContext.Refine(Kernel, WaitingGoals);
             var paths = WaitingGoals.ToDictionary(goal => goal.Id,
                 goal => (IReadOnlyList<string>)
                     [$"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Member{goal.Id.Value}.cs"]);
@@ -209,7 +212,12 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
                     goalId => new GateReadyCandidateRevisionPair(Branch(goalId), MainRevision),
                     goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
                     (_, _, _) => new GateReadyMergeTreeObservation(true)),
-                runAcceptanceCohort: grouped ? RunCohort : null,
+                runAcceptanceCohort: (_, _, _) =>
+                {
+                    CohortCalls++;
+                    throw new InvalidOperationException("New pair must use a merge train.");
+                },
+                runMergeTrain: grouped ? RunTrain : null,
                 executionDirectory: Root);
             foreach (var goal in WaitingGoals)
             {
@@ -227,20 +235,20 @@ public sealed class ConductorBatchLoopTestsRelaunchGateAdmission : ConductorBatc
             }
         }
 
-        private ConductorAcceptanceCohortRunResult RunCohort(ConductorAcceptanceCohortSelection selection,
+        private ConductorMergeTrainRunResult RunTrain(ConductorMergeTrainSelection selection,
             IReadOnlyList<Goal> goals, ConductorAutonomyPolicy policy)
         {
-            CohortCalls++;
+            TrainCalls++;
             Assert.Equal(WaitingGoals.Select(goal => goal.Id).OrderBy(id => id.Value),
                 selection.Members.Select(member => member.GoalId).OrderBy(id => id.Value));
-            var record = GroupedAttempts.Create("cohort", selection.Members, MainRevision,
-                new string('d', 40), "manifest", "queued-cohort", Root, policy);
+            var record = GroupedAttempts.Create("train", selection.Members, MainRevision,
+                new string('d', 40), "manifest", "queued-train", Root, policy);
             ConductorGroupedGateAttemptCoordinator.Save(record);
-            return new ConductorAcceptanceCohortRunResult(null,
+            return new ConductorMergeTrainRunResult(null,
                 selection.Members.ToDictionary(member => member.GoalId.Value,
                     member => new ConductorAdvanceResult(member.GoalId.Value, member.GoalId.Value[..8],
                         policy.Name, new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "cohort admitted"))),
-                "outcome=passed");
+                [], "outcome=passed");
         }
 
         internal string Run(int maxIterations = 1)

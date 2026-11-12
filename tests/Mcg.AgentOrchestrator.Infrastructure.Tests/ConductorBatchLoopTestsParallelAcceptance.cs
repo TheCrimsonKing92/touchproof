@@ -675,8 +675,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             maxIterations: 1);
 
         Assert.Equal(5, summary.Advanced);
-        Assert.Equal(1, trainCalls);
-        Assert.Equal(1, cohortCalls);
+        Assert.Equal(2, trainCalls);
+        Assert.Equal(0, cohortCalls);
         Assert.Equal(0, ordinaryCalls);
     }
 
@@ -717,7 +717,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             goalId => new GateReadyCandidateRevisionPair(branchRevisions[goalId], mainRevision),
             goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
             (_, _, _) => new GateReadyMergeTreeObservation(true));
-        IReadOnlyList<GoalId>? trainMembers = null;
+        var trainMembers = new List<IReadOnlyList<GoalId>>();
         IReadOnlyList<GoalId>? cohortMembers = null;
         var ordinaryCalls = 0;
         var driver = MakeDriver(
@@ -734,7 +734,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             resolveAcceptanceHeads: goal => (branchRevisions[goal.Id], mainRevision),
             runMergeTrain: (selection, orderedGoals, policy) =>
             {
-                trainMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                trainMembers.Add(selection.Members.Select(member => member.GoalId).ToArray());
                 return new ConductorMergeTrainRunResult(
                     null,
                     BuildSelectionResults(selection.Members, policy, "admitted by train"),
@@ -757,10 +757,10 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             NoStopPath(),
             maxIterations: 1);
 
-        Assert.Equal(goals[1..4].Select(goal => goal.Id), trainMembers);
-        Assert.Equal(goals[4..6].Select(goal => goal.Id), cohortMembers);
-        Assert.DoesNotContain(goals[0].Id, trainMembers!);
-        Assert.DoesNotContain(goals[0].Id, cohortMembers!);
+        Assert.Equal(new[] { 3, 2 }, trainMembers.Select(members => members.Count));
+        Assert.Equal(goals[1..6].Select(goal => goal.Id), trainMembers.SelectMany(members => members));
+        Assert.DoesNotContain(goals[0].Id, trainMembers.SelectMany(members => members));
+        Assert.Null(cohortMembers);
         Assert.Equal(0, ordinaryCalls);
         Assert.Equal(5, summary.Advanced);
         Assert.True(goals[0].LatestAcceptanceFailure?.IsEnvironmentalApparatus);

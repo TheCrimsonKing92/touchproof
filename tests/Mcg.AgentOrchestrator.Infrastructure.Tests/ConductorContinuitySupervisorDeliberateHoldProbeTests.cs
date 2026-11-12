@@ -133,11 +133,15 @@ public sealed class ConductorContinuitySupervisorDeliberateHoldProbeTests(ITestO
                 var ready = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Update src/Mcg.AgentOrchestrator.Core/Application/GatherReady.cs");
                 PassVerificationAt(kernel, ready, ready.Tasks.Single(), now());
                 Assert.Equal(GoalStatus.Verified, ready.Status);
+                if (mode == "gather")
+                    MergeTrainAdmissionTestContext.Refine(kernel, ready);
                 paths[ready.Id] = ["src/Mcg.AgentOrchestrator.Core/Application/GatherReady.cs"];
             }
             if (mode != "busy")
             {
                 var reviewing = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Update tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs");
+                if (mode == "gather")
+                    MergeTrainAdmissionTestContext.Refine(kernel, reviewing);
                 paths[reviewing.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs"];
                 var snapshot = kernel.ExportSnapshot();
                 kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
@@ -167,7 +171,8 @@ public sealed class ConductorContinuitySupervisorDeliberateHoldProbeTests(ITestO
                 classifyRisk: _ => ChangeRiskTier.Behavior, getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true, gateReadyCandidateProjector: projector,
                 parallelAcceptanceAttemptCoordinator: coordinator,
-                runAcceptanceCohort: (_, _, _) => throw new InvalidOperationException("Unexpected cohort admission"), utcNow: now);
+                runAcceptanceCohort: (_, _, _) => throw new InvalidOperationException("Unexpected cohort admission"),
+                runMergeTrain: (_, _, _) => throw new InvalidOperationException("Unexpected train admission"), utcNow: now);
             Assert.True(Driver.AcceptanceCohortsEnabled);
         }
 

@@ -93,6 +93,7 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
             var a = VerifiedAt(kernel, "A", 0);
             var b = VerifiedAt(kernel, "B", 1);
             var c = VerifiedAt(kernel, "C", 2);
+            MergeTrainAdmissionTestContext.Refine(kernel, a, b, c);
             if (high) kernel.SetGoalPriority(c.Id, GoalPriority.High, "test", "setup");
             var paths = new Dictionary<GoalId, IReadOnlyList<string>>
             {
@@ -103,7 +104,8 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
             };
             var pairs = new List<GoalId[]>();
             var solos = new List<GoalId>();
-            var driver = GroupingDriver(kernel, root, paths, pairs, solos);
+            var trains = new List<GoalId[]>();
+            var driver = GroupingDriver(kernel, root, paths, pairs, solos, trains);
             Assert.True(driver.AcceptanceCohortsEnabled);
             Assert.All(new[] { a, b, c }, goal => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
                 driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive)));
@@ -114,10 +116,11 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
                 checkpointGoalTick: (current, ids) => Checkpoint(current, ids, snapshots));
             if (high && !compatible)
             {
-                Assert.Empty(pairs);
+                Assert.Empty(trains);
                 Assert.Equal(c.Id, solos[0]);
             }
-            else Assert.Equal(high ? new[] { c.Id, a.Id } : new[] { a.Id, b.Id }, Assert.Single(pairs));
+            else Assert.Equal(high ? new[] { c.Id, a.Id } : new[] { a.Id, b.Id }, Assert.Single(trains));
+            Assert.Empty(pairs);
             if (!high)
             {
                 Assert.Empty(ReadPriorityEvents(log));
@@ -205,11 +208,10 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
             Assert.Contains($"ready={goals.Length} ", plan);
             if (dependency)
             {
-                Assert.Empty(trains);
-                if (train) Assert.Equal(new[] { t.Id, goals[2].Id }, Assert.Single(pairs));
+                if (train) Assert.Equal(new[] { t.Id, goals[2].Id }, Assert.Single(trains));
                 else
                 {
-                    Assert.Empty(pairs);
+                    Assert.Empty(trains);
                     Assert.Contains(t.Id, solos);
                 }
             }
@@ -218,7 +220,8 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
                 Assert.Equal(goals.Select(goal => goal.Id), Assert.Single(trains));
                 Assert.Empty(pairs);
             }
-            else Assert.Equal(new[] { s.Id, t.Id }, Assert.Single(pairs));
+            else Assert.Equal(new[] { s.Id, t.Id }, Assert.Single(trains));
+            Assert.Empty(pairs);
         }
         finally
         {
