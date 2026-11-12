@@ -74,12 +74,16 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
             if (current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
                 !File.Exists(current.ResultPath))
-                WriteAttemptFile(current with
+            {
+                var terminal = current with
                 {
                     Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
                     TransientFailureCount = CountConsecutiveTransientFailures(current) + 1,
                     CompletedAt = _utcNow(), Detail = $"holder-tree-settled:{observation.Reason}"
-                });
+                };
+                WriteAttemptFile(terminal);
+                AppendTerminalAttemptEvent(terminal);
+            }
         }
         return false;
     }
@@ -122,12 +126,14 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     // terminal publication rather than replacing a valid result with failure.
                     return true;
                 }
-                WriteAttemptFile(current with
+                var terminal = current with
                 {
                     Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
                     TransientFailureCount = CountConsecutiveTransientFailures(current) + 1,
                     CompletedAt = _utcNow(), Detail = "legacy-holder-settled"
-                });
+                };
+                WriteAttemptFile(terminal);
+                AppendTerminalAttemptEvent(terminal);
             }
             var binding = AcceptanceHolderBinding.For(current);
             if (LegacyAcceptanceHolderSettlement.RecordTerminal(binding, current.OwnerProcessId,
@@ -171,6 +177,20 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private void RecordHolderHold(ConductorParallelAcceptanceAttempt attempt, AcceptanceHolderLeaseFault fault) =>
         RecordHolderHold(attempt, fault.Format());
+
+    private void AppendTerminalAttemptEvent(ConductorParallelAcceptanceAttempt terminal)
+    {
+        if (_conductEventLogWriter is null) return;
+        var line = AcceptanceAttemptTerminalEvent.Format(terminal);
+        try
+        {
+            _conductEventLogWriter.Append(AcceptanceAttemptTerminalEvent.Kind, null, line);
+        }
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
+        {
+            TryAppendAttemptLog(terminal.StderrPath, $"acceptance-attempt append failed: {ex.Message}{Environment.NewLine}");
+        }
+    }
 
     private void RecordHolderHold(ConductorParallelAcceptanceAttempt attempt, string reason)
     {
@@ -223,11 +243,15 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             lock (MetadataWriteGate)
             {
                 var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
-                WriteAttemptFile(current with
+                var emitTerminalEvent = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
+                    !File.Exists(current.ResultPath);
+                var terminal = current with
                 {
                     Outcome = ConductorParallelAcceptanceAttemptOutcome.Cancelled,
                     CompletedAt = _utcNow(), Detail = "holder-tree-cancelled-before-detach"
-                });
+                };
+                WriteAttemptFile(terminal);
+                if (emitTerminalEvent) AppendTerminalAttemptEvent(terminal);
                 File.WriteAllText(current.ExitCodePath, "1");
             }
         }
