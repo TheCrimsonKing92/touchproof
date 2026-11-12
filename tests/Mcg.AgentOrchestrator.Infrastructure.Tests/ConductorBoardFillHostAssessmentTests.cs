@@ -35,7 +35,8 @@ public sealed class ConductorBoardFillHostAssessmentTests
         using var entry = BoardFillTestHarness.Event(Assert.Single(File.ReadAllLines(h.EventPath)));
         var prefix = $"BOARD_FILL_DRAFT backlog={h.Item.Id[..8]} outcome=draft checks=4/4 draft={h.DraftPath}";
         var depends = string.Join(',', new[] { first.Id.Value, second.Id.Value }.Order().Select(id => id[..8]));
-        Assert.Equal(prefix + $" verified={(verified ? 1 : 0)}/1 fileable={verified.ToString().ToLowerInvariant()} depends={depends}",
+        var reasons = verified ? "none" : "premise-bullet-1:contradicted";
+        Assert.Equal(prefix + $" verified={(verified ? 1 : 0)}/1 fileable={verified.ToString().ToLowerInvariant()} depends={depends} reasons={reasons}",
             entry.RootElement.GetProperty("detail").GetString());
         Assert.True(round.Reported);
         host.ServiceTick(h.Kernel);
