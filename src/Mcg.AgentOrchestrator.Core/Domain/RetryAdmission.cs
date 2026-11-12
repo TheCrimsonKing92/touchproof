@@ -609,7 +609,9 @@ public static class RetryAdmissionPolicy
                 receipt.LinkedDispatchAt > recoveryEvidence.LinkedDispatchAt &&
                 receipt.ReservationReleasedAt is null &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
-        if (priorSameContext is not null && !recoveryCreditAvailable)
+        if (!recoveryCreditAvailable &&
+            ((priorSameContext is not null && !PreparationTimeoutRetryAllowance.IsAvailable(task)) ||
+             PreparationTimeoutRetryAllowance.IsExhausted(task)))
         {
             return Create(
                 task,
@@ -620,7 +622,8 @@ public static class RetryAdmissionPolicy
                 ResolveRoute(cause, openBlockingFindings ?? []),
                 linkedDispatchAt,
                 recordedAt,
-                priorSameContext.LinkedDispatchAt,
+                priorSameContext?.LinkedDispatchAt ?? task.DispatchHistory.LastOrDefault(
+                    dispatch => dispatch.DispatchedAt < linkedDispatchAt)?.DispatchedAt,
                 reservationOwnerId,
                 reservationLeaseExpiresAt);
         }

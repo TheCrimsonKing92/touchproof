@@ -398,7 +398,13 @@ public static class DispatchProcessHost
         }
 
         var preparation = Track("prepare-roots", () => parameters.SandboxWorktreeWritable
-            ? preparer.Prepare(parameters.WorkingDirectory, sandboxRoot)
+            ? preparer.Prepare(parameters.WorkingDirectory, sandboxRoot,
+                new WorktreeFixtureScratchCleaner(), cleanup =>
+                {
+                    if (cleanup.FoundRoots)
+                        WriteSandboxPrepEvent(parameters, "fixture-scratch-cleanup", DateTimeOffset.UtcNow, null,
+                            $"timedOut={cleanup.TimedOut};removed={cleanup.RemovedEntries};retained={cleanup.RetainedEntries}");
+                })
             : preparer.PrepareSandboxRootOnly(parameters.WorkingDirectory, sandboxRoot));
         if (preparation.RecoveryAction is { } recoveryAction)
         {

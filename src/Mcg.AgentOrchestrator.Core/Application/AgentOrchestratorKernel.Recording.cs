@@ -1762,7 +1762,7 @@ public sealed partial class AgentOrchestratorKernel
                 RequestHumanInputDeduplicated(
                     goal.Id,
                     heldTask.Id,
-                    $"Retry admission is held for typed environment/provider recovery evidence. {marker}",
+                    $"Retry admission is held for typed environment/provider recovery evidence. {marker}" + SandboxPreparationFailure.Suffix(heldTask),
                     HumanWaitKind.RecoveryChoice,
                     isAutoDefaultable: false,
                     isDismissible: false,

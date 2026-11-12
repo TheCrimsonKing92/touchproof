@@ -311,13 +311,19 @@ internal sealed class WorkerSandboxPreparer(
         private static extern IntPtr ScratchLocalFree(IntPtr memory);
     }
 
-    public WorkerSandboxPreparationResult Prepare(string worktree, string sandboxRoot)
+    public WorkerSandboxPreparationResult Prepare(string worktree, string sandboxRoot) =>
+        Prepare(worktree, sandboxRoot, null);
+
+    internal WorkerSandboxPreparationResult Prepare(string worktree, string sandboxRoot,
+        WorktreeFixtureScratchCleaner? cleaner,
+        Action<WorktreeFixtureScratchCleanupResult>? reportCleanup = null)
     {
         var reusedWorktree = Directory.Exists(worktree);
         Directory.CreateDirectory(worktree);
         Directory.CreateDirectory(sandboxRoot);
 
-        var worktreeResult = EnsureLowIntegrityRoot(worktree, sandboxRoot, allowRecursiveMigration: true, reusedWorktree);
+        var worktreeResult = EnsureLowIntegrityRoot(worktree, sandboxRoot, allowRecursiveMigration: true,
+            reusedWorktree, cleaner, reportCleanup);
         if (worktreeResult.RecoveryAction is not null)
         {
             return worktreeResult;
@@ -354,7 +360,9 @@ internal sealed class WorkerSandboxPreparer(
         string path,
         string sandboxRoot,
         bool allowRecursiveMigration,
-        bool reusedWorktree)
+        bool reusedWorktree,
+        WorktreeFixtureScratchCleaner? cleaner = null,
+        Action<WorktreeFixtureScratchCleanupResult>? reportCleanup = null)
     {
         var receipt = TryReadValidReceipt(path, sandboxRoot);
         if (receipt.Valid && IsPrepared(path) &&
@@ -373,6 +381,11 @@ internal sealed class WorkerSandboxPreparer(
         }
 
         var recursive = allowRecursiveMigration;
+        if (recursive && cleaner is not null)
+        {
+            var cleanup = cleaner.Clean(path);
+            reportCleanup?.Invoke(cleanup);
+        }
         var nativeResult = labeler is IcaclsIntegrityLabeler native
             ? native.SetIntegrityWithDiagnostics(path, LowInheritableLevel, recursive)
             : null;
@@ -394,11 +407,7 @@ internal sealed class WorkerSandboxPreparer(
                 return new WorkerSandboxPreparationResult(false, false);
             }
 
-            var reason = $"Failed to apply inheritable Low integrity label to '{path}'.";
-            if (descendants is not null)
-                reason += $" Descendant integrity: {descendants.Outcome}; path={descendants.Path}.";
-            if (nativeResult is not null)
-                reason += $" Native label command: {nativeResult.Diagnostic}";
+            var reason = WorkerSandboxLabelFailureReason.Build(path, descendants, nativeResult);
             if (!reusedWorktree)
             {
                 throw new InvalidOperationException(reason);
