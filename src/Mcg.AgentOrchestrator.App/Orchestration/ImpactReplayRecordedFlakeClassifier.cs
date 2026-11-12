@@ -9,7 +9,7 @@ internal static class ImpactReplayRecordedFlakeClassifier
     internal static IReadOnlyList<ImpactReplayFailingClass> Classify(string attemptId,
         IReadOnlyList<ImpactReplayFailingClass> failures, IReadOnlyList<ImpactReplayLaneOutcome> lanes,
         IReadOnlyList<string> checkNames, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
-        IReadOnlyList<AcceptanceLaneFlakeRow> rows)
+        IReadOnlyList<AcceptanceLaneFlakeRow> rows, ICollection<string> warnings)
     {
         var recorded = rows.Where(row => row.AttemptId == attemptId).ToArray();
         var reruns = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -20,8 +20,17 @@ internal static class ImpactReplayRecordedFlakeClassifier
                 (row.LaneName == lane || checkNames.Any(check => row.LaneName == check + ": " + lane)) &&
                 row.FirstFailingTestIdentities.Any(identity =>
                     ImpactReplayTrxEvidence.ResolveClass(identity, classes) == failure.ClassName)).ToArray();
-            // An adjudicated failure must not be overturned by partial TRX evidence.
-            if (matchingRows.Any(row => row.Outcome == AcceptanceLaneRerunEvidence.ConfirmedFailure)) return failure;
+            // The producer also labels apparatus failures "confirmed-failure". Only an exact
+            // repeated failing identity with invocation provenance is positive hard evidence.
+            var confirmed = matchingRows.Where(row => row.Outcome == AcceptanceLaneRerunEvidence.ConfirmedFailure).ToArray();
+            if (confirmed.Any(row => HasRepeatedFailure(row, failure.ClassName, classes)))
+                return failure with { ConfirmedHardFailure = true };
+            if (confirmed.Length > 0)
+            {
+                warnings.Add($"Selected rerun evidence incomplete for {failure.ClassName}: confirmed-failure receipt " +
+                    "does not prove an exact repeated failure. Recover the original/rerun invocation provenance and test results.");
+                return failure;
+            }
             if (matchingRows.Any(row => row.Outcome == AcceptanceLaneRerunEvidence.Flake))
                 return failure with { FlakeEvidence = "lane-flakes" };
 
@@ -33,6 +42,19 @@ internal static class ImpactReplayRecordedFlakeClassifier
             return flakyClasses.Contains(failure.ClassName) ? failure with { FlakeEvidence = "rerun" } : failure;
         }).ToArray();
     }
+
+    private static bool HasRepeatedFailure(AcceptanceLaneFlakeRow row, string className,
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes) =>
+        !string.IsNullOrWhiteSpace(row.CandidateTreeSha) &&
+        !string.IsNullOrWhiteSpace(row.FirstInvocationId) && !string.IsNullOrWhiteSpace(row.RerunInvocationId) &&
+        row.FirstInvocationId != row.RerunInvocationId &&
+        row.FirstTestResultPaths.Count > 0 && row.RerunTestResultPaths.Count > 0 &&
+        row.FirstTestResultPaths.Concat(row.RerunTestResultPaths).All(Path.IsPathFullyQualified) &&
+        row.FirstPredicate == AcceptanceShardCompletionPredicates.FailingTrx &&
+        row.RerunPredicate == AcceptanceShardCompletionPredicates.FailingTrx &&
+        row.FirstFailingTestIdentities.Any(identity =>
+            ImpactReplayTrxEvidence.ResolveClass(identity, classes) == className &&
+            row.RerunFailingTestIdentities.Contains(identity, StringComparer.Ordinal));
 
     private static HashSet<string> ReadReruns(IReadOnlyList<string> paths,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes)

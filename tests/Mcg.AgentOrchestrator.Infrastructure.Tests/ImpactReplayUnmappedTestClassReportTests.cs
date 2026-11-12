@@ -93,13 +93,19 @@ public sealed class ImpactReplayUnmappedTestClassReportTests
             """;
         var report = JsonSerializer.Deserialize<ImpactReplayReport>(legacyJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         Assert.Null(report.UnmappedTestClasses);
+        Assert.Null(report.HistoricalEvidence);
 
         ImpactReplayReportWriter.Write(fixture.OutputDirectory, report);
 
         var markdown = File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.md"));
         Assert.Contains("## Unmapped test classes", markdown);
         Assert.Contains("No unmapped test classes were found.", markdown);
-        var json = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json")))!["unmappedTestClasses"]!;
+        var writtenJson = File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json"));
+        var written = JsonNode.Parse(writtenJson)!.AsObject();
+        Assert.False(written.ContainsKey("historicalEvidence"));
+        var roundTrip = JsonSerializer.Deserialize<ImpactReplayReport>(writtenJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Null(roundTrip.HistoricalEvidence);
+        var json = written["unmappedTestClasses"]!;
         Assert.Equal(3, json["countsByReason"]!.AsObject().Count);
         Assert.All(json["countsByReason"]!.AsObject(), item => Assert.Equal(0, item.Value!.GetValue<int>()));
         Assert.Empty(json["topClasses"]!.AsArray());

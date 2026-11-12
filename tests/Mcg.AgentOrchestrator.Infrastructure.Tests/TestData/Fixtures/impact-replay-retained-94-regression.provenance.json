@@ -1,0 +1,54 @@
+{
+  "fixture": "C:\u005cUsers\u005cmiles\\vcs\\mcg-agent-orchestrator\\.orchestrator\\operator-evidence\\impact-parity-20261111\\impact-replay-retained-94-regression.json",
+  "fixtureSha256": "788cf989bcc013f960fd712771c2c76422b376c4d533a481852d401965984503",
+  "fixtureBytes": 82920,
+  "sourceReport": "C:\u005cUsers\u005cmiles\\vcs\\mcg-agent-orchestrator\\.orchestrator\\operator-evidence\\impact-selection-20261109-full\\impact-replay.json",
+  "sourceReportSha256": "54c820df31da09770d865112421eaad29b38a1b5a3adc4dbb6a8825f7bca4ca2",
+  "inputHashes": {
+    "C:\u005cUsers\u005cmiles\\vcs\\mcg-agent-orchestrator\\.orchestrator\\operator-evidence\\impact-parity-20261111\\retained-evidence-reference-closure.json": "ec70e382604824ca36eb71ff1bb2db108db2f2ad35b0acf6cdff98ea581c0e8f",
+    "C:\u005cUsers\u005cmiles\\vcs\\mcg-agent-orchestrator\\.orchestrator\\operator-evidence\\impact-parity-20261111\\sidecar-field-comparison.json": "ece552c1adfb3af61315ec3886fe013ac2e9a56d65f41ba200e349c360be5e85",
+    "C:\u005cUsers\u005cmiles\\vcs\\mcg-agent-orchestrator\\.orchestrator\\operator-evidence\\impact-parity-20261111\\build-regression-input.py": "68cc89d5686df343d8cf554f9bb829036f2608d7bbfa62f8560245319c1baaa0"
+  },
+  "rows": 94,
+  "failureRows": 258,
+  "warningValues": 162,
+  "unresolvedFailureValues": 3,
+  "originalMissRows": 2,
+  "originalFlakeExcludedRows": 119,
+  "rowSchema": [
+    "attemptId",
+    "candidateSha",
+    "completeMissCheck",
+    "failures",
+    "evidenceWarnings",
+    "unresolvedFailures",
+    "selectionOutcome",
+    "selectionReason",
+    "absentSourceFields",
+    "failureAbsentFieldIndices",
+    "unknownEvidenceFlags",
+    "pinnedNormalizedComparisonAvailable"
+  ],
+  "failureSchema": [
+    "className",
+    "lane",
+    "wouldRun",
+    "flakeEvidence",
+    "isMiss",
+    "isFlakyFailureInSkippedLane"
+  ],
+  "unknownEvidenceSchema": [
+    "nativeTrxBytesAndHash",
+    "nativeOutcomeSpelling",
+    "subMillisecondDurationPrecision",
+    "duplicateDisplayIdentityMultiplicity",
+    "originalTimeGlobalLedgerSnapshot",
+    "currentCandidateAdjudication",
+    "confirmedHardFailureNotRecorded"
+  ],
+  "existingFixture": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestData/Fixtures/impact-replay-retained-3d6a5860.json",
+  "existingTest": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ImpactReplayRetainedHistoryParityTests.cs",
+  "safetyRegressions": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ImpactReplayHistoryQueryTests.cs",
+  "transformation": "Exact retained JSON field values projected into declared arrays. Missing source fields are explicit; original nulls, warning strings and unresolved-failure objects are retained. No hard-failure label is manufactured.",
+  "classification": "Regression input packaging only; no tests or replay executed and no criterion-satisfaction claim."
+}

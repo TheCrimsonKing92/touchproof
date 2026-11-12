@@ -13,8 +13,9 @@ internal class ImpactReplayExecutionSource
             ? revision.Output.Trim() : "unknown: git HEAD unavailable";
     }
 
+    // Production acquires history through the selected case's scoped query, never at startup.
     internal virtual IReadOnlyDictionary<string, GateStatsReport.FlakeRow> LoadHistory(string directory,
-        ICollection<ImpactReplayDiagnostic> skipped) => ImpactReplayHistoricalFlakeClassifier.Load(directory, skipped);
+        ICollection<ImpactReplayDiagnostic> skipped) => new Dictionary<string, GateStatsReport.FlakeRow>();
 
     internal virtual IReadOnlyList<AcceptanceLaneFlakeRow> LoadLedger(string executionDirectory) =>
         new AcceptanceLaneFlakeLedger(executionDirectory).Read();
@@ -115,7 +116,7 @@ internal class ImpactReplayExecutionSource
             { WouldRun = failure.Lane is null ? null : poolNames.Contains(failure.Lane, StringComparer.Ordinal)
                 ? !resolved || selectedFullNames.Contains(failure.ClassName) || !classes.Any(c => c.FullName == failure.ClassName)
                 : selectedLanes.Contains(failure.Lane) }).ToArray(),
-            evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), checkNames, classes, flakeRows);
+            evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), checkNames, classes, flakeRows, warnings);
         failures = ImpactReplayHistoricalFlakeClassifier.Classify(failures,
             evidence.LaneOutcomes.Concat(evidence.BalancedLaneOutcomes).ToArray(), classes, history);
         var pool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, resolved);

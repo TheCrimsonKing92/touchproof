@@ -8,7 +8,8 @@ internal static class ImpactReplayTrxEvidence
     internal static (IReadOnlyList<ImpactReplayLaneOutcome> LaneOutcomes,
         IReadOnlyList<ImpactReplayFailingClass> Failures, IReadOnlyList<string> Warnings,
         IReadOnlyList<ImpactReplayLaneOutcome> BalancedLaneOutcomes,
-        IReadOnlyList<ImpactReplayUnresolvedFailure> UnresolvedFailures) Read(
+        IReadOnlyList<ImpactReplayUnresolvedFailure> UnresolvedFailures,
+        IReadOnlyDictionary<(string ClassName, string Lane), IReadOnlyList<string>> FailingIdentities) Read(
         ImpactReplayStoredAttempt attempt, IReadOnlyList<AcceptanceTestLane> lanes,
         IReadOnlyList<string> checkNames, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
         IReadOnlyList<string>? poolLaneNames = null)
@@ -19,6 +20,7 @@ internal static class ImpactReplayTrxEvidence
         var unresolved = new List<ImpactReplayUnresolvedFailure>();
         var warnings = new List<string>();
         var outcomes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var identities = new Dictionary<(string ClassName, string Lane), HashSet<string>>();
         foreach (var rawPath in attempt.TestResultPaths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var path = Path.GetFullPath(rawPath.Replace('\\', Path.DirectorySeparatorChar), attempt.GoalDirectory);
@@ -52,7 +54,13 @@ internal static class ImpactReplayTrxEvidence
                     continue;
                 }
                 // The TRX's lane identifies where the failure actually happened, including overlapping filters.
-                if (matching.Length == 1) failures.Add(new(className, matching[0], null));
+                if (matching.Length == 1)
+                {
+                    failures.Add(new(className, matching[0], null));
+                    var key = (className, matching[0]);
+                    if (!identities.TryGetValue(key, out var tests)) identities[key] = tests = new(StringComparer.Ordinal);
+                    if (!string.IsNullOrWhiteSpace(failure.TestName)) tests.Add(failure.TestName);
+                }
                 else
                 {
                     warnings.Add($"Failing class has no unambiguous lane receipt: {className}: {path}");
@@ -73,7 +81,8 @@ internal static class ImpactReplayTrxEvidence
         if (ran.Length > 0 && ran.All(lane => lane.TrxPaths.Count == 0)) warnings.Add("No lane TRX evidence was available.");
         return (ran.Where(lane => !(poolLaneNames ?? []).Contains(lane.Lane, StringComparer.Ordinal)).ToArray(),
             failures.Distinct().ToArray(), warnings,
-            ran.Where(lane => (poolLaneNames ?? []).Contains(lane.Lane, StringComparer.Ordinal)).ToArray(), unresolved);
+            ran.Where(lane => (poolLaneNames ?? []).Contains(lane.Lane, StringComparer.Ordinal)).ToArray(), unresolved,
+            identities.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value.Order(StringComparer.Ordinal).ToArray()));
     }
 
     internal static string? ResolveClass(string? identity, IReadOnlyList<AcceptanceTestClassDescriptor> classes)

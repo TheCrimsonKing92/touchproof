@@ -19,9 +19,12 @@ public sealed class ImpactReplayBalancedPoolMissTests
         Assert.Equal("Balanced 2", failure.Lane);
         Assert.Equal(selected, failure.WouldRun);
         Assert.Equal(!selected, failure.IsMiss);
-        Assert.True(attempt.MissCheckComplete);
+        Assert.Equal(selected, attempt.MissCheckComplete);
         Assert.Empty(attempt.UnresolvedFailures!);
-        Assert.Empty(attempt.EvidenceWarnings);
+        if (selected) Assert.Empty(attempt.EvidenceWarnings);
+        else Assert.Contains(attempt.EvidenceWarnings, warning =>
+            warning.Contains("SampleTests.PoolBetaTests.Works", StringComparison.Ordinal) &&
+            warning.Contains("Recover authoritative exact-identity coverage", StringComparison.Ordinal));
         Assert.Equal(selected ? 0 : 1, report.Measurement!.MissCount);
     }
 

@@ -26,7 +26,8 @@ public sealed class ImpactReplayRecordedFlakeTests
         var miss = Assert.Single(attempt.FailingClasses, failure => failure.IsMiss);
         Assert.Equal("SampleTests.GammaTests", miss.ClassName);
         Assert.Null(miss.FlakeEvidence);
-        Assert.True(attempt.MissCheckComplete);
+        Assert.False(attempt.MissCheckComplete);
+        Assert.Contains(attempt.EvidenceWarnings, warning => warning.Contains("SampleTests.GammaTests.Works", StringComparison.Ordinal));
         var misses = markdown[markdown.IndexOf("## Misses", StringComparison.Ordinal)..
             markdown.IndexOf("## Flaky failures in skipped lanes", StringComparison.Ordinal)];
         Assert.DoesNotContain("SampleTests.BetaTests", misses);

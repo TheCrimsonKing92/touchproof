@@ -14,6 +14,11 @@ internal sealed record ImpactReplayReport(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     ImpactReplaySourceGuardReport? SourceReadingGuards = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ImpactReplayHistoryReadSummary? HistoricalEvidence = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     ImpactReplayReportRun? Run = null);
+
+internal sealed record ImpactReplayHistoryReadSummary(IReadOnlyList<string> QueriedIdentities,
+    int MetadataReads, int TrxParses, IReadOnlyList<string> ParsedPaths);
 
 internal sealed record ImpactReplayReportRun(string RunId, string CheckpointPath);

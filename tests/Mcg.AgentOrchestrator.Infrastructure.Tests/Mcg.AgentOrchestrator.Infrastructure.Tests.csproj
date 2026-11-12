@@ -43,6 +43,9 @@
     <Compile Include="Fixtures\SupervisorLaunchProbe\ProcessImagePathResolver.cs" />
     <Compile Include="Fixtures\SupervisorLaunchProbe\ConductorStartCallerProbe.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="TestData\Fixtures\impact-replay-retained-3d6a5860.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="TestData\Fixtures\impact-replay-retained-94-regression.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="TestData\Fixtures\impact-replay-retained-94-regression.provenance.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="Always" />
     <Content Include="Fixtures\CodexJsonl\*.jsonl" CopyToOutputDirectory="PreserveNewest" />

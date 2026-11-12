@@ -19,7 +19,7 @@ public sealed class ImpactReplayUnchangedBaselineTests
         Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
         Assert.Equal(new[] { "Beta lane" }, attempt.SkippedLanes);
         Assert.Equal(0, report.AttemptsGainingChangedTestClasses);
-        Assert.True(attempt.MissCheckComplete);
+        Assert.Equal(!failingBeta, attempt.MissCheckComplete);
         if (failingBeta)
         {
             var failure = Assert.Single(attempt.FailingClasses);
@@ -43,7 +43,7 @@ public sealed class ImpactReplayUnchangedBaselineTests
             "Attempts replayed: 1",
             "Unreplayable attempts: 0",
             "Skipped inputs: 0",
-            "Incomplete miss checks: 0",
+            $"Incomplete miss checks: {(failingBeta ? 1 : 0)}",
             "Median share of lanes skipped: 33.3 %",
             "P90 share of lanes skipped: 33.3 %",
             "Total estimated lane-seconds saved: 23.5",
@@ -68,7 +68,15 @@ public sealed class ImpactReplayUnchangedBaselineTests
             "| baseline | Resolved | Alpha lane, Beta lane, Chaos gate | Alpha lane, Chaos gate | Beta lane | 23.5 |",
             "",
             "## Input and evidence diagnostics",
-            "",
+            ""
+        });
+        if (failingBeta) expectedLines.AddRange(new[]
+        {
+            "- baseline: Historical coverage unavailable: lane-flakes receipts index adjudications only; retained native TRX has no exhaustive source-bound exact-identity index. Recover authoritative coverage metadata; an exhaustive compatibility scan requires separate operator authorization.",
+            "- baseline: Historical evidence incomplete for SampleTests.BetaTests: SampleTests.BetaTests.Works. Recover authoritative exact-identity coverage or authorize a separate diagnostic history scan."
+        });
+        expectedLines.AddRange(new[]
+        {
             "",
             "## Unmapped test classes",
             "",

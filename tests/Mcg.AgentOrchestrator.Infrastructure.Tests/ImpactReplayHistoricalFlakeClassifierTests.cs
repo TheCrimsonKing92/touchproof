@@ -93,7 +93,7 @@ public sealed class ImpactReplayHistoricalFlakeClassifierTests
     }
 
     [Fact]
-    public void HistorySnapshotLoadsAllAvailableAttemptsAndDoesNotReportFilenameSkipsAsFaults()
+    public void ExplicitGateStatsRead_PreservesAllAttemptsAndFilenameSkipAccounting()
     {
         using var fixture = new ImpactReplaySelectionFixture();
         var goal = Path.Combine(fixture.Root, "acceptance-gate-attempts", "goal");
@@ -103,16 +103,14 @@ public sealed class ImpactReplayHistoricalFlakeClassifierTests
         File.Move(first, Path.Combine(goal, attempt + ".lane.trx"));
         WriteTrx(Path.Combine(goal, attempt + ".lane-run-1.trx"), "Passed", ["Sample.GuardTests.Works"]);
         File.WriteAllText(Path.Combine(goal, "not-an-attempt.trx"), "<TestRun />");
-        var diagnostics = new List<ImpactReplayDiagnostic>();
-
-        var history = ImpactReplayHistoricalFlakeClassifier.Load(fixture.Root, diagnostics);
-
-        var row = Assert.Single(history).Value;
+        // gate-stats remains an explicit full-history command; replay never invokes it eagerly.
+        var history = GateStatsReport.Flakes(fixture.Root, int.MaxValue, int.MaxValue);
+        var row = Assert.Single(history.Tests);
         Assert.Equal("Sample.GuardTests.Works", row.Test);
         Assert.Equal(1, row.Attempts);
         Assert.Equal(1, row.Flake);
         Assert.Equal(0, row.Hard);
-        Assert.Empty(diagnostics);
+        Assert.Equal(1, history.Skipped);
     }
 
     private static Dictionary<string, GateStatsReport.FlakeRow> History(GateStatsReport.FlakeRow row) =>

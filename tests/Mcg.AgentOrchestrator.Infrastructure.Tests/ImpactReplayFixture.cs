@@ -207,12 +207,13 @@ internal sealed class ImpactReplayFixture : IDisposable
     }
 
     public void AddFlake(string attemptId, string lane = "Infrastructure tests: Beta lane",
-        string className = "BetaTests", string outcome = AcceptanceLaneRerunEvidence.Flake)
+        string className = "BetaTests", string outcome = AcceptanceLaneRerunEvidence.Flake,
+        Func<AcceptanceLaneFlakeRow, AcceptanceLaneFlakeRow>? transform = null)
     {
         var row = new AcceptanceLaneFlakeRow("fixture-goal", attemptId, lane, _branch,
             "first", [], [$"SampleTests.{className}.Works"], "first failed", "rerun", [], [], null,
             outcome, new DateTimeOffset(2026, 10, 28, 13, 0, 0, TimeSpan.Zero));
-        new AcceptanceLaneFlakeLedger(_root).Append(row);
+        new AcceptanceLaneFlakeLedger(_root).Append(transform?.Invoke(row) ?? row);
     }
 
     public void RewriteBetaRerun(string attemptId, (string Method, string Outcome)[] results,
@@ -284,6 +285,9 @@ internal sealed class ImpactReplayFixture : IDisposable
         Assert.Equal(report.UnreplayableAttempts.Count, status.Progress.Unreplayable);
         return (report, File.ReadAllText(Path.Combine(OutputDirectory, "impact-replay.md")));
     }
+
+    internal ImpactReplayReport ReadWithHistory(ImpactReplayHistoryQuery history, DateTimeOffset? since = null, int limit = 1) =>
+        ImpactReplay.Read(_root, StateDirectory, since, limit, tempCheckoutParent: CheckoutParent, historyQuery: history);
 
     public string[] StateSnapshot() => Directory.EnumerateFileSystemEntries(StateDirectory, "*", SearchOption.AllDirectories)
         .Where(path => path != OutputDirectory && !path.StartsWith(OutputDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
