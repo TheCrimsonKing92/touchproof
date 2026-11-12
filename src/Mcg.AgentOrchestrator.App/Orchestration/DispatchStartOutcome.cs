@@ -35,7 +35,7 @@ internal sealed record DispatchStartOutcome(
         ex.Message.StartsWith(SpecRefinementPendingPrefix, StringComparison.Ordinal);
 
     internal static DispatchStartOutcome FromDispatchException(Exception ex, string failurePrefix) =>
-        IsSpecRefinementPending(ex)
+        ex is AbortedDispatchStartException || IsSpecRefinementPending(ex)
             ? Deferred(ex.Message) with
             {
                 HoldOwner = ex.Data[HoldOwnerDataKey] is ConductorHoldOwner owner

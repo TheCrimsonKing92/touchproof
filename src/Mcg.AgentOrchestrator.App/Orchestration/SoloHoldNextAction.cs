@@ -17,6 +17,9 @@ internal static class SoloHoldNextAction
                 ("solo evidence consumption", "conductor", "wait for the next tick"),
             SoloHoldReasons.RetryCap =>
                 ("solo acceptance correction retry cap", "operator", "review the solo acceptance correction evidence"),
+            AbortedDispatchStartRecovery.RepeatedReason =>
+                ("retry admission failed twice in a row with the same failure text; the unstarted dispatch was discarded each time", "operator",
+                 "read the failure text in the task note, then run adjudicate --goal <goal-prefix> <task-number> route --cause <cause> --text-file <note> --evidence <reference>"),
             SoloHoldReasons.CorrectionCeiling =>
                 ("solo acceptance correction ceiling", "operator", "review the solo acceptance correction evidence"),
             SoloHoldReasons.FreshGateUnavailable =>

@@ -30,6 +30,7 @@ internal sealed partial class OperatorIntentCoordinator
                 throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
             return;
         }
+        if (task.LastProcess is null && NeverStartedDispatchReconciliation.ApplyCancel(kernel, goal, task, payload)) return;
         var process = task.LastProcess ??
             throw new InvalidOperationException($"Task '{task.Id}' has no background process to cancel.");
         var dispatch = task.LastDispatch ??
