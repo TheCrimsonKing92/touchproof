@@ -113,7 +113,13 @@ internal sealed class GitRevisionReader : IDisposable
 
     internal static bool TryConfirmWorkTree(string directory, Func<string, string?> environment,
         bool allowIdentityConfiguration = true)
+        => TryConfirmWorkTree(directory, environment, new GitLookupDirectoryProbe(), out _, out _, out _, allowIdentityConfiguration);
+
+    private static bool TryConfirmWorkTree(string directory, Func<string, string?> environment,
+        GitLookupDirectoryProbe probe, out string confirmedRoot, out string confirmedGitDirectory,
+        out string confirmedCommonDirectory, bool allowIdentityConfiguration)
     {
+        confirmedRoot = confirmedGitDirectory = confirmedCommonDirectory = string.Empty;
         ArgumentNullException.ThrowIfNull(environment);
         try
         {
@@ -126,7 +132,7 @@ internal sealed class GitRevisionReader : IDisposable
             if (directory.Split(['/', '\\']).Any(part => part == ".." ||
                 part.TrimEnd(' ', '.').Equals(".git", StringComparison.OrdinalIgnoreCase))) return false;
             var start = Path.GetFullPath(directory);
-            if (!Directory.Exists(start) || !HasOrdinaryDirectoryPath(start)) return false;
+            if (!probe.HasOrdinaryDirectoryPath(start)) return false;
             if (start.Split(['/', '\\']).Any(part =>
                 part.TrimEnd(' ', '.').Equals(".git", StringComparison.OrdinalIgnoreCase))) return false;
 
@@ -137,7 +143,7 @@ internal sealed class GitRevisionReader : IDisposable
                 {
                     if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
                     var gitDirectory = ResolveBranchGitDirectory(current.FullName);
-                    if (gitDirectory is null || !HasOrdinaryDirectoryPath(gitDirectory)) return false;
+                    if (gitDirectory is null || !probe.HasOrdinaryDirectoryPath(gitDirectory)) return false;
                     var headPath = Path.Combine(gitDirectory, "HEAD");
                     if ((File.GetAttributes(headPath) & FileAttributes.ReparsePoint) != 0) return false;
                     var head = ReadBranchMetadataLine(headPath);
@@ -155,7 +161,7 @@ internal sealed class GitRevisionReader : IDisposable
                         if (common is null) return false;
                         commonDirectory = Path.GetFullPath(common, gitDirectory);
                     }
-                    if (!HasOrdinaryDirectoryPath(commonDirectory) ||
+                    if (!probe.HasOrdinaryDirectoryPath(commonDirectory) ||
                         !Directory.Exists(Path.Combine(commonDirectory, "objects")) ||
                         !Directory.Exists(Path.Combine(commonDirectory, "refs")) ||
                         !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out _, allowIdentityConfiguration)) return false;
@@ -176,6 +182,9 @@ internal sealed class GitRevisionReader : IDisposable
                                 new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))) return false;
                         }
                     }
+                    confirmedRoot = current.FullName;
+                    confirmedGitDirectory = gitDirectory;
+                    confirmedCommonDirectory = commonDirectory;
                     return true;
                 }
                 // Git stops at a bare repository before looking for an enclosing checkout.
@@ -332,34 +341,22 @@ internal sealed class GitRevisionReader : IDisposable
     // Shared layout policy for both positive ref reads and the absence proof.
     internal static bool TryLocateRefStore(string directory, Func<string, string?> environment,
         out string gitDirectory, out string commonDirectory, bool allowIdentityConfiguration = true)
+        => TryLocateRefStore(directory, environment, new GitLookupDirectoryProbe(), out gitDirectory, out commonDirectory, allowIdentityConfiguration);
+
+    // Test seam: the caller supplies a fresh probe owned by this invocation only.
+    internal static bool TryLocateRefStore(string directory, Func<string, string?> environment,
+        GitLookupDirectoryProbe probe, out string gitDirectory, out string commonDirectory, bool allowIdentityConfiguration = true)
     {
         gitDirectory = commonDirectory = string.Empty;
-        if (!TryConfirmWorkTree(directory, environment, allowIdentityConfiguration)) return false;
+        if (!TryConfirmWorkTree(directory, environment, probe, out var root, out var confirmedGit,
+            out var confirmedCommon, allowIdentityConfiguration)) return false;
         // Worktree confirmation permits nested directories; this proof requires the root entry.
-        var root = Path.GetFullPath(directory);
-        var entry = Path.Combine(root, ".git");
-        if (!WorkTreeMetadataEntryExists(entry) ||
-            (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) return false;
-        var resolved = ResolveBranchGitDirectory(root);
-        if (resolved is null) return false;
-        gitDirectory = resolved;
-        if (!HasOrdinaryDirectoryPath(gitDirectory)) return false;
-
-        commonDirectory = gitDirectory;
-        var commonPath = Path.Combine(gitDirectory, "commondir");
-        if (WorkTreeMetadataEntryExists(commonPath))
-        {
-            if ((File.GetAttributes(commonPath) & FileAttributes.ReparsePoint) != 0) return false;
-            var common = ReadBranchMetadataLine(commonPath);
-            if (common is null) return false;
-            commonDirectory = Path.GetFullPath(common, gitDirectory);
-        }
-        if (!HasOrdinaryDirectoryPath(commonDirectory) ||
-            WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) ||
-            WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable")) ||
-            !HasConclusiveWorkTreeConfig(Path.Combine(commonDirectory, "config"), out _, allowIdentityConfiguration)) return false;
-
-        return true;
+        if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)),
+            Path.TrimEndingDirectorySeparator(root), StringComparison.Ordinal)) return false;
+        gitDirectory = confirmedGit;
+        commonDirectory = confirmedCommon;
+        return !WorkTreeMetadataEntryExists(Path.Combine(commonDirectory, "reftable")) &&
+            !WorkTreeMetadataEntryExists(Path.Combine(gitDirectory, "reftable"));
     }
 
     internal static bool TryReadPackedRefs(string commonDirectory, out List<(string Id, string Name)> entries)
@@ -472,21 +469,10 @@ internal sealed class GitRevisionReader : IDisposable
     }
 
     internal static bool HasOrdinaryDirectoryPath(string directory)
-    {
-        for (var current = new DirectoryInfo(directory); current is not null; current = current.Parent)
-            if (!current.Exists || (current.Attributes & FileAttributes.ReparsePoint) != 0 ||
-                current.Name != current.Name.TrimEnd(' ', '.') ||
-                OperatingSystem.IsWindows() && current.Name.Contains('~')) return false;
-        return true;
-    }
+        => new GitLookupDirectoryProbe().HasOrdinaryDirectoryPath(directory);
 
     internal static bool WorkTreeMetadataEntryExists(string path)
-    {
-        // Unlike Exists, preserve access/I/O failures so the caller declines confirmation.
-        try { _ = File.GetAttributes(path); return true; }
-        catch (FileNotFoundException) { return false; }
-        catch (DirectoryNotFoundException) { return false; }
-    }
+        => GitLookupDirectoryProbe.EntryExists(path);
 
     private static bool HasConclusiveWorkTreeConfig(string path) => HasConclusiveWorkTreeConfig(path, out _);
 
