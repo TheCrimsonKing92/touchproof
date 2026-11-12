@@ -184,7 +184,7 @@ public sealed class CliStatusStorageLineTests : CliTaskQueryTestSupport
     private static AgentOrchestratorKernel Kernel()
     {
         var kernel = new AgentOrchestratorKernel();
-        kernel.CreateGoal(new GoalId("abcdef12abcdef12abcdef12abcdef12"), "Storage fixture", []);
+        kernel.CreateGoal(new GoalId("abcdef12abcdef12abcdef12abcdef12"), "Storage fixture");
         return kernel;
     }
 

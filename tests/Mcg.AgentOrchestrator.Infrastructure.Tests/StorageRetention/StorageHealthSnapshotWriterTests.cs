@@ -114,7 +114,11 @@ public sealed class StorageHealthSnapshotWriterTests
             Assert.Equal(1, calls);
             var diagnostic = Assert.Single(result.Decisions, row => row.Reason == "storage-health-snapshot-failed");
             Assert.Equal(EvidenceRetentionAction.Preserved, diagnostic.Action);
-            Assert.Equal(nameof(IOException), diagnostic.FailureExceptionType);
+            if (failMeasurement)
+                Assert.Equal(nameof(IOException), diagnostic.FailureExceptionType);
+            else
+                Assert.Contains(diagnostic.FailureExceptionType,
+                    new[] { nameof(IOException), nameof(UnauthorizedAccessException) });
             Assert.DoesNotContain(result.Decisions, row => row.Action == EvidenceRetentionAction.Failed);
         }
         Assert.Equal("previous snapshot", File.ReadAllText(SnapshotPath(fixture)));

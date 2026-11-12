@@ -49,7 +49,10 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
                 Xunit.Assert.False(changed);
             });
 
-            Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetBytes(fixture),
+            var readFixture = verb == "status"
+                ? fixture + "storage unknown" + Environment.NewLine
+                : fixture;
+            Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetBytes(readFixture),
                 System.Text.Encoding.UTF8.GetBytes(newOutput));
         }
         finally
