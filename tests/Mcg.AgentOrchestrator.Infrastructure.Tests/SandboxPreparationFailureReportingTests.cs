@@ -64,6 +64,8 @@ public sealed class SandboxPreparationFailureReportingTests
         var reason = Reason();
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(reason) with
         {
+            Command = task.LastDispatch!.Command,
+            WorkingDirectory = task.LastDispatch.WorkingDirectory,
             CompletedAt = task.LastDispatch!.DispatchedAt.AddSeconds(1),
             DispatchStartedAt = task.LastDispatch.DispatchedAt
         });
