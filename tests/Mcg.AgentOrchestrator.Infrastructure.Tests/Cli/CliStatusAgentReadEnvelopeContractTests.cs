@@ -165,7 +165,7 @@ public sealed class CliStatusAgentReadEnvelopeContractTests : CliTaskQueryTestSu
         Assert.Equal(AgentReadEnvelope.StatusSchemaVersion, envelope.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("2026-10-12T00:00:00.0000000Z", envelope.GetProperty("generatedAt").GetString());
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "goal", "label", "objective", "status", "tasks" },
+        Assert.Equal(new[] { "goal", "label", "objective", "status", "tasks", "storage" },
             payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }

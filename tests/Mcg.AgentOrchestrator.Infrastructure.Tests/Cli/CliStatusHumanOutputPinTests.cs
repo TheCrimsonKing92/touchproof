@@ -61,6 +61,7 @@ public sealed class CliStatusHumanOutputPinTests : CliTaskQueryTestSupport
                 "  1. [Pending] Developer: Unassigned task (unassigned)",
                 "  2. [Assigned] Tester: Assigned task (tester12)",
                 "",
+                "storage unknown",
                 ""
             };
             Assert.Equal(string.Join(Environment.NewLine, lines), output);

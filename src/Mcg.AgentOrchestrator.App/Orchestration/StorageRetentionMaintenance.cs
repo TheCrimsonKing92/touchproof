@@ -168,7 +168,8 @@ internal static partial class StorageRetentionMaintenance
         StorageRetentionGoalLoadResult? goalLoad = null,
         Action<string>? beforeEachAttemptCandidateDeletionForTests = null,
         Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests = null,
-        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests = null)
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests = null,
+        StorageHealthSnapshotWriter? storageHealthSnapshotWriter = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -277,6 +278,10 @@ internal static partial class StorageRetentionMaintenance
                     "sweep-failed",
                     FailureExceptionType: ex.GetType().Name));
             }
+
+            if (!decisions.Any(decision => decision.Action == EvidenceRetentionAction.Failed))
+                (storageHealthSnapshotWriter ?? StorageHealthSnapshotWriter.Default)
+                    .Publish(orchestratorDirectory, now, decisions);
 
             return BuildResult(sweepId, decisions) with
             {
