@@ -20,7 +20,7 @@ public sealed class ImpactReplayMeasurementTests
     {
         var failure = new ImpactReplayFailingClass("FailureTests", lane, wouldRun, evidence);
 
-        var measurement = ImpactReplayMeasurement.Create(20, [Attempt("one", failure)]);
+        var measurement = ImpactReplayMeasurement.Create([Attempt("one", failure)]);
 
         Assert.Equal(misses == 1, failure.IsMiss);
         Assert.Equal(flakes == 1, failure.IsFlakyFailureInSkippedLane);
@@ -75,8 +75,8 @@ public sealed class ImpactReplayMeasurementTests
             new("FlakeTests", "Balanced 9", false, "historical-flakes")
         ];
 
-        var single = ImpactReplayMeasurement.Create(20, [Attempt("first", failures)]);
-        var repeated = ImpactReplayMeasurement.Create(20,
+        var single = ImpactReplayMeasurement.Create([Attempt("first", failures)]);
+        var repeated = ImpactReplayMeasurement.Create(
             [Attempt("first", failures), Attempt("second", failures)]);
 
         Assert.Equal(2, single.MissCount);
@@ -163,7 +163,7 @@ public sealed class ImpactReplayMeasurementTests
     [Fact]
     public void EmptyPopulation_ReportsZeroCategoryCounts()
     {
-        var measurement = ImpactReplayMeasurement.Create(20, []);
+        var measurement = ImpactReplayMeasurement.Create([]);
         Assert.Equal(0, measurement.MissCount);
         Assert.Equal(0, measurement.FlakeExcludedCount);
         Assert.Equal(0, measurement.CompleteMissCheckCount);
@@ -175,7 +175,7 @@ public sealed class ImpactReplayMeasurementTests
             [], [], [], [], [], [], 0, [], failures, true, []);
 
     private static ImpactReplayReport Report(params ImpactReplayAttemptRecord[] attempts) =>
-        new("override", [], attempts, [], [], [], Measurement: ImpactReplayMeasurement.Create(20, attempts));
+        new("override", [], attempts, [], [], [], Measurement: ImpactReplayMeasurement.Create(attempts));
 
     private static JsonDocument Serialize(ImpactReplayReport report) =>
         JsonDocument.Parse(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web)));

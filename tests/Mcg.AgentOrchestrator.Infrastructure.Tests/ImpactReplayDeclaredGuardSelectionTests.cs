@@ -221,5 +221,5 @@ public sealed class ImpactReplayDeclaredGuardSelectionTests
         IReadOnlyList<string>? additionalClasses = null) =>
         ImpactReplaySelectionAugmentation.Apply(original ?? ReverseDependencyTestSelection.Resolved([]),
             changed, sources, classes ?? [new("Sample.PreTesterTestSourceGuardClassesTests", null), new("Sample.OrdinaryTests", null)],
-            null, out report, additionalClasses);
+            null, out report, additionalClasses, []);
 }

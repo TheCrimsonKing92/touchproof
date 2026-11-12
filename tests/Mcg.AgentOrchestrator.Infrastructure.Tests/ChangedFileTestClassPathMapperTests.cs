@@ -42,7 +42,7 @@ public sealed class ChangedFileTestClassPathMapperTests
 
         var sources = fixture.Sources;
         var selection = ImpactReplaySelectionAugmentation.Apply(ReverseDependencyTestSelection.Resolved(["Sample.ScriptTests"]),
-            ["scripts/Example.ps1", "scripts/Other.ps1"], sources, fixture.Classes, null);
+            ["scripts/Example.ps1", "scripts/Other.ps1"], sources, fixture.Classes, null, []);
 
         Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
         Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
@@ -74,7 +74,7 @@ public sealed class ChangedFileTestClassPathMapperTests
             public class ScriptTests { [Fact] public void Works() { var path = "run.sh"; } }
             """);
         var original = ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedSourceFileCount, "existing limit");
-        Assert.Same(original, ImpactReplaySelectionAugmentation.Apply(original, ["scripts/run.sh"], fixture.Sources, fixture.Classes, null));
+        Assert.Same(original, ImpactReplaySelectionAugmentation.Apply(original, ["scripts/run.sh"], fixture.Sources, fixture.Classes, null, []));
     }
 
     [Theory]
@@ -106,7 +106,7 @@ public sealed class ChangedFileTestClassPathMapperTests
             selection.DegradationKind);
 
         var augmented = ImpactReplaySelectionAugmentation.Apply(ReverseDependencyTestSelection.Resolved(["ExistingTests"]),
-            [changed], fixture.Sources, fixture.Classes, null, out _, testProjectDirectories: directories);
+            [changed], fixture.Sources, fixture.Classes, null, out _, additionalClasses: null, testProjectDirectories: directories);
         Assert.Equal(selection.Outcome, augmented.Outcome);
         if (resolved) Assert.Equal(new[] { "ExistingTests" }, augmented.TestClassNames);
         else Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, augmented.DegradationKind);

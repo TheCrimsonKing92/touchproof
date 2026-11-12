@@ -23,7 +23,7 @@ internal sealed class ImpactReplayObservationFixture : IDisposable
 
     internal ImpactReplayRunSink Sink() => new(Destination,
         new(Guid.NewGuid().ToString("N"), Clock.GetUtcNow(),
-            new(Root, Root, null, 100, null, 5, null), "fake runtime", "fake implementation", "fake revision"), Error, Clock);
+            new(Root, Root, null, 100, null, null), "fake runtime", "fake implementation", "fake revision"), Error, Clock);
 
     internal ImpactReplayCheckpointStatus Status() => Assert.Single(ImpactReplayCheckpointStore.ReadStatus(Checkpoint));
 

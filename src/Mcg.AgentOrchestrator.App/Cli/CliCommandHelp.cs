@@ -110,7 +110,7 @@ internal static class CliCommandHelp
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
     public const string ImpactReplayStatusUsage = "Usage: impact-replay --status --checkpoint-file <path>";
-    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...] [--max-changed-source-files <n>]";
+    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -721,7 +721,7 @@ internal static class CliCommandHelp
         ["--max-candidates", "--executor", "--help", "-h"]);
     private static readonly CommandHelpEntry ImpactReplay = new(
         ImpactReplayUsage + "\n" + ImpactReplayStatusUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
-        ["--since", "--limit", "--out", "--floor", "--max-changed-source-files", "--status", "--checkpoint-file", "--help", "-h"]);
+        ["--since", "--limit", "--out", "--floor", "--status", "--checkpoint-file", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentReplay = new(
         CliExperimentReplayCommand.Usage, "Operator-only fixed-sample paired replay of recorded Developer rounds.",
         ["--registration", "--run", "--seed", "--value-bound", "--spec", "--json", "--help", "-h"]);

@@ -22,7 +22,7 @@ public sealed class ImpactReplayUnboundedSelectionTests
         Assert.Equal(count, bounded.TestClassNames.Count);
 
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(input.Attempt, fixture.Root,
-            input.Changed, input.Sources, input.Classes, null, []);
+            input.Changed, input.Sources, input.Classes, null, [], []);
 
         Assert.Equal(count, measured.UnboundedSelectedClassCount);
         Assert.Equal(0.25, measured.UnboundedNonFloorTestSecondsShare);
@@ -68,7 +68,7 @@ public sealed class ImpactReplayUnboundedSelectionTests
             attempt = attempt with { LaneOutcomes = [new("lane", "Passed", [path])], BalancedLaneOutcomes = [] };
         }
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(attempt, fixture.Root,
-            input.Changed, input.Sources, input.Classes, null, []);
+            input.Changed, input.Sources, input.Classes, null, [], []);
 
         Assert.Equal(1001, measured.UnboundedSelectedClassCount);
         Assert.Null(measured.UnboundedNonFloorTestSecondsShare);
@@ -93,7 +93,7 @@ public sealed class ImpactReplayUnboundedSelectionTests
             DurationCoverageComplete = false
         };
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(attempt, fixture.Root,
-            input.Changed, input.Sources, input.Classes, null, []);
+            input.Changed, input.Sources, input.Classes, null, [], []);
         Assert.Equal(1001, measured.UnboundedSelectedClassCount);
         Assert.Equal(0.25, measured.UnboundedNonFloorTestSecondsShare);
         Assert.Null(measured.UnboundedDurationShareUnavailableReason);
@@ -110,14 +110,14 @@ public sealed class ImpactReplayUnboundedSelectionTests
         var projectText = File.ReadAllText(project);
         if (fault == "unreadable-index") File.WriteAllText(project, "<Project>");
         var unavailable = ImpactReplayUnboundedSelectionMeasurement.Apply(input.Attempt, fixture.Root,
-            input.Changed, input.Sources, input.Classes, null, fault == "unmapped-class" ? ["MissingTests"] : []);
+            input.Changed, input.Sources, input.Classes, null, fault == "unmapped-class" ? ["MissingTests"] : [], []);
         Assert.Null(unavailable.UnboundedSelectedClassCount);
         Assert.Null(unavailable.UnboundedNonFloorTestSecondsShare);
         Assert.False(string.IsNullOrWhiteSpace(unavailable.UnboundedClassCountUnavailableReason));
         Assert.Equal(unavailable.UnboundedClassCountUnavailableReason, unavailable.UnboundedDurationShareUnavailableReason);
         File.WriteAllText(project, projectText);
         var next = ImpactReplayUnboundedSelectionMeasurement.Apply(input.Attempt with { AttemptId = "next" },
-            fixture.Root, input.Changed, input.Sources, input.Classes, null, []);
+            fixture.Root, input.Changed, input.Sources, input.Classes, null, [], []);
         Assert.Equal(1001, next.UnboundedSelectedClassCount);
         var (json, markdown) = WriteReport(fixture, [unavailable, next]);
         using (json)
@@ -139,7 +139,7 @@ public sealed class ImpactReplayUnboundedSelectionTests
     {
         var attempt = Attempt(kind, [], [], []);
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(attempt, "unused", [],
-            new ImpactReplayTestSourceIndex(Array.Empty<Microsoft.CodeAnalysis.SyntaxTree>()), [], null, []);
+            new ImpactReplayTestSourceIndex(Array.Empty<Microsoft.CodeAnalysis.SyntaxTree>()), [], null, [], []);
         Assert.Same(attempt, measured);
         Assert.DoesNotContain("## Unbounded selections", ImpactReplayReportWriter.Render(new("override", [], [measured], [], [], [])));
     }
