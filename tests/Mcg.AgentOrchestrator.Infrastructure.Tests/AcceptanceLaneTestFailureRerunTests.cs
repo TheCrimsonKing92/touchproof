@@ -390,6 +390,115 @@ public sealed class AcceptanceLaneTestFailureRerunTests
         Assert.Same(check, AcceptanceLaneRerunNarrowing.BuildRerunCheck(check, plan));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task RunAsync_ExplainedShortfall_RerunsAllFailuresOnce(bool rerunPasses)
+    {
+        var root = Directory.CreateTempSubdirectory("lane-shortfall-").FullName;
+        try
+        {
+            var first = IncompleteResult(root, 4057);
+            var second = Result(2, rerunPasses) with
+            {
+                CompletionDecision = new(rerunPasses, rerunPasses ? null : "failing-trx", false,
+                    rerunPasses ? 0 : 1, 2, 2, rerunPasses ? "Passed" : "Failed", NotExecutedTestCount: 0),
+                ExecutedTestCount = 2,
+                FailingTestIdentities = rerunPasses ? [] : ["Cls.TimedOut"]
+            };
+            var writes = new List<AcceptanceLaneFlakeRow>();
+            var lines = new List<string>();
+            var ledger = new AcceptanceLaneFlakeLedger(root, writes.Add);
+            var attempt = new AcceptanceLaneTestFailureRerun(ledger, "goal", "attempt", "tree", lines.Add);
+            var selections = new List<AcceptanceManifestCheck>();
+            Task<AcceptanceCheckResult> Runner(AcceptanceManifestCheck selected)
+            {
+                selections.Add(selected);
+                return Task.FromResult(second);
+            }
+
+            var result = await attempt.RunAsync(MtpCheck(), first, Runner, Invocation);
+            var repeat = await attempt.RunAsync(MtpCheck(), first, Runner, Invocation);
+
+            var selection = Assert.Single(selections);
+            Assert.Equal(["Cls.Failed", "Cls.TimedOut"], selection.FocusedEvidenceTokens.Select(token => token.Value));
+            Assert.Equal(["--filter", "FullyQualifiedName~Cls.Failed|FullyQualifiedName~Cls.TimedOut"], selection.Arguments);
+            Assert.Same(first, repeat);
+            Assert.Equal(rerunPasses, result.Passed);
+            var evidence = Assert.IsType<AcceptanceLaneRerunEvidence>(result.LaneRerun);
+            var outcome = rerunPasses ? AcceptanceLaneRerunEvidence.Flake : AcceptanceLaneRerunEvidence.ConfirmedFailure;
+            Assert.Equal(outcome, evidence.Outcome);
+            Assert.Equal("incomplete-execution", evidence.FirstPredicate);
+            Assert.Equal(first.FailingTestIdentities, evidence.FirstFailingTestIdentities);
+            Assert.Equal(first.TestResultPaths, evidence.FirstTestResultPaths);
+            Assert.Equal("invocation-1", evidence.FirstInvocationId);
+            Assert.Equal("invocation-2", evidence.RerunInvocationId);
+            Assert.Equal(second.TestResultPaths, evidence.RerunTestResultPaths);
+            Assert.Equal(second.FailingTestIdentities, evidence.RerunFailingTestIdentities);
+            Assert.Equal(second.CompletionDecision.FailedPredicate, evidence.RerunPredicate);
+            var row = Assert.Single(writes);
+            Assert.Equal(outcome, row.Outcome);
+            Assert.Equal(MtpCheck().Name, row.LaneName);
+            Assert.Contains("first_run=failed(incomplete-execution)", result.ResultSummary);
+            Assert.Contains("mode=failed-only", Assert.Single(lines));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public async Task RunAsync_UnexplainedShortfall_ReturnsFirstWithoutClaimingLane()
+    {
+        var root = Directory.CreateTempSubdirectory("lane-unexplained-").FullName;
+        try
+        {
+            var first = IncompleteResult(root, 4058);
+            var writes = new List<AcceptanceLaneFlakeRow>();
+            var lines = new List<string>();
+            var attempt = new AcceptanceLaneTestFailureRerun(new AcceptanceLaneFlakeLedger(root, writes.Add), emit: lines.Add);
+            var calls = 0;
+            Task<AcceptanceCheckResult> Runner(AcceptanceManifestCheck _)
+            {
+                calls++;
+                return Task.FromResult(Result(2, false));
+            }
+
+            var result = await attempt.RunAsync(MtpCheck(), first, Runner, Invocation);
+
+            Assert.Same(first, result);
+            Assert.Null(result.LaneRerun);
+            Assert.Equal(0, calls);
+            Assert.Empty(writes);
+            Assert.Empty(lines);
+
+            // An unexplained result must not consume the attempt's one rerun claim.
+            var explained = IncompleteResult(root, 4057);
+            var eligible = await attempt.RunAsync(MtpCheck(), explained, Runner, Invocation);
+            Assert.Equal(1, calls);
+            Assert.Equal(AcceptanceLaneRerunEvidence.ConfirmedFailure, eligible.LaneRerun!.Outcome);
+            Assert.Single(writes);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static AcceptanceCheckResult IncompleteResult(string root, int discovered)
+    {
+        var path = Path.Combine(root, "first.trx");
+        new XDocument(new XElement("TestRun",
+            new XElement("ResultSummary", new XAttribute("outcome", "Failed"),
+                new XElement("Counters", new XAttribute("total", discovered), new XAttribute("executed", 4054),
+                    new XAttribute("notExecuted", 2), new XAttribute("passed", 4050),
+                    new XAttribute("failed", 4), new XAttribute("timeout", 1))),
+            new XElement("Results",
+                new XElement("UnitTestResult", new XAttribute("testName", "Cls.Failed"), new XAttribute("outcome", "Failed")),
+                new XElement("UnitTestResult", new XAttribute("testName", "Cls.TimedOut"), new XAttribute("outcome", "Timeout"))))).Save(path);
+        return Result(1, false, AcceptanceShardCompletionPredicates.IncompleteExecution) with
+        {
+            TestResultPaths = [path], FailingTestIdentities = ["Cls.Failed", "Cls.TimedOut"],
+            CompletionDecision = new(false, AcceptanceShardCompletionPredicates.IncompleteExecution, false, 1,
+                discovered, 4054, "Failed", NotExecutedTestCount: 2)
+        };
+    }
+
     private static AcceptanceManifestCheck MtpCheck(string filter = "FullyQualifiedName~AlphaTests") => new()
     {
         Name = "infrastructure tests: Alpha", Type = "dotnet-test", Runner = "mtp",

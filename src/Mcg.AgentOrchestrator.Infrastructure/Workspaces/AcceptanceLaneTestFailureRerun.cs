@@ -42,10 +42,13 @@ internal sealed class AcceptanceLaneTestFailureRerun
         CancellationToken cancellationToken = default)
     {
         if (firstRun.Passed ||
-            firstRun.CompletionDecision?.FailedPredicate != AcceptanceShardCompletionPredicates.FailingTrx ||
             firstRun.FailingTestIdentities is not { Count: > 0 } ||
             !GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _) ||
             sharedApparatusInvalidated || cancellationToken.IsCancellationRequested ||
+            !(firstRun.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx ||
+              (firstRun.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.IncompleteExecution &&
+               AcceptanceIncompleteShortfallExplanation.IsExplained(
+                   firstRun.CompletionDecision, firstRun.FailingTestIdentities, firstRun.TestResultPaths))) ||
             !_reranLanes.TryAdd(check.Name, 0))
         {
             return firstRun;

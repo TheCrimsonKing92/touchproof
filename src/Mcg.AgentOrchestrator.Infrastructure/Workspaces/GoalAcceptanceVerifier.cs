@@ -1524,7 +1524,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         if (cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled &&
-            fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
+            fresh.Result.CompletionDecision?.FailedPredicate is AcceptanceShardCompletionPredicates.FailingTrx or AcceptanceShardCompletionPredicates.IncompleteExecution)
         {
             var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
                 check, fresh.Result, RunNarrowedCheckAsync, result => AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
