@@ -1315,7 +1315,9 @@ public sealed class ProgressiveReviewGlanceTests
             liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
             diffReader: (_, _) => diff);
 
-        var first = runner.EnqueuePending();
+        // Join the inline completion stack before observing: runner release alone leaves the
+        // coordinator wrapper dependent on pool availability (see the handoff reproduction).
+        var first = runner.EnqueueInlineControl();
         var result = coordinator.Observe(kernel, [goal]);
 
         Xunit.Assert.Single(runner.Calls);
@@ -1325,13 +1327,8 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Single(runner.Calls);
 
         first.SetResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "diff aligns", 10, 5));
-        Xunit.Assert.True(SpinWait.SpinUntil(
-            () =>
-            {
-                _ = coordinator.Observe(kernel, [goal]);
-                return events.Receipts.Count == 1;
-            },
-            TimeSpan.FromSeconds(2)));
+        var firstHarvest = coordinator.Observe(kernel, [goal]);
+        Xunit.Assert.Contains(firstHarvest.ProgressLines, line => line.Contains("result=receipt", StringComparison.Ordinal));
         Xunit.Assert.Single(events.Receipts);
         Xunit.Assert.Equal("ChangedFiles", events.Receipts[0].Trigger);
         Xunit.Assert.Equal("OnTrack", events.Receipts[0].Verdict);
@@ -1339,17 +1336,13 @@ public sealed class ProgressiveReviewGlanceTests
 
         now += TimeSpan.FromMinutes(16);
         diff = "second materially changed diff";
-        var second = runner.EnqueuePending();
+        var second = runner.EnqueueInlineControl();
         _ = coordinator.Observe(kernel, [goal]);
         Xunit.Assert.Equal(2, runner.Calls.Count);
         second.SetResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok again", "still aligned", 6, 4));
-        Xunit.Assert.True(SpinWait.SpinUntil(
-            () =>
-            {
-                _ = coordinator.Observe(kernel, [goal]);
-                return events.Receipts.Count == 2;
-            },
-            TimeSpan.FromSeconds(2)));
+        var secondHarvest = coordinator.Observe(kernel, [goal]);
+        Xunit.Assert.Contains(secondHarvest.ProgressLines, line => line.Contains("result=receipt", StringComparison.Ordinal));
+        Xunit.Assert.Equal(2, events.Receipts.Count);
 
         now += TimeSpan.FromMinutes(16);
         _ = coordinator.Observe(kernel, [goal]);
@@ -2362,7 +2355,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains(result.ProgressLines, line => line.Contains("attention-write-failed", StringComparison.Ordinal));
     }
 
-    private static ProgressiveReviewGlanceCoordinator NewCoordinator(
+    internal static ProgressiveReviewGlanceCoordinator NewCoordinator(
         ControlledGlanceRunner runner,
         RecordingGlanceEvents events,
         ProgressiveReviewGlanceOptions? options = null,
@@ -2406,7 +2399,7 @@ public sealed class ProgressiveReviewGlanceTests
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
         IClock? clock = null,
@@ -2578,7 +2571,7 @@ public sealed class ProgressiveReviewGlanceTests
         public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 
-    private sealed class ControlledGlanceRunner : IProgressiveReviewGlanceRunner
+    internal sealed class ControlledGlanceRunner : IProgressiveReviewGlanceRunner
     {
         private readonly Queue<Task<ProgressiveReviewGlanceDispatchResult>> _responses = [];
 
@@ -2596,6 +2589,13 @@ public sealed class ProgressiveReviewGlanceTests
             return source;
         }
 
+        public ControlledGlanceReleaseGate EnqueueInlineControl()
+        {
+            var source = new TaskCompletionSource<ProgressiveReviewGlanceDispatchResult>();
+            _responses.Enqueue(source.Task);
+            return new ControlledGlanceReleaseGate(source);
+        }
+
         public void EnqueueCompleted(ProgressiveReviewGlanceDispatchResult result) =>
             _responses.Enqueue(Task.FromResult(result));
 
@@ -2607,6 +2607,32 @@ public sealed class ProgressiveReviewGlanceTests
             return _responses.Count == 0
                 ? Task.FromResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "ok", 1, 1))
                 : _responses.Dequeue();
+        }
+    }
+
+    internal sealed class ControlledGlanceReleaseGate(TaskCompletionSource<ProgressiveReviewGlanceDispatchResult> source)
+    {
+        public Task<ProgressiveReviewGlanceDispatchResult> Task => source.Task;
+
+        public void SetResult(ProgressiveReviewGlanceDispatchResult result)
+        {
+            Exception? failure = null;
+            // A context-free dedicated thread permits inline continuations even when the pool is full.
+            // Joining it waits for the entire completion stack, not just the runner's source task.
+            var release = new Thread(() =>
+            {
+                try
+                {
+                    Xunit.Assert.Null(SynchronizationContext.Current);
+                    Xunit.Assert.Same(TaskScheduler.Default, TaskScheduler.Current);
+                    Xunit.Assert.True(source.TrySetResult(result), "Inline control result was already released.");
+                }
+                catch (Exception ex) { failure = ex; }
+            }) { IsBackground = true };
+            release.Start();
+            Xunit.Assert.True(release.Join(TimeSpan.FromSeconds(2)), "Inline control completion stack did not return.");
+            if (failure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
 
@@ -2658,7 +2684,7 @@ public sealed class ProgressiveReviewGlanceTests
             throw new InvalidOperationException("suppression drain unavailable");
     }
 
-    private sealed class RecordingGlanceEvents : IGoalLifecycleEventWriter
+    internal sealed class RecordingGlanceEvents : IGoalLifecycleEventWriter
     {
         public List<Receipt> Receipts { get; } = [];
         public List<Summary> Summaries { get; } = [];
@@ -2854,7 +2880,7 @@ public sealed class ProgressiveReviewGlanceTests
             throw new NotSupportedException();
     }
 
-    private sealed record Receipt(
+    internal sealed record Receipt(
         string Trigger,
         string InputsHash,
         string Verdict,
@@ -2866,7 +2892,7 @@ public sealed class ProgressiveReviewGlanceTests
         string? Model,
         string? Profile);
 
-    private sealed record Summary(
+    internal sealed record Summary(
         int TotalGlances,
         int OnTrack,
         int Concern,
