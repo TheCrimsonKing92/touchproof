@@ -254,7 +254,7 @@ internal static class GoalBoardProjector
     private static bool IsUsable(DateTimeOffset? value, DateTimeOffset now) =>
         value is { } timestamp && timestamp != DateTimeOffset.MinValue && timestamp <= now;
 
-    private static string FormatAge(TimeSpan age)
+    internal static string FormatAge(TimeSpan age)
     {
         if (age < TimeSpan.FromMinutes(1))
             return $"{Math.Max(0, (int)age.TotalSeconds)}s";

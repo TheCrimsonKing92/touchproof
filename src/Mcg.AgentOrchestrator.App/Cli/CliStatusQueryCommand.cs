@@ -23,7 +23,8 @@ internal static class CliStatusQueryCommand
         IModelProviderRegistry providers,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        TimeProvider? time = null)
     {
         var prefix = CliStatusTasksOnlyForm.IsForm(args)
             ? CliStatusTasksOnlyForm.ResolveGoalPrefix(args)
@@ -36,6 +37,8 @@ internal static class CliStatusQueryCommand
             throw new InvalidOperationException("Status query attempted to mutate orchestrator state through its read-only route.");
 
         currentGoal = commandCurrentGoal;
+        if (args[0].Equals("status", StringComparison.OrdinalIgnoreCase) && !CliStatusTasksOnlyForm.IsForm(args))
+            Console.WriteLine(StorageHealthStatusView.Read(workspace.OrchestratorDirectory, time).FormatLine());
     }
 
     internal static (AgentOrchestratorKernel Kernel, Goal Goal) ResolveGoal(
