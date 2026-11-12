@@ -146,7 +146,8 @@ internal static class SourceSizeRatchet
             // Goal 43d6c8a3: one property wires the separately owned stalled evidence wait attention; no new partial.
             // Goal 871a6f45 adds seven lines to open the attributed-failure routing hold between retry
             // and dispatch in the shared route body; ledger and gate behavior remain separately owned.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1650),
+            // Goal 35c35d6d: three delegation lines wire the shared attributed-failure diagnosis coordinator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1653),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 429),
@@ -576,7 +577,8 @@ internal static class SourceSizeRatchet
             // Goal c1182160: 29 integration lines preserve admission, evidence ownership and retry routing around the separate tuple gate; no new partial.
             // Follower removal integrated with direct test seams: measured 13753 lines in 68 partial files.
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
-            new SourceClassCeiling("ConductorDriver", 13759, 68),
+            // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
+            new SourceClassCeiling("ConductorDriver", 13762, 68),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

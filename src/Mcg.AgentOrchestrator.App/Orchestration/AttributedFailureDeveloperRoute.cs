@@ -106,7 +106,8 @@ internal static class AttributedFailureDeveloperRoute
             .Any(tokens => tokens.Contains("candidate_sha=" + failure.CandidateSha, StringComparer.Ordinal) &&
                 tokens.Contains("signature=" + signature, StringComparer.Ordinal)))
             return AttributedFailureRouteDecision.Decline(SoloHoldReasons.AlreadyRouted);
-        return new(developer.Id, BuildFeedback(goal, failure with { FailingTests = tests }, signature), signature, null);
+        return new(developer.Id, BuildFeedback(goal, failure with { FailingTests = tests }, signature), signature, null)
+        { Failure = failure with { FailingTests = tests } };
     }
 
     internal static string BuildFeedback(Goal goal, AttributedFailure failure, string signature) =>

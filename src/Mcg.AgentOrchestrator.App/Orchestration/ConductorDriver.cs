@@ -875,6 +875,7 @@ internal sealed partial class ConductorDriver
                 : changedFiles;
         };
         EnvironmentGate = EnvironmentContractGate.ForWorkspace(kernel, workspace, agents, profiles);
+        FailureDiagnosis = AttributedFailureDiagnosisCoordinator.ForWorkspace(kernel, workspace, agents);
         SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
             () => kernel.Goals,
             goal =>
@@ -1264,9 +1265,10 @@ internal sealed partial class ConductorDriver
         () => _cohortKernel ?? _conductorTickKernel, _recordAcceptanceFailure, _utcNow,
         goal => SoloAcceptanceContextReader is { } reader ? reader(goal) :
             SoloAcceptanceFailureHandler.ReadContext(goal, _executionDirectory, ReadCurrentCohortAttributionRevisions(goal)),
-        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation, goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value));
+        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation, goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value), (goal, route) => FailureDiagnosis?.Enrich(goal, route) ?? route);
 
     internal EnvironmentContractGate? EnvironmentGate { get; set; }
+    internal AttributedFailureDiagnosisCoordinator? FailureDiagnosis { get; set; }
 
     public ConductorAdvanceResult AdvanceOnce(
         Goal goal,
@@ -1336,6 +1338,7 @@ internal sealed partial class ConductorDriver
     }
     private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
     {
+        route = FailureDiagnosis?.Enrich(goal, route) ?? route;
         var failureRecordedAt = _utcNow();
         _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
         var retryGoal = GetCurrentGoal(goal);

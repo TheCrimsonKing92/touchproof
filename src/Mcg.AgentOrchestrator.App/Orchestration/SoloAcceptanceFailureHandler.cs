@@ -13,7 +13,8 @@ internal sealed class SoloAcceptanceFailureHandler(
     Func<GoalId, TaskId, IReadOnlyList<string>, int> recordRetryFeedback,
     Func<Goal, string, ConductorAutonomyPolicy, AttributedFailureRouteDecision, ConductorAdvanceResult> routeFailure,
     Action<Goal, GoalLifecycleState, string> recordEscalation,
-    Func<Goal, ConductorParallelAcceptanceAttempt?>? readAttempt = null)
+    Func<Goal, ConductorParallelAcceptanceAttempt?>? readAttempt = null,
+    Func<Goal, AttributedFailureRouteDecision, AttributedFailureRouteDecision>? diagnose = null)
 {
     internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
@@ -77,6 +78,7 @@ internal sealed class SoloAcceptanceFailureHandler(
             return Hold(goal, prefix, policy, failure is null ? evidence.Reason : route.DeclineReason!);
         if (SoloCorrectionRetryBudget.HoldReason(goal, failure!, policy.MaxCriterionRetries) is { } capReason)
             return Hold(goal, prefix, policy, capReason);
+        route = diagnose?.Invoke(goal, route) ?? route;
         // The existing accounting and route marker are included in the dispatch
         // checkpoint before any worker starts. Replay never charges another retry.
         recordRetryFeedback(goal.Id, route.DeveloperTaskId!, [route.Feedback!]);
