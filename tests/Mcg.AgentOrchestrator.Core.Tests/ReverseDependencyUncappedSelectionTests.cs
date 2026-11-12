@@ -82,7 +82,7 @@ public sealed class ReverseDependencyUncappedSelectionTests
     }
 
     [Xunit.Fact]
-    public void OneThousandAndOneSelectedClasses_StillAbandonsAtDefaultCap()
+    public void OneThousandAndOneSelectedClasses_PreservesCompleteSelection()
     {
         using var repository = new Repository();
         repository.Write(Repository.Source, "public class ChangedSource { }");
@@ -92,9 +92,10 @@ public sealed class ReverseDependencyUncappedSelectionTests
 
         var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [Repository.Source]);
 
-        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
-        Xunit.Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selection.DegradationKind);
-        Xunit.Assert.Equal("Reverse-dependency selection of 1001 test classes exceeded the 1000-test-class bound.", selection.Reason);
+        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Xunit.Assert.Null(selection.DegradationKind);
+        Xunit.Assert.Equal(Enumerable.Range(0, 1001).Select(index => $"Consumer{index}Tests").Order(StringComparer.Ordinal),
+            selection.TestClassNames);
         Xunit.Assert.Equal(1001, selection.Headroom!.SelectedTestClassCount);
     }
 

@@ -7,24 +7,20 @@ using static RepositoryTestImpactHeadroomTests;
 public sealed class ReverseDependencySmokeDegradationBranchTests
 {
     [Xunit.Theory]
-    [Xunit.InlineData(ReverseDependencyDegradationKind.IndexedSourceBound, 2, 96)]
-    [Xunit.InlineData(ReverseDependencyDegradationKind.SelectedTestClassBound, 10, 1)]
-    public void Plan_InjectedBound_SmokeBranchAcceptsOnlySignalledDegradation(
-        ReverseDependencyDegradationKind kind, int indexedCap, int selectedCap)
+    [Xunit.InlineData(ReverseDependencyDegradationKind.IndexedSourceBound, 2)]
+    [Xunit.InlineData(ReverseDependencyDegradationKind.Unreadable, 10)]
+    public void Plan_InjectedDegradation_SmokeBranchAcceptsOnlySignalledDegradation(
+        ReverseDependencyDegradationKind kind, int indexedCap)
     {
         using var repository = Repository.Create();
-        if (kind == ReverseDependencyDegradationKind.SelectedTestClassBound)
+        if (kind == ReverseDependencyDegradationKind.Unreadable)
         {
-            repository.Write($"{Repository.TestDirectory}/RunGoalServiceTests.cs",
-                "public sealed class FirstClassifierTests { private DispatchFailureClassifier _classifier; " +
-                "[Xunit.Fact] public void Runs() { } } " +
-                "public sealed class SecondClassifierTests { private DispatchFailureClassifier _classifier; " +
-                "[Xunit.Fact] public void Runs() { } }");
+            repository.Write(Repository.CoreSource, "public class Broken {");
         }
         var bypassed = ReverseDependencyTestImpactReader.Read(repository.Root, [Repository.CoreSource],
-            bypassCache: true, maximumIndexedSourceFiles: indexedCap,
-            maximumSelectedTestClasses: selectedCap);
-        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, bypassed.Outcome);
+            bypassCache: true, maximumIndexedSourceFiles: indexedCap);
+        Xunit.Assert.Equal(kind == ReverseDependencyDegradationKind.Unreadable
+            ? ReverseDependencySelectionOutcome.Unreadable : ReverseDependencySelectionOutcome.Abandoned, bypassed.Outcome);
         Xunit.Assert.Equal(kind, bypassed.DegradationKind);
 
         // Test the smoke branch and receipt rendering from one measured selection; cache lifecycle
@@ -50,7 +46,7 @@ public sealed class ReverseDependencySmokeDegradationBranchTests
             Xunit.Assert.Contains("reverse-dependency-cache=miss", coldInfrastructure.Reason);
             Xunit.Assert.Contains("reverse-dependency-cache=hit", warmInfrastructure.Reason);
             Xunit.Assert.NotNull(bypassed.CacheReceipt);
-            var expected = new RepositoryTestImpactHeadroom(3, 10, 2, 1, 1);
+            var expected = new RepositoryTestImpactHeadroom(3, 10, null, null);
             Xunit.Assert.Equal(expected, warm.ReverseDependencyHeadroom);
             Xunit.Assert.EndsWith(" " + expected.Render(), warmInfrastructure.Reason);
         }
@@ -58,7 +54,7 @@ public sealed class ReverseDependencySmokeDegradationBranchTests
         {
             Xunit.Assert.Null(bypassed.CacheReceipt);
             Xunit.Assert.DoesNotContain("reverse-dependency-cache=", warmInfrastructure.Reason);
-            Xunit.Assert.Equal(new RepositoryTestImpactHeadroom(3, 2, null, 96, null),
+            Xunit.Assert.Equal(new RepositoryTestImpactHeadroom(3, 2, null, null),
                 warm.ReverseDependencyHeadroom);
         }
         var receiptValues = new[]

@@ -9,11 +9,11 @@ public sealed class RepositoryTestImpactHeadroomTests
     {
         using var repository = Repository.Create();
         var selection = new FileSystemTestClassDeclarationReader(repository.Root,
-            maximumIndexedSourceFiles: 10, maximumSelectedTestClasses: 5)
+            maximumIndexedSourceFiles: 10)
             .ReadReverseDependentTestClasses([Repository.CoreSource]);
 
         Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
-        var expected = new RepositoryTestImpactHeadroom(3, 10, 1, 5, 1);
+        var expected = new RepositoryTestImpactHeadroom(3, 10, 1, 1);
         Xunit.Assert.Equal(expected, selection.Headroom);
         var plan = PlanSelection(selection);
         var baseline = PlanSelection(selection with { Headroom = null });
@@ -21,36 +21,36 @@ public sealed class RepositoryTestImpactHeadroomTests
         Xunit.Assert.Null(baseline.ReverseDependencyHeadroom);
         Xunit.Assert.Null(plan.ReverseDependencyDegradation);
         Xunit.Assert.Equal(InfrastructureCheck(baseline).Reason +
-            " headroom indexed-files=3/10 selected-classes=1/5 frontier-symbols=1",
+            " headroom indexed-files=3/10 selected-classes=1 frontier-symbols=1",
             InfrastructureCheck(plan).Reason);
         Xunit.Assert.Equal(baseline.Checks.Select(check => check.CommandLine),
             plan.Checks.Select(check => check.CommandLine));
     }
 
     [Xunit.Fact]
-    public void Plan_SelectedClassBound_ReportsCrossingCountAndExactSuffix()
+    public void Plan_MultipleSelectedClasses_ReportsCompleteCountAndExactSuffix()
     {
         using var repository = Repository.Create();
         repository.Write($"{Repository.TestDirectory}/OtherClassifierTests.cs",
             "public sealed class OtherClassifierTests { private DispatchFailureClassifier _classifier; " +
             "[Xunit.Fact] public void Runs() { } }");
         var selection = new FileSystemTestClassDeclarationReader(repository.Root,
-            maximumIndexedSourceFiles: 10, maximumSelectedTestClasses: 1)
+            maximumIndexedSourceFiles: 10)
             .ReadReverseDependentTestClasses([Repository.CoreSource]);
 
-        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
-        Xunit.Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selection.DegradationKind);
-        var expected = new RepositoryTestImpactHeadroom(4, 10, 2, 1, 1);
+        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Xunit.Assert.Null(selection.DegradationKind);
+        var expected = new RepositoryTestImpactHeadroom(4, 10, 2, 1);
         Xunit.Assert.Equal(expected, selection.Headroom);
-        Xunit.Assert.Empty(selection.TestClassNames);
+        Xunit.Assert.Equal(new[] { "OtherClassifierTests", "RunGoalServiceTests" }, selection.TestClassNames);
         var plan = PlanSelection(selection);
         var baseline = PlanSelection(selection with { Headroom = null });
         Xunit.Assert.Equal(expected, plan.ReverseDependencyHeadroom);
         Xunit.Assert.Equal(selection.DegradationKind, plan.ReverseDependencyDegradation?.Kind);
         Xunit.Assert.Equal(InfrastructureCheck(baseline).Reason +
-            " headroom indexed-files=4/10 selected-classes=2/1 frontier-symbols=1",
+            " headroom indexed-files=4/10 selected-classes=2 frontier-symbols=1",
             InfrastructureCheck(plan).Reason);
-        Xunit.Assert.DoesNotContain("--filter", InfrastructureCheck(plan).Command);
+        Xunit.Assert.Contains("--filter", InfrastructureCheck(plan).Command);
     }
 
     [Xunit.Fact]
@@ -62,12 +62,12 @@ public sealed class RepositoryTestImpactHeadroomTests
 
         Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
         Xunit.Assert.Equal(ReverseDependencyDegradationKind.IndexedSourceBound, selection.DegradationKind);
-        var expected = new RepositoryTestImpactHeadroom(3, 2, null, 1000, null);
+        var expected = new RepositoryTestImpactHeadroom(3, 2, null, null);
         Xunit.Assert.Equal(expected, selection.Headroom);
         Xunit.Assert.Null(selection.CacheReceipt);
         var plan = PlanSelection(selection);
         Xunit.Assert.Equal(expected, plan.ReverseDependencyHeadroom);
-        Xunit.Assert.Equal("headroom indexed-files=3/2 selected-classes=n/a/1000 frontier-symbols=n/a",
+        Xunit.Assert.Equal("headroom indexed-files=3/2 selected-classes=n/a frontier-symbols=n/a",
             plan.ReverseDependencyHeadroom!.Render());
         // No receipt means no suffix: the protected indexed-bound reason remains exact.
         Xunit.Assert.Equal("Reverse-dependency indexing exceeded the 2-source-file bound.",

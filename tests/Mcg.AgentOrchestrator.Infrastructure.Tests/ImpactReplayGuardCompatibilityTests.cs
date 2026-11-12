@@ -10,24 +10,24 @@ public sealed class ImpactReplayGuardCompatibilityTests
     private const string Guard = "namespace Sample; [LiveTreeStructural] public class Guard { [Fact] public void Works() {} }";
 
     [Fact]
-    public void Apply_DeclaredGuardsOverflowEffectiveCap_AbandonsWithoutTruncation()
+    public void Apply_DeclaredGuards_PreservesCompleteSelection()
     {
         var original = ReverseDependencyTestSelection.Resolved(["Sample.Existing"],
-            headroom: new(null, 8000, 1, 1, null));
+            headroom: new(null, 8000, 1, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out var report,
             [new("Sample.Guard", null)], original);
-        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selected.Outcome);
-        Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);
-        Assert.Empty(selected.TestClassNames);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
+        Assert.Null(selected.DegradationKind);
+        Assert.Equal(new[] { "Sample.Existing", "Sample.Guard" }, selected.TestClassNames);
         Assert.Equal(2, selected.Headroom!.SelectedTestClassCount);
         Assert.Single(report.Selections);
     }
 
     [Fact]
-    public void Apply_AtCap_DeduplicatesQualifiedAliasesAndAdditionalSelections()
+    public void Apply_DeduplicatesQualifiedAliasesAndAdditionalSelections()
     {
         var original = ReverseDependencyTestSelection.Resolved(["Guard"],
-            headroom: new(null, 8000, 1, 1, null));
+            headroom: new(null, 8000, 1, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out _,
             [new("Sample.Guard", null)], original, ["Sample.Guard"]);
         Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
@@ -36,32 +36,28 @@ public sealed class ImpactReplayGuardCompatibilityTests
     }
 
     [Fact]
-    public void Apply_ChangedTestClassesOverflowCap_Abandons()
+    public void Apply_ChangedTestClasses_PreservesCompleteSelection()
     {
         var original = ReverseDependencyTestSelection.Resolved([],
-            headroom: new(null, 8000, 0, 1, null));
+            headroom: new(null, 8000, 0, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out _,
             [new("Sample.Guard", null)], original, ["Sample.Added"]);
-        Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);
-        Assert.Empty(selected.TestClassNames);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
+        Assert.Null(selected.DegradationKind);
+        Assert.Equal(new[] { "Sample.Added", "Sample.Guard" }, selected.TestClassNames);
+        Assert.Equal(2, selected.Headroom!.SelectedTestClassCount);
     }
 
     [Theory]
-    [InlineData(999, "Resolved")]
-    [InlineData(1000, "Abandoned")]
-    public void Apply_DefaultCap_IncludesGuardsInDistinctCount(int existing, string expected)
+    [InlineData(999)]
+    [InlineData(1000)]
+    public void Apply_LargeSelection_IncludesEveryClassAndGuard(int existing)
     {
         var original = ReverseDependencyTestSelection.Resolved(Enumerable.Range(0, existing).Select(index => $"Sample.Existing{index}"));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out _, [new("Sample.Guard", null)], original);
-        Assert.Equal(expected, selected.Outcome.ToString());
-        if (selected.Outcome == ReverseDependencySelectionOutcome.Abandoned)
-        {
-            Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);
-            Assert.Empty(selected.TestClassNames);
-            Assert.Contains("1001 test classes", selected.Reason);
-            Assert.Contains("1000-test-class bound", selected.Reason);
-        }
-        else Assert.Equal(1000, selected.TestClassNames.Count);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
+        Assert.Null(selected.DegradationKind);
+        Assert.Equal(original.TestClassNames.Append("Sample.Guard").Order(StringComparer.Ordinal), selected.TestClassNames);
     }
 
     [Fact]

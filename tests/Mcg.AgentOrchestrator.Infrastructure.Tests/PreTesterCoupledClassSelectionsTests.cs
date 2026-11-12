@@ -36,16 +36,13 @@ public sealed class PreTesterCoupledClassSelectionsTests
     public void DegradationRetainsOnlyPlannerNamedCoupledClasses(bool broad)
     {
         using var fixture = new Fixture();
-        fixture.Write(Fixture.Source, "public class NewContract {}");
-        fixture.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Consumers.cs",
-            string.Join("\n", Enumerable.Range(0, ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 1)
-                .Select(index => $"public class Consumer{index}Tests {{ [Fact] public void Works() {{ _ = new NewContract(); }} }}")));
+        fixture.Write(Fixture.Source, "public class Broken {");
         fixture.Test("TreeReaderTests", prefix: "[LiveTreeStructural]");
         fixture.Write("Directory.Build.props", "<Project />");
         var paths = broad ? new[] { "Directory.Build.props" } : [Fixture.Source];
         var plan = ManifestScopedImpactPlan.Plan(paths, fixture.Root, fixture.Settings.DeclaredDotnetTestChecks);
         if (broad) Assert.True(plan.RequiresBroadVerification);
-        else Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, plan.ReverseDependencyDegradation?.Kind);
+        else Assert.Equal(ReverseDependencyDegradationKind.Unreadable, plan.ReverseDependencyDegradation?.Kind);
         var lines = new List<string>();
 
         var result = PreTesterCoupledClassSelections.Select(fixture.Root, paths, fixture.Settings, lines.Add);
@@ -54,7 +51,7 @@ public sealed class PreTesterCoupledClassSelectionsTests
         Assert.Equal(expected, result.Provenance.Where(item => item.Kind == "coupled-impact")
             .Select(item => item.Class).Distinct().Order().ToArray());
         var line = Assert.Single(lines.Where(line => line.Contains("kind=coupled-impact-degraded", StringComparison.Ordinal)));
-        Assert.Contains(broad ? "RequiresBroadVerification" : "SelectedTestClassBound", line, StringComparison.Ordinal);
+        Assert.Contains(broad ? "RequiresBroadVerification" : "Unreadable", line, StringComparison.Ordinal);
         Assert.Equal("TreeReaderTests", Assert.Single(result.Provenance.Where(item => item.Kind == "live-tree-structural")).Class);
     }
 

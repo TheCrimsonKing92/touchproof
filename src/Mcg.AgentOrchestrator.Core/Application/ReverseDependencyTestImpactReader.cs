@@ -9,9 +9,6 @@ internal static class ReverseDependencyTestImpactReader
     private const string InfrastructureTestProject =
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const int MaximumDependencyHops = 2;
-    // ReverseDependencySelectionTransportTests exercises the existing launcher response file at
-    // 1,000 classes. Keep this inclusive capacity bound independent of inline command-line length.
-    internal const int MaximumSelectedTestClasses = 1_000;
     // The Infrastructure test closure reached 4,012 tracked source files on 2026-10-18. Keep
     // bounded growth headroom; exceeding this cap abandons selection for the full suite.
     internal const int MaximumIndexedSourceFiles = 8_000;
@@ -27,11 +24,10 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyList<string> changedSourcePaths,
         bool bypassCache = false,
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
-        int maximumSelectedTestClasses = MaximumSelectedTestClasses,
         bool propagateShippingSourceReach = false)
     {
         var headroom = new RepositoryTestImpactHeadroom(
-            null, maximumIndexedSourceFiles, null, maximumSelectedTestClasses,
+            null, maximumIndexedSourceFiles, null,
             null);
         if (changedSourcePaths.Count == 0)
         {
@@ -210,7 +206,6 @@ internal static class ReverseDependencyTestImpactReader
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
-            var classBoundExceeded = false;
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
                 headroom = headroom with
@@ -250,9 +245,6 @@ internal static class ReverseDependencyTestImpactReader
                                 ownedClassNames.Contains(declaration.Name) ||
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
                             .Select(declaration => declaration.Name));
-
-                    // Finish traversal after the class bound is exceeded to report a complete count.
-                    classBoundExceeded |= selectedTestClasses.Count > headroom.SelectedTestClassCap;
                 }
 
                 foreach (var consumer in consumers)
@@ -285,13 +277,6 @@ internal static class ReverseDependencyTestImpactReader
                     break;
                 }
             }
-
-            if (classBoundExceeded)
-                return ReverseDependencyTestSelection.Abandoned(
-                    ReverseDependencyDegradationKind.SelectedTestClassBound,
-                    ReverseDependencySelectedClassBoundReason.Render("Reverse-dependency",
-                        selectedTestClasses.Count, headroom.SelectedTestClassCap),
-                    receipt, headroom with { SelectedTestClassCount = selectedTestClasses.Count });
 
             return ReverseDependencyTestSelection.Resolved(selectedTestClasses, receipt,
                 headroom with { SelectedTestClassCount = selectedTestClasses.Count });
@@ -347,7 +332,7 @@ internal static class ReverseDependencyTestImpactReader
             var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out _);
             return closure is null ? null : new RepositoryTestImpactHeadroom(
                 closure.Value.SourceOwnership.Count, maximumIndexedSourceFiles,
-                null, MaximumSelectedTestClasses, null);
+                null, null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             System.Xml.XmlException or ArgumentException or NotSupportedException)

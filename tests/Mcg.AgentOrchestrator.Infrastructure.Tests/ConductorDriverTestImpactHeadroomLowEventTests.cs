@@ -10,7 +10,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
     private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("mcg-headroom-events-");
     private string LogPath => Path.Combine(_root.FullName, "conduct-events.log");
     private static readonly DateTimeOffset Timestamp = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
-    private static readonly RepositoryTestImpactHeadroom AtThreshold = new(3200, 4000, 77, 96, 52);
+    private static readonly RepositoryTestImpactHeadroom AtThreshold = new(3200, 4000, 77, 52);
 
     [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
@@ -36,7 +36,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         driver.AdvanceOnce(goalA, ConductorAutonomyPolicy.Permissive);
         driver.AdvanceOnce(goalB, ConductorAutonomyPolicy.Permissive);
         var first = ReadEvents();
-        Xunit.Assert.Equal(2, first.Length);
+        Xunit.Assert.Single(first);
         AssertThresholdEvents(first, goalA, "candidate-a", "main-a");
 
         main = "main-b";
@@ -45,18 +45,18 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
 
         Xunit.Assert.Equal(5, dispatches);
         var events = ReadEvents();
-        Xunit.Assert.Equal(4, events.Length);
-        AssertThresholdEvents(events.Skip(2).ToArray(), goalB, "candidate-c", "main-b");
+        Xunit.Assert.Equal(2, events.Length);
+        AssertThresholdEvents(events.Skip(1).ToArray(), goalB, "candidate-c", "main-b");
     }
 
     [Xunit.Fact]
-    public void AdvanceOnce_CappedCountsBelowThresholdAndLargeFrontier_EmitsNothingAndReviews()
+    public void AdvanceOnce_IndexedCountBelowThresholdAndLargeSelection_EmitsNothingAndReviews()
     {
         var (kernel, goal) = ReadyGoal();
         var dispatches = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => Context("candidate-a", new(3199, 4000, 76, 96, 200)),
+            getPreReviewEvidenceContext: _ => Context("candidate-a", new(3199, 4000, 5000, 200)),
             resolveAcceptanceHeads: _ => ("candidate-a", "main-a"),
             recordPreReviewEvidence: (goalId, taskId, receipt) => kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             dispatchAndStart: _ => { dispatches++; return DispatchStartOutcome.Started(); });
@@ -72,15 +72,12 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
 
     [Xunit.Theory]
     [Xunit.InlineData(ReverseDependencyDegradationKind.IndexedSourceBound, "IndexedSourceFiles", 4001, 4000)]
-    [Xunit.InlineData(ReverseDependencyDegradationKind.SelectedTestClassBound, "SelectedTestClasses", 97, 96)]
     public void AdvanceOnce_AbandonedBound_EmitsForCrossingWithUnreachedCountsNull(
         ReverseDependencyDegradationKind kind, string bound, int count, int cap)
     {
         var (kernel, goal) = ReadyGoal();
         var headroom = new RepositoryTestImpactHeadroom(
-            kind == ReverseDependencyDegradationKind.IndexedSourceBound ? count : 3, 4000,
-            kind == ReverseDependencyDegradationKind.SelectedTestClassBound ? count : null, 96,
-            kind == ReverseDependencyDegradationKind.SelectedTestClassBound ? 1 : null);
+            count, cap, null, null);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => Context("candidate-a", headroom, kind),
@@ -94,7 +91,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         var warning = Xunit.Assert.Single(events, entry =>
             entry.GetProperty("eventKind").GetString() == "test-impact-headroom-low");
         AssertEvent(warning, goal, "candidate-a", "main-a", bound, count, cap);
-        Xunit.Assert.Equal(kind == ReverseDependencyDegradationKind.IndexedSourceBound ? 2 : 1, events.Length);
+        Xunit.Assert.Equal(2, events.Length);
     }
 
     [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
@@ -104,7 +101,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         var (kernelA, goalA) = ReadyGoal();
         var (kernelB, goalB) = ReadyGoal();
         var candidate = "candidate-a";
-        var headroom = new RepositoryTestImpactHeadroom(8, 10, null, 96, null);
+        var headroom = new RepositoryTestImpactHeadroom(8, 10, null, null);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => Context(candidate, headroom),
@@ -132,7 +129,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         string? main = "same-sha";
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => Context("same-sha", new(8, 10, null, 96, null)),
+            getPreReviewEvidenceContext: _ => Context("same-sha", new(8, 10, null, null)),
             resolveAcceptanceHeads: _ => ("same-sha", main),
             recordPreReviewEvidence: (goalId, taskId, receipt) => kernel.RecordPreReviewEvidence(goalId, taskId, receipt));
         driver.OverrideTestImpactDegradedEventWriterForTests(new ConductEventLogWriter(LogPath, utcNow: () => Timestamp));
@@ -159,7 +156,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         var dispatches = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => Context("candidate-a", new(8, 10, null, 96, null)),
+            getPreReviewEvidenceContext: _ => Context("candidate-a", new(8, 10, null, null)),
             resolveAcceptanceHeads: _ => ("candidate-a", "main-a"),
             recordPreReviewEvidence: (goalId, taskId, receipt) => kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             dispatchAndStart: _ => { dispatches++; return DispatchStartOutcome.Started(); });
@@ -227,7 +224,6 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
     private static void AssertThresholdEvents(JsonElement[] events, Goal goal, string candidate, string main)
     {
         AssertEvent(events[0], goal, candidate, main, "IndexedSourceFiles", 3200, 4000);
-        AssertEvent(events[1], goal, candidate, main, "SelectedTestClasses", 77, 96);
     }
 
     private static void AssertEvent(JsonElement entry, Goal goal, string candidate, string main,

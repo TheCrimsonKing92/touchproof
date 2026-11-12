@@ -409,8 +409,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         else
         {
             Assert.True(bypassed.Outcome == ReverseDependencySelectionOutcome.Abandoned &&
-                bypassed.DegradationKind is ReverseDependencyDegradationKind.IndexedSourceBound or
-                    ReverseDependencyDegradationKind.SelectedTestClassBound,
+                bypassed.DegradationKind is ReverseDependencyDegradationKind.IndexedSourceBound,
                 $"Unexpected reverse-dependency outcome: {bypassed.Outcome}, {bypassed.DegradationKind}");
             Assert.Equal(bypassed.DegradationKind, warm.ReverseDependencyDegradation?.Kind);
             Assert.DoesNotContain("--filter", warmInfrastructure.Command);
@@ -703,14 +702,14 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
-    public void ReverseDependencyFanOutAboveBoundWidensAtomically()
+    public void ReverseDependencyLargeFanOutPreservesCompleteSelection()
     {
         using var repository = ReverseDependencyRepository.Create();
         repository.Write(
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DirectConsumers.cs",
             string.Join(
                 Environment.NewLine,
-                Enumerable.Range(1, ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 1).Select(index =>
+                Enumerable.Range(1, 1001).Select(index =>
                     $"public sealed class DirectConsumer{index}Tests {{ " +
                     "private readonly DispatchFailureClassifier _classifier = new(); " +
                     "[Xunit.Fact] public void Runs() { } }")));
@@ -723,13 +722,10 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         var infrastructureCheck = Assert.Single(plan.Checks, check =>
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
-        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains($"selection of {ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 2} test classes",
-            infrastructureCheck.Reason, StringComparison.Ordinal);
-        Assert.Contains(
-            $"{ReverseDependencyTestImpactReader.MaximumSelectedTestClasses}-test-class bound",
-            infrastructureCheck.Reason,
-            StringComparison.Ordinal);
+        Assert.Contains("--filter", infrastructureCheck.Command);
+        Assert.Null(plan.ReverseDependencyDegradation);
+        Assert.Equal(Enumerable.Range(1, 1001).Select(index => $"DirectConsumer{index}Tests")
+            .Append("RunGoalServiceTests").Order(StringComparer.Ordinal), infrastructureCheck.TestClassSelections);
     }
 
     [Xunit.Fact]
