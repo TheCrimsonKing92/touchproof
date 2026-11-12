@@ -65,7 +65,7 @@ internal sealed class AttributedFailureDiagnosisCoordinator(
             enclosing.ThrowIfCancellationRequested();
             if (winner == deadline)
             {
-                _ = inquiryCancellation.CancelAsync();
+                await inquiryCancellation.CancelAsync().ConfigureAwait(false);
                 outcome = AttributedFailureDiagnosisOutcome.Unavailable(route, "timed-out", "inquiry timed out after 120 seconds");
             }
             else outcome = await inquiry.ConfigureAwait(false);
@@ -80,7 +80,7 @@ internal sealed class AttributedFailureDiagnosisCoordinator(
         }
         finally
         {
-            _ = deadlineCancellation.CancelAsync();
+            await deadlineCancellation.CancelAsync().ConfigureAwait(false);
             // A late result is observed only for fault cleanup; it can never replace the recorded outcome.
             _ = inquiry.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
