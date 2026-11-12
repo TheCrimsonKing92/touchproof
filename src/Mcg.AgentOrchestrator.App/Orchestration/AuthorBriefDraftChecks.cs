@@ -23,6 +23,7 @@ internal static class AuthorBriefDraftChecks
         var criteria = DeclaredTestRemovalSet.FromObjective(markdown).Ordinary;
         var ownerFailures = criteria.Where(criterion => !Owner.IsMatch(criterion)).ToArray();
         var citationFailures = new List<string>();
+        var premiseBulletCount = BoardFillVerifierContract.BulletCount(BoardFillVerifierContract.Premise(markdown));
         var premise = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()
             .Equals("Measured premise", StringComparison.OrdinalIgnoreCase));
         if (premise is not null)
@@ -85,6 +86,8 @@ internal static class AuthorBriefDraftChecks
             new("criteria-present", criteria.Count > 0, criteria.Count > 0 ? $"{criteria.Count} declared criteria." : "Acceptance criteria contains no declared criteria."),
             new("owner-sentence", ownerFailures.Length == 0, ownerFailures.Length == 0 ? "Every declared criterion has an owner sentence and verification class." : $"Missing owner sentence: {string.Join(" | ", ownerFailures)}"),
             new("premise-citations", citationFailures.Count == 0, citationFailures.Count == 0 ? "All premise file citations resolve at main HEAD." : string.Join(" | ", citationFailures)),
+            new("premise-bullets", premiseBulletCount > 0, premiseBulletCount > 0 ?
+                $"{premiseBulletCount} premise bullets." : "Measured premise contains no bullets. Restate each source claim as one bullet."),
             new("numbered-criteria", numberedCriteria, criteria.Count == 0 ? "No declared criteria; criteria-present reports the absence." :
                 numberedCriteria ? "No bulleted criteria outside fenced code blocks." : $"Observed bulleted lines: {string.Join(" | ", bulletedLines)}"),
             new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
