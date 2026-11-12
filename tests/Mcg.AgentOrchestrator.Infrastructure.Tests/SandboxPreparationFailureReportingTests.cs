@@ -93,7 +93,7 @@ public sealed class SandboxPreparationFailureReportingTests
         var task = goal.Tasks.Single();
         task.RecordVerification(Verification(Reason()));
         DispatchTask(kernel, goal, task);
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var stem = Path.Combine(root, "dispatch");
