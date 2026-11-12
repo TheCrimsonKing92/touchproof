@@ -10,20 +10,25 @@ internal static class ProviderHoldSeedEvidenceReader
 {
     internal static async Task<IReadOnlyList<ProviderUsageGoalEvidence>> ReadAsync(SqliteConnection connection,
         IReadOnlyCollection<GoalId> ids, JsonSerializerOptions options, CancellationToken cancellationToken)
+        => await ReadSnapshotsAsync(connection, ids, options, cancellationToken);
+
+    internal static async Task<IReadOnlyList<ProviderUsageGoalEvidence>> ReadSnapshotsAsync(SqliteConnection connection,
+        IReadOnlyCollection<GoalId> ids, JsonSerializerOptions options, CancellationToken cancellationToken,
+        Action<GoalSnapshotReadObservation>? observer = null,
+        Action<ProviderUsageGoalEvidence, string>? projected = null)
     {
         if (ids.Count == 0) return [];
-        await using var exists = connection.CreateCommand();
-        exists.CommandText = "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'goal_snapshot_archive'";
-        var hasArchive = (long)(await exists.ExecuteScalarAsync(cancellationToken))! != 0;
+        var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = hasArchive ? """
+        command.CommandText = hasArchive ? $"""
             SELECT g.id, g.snapshot_json,
-                CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json END
+                CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json END,
+                {ProviderHoldSeedEvidenceStore.MarkerSql(hasArchive)}
             FROM goals g LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id
             WHERE g.id IN (SELECT value FROM json_each($ids)) ORDER BY g.id
-            """ : """
-            SELECT id, snapshot_json, NULL FROM goals
-            WHERE id IN (SELECT value FROM json_each($ids)) ORDER BY id
+            """ : $"""
+            SELECT g.id, g.snapshot_json, NULL, {ProviderHoldSeedEvidenceStore.MarkerSql(hasArchive)} FROM goals g
+            WHERE g.id IN (SELECT value FROM json_each($ids)) ORDER BY g.id
             """;
         command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids.Select(id => id.Value)));
         var result = new List<ProviderUsageGoalEvidence>();
@@ -32,7 +37,10 @@ internal static class ProviderHoldSeedEvidenceReader
         {
             var payload = reader.IsDBNull(2) ? reader.GetValue(1) : reader.GetValue(2);
             var id = reader.GetString(0);
-            result.Add(await ProjectAsync(id, payload, options, cancellationToken));
+            observer?.Invoke(new("provider-seed-snapshot-decode", id));
+            var evidence = await ProjectAsync(id, payload, options, cancellationToken);
+            result.Add(evidence);
+            projected?.Invoke(evidence, reader.GetString(3));
         }
         return result;
     }

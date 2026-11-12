@@ -51,7 +51,7 @@ public sealed class ProviderHoldHistoryStartupSeedTests
             release.TrySetResult();
             await WaitFor(run, "seed return");
             await WaitFor(script.Stopped.Task, "seed ticker cancellation");
-            Assert.Equal("PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals=aaaaaaaa elapsedMs=45000 loaded=1",
+            Assert.Equal($"PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals=aaaaaaaa elapsedMs=45000 loaded=1 historyMs={(stage == 0 ? 45000 : 0)} evidenceMs={(stage == 1 ? 45000 : 0)} pruneMs=0",
                 await script.NextLine());
             Assert.True(summaryWhileActive);
             Assert.Equal(5, script.Lines.Count);
@@ -141,7 +141,7 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         Assert.Empty(repository.RequestedIds);
         Assert.Empty(oracle.Retained);
         Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
-        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=73 retained=0 goals= elapsedMs=\d+ loaded=0$", Assert.Single(lines));
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=73 retained=0 goals= elapsedMs=\d+ loaded=0 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$", Assert.Single(lines));
     }
 
     [Theory]
@@ -169,7 +169,7 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
         Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
             ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
-        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=2 retained=\d+ goals=.* elapsedMs=\d+ loaded=2$", Assert.Single(lines));
+        Assert.Matches(@"^PROVIDER_HOLD_HISTORY candidates=2 retained=\d+ goals=.* elapsedMs=\d+ loaded=2 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$", Assert.Single(lines));
     }
 
     [Fact]
@@ -233,6 +233,32 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         Assert.Equal(oracle.Retained.Select(goal => goal.Id), kernel.ProviderHoldHistory.Retained.Select(goal => goal.Id));
         Assert.Equal(ProviderUsageHoldView.Read(oracle.Scope([]), DateTimeOffset.UnixEpoch),
             ProviderUsageHoldView.Read(kernel.ProviderHoldScope, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void Apply_StepDurations_ExcludeGoalLoadAndFitWithinElapsed()
+    {
+        var time = new ManualTime();
+        Task Advance(int milliseconds)
+        {
+            time.ElapsedTicks += TimeSpan.FromMilliseconds(milliseconds).Ticks;
+            return Task.CompletedTask;
+        }
+        var repository = new Repository
+        {
+            BeforeRows = () => Advance(100),
+            BeforeEvidence = () => Advance(250),
+            BeforeLoad = () => Advance(1000)
+        };
+        var lines = new List<string>();
+        ProviderHoldHistoryStartupSeed.Apply(new(), repository, lines.Add, timeProvider: time);
+        var line = Assert.Single(lines);
+        Assert.EndsWith("elapsedMs=1350 loaded=1 historyMs=100 evidenceMs=250 pruneMs=0", line);
+        var fields = line.Split(' ').Where(field => field.Contains('='))
+            .Select(field => field.Split('=')).ToDictionary(field => field[0], field => field[1]);
+        long Milliseconds(string key) => long.Parse(fields[key], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.True(Milliseconds("historyMs") + Milliseconds("evidenceMs") + Milliseconds("pruneMs") <= Milliseconds("elapsedMs"));
+        Assert.Single(repository.RequestedIds);
     }
 
     private static async Task WaitFor(Task task, string eventName)

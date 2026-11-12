@@ -578,7 +578,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return await WithBusyRetryAsync(async () =>
         {
             await using var connection = OpenConnection();
-            return await ProviderHoldSeedEvidenceReader.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken);
+            return await ProviderHoldSeedEvidenceStore.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken, _readObserver);
         }, cancellationToken);
     }
 
