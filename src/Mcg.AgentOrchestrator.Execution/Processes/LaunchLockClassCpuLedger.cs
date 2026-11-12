@@ -1,6 +1,9 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Process-lifetime CPU totals. Membership counts tests, but each distinct class gets one share.
+// Process-lifetime CPU totals. The in-process value is an equal time-active share of whole-process CPU:
+// each sampled delta is split evenly among distinct classes active since the previous sample.
+// Membership counts tests, but each distinct class gets one share. This is not the class's own CPU;
+// a class that mostly waits still shares other classes' work and GC. Rank cuts by child CPU.
 internal sealed class LaunchLockClassCpuLedger
 {
     internal static LaunchLockClassCpuLedger Live { get; } = new();
