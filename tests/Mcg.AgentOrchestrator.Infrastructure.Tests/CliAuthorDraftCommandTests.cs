@@ -93,7 +93,7 @@ public sealed class CliAuthorDraftCommandTests
         using var fixture = new Fixture();
         var json = JsonSerializer.Serialize(new
         {
-            kind = "stale", reason = "The requested capability already exists.",
+            kind = "stale", staleKind = "refused", reason = "The requested capability already exists.",
             evidenceReferences = new[] { "docs/role-capability-matrix.md:1" }
         });
 

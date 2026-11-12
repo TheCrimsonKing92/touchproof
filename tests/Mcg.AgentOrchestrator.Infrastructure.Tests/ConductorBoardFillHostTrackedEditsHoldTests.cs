@@ -32,7 +32,7 @@ public sealed class ConductorBoardFillHostTrackedEditsHoldTests
                 {
                     Interlocked.Increment(ref modelCalls);
                     return Task.FromResult(new WorkerProcessRunResult(0,
-                        JsonSerializer.Serialize(new { kind = "stale", reason = "already implemented",
+                        JsonSerializer.Serialize(new { kind = "stale", staleKind = "refused", reason = "already implemented",
                             evidenceReferences = new[] { "seed.txt:1" } }), ""));
                 }, repository), TextWriter.Null, TextWriter.Null, token, utcNow: () => clock.UtcNow),
             () => [item], (_, _) => BoardFillFailureKindSelectionTests.Ready,

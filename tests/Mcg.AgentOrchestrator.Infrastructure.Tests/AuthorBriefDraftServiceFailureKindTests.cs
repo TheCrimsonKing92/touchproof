@@ -67,7 +67,7 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
         };
         var outcome = AuthorBriefDraftService.Run(fixture.Item.Id, fixture.Workspace,
             new((_, _) => Task.FromResult(new WorkerProcessRunResult(0,
-                JsonSerializer.Serialize(new { kind = "stale", reason = "already done",
+                JsonSerializer.Serialize(new { kind = "stale", staleKind = "refused", reason = "already done",
                     evidenceReferences = new[] { "seed.txt:1" } }), "")), fixture.Repository),
             fixture.Output, fixture.Error, includeBoardFillMetadata: true);
         Assert.Equal(2, resolutions);

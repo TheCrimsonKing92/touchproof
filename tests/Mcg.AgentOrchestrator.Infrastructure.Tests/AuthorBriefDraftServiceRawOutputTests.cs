@@ -90,7 +90,7 @@ public sealed class AuthorBriefDraftServiceRawOutputTests
             }),
             "stale" => JsonSerializer.Serialize(new
             {
-                kind = "stale", reason = "Capability exists.",
+                kind = "stale", staleKind = "refused", reason = "Capability exists.",
                 evidenceReferences = new[] { "docs/role-capability-matrix.md:1" }
             }),
             _ => "not JSON"
