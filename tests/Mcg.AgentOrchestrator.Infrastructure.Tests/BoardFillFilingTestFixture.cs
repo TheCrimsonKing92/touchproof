@@ -10,6 +10,7 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
         { BoardFillMode = ConductorBoardFillMode.File, BoardFillMaxDraftsPerDay = 1 };
     internal BoardFillGoalBoard Board { get; set; } = new(0, new HashSet<string>());
     internal string? Head { get; set; } = BoardFillAssessmentTestFixture.Head;
+    internal Func<string, string, IReadOnlyList<string>?> ChangedPaths { get; set; } = (_, _) => null;
     internal Action? BeforeHead { get; set; }
     internal Action? BeforeBoard { get; set; }
     internal IntakeFake Intake { get; } = new();
@@ -19,13 +20,15 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
         Host = new(Drafts.Store, (_, _) => throw new InvalidOperationException("No drafting expected."),
             () => [Drafts.Item], (_, _) => BoardFillAssessmentTestFixture.Ready, () => Policy,
             new(Drafts.EventPath, utcNow: () => Drafts.Clock.UtcNow), () => Drafts.Clock.UtcNow,
-            filing: new(Intake, () => { BeforeBoard?.Invoke(); return Board; }, () => { BeforeHead?.Invoke(); return Head; }));
+            filing: new(Intake, () => { BeforeBoard?.Invoke(); return Board; }, () => { BeforeHead?.Invoke(); return Head; },
+                (from, to) => ChangedPaths(from, to)));
     }
 
-    internal BoardFillDraftRound Assessed(bool fileable = true, BoardFillScopeProposal? scope = null)
+    internal BoardFillDraftRound Assessed(bool fileable = true, BoardFillScopeProposal? scope = null,
+        DateTimeOffset? at = null, BoardFillPremiseVerification? verification = null)
     {
-        var round = Drafts.Finished();
-        Drafts.Store.Assess(round.Id, new(BoardFillAssessmentTestFixture.Verified,
+        var round = Drafts.Finished(at);
+        Drafts.Store.Assess(round.Id, new(verification ?? BoardFillAssessmentTestFixture.Verified,
             BoardFillPreflightChecks.Run(BoardFillAssessmentTestFixture.Brief), scope ?? BoardFillAssessmentTestFixture.NoDepends,
             fileable, fileable ? [] : ["changed"]));
         return Drafts.Store.ReadAll().Single(row => row.Id == round.Id);

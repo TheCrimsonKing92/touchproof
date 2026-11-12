@@ -8,8 +8,9 @@ internal sealed partial class ConductorBoardFillHost
 {
     // This phase is read-only. A fault here supplies no evidence that intake failed or a goal was created.
     private BoardFillFilingAttempt? FilingAdmission(BoardFillDraftRound draft, BoardFillFilingAttempt attempt,
-        bool completed, CancellationToken token)
+        bool completed, CancellationToken token, out bool revalidated)
     {
+        revalidated = false;
         var phase = "policy";
         try
         {
@@ -50,7 +51,12 @@ internal sealed partial class ConductorBoardFillHost
                 phase = "main-head";
                 var head = _filingSeams.MainHead();
                 if (string.IsNullOrWhiteSpace(head)) return Refuse("main-head-unavailable");
-                if (head != draft.MainHead) return Refuse("stale-head", true);
+                if (head != draft.MainHead)
+                {
+                    if (!BoardFillStaleHeadRevalidation.CanAdmit(draft, head, _filingSeams.ChangedPaths))
+                        return Refuse("stale-head", true);
+                    revalidated = true;
+                }
                 if (board!.LinkedBacklogItemIds.Contains(draft.BacklogItemId)) return Refuse("backlog-linked", true);
             }
             // Policy can change while the read seams run. Check again at the mutation boundary.

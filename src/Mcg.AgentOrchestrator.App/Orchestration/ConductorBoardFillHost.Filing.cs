@@ -30,7 +30,8 @@ internal sealed partial class ConductorBoardFillHost
             ((round.Filings ?? []).Any(attempt => attempt.Result is null) ||
                 (admissionOpen || (round.Filings ?? []).Count > 0) && RetryReady(round, now)) &&
             items.TryGetValue(round.BacklogItemId, out var item) && !BoardFillReadyItemSelector.IsOwnerGated(item))
-            .OrderBy(round => round.StartedAt).ThenBy(round => round.Id, StringComparer.Ordinal).FirstOrDefault();
+            .OrderByDescending(round => (round.Filings ?? []).Any(attempt => attempt.Result is null))
+            .ThenByDescending(round => round.StartedAt).ThenBy(round => round.Id, StringComparer.Ordinal).FirstOrDefault();
         if (candidate is not null) _filing = Task.Run(() => AttemptFiling(candidate.Id, _shutdown.Token));
     }
 
@@ -48,7 +49,7 @@ internal sealed partial class ConductorBoardFillHost
             // A crash before FinishFiling resumes the same durable attempt and request key.
             var pending = (draft.Filings ?? []).SingleOrDefault(row => row.Result is null);
             var attempt = pending ?? _store.BeginFiling(draft.Id, _utcNow());
-            var refusal = FilingAdmission(draft, attempt, previous is not null, token);
+            var refusal = FilingAdmission(draft, attempt, previous is not null, token, out var revalidated);
             if (refusal is not null) return Finish(refusal);
             // Re-reading a completed receipt creates no goal and bypasses new-goal admission limits.
             if (previous is not null)
@@ -79,7 +80,8 @@ internal sealed partial class ConductorBoardFillHost
                 catch (Exception exception) { dependencies.Add(new(dependency.GoalId, false, "", exception.ToString(), 1)); }
             }
             var failed = dependencies.Where(dependency => !dependency.Applied).Select(dependency => BoardFillFiledEvent.Id8(dependency.GoalId)).ToArray();
-            return Finish(attempt with { Result = intake.Kind, Reason = failed.Length == 0 ? intake.Reason :
+            var reason = revalidated && intake.Reason == "ok" ? BoardFillStaleHeadRevalidation.AdmittedReason : intake.Reason;
+            return Finish(attempt with { Result = intake.Kind, Reason = failed.Length == 0 ? reason :
                 "dependency-failed:" + string.Join(',', failed), GoalId = intake.GoalId, Stdout = intake.Stdout,
                 Stderr = intake.Stderr, ExitCode = intake.ExitCode, Dependencies = dependencies, Terminal = true, Intake = intake });
 
