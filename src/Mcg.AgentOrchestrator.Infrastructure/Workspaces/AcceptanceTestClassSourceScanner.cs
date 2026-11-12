@@ -91,6 +91,16 @@ internal static class AcceptanceTestClassSourceScanner
         }
 
         var extracts = AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files, ExtractFile);
+        return ScanExtracts(extracts);
+    }
+
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanSourceTexts(IEnumerable<string> sources) =>
+        ScanExtracts(sources.Select(ExtractText).ToArray());
+
+    private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanExtracts(IReadOnlyList<FileExtract> extracts)
+    {
+        var derivedFacts = AcceptanceTestClassSourceScannerFactAncestry.Resolve(
+            extracts.Select(extract => extract.Ancestry));
         var constants = extracts.SelectMany(extract => extract.Constants)
             .GroupBy(item => item.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
@@ -98,7 +108,8 @@ internal static class AcceptanceTestClassSourceScanner
 
         var classes = extracts.SelectMany(extract => extract.Classes)
             .Select(item => new SourceClass(item.FullName, item.ShortName, item.Abstract, item.BaseName,
-                item.HasFacts, ResolveCollection(item.FullName, item.Collection, constants)))
+                item.HasFacts || derivedFacts.Contains(item.FullName),
+                ResolveCollection(item.FullName, item.Collection, constants)))
             .GroupBy(item => item.FullName, StringComparer.Ordinal)
             .Select(group => group.Aggregate((left, right) => left with
             {
@@ -116,9 +127,11 @@ internal static class AcceptanceTestClassSourceScanner
             .ToArray();
     }
 
-    private static FileExtract ExtractFile(string path)
+    private static FileExtract ExtractFile(string path) => ExtractText(File.ReadAllText(path));
+
+    private static FileExtract ExtractText(string text)
     {
-        var root = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
+        var root = CSharpSyntaxTree.ParseText(text).GetRoot();
         var constants = root.DescendantNodes().OfType<FieldDeclarationSyntax>()
             .Where(field => field.Parent is ClassDeclarationSyntax)
             .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword) &&
@@ -142,10 +155,10 @@ internal static class AcceptanceTestClassSourceScanner
                 HasFacts(node),
                 ExtractCollection(node)))
             .ToArray();
-        return new FileExtract(constants, classes);
+        return new FileExtract(constants, classes, AcceptanceTestClassSourceScannerFactAncestry.Extract(root));
     }
 
-    private static string NameOf(ClassDeclarationSyntax node)
+    internal static string NameOf(ClassDeclarationSyntax node)
     {
         var namespaces = node.Ancestors().OfType<BaseNamespaceDeclarationSyntax>()
             .Reverse().Select(item => item.Name.ToString());
@@ -236,7 +249,8 @@ internal static class AcceptanceTestClassSourceScanner
         bool HasFacts, string? Collection);
 
     // Only file-local syntax facts are cached; resolution against other files happens on every scan.
-    internal sealed record FileExtract(IReadOnlyList<ConstantExtract> Constants, IReadOnlyList<ClassExtract> Classes);
+    internal sealed record FileExtract(IReadOnlyList<ConstantExtract> Constants, IReadOnlyList<ClassExtract> Classes,
+        AcceptanceTestClassSourceScannerFactAncestry.AncestryFile? Ancestry = null);
     internal sealed record ConstantExtract(string Key, string Value);
     internal sealed record ClassExtract(string FullName, string ShortName, bool Abstract, string? BaseName,
         bool HasFacts, CollectionExpression Collection);
