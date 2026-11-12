@@ -130,7 +130,7 @@ public sealed class SubscriptionPlanTextViewCharacterizationTests
             "     ready: True; Ready to prepare",
             "  2. [Assigned] Tester: Verify subscription output",
             "     agent: Opus tester (Anthropic/claude-opus-5, SubscriptionOnly)",
-            "     subscription: claude-cli model=default estPrompt=9100chars budget=8000chars over=1100chars profile=True executable=True patchCapable=True",
+            "     subscription: claude-cli model=default estPrompt=9100chars budget=8000chars over=1100chars | used 113.8% | near-budget profile=True executable=True patchCapable=True",
             "     ready: False; Brief exceeds budget",
             "  3. [Pending] Reviewer: Review the extraction",
             "     agent: unassigned",
@@ -142,5 +142,53 @@ public sealed class SubscriptionPlanTextViewCharacterizationTests
         var actual = AsyncLocalConsoleRouter.Capture(() => SubscriptionPlanTextView.Print(plan));
 
         Assert.Equal(expected, actual.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BelowNinetyPercentPreservesExactSubscriptionLine()
+    {
+        Assert.Equal(
+            "     subscription: codex-cli model=default estPrompt=8999chars budget=10000chars headroom=1001chars profile=True executable=True patchCapable=True",
+            PrintSubscriptionLine(10000, 1001));
+    }
+
+    [Fact]
+    public void ExactlyNinetyPercentAppendsUsedPercentageAndNearBudget()
+    {
+        Assert.Equal(
+            "     subscription: codex-cli model=default estPrompt=9000chars budget=10000chars headroom=1000chars | used 90% | near-budget profile=True executable=True patchCapable=True",
+            PrintSubscriptionLine(10000, 1000));
+    }
+
+    private static string PrintSubscriptionLine(int budget, int headroom)
+    {
+        var item = new SubscriptionPlanItem(
+            1, "task-1", AgentRole.Developer, WorkTaskStatus.Assigned, "Check brief size",
+            "agent-1", "Sol developer", "OpenAI", "gpt-5-mini", AgentExecutionPolicy.SubscriptionOnly,
+            "codex-cli", null, true, true, false, true, true, "Ready to prepare",
+            EstimatedPromptCharacterCount: budget - headroom,
+            TaskBriefCharacterBudget: budget,
+            TaskBriefHeadroom: headroom);
+        var plan = new SubscriptionPlan(
+            GoalId: "e1c6fb02aef3446f8a71b9d54bbc3d95",
+            Objective: "Check brief size",
+            Status: GoalStatus.Active,
+            ReadyToPrepareCount: 1,
+            ResolvableProfileCount: 1,
+            RetryDeferredCount: 0,
+            NextSubscriptionRetryAfter: null,
+            ReadyStartCostRisk: null,
+            ReadyStartPromptCharacterCount: null,
+            ReadyStartCostRiskDetails: [],
+            ReadyStartCostRecommendation: null,
+            CapacitySchedule: new ProviderCapacitySchedule(
+                ProviderCapacityDisposition.Ready, "Ready", 1, 0, null, false, []),
+            ReadyModelUsage: [],
+            ProviderBudgets: [],
+            Items: [item]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() => SubscriptionPlanTextView.Print(plan));
+        return Assert.Single(output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'),
+            line => line.StartsWith("     subscription:", StringComparison.Ordinal));
     }
 }
