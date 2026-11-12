@@ -119,7 +119,9 @@ public sealed class PreTesterReverseDependencySelectionTests
     {
         using var scenario = new Scenario();
         scenario.Repository.Test("CoupledOnlyTests", prefix: "[LiveTreeStructural]");
-        var guards = Select(scenario.Repository, [AppSource], _ => { });
+        // Structural coverage needs a topology trigger for the coupled-only negative control.
+        var guards = PreTesterGuardSelections.Create(new(), scenario.Repository.Root, [AppSource], "fixture-main",
+            _ => { }, scenario.Repository.Settings, structuralPathReader: (_, _) => [AppSource]);
         Assert.Contains(new FindingEvidenceSelection("Infrastructure.Tests", "CoupledOnlyTests"), guards.Selections);
         Assert.True(guards.EveryFailureIsInsideChanges([Failure], _ => throw new InvalidOperationException("Unexpected outside failure")));
         foreach (var classification in new[] { false, true })
