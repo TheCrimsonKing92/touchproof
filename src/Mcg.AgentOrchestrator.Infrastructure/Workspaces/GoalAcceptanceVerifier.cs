@@ -1784,7 +1784,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles) =>
         AcceptancePolicyShardPlanner.ClassifyDotnetShardDisposition(changedFiles);
 
-    private static EffectiveGatePlan CreateEffectiveGatePlan(
+    internal static EffectiveGatePlan CreateEffectiveGatePlan(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
         AcceptanceGateEngineSettings engineSettings,
@@ -3778,7 +3778,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : value;
 
-    private sealed record EffectiveGatePlan(
+    internal sealed record EffectiveGatePlan(
         AcceptanceManifest Manifest,
         IReadOnlyList<AcceptanceManifestCheck> Checks,
         IReadOnlyList<AcceptanceTestLane> CandidateLanes,

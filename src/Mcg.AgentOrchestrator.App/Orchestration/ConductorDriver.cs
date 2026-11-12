@@ -889,7 +889,7 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir, workspace.IntegrationBranch);
-        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace));
+        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory);
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull;
