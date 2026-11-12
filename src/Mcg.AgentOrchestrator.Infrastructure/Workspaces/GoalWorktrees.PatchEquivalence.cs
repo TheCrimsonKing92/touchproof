@@ -26,10 +26,23 @@ public static partial class GoalWorktrees
         string newHeadSha, string integrationBranch,
         out string evidence,
         out string refusalReason)
+        => TryComputePatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch,
+            false, out evidence, out refusalReason, out _);
+
+    public static bool TryComputePatchEquivalence(
+        string executionDirectory,
+        string oldHeadSha,
+        string newHeadSha, string integrationBranch,
+        bool boundCandidateCarry,
+        out string evidence,
+        out string refusalReason,
+        out string evaluatedHead)
     {
+        var boundCandidate = boundCandidateCarry ? oldHeadSha : null;
         oldHeadSha = PeelRetightenCommits(executionDirectory, oldHeadSha);
         newHeadSha = PeelRetightenCommits(executionDirectory, newHeadSha);
-        if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch, out evidence, out refusalReason))
+        if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch,
+                boundCandidate, out evidence, out refusalReason, out evaluatedHead))
             return true;
         if (!TryComputeSquashEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch, out var squashEvidence))
             return false;
@@ -42,11 +55,14 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string oldHeadSha,
         string newHeadSha, string integrationBranch,
+        string? boundCandidate,
         out string evidence,
-        out string refusalReason)
+        out string refusalReason,
+        out string evaluatedHead)
     {
         evidence = string.Empty;
         refusalReason = string.Empty;
+        evaluatedHead = string.Empty;
         if (string.IsNullOrWhiteSpace(executionDirectory) || !Directory.Exists(executionDirectory))
         {
             refusalReason = "no-execution-directory";
@@ -58,14 +74,18 @@ public static partial class GoalWorktrees
             refusalReason = "unresolvable-head";
             return false;
         }
+        evaluatedHead = newHead;
         if (!TryReadGit(executionDirectory, ["merge-base", $"refs/heads/{integrationBranch}", oldHead], out var oldBase) ||
             !TryReadGit(executionDirectory, ["merge-base", $"refs/heads/{integrationBranch}", newHead], out var newBase))
         {
             refusalReason = "no-merge-base";
             return false;
         }
-        if (!TryVerifyIntegrationMergesClean(executionDirectory, oldBase, oldHead, out refusalReason) ||
-            !TryVerifyIntegrationMergesClean(executionDirectory, newBase, newHead, out refusalReason))
+        var containedBound = boundCandidate is null ? null
+            : BoundCandidateMergeRange.ContainedBound(executionDirectory, boundCandidate, newHead);
+        if ((containedBound is null &&
+             !TryVerifyIntegrationMergesClean(executionDirectory, oldBase, oldHead, out refusalReason)) ||
+            !TryVerifyIntegrationMergesClean(executionDirectory, newBase, newHead, out refusalReason, containedBound))
         {
             if (refusalReason.StartsWith("integration-merge-not-clean;", StringComparison.Ordinal) &&
                 TryReadIntegratedMainParent(executionDirectory, newBase, newHead, out var merge, out var mainParent))
@@ -165,10 +185,11 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string baseSha,
         string headSha,
-        out string refusalReason)
+        out string refusalReason,
+        string? containedBound = null)
     {
         refusalReason = string.Empty;
-        var listed = GitCli.Run(executionDirectory, "rev-list", "--merges", $"{baseSha}..{headSha}");
+        var listed = GitCli.Run(executionDirectory, BoundCandidateMergeRange.ListArguments(baseSha, headSha, containedBound));
         if (!listed.Succeeded || listed.DrainTimedOut)
         {
             refusalReason = "integration-merge-unverifiable";

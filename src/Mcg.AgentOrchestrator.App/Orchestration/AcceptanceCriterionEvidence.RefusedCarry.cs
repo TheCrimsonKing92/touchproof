@@ -99,7 +99,8 @@ internal static partial class AcceptanceCriterionEvidence
         foreach (var oldHead in oldHeads)
         {
             if (!GoalWorktrees.TryComputePatchEquivalence(
-                    executionDirectory, oldHead, candidateSha, integrationBranch, out var evidence, out var reason))
+                    executionDirectory, oldHead, candidateSha, integrationBranch,
+                    boundCandidateCarry: true, out var evidence, out var reason, out var evaluatedHead))
             {
                 if (IntegrationOnlyCandidateDrift.TryProve(executionDirectory, oldHead, candidateSha,
                         integrationBranch, GoalWorktrees.BranchName(goal.Id), out var drift))
@@ -124,7 +125,7 @@ internal static partial class AcceptanceCriterionEvidence
                         (item.Owner == CriterionEvidenceOwner.Operator || item.State == CriterionEvidenceState.Pending) &&
                         string.Equals(item.ExpectedCandidateSha, oldHead, StringComparison.OrdinalIgnoreCase))
                         ? null
-                        : $"reason={reason}; head={oldHead}";
+                        : CarryForwardRefusalText.Format(reason, oldHead, evaluatedHead);
                 return false;
             }
             evidenceByHead.Add(oldHead, evidence);

@@ -26,7 +26,7 @@ internal static partial class AcceptanceCriterionEvidence
             if (evidenceByHead.ContainsKey(oldHead)) continue;
             if (!GoalWorktrees.TryComputePatchEquivalence(
                     executionDirectory ?? string.Empty, oldHead, candidateSha, integrationBranch,
-                    out var evidence, out var reason))
+                    boundCandidateCarry: true, out var evidence, out var reason, out var evaluatedHead))
             {
                 if (IntegrationOnlyCandidateDrift.TryProve(executionDirectory ?? string.Empty,
                         oldHead, candidateSha, integrationBranch, GoalWorktrees.BranchName(goal.Id), out var drift))
@@ -35,7 +35,7 @@ internal static partial class AcceptanceCriterionEvidence
                     continue;
                 }
                 return FormatStaleBindingsDiagnostic(
-                    candidateSha, obligation, boundElsewhere, $"reason={reason}; head={oldHead}");
+                    candidateSha, obligation, boundElsewhere, CarryForwardRefusalText.Format(reason, oldHead, evaluatedHead));
             }
             evidenceByHead.Add(oldHead, evidence);
         }
