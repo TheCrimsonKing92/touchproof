@@ -123,7 +123,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch, WorkerTargetHome? targetHome = null)
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null)
     {
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
@@ -133,17 +133,17 @@ internal sealed partial class ConductorDriver
         return BuildPreReviewEvidenceContext(
             candidateSha,
             changedFiles,
-            worktreePath, targetHome);
+            worktreePath, targetHome, orchestratorDirectory ?? targetHome?.ProjectHomeDirectory ?? OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory);
     }
 
     internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) =>
         _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null)
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null)
     {
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-        var plan = GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome);
+        var plan = ReverseDependencyEvidenceCostGate.Apply(GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome), selections => ReverseDependencyEvidenceCostHistory.Read(repositoryRoot, orchestratorDirectory, selections, changedFiles, targetHome?.ProjectHomeDirectory));
         return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
     }
 

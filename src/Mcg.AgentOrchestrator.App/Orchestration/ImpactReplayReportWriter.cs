@@ -100,7 +100,6 @@ internal static class ImpactReplayReportWriter
             text.AppendLine();
             text.AppendLine("## Balanced pool and skip measurement");
             text.AppendLine();
-            text.AppendLine($"- Maximum changed source files: {measurement.MaximumChangedSourceFiles}");
             text.AppendLine($"- Changed source file count distribution: {string.Join(", ", measurement.ChangedSourceFileCountDistribution.Select(p => $"{p.Key}: {p.Value}"))}");
             text.AppendLine($"- Named-lane estimated seconds saved: {Number(measurement.NamedLaneSecondsSaved)}");
             text.AppendLine($"- Balanced-pool seconds saved: {Number(measurement.BalancedPoolSecondsSaved)}");

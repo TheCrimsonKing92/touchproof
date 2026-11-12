@@ -14,7 +14,7 @@ internal static class ImpactReplayUnboundedSelectionMeasurement
     internal static ImpactReplayAttemptRecord Apply(ImpactReplayAttemptRecord attempt, string checkout,
         IReadOnlyList<string> productionSources, ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
-        IReadOnlyList<string> additionalClasses, IReadOnlyList<string>? testProjectDirectories = null)
+        IReadOnlyList<string> additionalClasses, IReadOnlyList<string> testProjectDirectories)
     {
         if (attempt.SelectionOutcome != "Abandoned" || !IsBound(attempt.DegradationKind)) return attempt;
         try

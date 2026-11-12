@@ -10,7 +10,7 @@ public sealed class ImpactReplayClassLevelReportTests
             [Attempt("selected", 7.25, 9.25), Attempt("abandoned", 0, 9.25),
              Attempt("unresolved", null, 2, "selection unresolved"),
              Attempt("incomplete", null, null, "incomplete TRX duration or class evidence")];
-        var measurement = ImpactReplayMeasurement.Create(20, attempts);
+        var measurement = ImpactReplayMeasurement.Create(attempts);
         var summary = measurement.ClassLevel!;
         Assert.Equal(7.25, summary.TotalSecondsSaved);
         Assert.Equal(3.625d, summary.MedianSecondsSaved);
@@ -50,7 +50,7 @@ public sealed class ImpactReplayClassLevelReportTests
     public void ZeroOrAbsentBaseline_ReportsUnavailableShare(bool incomplete)
     {
         ImpactReplayAttemptRecord[] attempts = [Attempt("zero", incomplete ? null : 0, incomplete ? null : 0)];
-        var measurement = ImpactReplayMeasurement.Create(20, attempts);
+        var measurement = ImpactReplayMeasurement.Create(attempts);
         var markdown = ImpactReplayReportWriter.Render(new("override", [], attempts, [], [], [], Measurement: measurement));
         Assert.Null(measurement.ClassLevel!.ShareOfNonFloorTestSeconds);
         Assert.Contains("Share of non-floor test seconds saved at class level: unavailable", markdown);

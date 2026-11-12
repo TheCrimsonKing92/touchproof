@@ -2,6 +2,42 @@
 public sealed class ImpactReplayCommandTests
 {
     [Fact]
+    public void SourceAndUnnamedTestDataChange_RetainsDependentSelection()
+    {
+        const string testData = "TestData/Fixtures/retained-note.md";
+        using var fixture = new ImpactReplayFixture(changedTestFiles:
+            new Dictionary<string, string> { [testData] = "unnamed test data" });
+        fixture.AddAttempt("source-and-test-data");
+
+        var attempt = Assert.Single(fixture.Run().Report.Attempts);
+
+        Assert.Equal(new[] { "src/Sample/Alpha.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/" + testData }, attempt.ChangedFiles);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.Equal(new[] { "AlphaTests" }, attempt.SelectedTestClasses);
+        Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
+        Assert.Equal(new[] { "Beta lane" }, attempt.SkippedLanes);
+    }
+
+    [Fact]
+    public void SourceAndUnnamedFixtureOutsideTestProjects_AbandonsSelection()
+    {
+        const string testData = "tools/Fixtures/retained-note.md";
+        using var fixture = new ImpactReplayFixture(changedRepositoryFiles:
+            new Dictionary<string, string> { [testData] = "unnamed test data" });
+        fixture.AddAttempt("source-and-outside-fixture");
+
+        var attempt = Assert.Single(fixture.Run().Report.Attempts);
+
+        Assert.Equal(new[] { "src/Sample/Alpha.cs", testData }, attempt.ChangedFiles);
+        Assert.Equal("Abandoned", attempt.SelectionOutcome);
+        Assert.Equal("ChangedFileUnmapped", attempt.DegradationKind);
+        Assert.Contains(testData, attempt.SelectionReason);
+        Assert.Empty(attempt.SkippedLanes);
+    }
+
+    [Fact]
     public void OneSourceChangeSelectsDependentAndFloorLanesAndReportsSavings()
     {
         using var fixture = new ImpactReplayFixture();

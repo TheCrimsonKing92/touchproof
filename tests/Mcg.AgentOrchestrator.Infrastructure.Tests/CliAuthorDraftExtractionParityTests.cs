@@ -21,7 +21,7 @@ public sealed class CliAuthorDraftExtractionParityTests
         {
             "stale" => JsonSerializer.Serialize(new
             {
-                kind = "stale", reason = "Capability exists.",
+                kind = "stale", staleKind = "refused", reason = "Capability exists.",
                 evidenceReferences = new[] { "docs/role-capability-matrix.md:1" }
             }),
             "unparseable" => "not JSON",
@@ -52,7 +52,8 @@ public sealed class CliAuthorDraftExtractionParityTests
     {
         using var document = JsonDocument.Parse(receipt);
         return document.RootElement.EnumerateObject()
-            .Where(property => !stripRevisionFields || property.Name is not ("rounds" or "roundCount" or "backlogCoverage"))
+            .Where(property => !stripRevisionFields || property.Name is not
+                ("rounds" or "roundCount" or "backlogCoverage" or "staleKind" or "implementingCommits"))
             .Select(property => (property.Name, property.Value.GetRawText())).ToArray();
     }
 

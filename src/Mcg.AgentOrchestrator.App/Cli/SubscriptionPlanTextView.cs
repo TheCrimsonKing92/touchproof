@@ -1,3 +1,4 @@
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -91,10 +92,20 @@ internal static class SubscriptionPlanTextView
             return string.Empty;
         }
 
-        var headroom = item.TaskBriefHeadroom.Value >= 0
-            ? $" headroom={item.TaskBriefHeadroom.Value}chars"
-            : $" over={Math.Abs(item.TaskBriefHeadroom.Value)}chars";
-        return $" budget={item.TaskBriefCharacterBudget.Value}chars{headroom}";
+        var budget = item.TaskBriefCharacterBudget.Value;
+        var usage = new TaskBriefBudgetHeadroom(budget, budget - item.TaskBriefHeadroom.Value);
+        var headroom = usage.Headroom >= 0
+            ? $" headroom={usage.Headroom}chars"
+            : $" over={Math.Abs(usage.Headroom)}chars";
+        var text = $" budget={budget}chars{headroom}";
+        if (usage.IsNearLimit)
+        {
+            var percentage = decimal.Round(usage.UsedPercentage, 1, MidpointRounding.AwayFromZero)
+                .ToString("0.#", CultureInfo.InvariantCulture);
+            text += $" | used {percentage}% | near-budget";
+        }
+
+        return text;
     }
 
     private static string FormatProviderBudgetSummary(SubscriptionProviderBudgetSummary summary)

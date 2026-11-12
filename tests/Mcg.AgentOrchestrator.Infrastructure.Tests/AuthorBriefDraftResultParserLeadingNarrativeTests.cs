@@ -28,7 +28,7 @@ public sealed class AuthorBriefDraftResultParserLeadingNarrativeTests
     {
         const string reason = "The requested behavior already exists.";
         string[] evidenceReferences = ["docs/role-capability-matrix.md:1", "docs/operator-runbook.md:1"];
-        var json = JsonSerializer.Serialize(new { kind = "stale", reason, evidenceReferences });
+        var json = JsonSerializer.Serialize(new { kind = "stale", staleKind = "refused", reason, evidenceReferences });
 
         var result = AuthorBriefDraftResultParser.Parse("The source confirms the premise is stale.\n" + json);
 
@@ -49,7 +49,7 @@ public sealed class AuthorBriefDraftResultParserLeadingNarrativeTests
     [InlineData("Drafting the brief.\n{\"kind\":\"draft\",\"markdown\":\"brief\"}\nHere is the result.")]
     [InlineData("Drafting the brief.\n{\"kind\":\"draft\",\"markdown\":\"brief\"} {}")]
     [InlineData("Narrative with { stray brace.\n{\"kind\":\"draft\",\"markdown\":\"brief\"}")]
-    [InlineData("The premise is stale.\n{\"kind\":\"stale\",\"reason\":\"old\",\"evidenceReferences\":[]}")]
+    [InlineData("The premise is stale.\n{\"kind\":\"stale\",\"staleKind\":\"refused\",\"reason\":\"old\",\"evidenceReferences\":[]}")]
     public void Invalid_output_returns_null(string output)
     {
         Assert.Null(AuthorBriefDraftResultParser.Parse(output));

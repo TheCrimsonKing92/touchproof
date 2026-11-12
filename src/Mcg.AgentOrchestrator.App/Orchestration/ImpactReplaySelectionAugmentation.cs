@@ -7,18 +7,19 @@ internal static class ImpactReplaySelectionAugmentation
 {
     internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
         IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
-        IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards)
-        => Apply(selection, changedFiles, sources, classes, guards, out _);
+        IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
+        IReadOnlyList<string> testProjectDirectories)
+        => Apply(selection, changedFiles, sources, classes, guards, out _, null, testProjectDirectories);
 
     internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
         IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
-        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses = null,
-        IReadOnlyList<string>? testProjectDirectories = null)
+        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses,
+        IReadOnlyList<string> testProjectDirectories)
     {
         var changed = changedFiles.ToArray();
         declaredGuards = ImpactReplayDeclaredGuardSelection.Read(changed, sources, classes);
-        var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes, testProjectDirectories ?? []);
+        var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes, testProjectDirectories);
         if (mapped.Outcome != ReverseDependencySelectionOutcome.Resolved) return mapped;
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved) return selection;
         if (declaredGuards.DegradationReason is { } reason)

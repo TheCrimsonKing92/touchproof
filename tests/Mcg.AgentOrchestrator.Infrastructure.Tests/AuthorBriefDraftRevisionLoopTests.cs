@@ -91,7 +91,7 @@ public sealed class AuthorBriefDraftRevisionLoopTests
             "unparseable" => new WorkerProcessRunResult(0, "not JSON", ""),
             "stale" => new WorkerProcessRunResult(0, JsonSerializer.Serialize(new
             {
-                kind = "stale", reason = detail,
+                kind = "stale", staleKind = "refused", reason = detail,
                 evidenceReferences = new[] { "docs/role-capability-matrix.md:1" }
             }), ""),
             _ => new WorkerProcessRunResult(17, Draft(ValidDraft).StandardOutput, "fake model failure")

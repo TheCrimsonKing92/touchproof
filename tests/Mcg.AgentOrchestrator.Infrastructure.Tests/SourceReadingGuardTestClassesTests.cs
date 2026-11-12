@@ -43,7 +43,7 @@ public sealed class SourceReadingGuardTestClassesTests
         var sources = fixture.Sources;
         var guards = Assert.IsType<ImpactReplaySourceGuardReport>(SourceReadingGuardTestClasses.Read(sources, fixture.Classes));
         var selected = ImpactReplaySelectionAugmentation.Apply(ReverseDependencyTestSelection.Resolved(["Sample.ChangedTests"]),
-            ["src/Unrelated.cs"], sources, fixture.Classes, guards);
+            ["src/Unrelated.cs"], sources, fixture.Classes, guards, []);
 
         Assert.Equal(new[] { "Sample.DirectTests", "Sample.FieldTests", "Sample.InheritedTestMethods", "Sample.InheritedTests", "Sample.SnapshotTests", "Sample.WrapperTests" }, guards.Classes);
         Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);

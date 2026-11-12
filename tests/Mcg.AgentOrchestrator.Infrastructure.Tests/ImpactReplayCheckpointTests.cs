@@ -5,6 +5,48 @@ using System.Text.Json;
 // Parallel-safe: per-test fake sources and private SQLite files, including independent reader connections.
 public sealed class ImpactReplayCheckpointTests
 {
+    [Fact]
+    public void LegacyChangedFileLimit_LoadsAndAllowsFurtherInvocation()
+    {
+        using var fixture = new ImpactReplayObservationFixture();
+        string legacyRunId;
+        using (var sink = fixture.Sink()) legacyRunId = sink.RunId;
+        fixture.Sql("""
+            UPDATE runs SET
+              identity_json=json_set(identity_json,'$.configuration.maximumChangedSourceFiles',20),
+              progress_json=json_set(progress_json,'$.maximumChangedSourceFiles',20);
+            """);
+        Assert.Equal(20L, fixture.Sql("SELECT json_extract(identity_json,'$.configuration.maximumChangedSourceFiles') FROM runs"));
+        Assert.Equal(20L, fixture.Sql("SELECT json_extract(progress_json,'$.maximumChangedSourceFiles') FROM runs"));
+
+        var legacy = fixture.Status();
+        Assert.Equal(legacyRunId, legacy.Identity.RunId);
+        Assert.Equal(100, legacy.Identity.Configuration.RequestedLimit);
+        Assert.Equal(100, legacy.Progress.RequestedLimit);
+        Assert.Equal("incomplete/unknown", legacy.Completion);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(0, CliImpactReplayCommand.Run(
+            ["impact-replay", "--status", "--checkpoint-file", fixture.Checkpoint],
+            fixture.Root, fixture.Root, null, output, error));
+        Assert.Contains(legacyRunId, output.ToString());
+        Assert.DoesNotContain("maximumChangedSourceFiles", output.ToString());
+        Assert.Empty(error.ToString());
+
+        Assert.Equal(0, fixture.Run());
+
+        var runs = ImpactReplayCheckpointStore.ReadStatus(fixture.Checkpoint);
+        Assert.Equal(2, runs.Count);
+        Assert.Contains(runs, run => run.Identity.RunId == legacyRunId && run.Completion == "incomplete/unknown");
+        var current = Assert.Single(runs, run => run.Identity.RunId != legacyRunId);
+        Assert.Equal("completed", current.Completion);
+        Assert.Equal(2, current.Progress.Completed);
+        Assert.Equal(2, current.Progress.Replayable);
+        Assert.Equal(1L, fixture.Sql("SELECT count(*) FROM runs WHERE json_extract(identity_json,'$.configuration.maximumChangedSourceFiles')=20"));
+        Assert.Equal(1L, fixture.Sql("SELECT count(*) FROM runs WHERE json_extract(progress_json,'$.maximumChangedSourceFiles')=20"));
+        Assert.Equal(1L, fixture.Sql("SELECT count(*) FROM runs WHERE instr(identity_json,'maximumChangedSourceFiles')>0 OR instr(progress_json,'maximumChangedSourceFiles')>0"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

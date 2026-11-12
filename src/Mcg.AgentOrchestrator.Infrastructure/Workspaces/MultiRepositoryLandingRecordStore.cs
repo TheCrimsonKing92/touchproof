@@ -12,6 +12,30 @@ public sealed class MultiRepositoryLandingRecordStore(string orchestratorDirecto
     public MultiRepositoryLandingRecord? ReadLanding(GoalId id) => Read<MultiRepositoryLandingRecord>(id, "landed");
     public MultiRepositoryLandingFailure? ReadFailure(GoalId id) => Read<MultiRepositoryLandingFailure>(id, "failed");
     public MultiRepositoryLandingAttempt? ReadAttempt(GoalId id) => Read<MultiRepositoryLandingAttempt>(id, "attempt");
+
+    public IReadOnlyList<MultiRepositoryLandingRecord> FindByLandedHomeCommit(string commit)
+    {
+        if (!File.Exists(DatabasePath)) return [];
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = DatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        connection.Open();
+        using var table = connection.CreateCommand();
+        table.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings'";
+        if (table.ExecuteScalar() is null) return [];
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT payload FROM landings WHERE kind='landed' ORDER BY goal COLLATE BINARY";
+        using var reader = command.ExecuteReader();
+        var matches = new List<MultiRepositoryLandingRecord>();
+        while (reader.Read())
+        {
+            var record = JsonSerializer.Deserialize<MultiRepositoryLandingRecord>(reader.GetString(0));
+            if (record is null || record.LandedCommits is null || record.Order is null)
+                throw new InvalidDataException("Unreadable tuple landing state.");
+            if (record.MatchesLandedHomeCommit(commit)) matches.Add(record);
+        }
+        return matches;
+    }
+
     public void Write(MultiRepositoryLandingRecord record) => Write(record.GoalId, "landed", record);
     public void Write(MultiRepositoryLandingFailure failure) => Write(failure.GoalId, "failed", failure);
     public void Write(MultiRepositoryLandingAttempt attempt) => Write(attempt.GoalId, "attempt", attempt);

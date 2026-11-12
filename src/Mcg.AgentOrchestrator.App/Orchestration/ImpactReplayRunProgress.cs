@@ -31,7 +31,7 @@ internal sealed class ImpactReplayNullSink : IImpactReplaySink
 }
 
 internal sealed record ImpactReplayRunConfiguration(string ExecutionDirectory, string OrchestratorDirectory,
-    DateTimeOffset? Since, int RequestedLimit, IReadOnlyList<string>? Floor, int MaximumChangedSourceFiles,
+    DateTimeOffset? Since, int RequestedLimit, IReadOnlyList<string>? Floor,
     string? CheckoutParent);
 
 internal sealed record ImpactReplayRunIdentity(string RunId, DateTimeOffset StartedAt,

@@ -9,15 +9,14 @@ internal static class ImpactReplay
 {
     internal static ImpactReplayReport Read(string executionDirectory, string orchestratorDirectory,
         DateTimeOffset? since = null, int limit = 100, IReadOnlyList<string>? floor = null,
-        string? tempCheckoutParent = null, int? maxChangedSourceFiles = null,
+        string? tempCheckoutParent = null,
         IImpactReplaySink? observation = null, CancellationToken cancellationToken = default,
         ImpactReplayExecutionSource? source = null, ImpactReplayHistoryQuery? historyQuery = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxChangedSourceFiles ?? 5, 1);
         var sink = observation ?? ImpactReplayNullSink.Instance;
         var configuration = new ImpactReplayRunConfiguration(executionDirectory, orchestratorDirectory,
-            since, limit, floor, maxChangedSourceFiles ?? 5, tempCheckoutParent);
+            since, limit, floor, tempCheckoutParent);
         var loadingDiagnostics = new ImpactReplayDiagnostics(sink);
         var skipped = new List<ImpactReplayDiagnostic>();
         var unreplayable = new List<ImpactReplayDiagnostic>();
@@ -117,8 +116,8 @@ internal static class ImpactReplay
         cancellationToken.ThrowIfCancellationRequested();
         return new(floor is null ? "default" : "override", floorNames.ToArray(), records, skipped, unreplayable, cleanupErrors, gainedAttempts,
             ImpactReplayUnmappedTestClasses.Aggregate(unmappedClasses),
-            maxChangedSourceFiles is not null || records.Any(r => r.BalancedLaneOutcomes?.Count > 0)
-                ? ImpactReplayMeasurement.Create(maxChangedSourceFiles ?? 5, records) : null,
+            records.Any(r => r.BalancedLaneOutcomes?.Count > 0)
+                ? ImpactReplayMeasurement.Create(records) : null,
             guardHelpersPresent ? new ImpactReplaySourceGuardReport(guardClasses.ToArray()) : null,
             new(historyQuery.QueriedIdentities, historyReader.MetadataReads, historyReader.ParsedPaths.Count,
                 historyReader.ParsedPaths));
@@ -164,6 +163,7 @@ internal static class ImpactReplay
             var manifest = AcceptanceManifestLocator.Resolve(checkout);
             if (!File.Exists(manifest)) throw new InvalidDataException("Historical manifest is missing.");
             var settings = AcceptanceGateEngineSettings.Load(checkout);
+            var testProjectDirectories = ChangedFileTestClassPathMapper.TestProjectDirectories(settings);
             var checkNames = settings.DeclaredDotnetTestChecks.Where(check => check.Project is { } project &&
                     Path.GetFileName(project.Replace('\\', '/')).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase))
                 .Select(check => check.Name).ToArray();
@@ -196,7 +196,7 @@ internal static class ImpactReplay
                 : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true);
             var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
             selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards,
-                out var declaredGuards, augmented.QualifiedClasses);
+                out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories);
             var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
             var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
             var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
@@ -277,7 +277,7 @@ internal static class ImpactReplay
                 ClassLevelCpuUnavailableReason: classLevel.CpuUnavailableReason,
                 DeclaredGuards: declaredGuards);
             record = ImpactReplayUnboundedSelectionMeasurement.Apply(record, checkout, productionSources,
-                testSources, classes, guards, augmented.QualifiedClasses);
+                testSources, classes, guards, augmented.QualifiedClasses, testProjectDirectories);
             return new(ImpactReplayCaseKind.Replayable, record, UnmappedClasses: attemptUnmappedClasses,
                 Gained: augmented.Gained, GuardClasses: guards?.Classes.ToArray());
         }

@@ -29,9 +29,11 @@ internal static class AuthorBriefDraftService
         string? model = null;
         var kind = "failed";
         string? staleReason = null;
+        string? staleKind = null;
         string? rawOutputPath = null;
         int? rawOutputBytes = null;
         IReadOnlyList<string> evidenceReferences = [];
+        IReadOnlyList<string> implementingCommits = [];
         IReadOnlyList<AuthorBriefDraftCheck> checks = [];
         var rounds = new List<AuthorBriefDraftRoundRecord>();
         var roundCount = 0;
@@ -113,6 +115,8 @@ internal static class AuthorBriefDraftService
             kind = result.Kind;
             staleReason = result.Reason;
             evidenceReferences = result.EvidenceReferences;
+            staleKind = result.StaleKind;
+            implementingCommits = result.ImplementingCommits;
             if (kind == "stale")
             {
                 rounds.Add(new(1, false, null, "stale", staleReason));
@@ -120,7 +124,7 @@ internal static class AuthorBriefDraftService
                 try
                 {
                     AuthorStaleRetirement.Retire(new BacklogStore(workspace.BacklogStorePath), item.Id,
-                        staleReason ?? "", evidenceReferences,
+                        staleReason ?? "", evidenceReferences, staleKind, implementingCommits,
                         candidate => seams.Repository.IsAncestorOfMain(candidate, mainHead!), cancellationToken);
                 }
                 catch (Exception ex)
@@ -175,23 +179,27 @@ internal static class AuthorBriefDraftService
             // Ordinary Author receipts retain their CLI contract; board-fill metadata is opt-in.
             object receipt = includeBoardFillMetadata || trackedEdits is not null ? rawOutputPath is null ? new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences,
+                staleKind, implementingCommits, failure, model,
                 failureKind, holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason,
                 heldPaths = trackedEdits?.Paths,
                 rounds, roundCount, backlogCoverage
             } : new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences,
+                staleKind, implementingCommits, failure, model,
                 rawOutputPath, rawOutputBytes, failureKind,
                 holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason, heldPaths = trackedEdits?.Paths,
                 rounds, roundCount, backlogCoverage
             } : rawOutputPath is null ? new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences,
+                staleKind, implementingCommits, failure, model,
                 rounds, roundCount, backlogCoverage
             } : new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences,
+                staleKind, implementingCommits, failure, model,
                 rawOutputPath, rawOutputBytes,
                 rounds, roundCount, backlogCoverage
             };

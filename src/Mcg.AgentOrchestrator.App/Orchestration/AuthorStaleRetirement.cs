@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,11 +7,9 @@ internal static class AuthorStaleRetirement
 {
     internal const string Tag = "author-refused";
 
-    private static readonly Regex CommitReference = new(
-        @"(?<![0-9A-Fa-f])[0-9A-Fa-f]{7,40}(?![0-9A-Fa-f])", RegexOptions.CultureInvariant);
-
     internal static void Retire(BacklogStore store, string itemId, string reason,
-        IReadOnlyList<string> evidence, Func<string, bool> isAncestorOfMain,
+        IReadOnlyList<string> evidence, string? staleKind, IReadOnlyList<string> implementingCommits,
+        Func<string, bool> isAncestorOfMain,
         CancellationToken cancellationToken = default)
     {
         var note = reason + (evidence.Count == 0 ? "" : Environment.NewLine + "Evidence:" +
@@ -23,10 +20,10 @@ internal static class AuthorStaleRetirement
 
         var tags = current.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
         var refused = tags.Contains(Tag, StringComparer.OrdinalIgnoreCase);
-        var candidates = new[] { reason }.Concat(evidence)
-            .SelectMany(text => CommitReference.Matches(text).Select(match => match.Value.ToLowerInvariant()))
-            .Distinct(StringComparer.Ordinal);
-        if (candidates.Any(isAncestorOfMain))
+        if (staleKind == "delivered" && implementingCommits.Count > 0 &&
+            implementingCommits.All(AuthorBriefDraftResultParser.IsImplementingCommitId) &&
+            implementingCommits.Select(commit => commit.ToLowerInvariant())
+                .Distinct(StringComparer.Ordinal).All(isAncestorOfMain))
         {
             store.CloseAsync(itemId, reason, cancellationToken).GetAwaiter().GetResult();
             // Reopening a closed item must not require a separate refusal-tag removal.

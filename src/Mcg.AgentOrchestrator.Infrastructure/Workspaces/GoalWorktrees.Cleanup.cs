@@ -312,6 +312,7 @@ public static partial class GoalWorktrees
         }
 
         GitCli.GitResult? branchRemoval = null;
+        string? archiveEvidence = null;
         if (hasBranch)
         {
             if (!forceTerminalCleanup &&
@@ -323,6 +324,22 @@ public static partial class GoalWorktrees
                     path,
                     Directory.Exists(path) ? hooks.FindLockHoldersForCleanup(path) : [],
                     ConductorRetryCommand(goalId));
+            }
+
+            if (forceTerminalCleanup)
+            {
+                var archive = GoalBranchArchive.PreserveUnmergedTip(
+                    executionDirectory, goalId, branch, () => cleanupBudget.RemainingMilliseconds);
+                if (archive.Failure is not null)
+                {
+                    return new GoalWorktreeRemoveResult(
+                        $"Workspace cleanup aborted; branch {branch} kept because {archive.Failure}.",
+                        path,
+                        Directory.Exists(path) ? hooks.FindLockHoldersForCleanup(path) : [],
+                        ConductorRetryCommand(goalId));
+                }
+
+                archiveEvidence = archive.Evidence;
             }
 
             branchRemoval = expectedSupersededBranchTip is not null
@@ -369,12 +386,16 @@ public static partial class GoalWorktrees
             var completeMessage = branchRemoval is { ExitCode: 0 }
                 ? expectedSupersededBranchTip is not null
                     ? $"Removed workspace and superseded branch {branch}."
-                    : $"Removed workspace and merged branch {branch}."
+                    : archiveEvidence is not null
+                        ? $"Removed workspace and unmerged branch {branch}. {archiveEvidence}"
+                        : $"Removed workspace and merged branch {branch}."
                 : "Removed workspace.";
             var incompleteMessage = branchRemoval is { ExitCode: 0 }
                 ? expectedSupersededBranchTip is not null
                     ? $"Removed workspace and superseded branch {branch}, but leftover directory cleanup is incomplete."
-                    : $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
+                    : archiveEvidence is not null
+                        ? $"Removed workspace and unmerged branch {branch}, but leftover directory cleanup is incomplete. {archiveEvidence}"
+                        : $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
                 : "Removed workspace, but leftover directory cleanup is incomplete.";
             var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, hooks);
             ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup, hooks);
@@ -393,7 +414,8 @@ public static partial class GoalWorktrees
         var branchCleanupBackoff = TryGetCleanupBackoff(path, hooks);
         return new GoalWorktreeRemoveResult(
             $"Removed workspace; branch {branch} kept because branch deletion failed. Conductor retry: {ConductorRetryCommand(goalId)}" +
-                (branchCleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(branchCleanupBackoff)}"),
+                (branchCleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(branchCleanupBackoff)}") +
+                (archiveEvidence is null ? string.Empty : $" {archiveEvidence}"),
             path,
             [],
             ConductorRetryCommand(goalId),

@@ -150,9 +150,19 @@ internal sealed partial class ConductorBoardFillHost
                 $" fileable={assessment.Fileable.ToString().ToLowerInvariant()} depends=" +
                 (assessment.Scope.Depends.Count == 0 ? "none" : string.Join(',', assessment.Scope.Depends.Select(dependency =>
                     dependency.GoalId[..Math.Min(8, dependency.GoalId.Length)])));
+            detail += " reasons=" + FormatDraftReasons(assessment.FailingReasons);
             if (_events.AppendRequired("board-fill-draft", null, detail, round.FinishedAt, "board-fill-" + round.Id))
                 _store.MarkReported(round.Id);
         }
+    }
+
+    private static string FormatDraftReasons(IReadOnlyList<string> reasons)
+    {
+        if (reasons.Count == 0) return "none";
+        var joined = string.Join("; ", reasons.Select(reason => reason.Replace("\r\n", " ")
+            .Replace('\r', ' ').Replace('\n', ' ').Replace('\u0085', ' ')
+            .Replace('\u2028', ' ').Replace('\u2029', ' ')));
+        return joined.Length > 400 ? joined[..400] + "..." : joined;
     }
 
     internal void Stop()
