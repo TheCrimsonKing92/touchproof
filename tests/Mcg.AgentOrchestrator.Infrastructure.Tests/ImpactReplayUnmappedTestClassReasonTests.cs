@@ -33,7 +33,6 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
     [Fact]
     public void AmbiguousClassWithLanesKeepsResolvedSelection()
     {
-        // Keep the collision outside the changed frontier, which independently rejects ambiguous declarations.
         using var fixture = new ImpactReplayFixture(initialTestFiles: new Dictionary<string, string>
         {
             ["Nested/AlphaTests.cs"] = "namespace SampleTests.Nested; public class AlphaTests { [Xunit.Fact] public void Works() { } }"
@@ -57,22 +56,26 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
     }
 
     [Fact]
-    public void WideSourceChangeAbandonsForUnmappedAmbiguousClass()
+    public void WideSourceChangeWithAmbiguousClassKeepsResolvedSelection()
     {
         using var fixture = new ImpactReplayFixture(changedSourceCount: 6, changedTestFiles: new Dictionary<string, string>
         {
             ["Nested/AlphaTests.cs"] = "namespace SampleTests.Nested; public class AlphaTests { [Xunit.Fact] public void Works() { } }"
         });
-        fixture.AddAttempt("source-bound");
+        fixture.AddAttempt("wide-resolved");
 
         var (report, _) = fixture.Run();
 
         var attempt = Assert.Single(report.Attempts);
-        Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("UnmappedTestClass", attempt.DegradationKind);
-        Assert.Empty(attempt.SkippedLanes);
+        Assert.Equal(6, attempt.ChangedFiles.Count(path => path.StartsWith("src/", StringComparison.Ordinal)));
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Nested/AlphaTests.cs", attempt.ChangedFiles);
+        Assert.Equal(new[] { "AlphaTests" }, attempt.SelectedTestClasses);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
+        Assert.Equal(new[] { "Beta lane" }, attempt.SkippedLanes);
         var diagnostic = Assert.Single(report.UnmappedTestClasses!.Occurrences);
-        Assert.Equal("source-bound", diagnostic.AttemptId);
+        Assert.Equal("wide-resolved", diagnostic.AttemptId);
         Assert.Equal("AlphaTests", diagnostic.Class);
         Assert.Equal("ambiguous", diagnostic.Reason);
         Assert.Equal(new[] { "SampleTests.AlphaTests", "SampleTests.Nested.AlphaTests" }, diagnostic.FullNames);
