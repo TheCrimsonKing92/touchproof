@@ -10,25 +10,31 @@ internal sealed class PreTesterGuardSelections
     private readonly IReadOnlyList<FindingEvidenceSelection> _guardSelections;
     private readonly IReadOnlyList<FindingEvidenceSelection> _cliSelections;
     private readonly IReadOnlyList<FindingEvidenceSelection> _coupledSelections;
+    private readonly IReadOnlyList<FindingEvidenceSelection> _reverseDependencySelections;
+    private readonly bool _hasShippingSourceChanges;
     internal IReadOnlyList<FindingEvidenceSelection> Selections { get; }
     internal IReadOnlyList<string> NotRun => _changedFileGuards.NotRun;
 
     private PreTesterGuardSelections(DeveloperDeferredTestSelection changedFileGuards,
         IReadOnlyList<FindingEvidenceSelection> selections, IReadOnlyList<FindingEvidenceSelection> cliSelections,
-        IReadOnlyList<FindingEvidenceSelection> coupledSelections)
+        IReadOnlyList<FindingEvidenceSelection> coupledSelections,
+        IReadOnlyList<FindingEvidenceSelection> reverseDependencySelections, bool hasShippingSourceChanges)
     {
         _changedFileGuards = changedFileGuards;
         _guardSelections = selections;
         Selections = selections.Concat(cliSelections).Concat(coupledSelections).Distinct().ToArray();
         _cliSelections = cliSelections;
         _coupledSelections = coupledSelections;
+        _reverseDependencySelections = reverseDependencySelections;
+        _hasShippingSourceChanges = hasShippingSourceChanges;
     }
 
     internal static PreTesterGuardSelections Create(PreTesterChangedFileGuardClasses cache,
         string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
         Action<string>? progress = null, AcceptanceGateEngineSettings? settings = null,
         IReadOnlyList<string>? priorSelections = null,
-        Func<string, string, IReadOnlyList<string>?>? structuralPathReader = null)
+        Func<string, string, IReadOnlyList<string>?>? structuralPathReader = null,
+        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null)
     {
         var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
         foreach (var selection in changedFileGuards.Selections)
@@ -51,9 +57,15 @@ internal sealed class PreTesterGuardSelections
         foreach (var reason in coupled.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
+        var reverse = PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress, reverseDependencySelector);
+        foreach (var reason in reverse.Provenance)
+            (progress ?? Console.WriteLine)(
+                $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
         return new(changedFileGuards, PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
             .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
-            .Concat(changedFileGuards.Selections).ToArray(), cli.Selections, coupled.Selections);
+            .Concat(changedFileGuards.Selections).ToArray(), cli.Selections,
+            coupled.Selections.Concat(reverse.Selections).Distinct().ToArray(), reverse.Selections,
+            PreTesterReverseDependencySelections.ShippingSourcePaths(changedPaths).Length != 0);
     }
 
     internal static string ReadMainRevision(string worktreePath, OrchestratorWorkspace? workspace)
@@ -92,6 +104,10 @@ internal sealed class PreTesterGuardSelections
         selected.AddRange(normalizedCoupled.Selections);
         notRun.AddRange(normalizedCoupled.NotRun.Where(name => prior?.Outcome != "started" ||
             prior.NotRun.Contains(name, StringComparer.Ordinal)));
+        // Recordings have no provenance field. Keep their Infrastructure block authoritative
+        // when dependency recomputation returns fewer classes or becomes unavailable.
+        if (started && _hasShippingSourceChanges)
+            selected.AddRange(PreTesterReverseDependencySelections.RecordedSelections(prior!.Selections));
         return new(RetainStartedSelections(selected,
             prior?.Outcome == "started" ? prior.Selections : null, format), notRun);
     }
@@ -146,7 +162,9 @@ internal sealed class PreTesterGuardSelections
         Func<IReadOnlyList<string>, bool> otherFailuresAreInsideChanges)
     {
         var otherFailures = failures.Where(test => !PreTesterChangedFileGuardClasses.ContainsClass(
-            _changedFileGuards.Selections, AcceptanceTestSourceResolver.ExtractClassName(test))).ToArray();
+            _changedFileGuards.Selections, AcceptanceTestSourceResolver.ExtractClassName(test)) &&
+            !PreTesterChangedFileGuardClasses.ContainsClass(
+                _reverseDependencySelections, AcceptanceTestSourceResolver.ExtractClassName(test))).ToArray();
         return otherFailures.Length == 0 || otherFailuresAreInsideChanges(otherFailures);
     }
 }
