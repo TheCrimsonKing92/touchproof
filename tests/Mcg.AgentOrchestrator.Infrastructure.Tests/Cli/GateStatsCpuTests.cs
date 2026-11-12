@@ -7,23 +7,25 @@ using Xunit;
 public sealed class GateStatsCpuTests : CliTaskQueryTestSupport
 {
     [Fact]
-    public void Cpu_RanksCombinedTotalsAndShowsBothComponentsAcrossGates()
+    public void Cpu_RanksByChildCpuAndShowsActiveShareAcrossGates()
     {
         using var fixture = new Fixture();
-        fixture.Write("one", 1, "alpha", Line("A", "10.125", "0.250"), Line("B", "0", "50"));
-        fixture.Write("one", 1, "beta", Line("A", "0.125", "1.250"));
+        fixture.Write("one", 1, "alpha", Line("A", "10.125", "0.250"), Line("Z", "0", "99999"), Line("B", "0", "95000"));
+        fixture.Write("one", 1, "beta", Line("A", "0.125", "1.250"), Line("D", "0.200", "0"));
         fixture.Write("two", 2, "alpha", Line("A", "2.250", "0"), Line("C", "25", "25"));
         fixture.Write("two", 2, "legacy");
         Assert.Equal(new[]
         {
-            "class=B\tgates=1\tcpu_ms_total=50.000\tchild_cpu_ms=0.000\tinproc_cpu_ms_apportioned=50.000",
-            "class=C\tgates=1\tcpu_ms_total=50.000\tchild_cpu_ms=25.000\tinproc_cpu_ms_apportioned=25.000",
-            "class=A\tgates=2\tcpu_ms_total=14.000\tchild_cpu_ms=12.500\tinproc_cpu_ms_apportioned=1.500",
+            "class=C\tgates=1\tchild_cpu_ms=25.000\tinproc_active_share_ms=25.000",
+            "class=A\tgates=2\tchild_cpu_ms=12.500\tinproc_active_share_ms=1.500",
+            "class=D\tgates=1\tchild_cpu_ms=0.200\tinproc_active_share_ms=0.000",
+            "class=B\tgates=1\tchild_cpu_ms=0.000\tinproc_active_share_ms=95000.000",
+            "class=Z\tgates=1\tchild_cpu_ms=0.000\tinproc_active_share_ms=99999.000",
             "attempts=2\tskipped=1"
         }, fixture.Report());
         Assert.Equal(new[]
         {
-            "class=C\tgates=1\tcpu_ms_total=50.000\tchild_cpu_ms=25.000\tinproc_cpu_ms_apportioned=25.000",
+            "class=C\tgates=1\tchild_cpu_ms=25.000\tinproc_active_share_ms=25.000",
             "attempts=1\tskipped=1"
         }, fixture.Report("--last", "1", "--top", "1"));
     }
@@ -39,7 +41,7 @@ public sealed class GateStatsCpuTests : CliTaskQueryTestSupport
         using var holder = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         Assert.Equal(new[]
         {
-            "class=A\tgates=1\tcpu_ms_total=3.750\tchild_cpu_ms=1.250\tinproc_cpu_ms_apportioned=2.500",
+            "class=A\tgates=1\tchild_cpu_ms=1.250\tinproc_active_share_ms=2.500",
             "attempts=1\tskipped=6"
         }, fixture.Report());
     }
@@ -53,7 +55,7 @@ public sealed class GateStatsCpuTests : CliTaskQueryTestSupport
         fixture.Write("two", 1, "alpha", Line("A", "3", "0"));
         Assert.Equal(new[]
         {
-            "class=A\tgates=2\tcpu_ms_total=6.000\tchild_cpu_ms=6.000\tinproc_cpu_ms_apportioned=0.000",
+            "class=A\tgates=2\tchild_cpu_ms=6.000\tinproc_active_share_ms=0.000",
             "attempts=2\tskipped=0"
         }, fixture.Report());
     }

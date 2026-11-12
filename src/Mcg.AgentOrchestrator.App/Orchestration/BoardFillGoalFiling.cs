@@ -20,7 +20,7 @@ internal sealed record BoardFillIntakeResult(string Kind, string? GoalId, string
     int ExitCode, string Reason = "ok");
 internal sealed record BoardFillGoalBoard(int NonTerminalCount, IReadOnlySet<string> LinkedBacklogItemIds);
 internal sealed record BoardFillFilingSeams(IBoardFillGoalIntake Intake, Func<BoardFillGoalBoard> Board,
-    Func<string?> MainHead);
+    Func<string?> MainHead, Func<string, string, IReadOnlyList<string>?> ChangedPaths);
 internal sealed record BoardFillDependencyResult(string GoalId, bool Applied, string Stdout, string Stderr, int ExitCode);
 internal sealed record BoardFillFilingAttempt(string Id, string RequestKey, DateTimeOffset StartedAt,
     DateTimeOffset? FinishedAt = null, string? Result = null, string Reason = "pending", string? GoalId = null,

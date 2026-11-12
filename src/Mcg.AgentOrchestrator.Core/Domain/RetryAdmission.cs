@@ -346,7 +346,8 @@ public static class RetryContextFingerprintFactory
         PaidRouteClassification paidRoute,
         string? reviewedCandidateSha,
         string? baseIdentity,
-        string? mainIdentity)
+        string? mainIdentity,
+        IEnumerable<HumanInputRequest>? humanInputRequests = null)
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(task);
@@ -415,7 +416,7 @@ public static class RetryContextFingerprintFactory
             findingIdentities,
             evidenceIdentities,
             retryFeedback,
-            authoritativeDecisions,
+            authoritativeDecisions.Concat(AnsweredHumanInputRetryContext.Select(goal, task, humanInputRequests ?? [])).ToArray(),
             baseIdentity,
             mainIdentity));
     }

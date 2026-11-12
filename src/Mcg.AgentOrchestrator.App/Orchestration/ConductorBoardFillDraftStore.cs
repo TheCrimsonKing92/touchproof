@@ -73,7 +73,7 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
         throw new InvalidOperationException("Cannot report an unfinished board-fill round."));
 
     internal int StartedOnUtcDay(DateTimeOffset now) =>
-        ReadAll().Count(round => round.Outcome != "held" && round.StartedAt.UtcDateTime.Date == now.UtcDateTime.Date);
+        BoardFillDailyAllowance.Count(ReadAll(), now);
 
     internal void MarkHoldStartReported(string id) => Update(id, current => current with { HoldStartReported = true });
 

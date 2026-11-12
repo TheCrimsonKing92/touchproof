@@ -877,6 +877,34 @@ Success appends `ADOPTED_BUILD_PUSHED commit=<sha> remote=<name> added_lines=<co
 
 For an operator retry after resolving the hold, run `push-adopted <commit> [--remote <name>] [--branch <name>]`. Defaults are `origin` and the workspace integration branch. This explicit command uses the same scanner and service and does not require the automatic switch. Exit 0 means pushed and independently verified; exit 1 means held or invalid arguments. Review the attention item and conduct events before retrying, and retain bounded publication evidence in the existing goal/operator records. Do not waive a finding, repair history, force-push or broaden the destination through this verb.
 
+### 6.2.5 Multi-repository goals
+
+1. **Declare repositories.** Use plain `goal` mode with one `--repositories default,<key>[,<key>...]` flag. Include `default` for the home repository and use registered project names for the other keys; choose this mode when creating a multi-repository goal instead of the simple, run or backlog intake modes. For a prepared brief, run `goal --brief-file <path> --repositories default,<key>` through `scripts/Invoke-OrchestratorCommand.ps1`.
+
+2. **Scope each repository.** In the brief's `## Scope` section, put paths relative to their own repository under a label on its own line. Use `In scope:` for home and `In scope, <description> (key <key>):` for another declared key. For example, replace `companion` with the registered key:
+
+   ```text
+   ## Scope
+   In scope:
+   - `src/HomeFile.cs`
+   In scope, companion repository (key companion):
+   - new `src/CompanionFile.cs`
+   ```
+
+   Put the whole word `new` before each not-yet-existing path on the same line, under that repository's own label. Scope resolution keeps existing paths or paths declared new for that key. If intake warns that a scope key is undeclared, correct the label to a declared key and resubmit the scope; that block's paths were ignored.
+
+3. **Request evidence and review every candidate.** Have the Tester set `repository` to the declared key in its `evidence_request`, alongside the `selections` entries containing `test_project` and `test_class`. The conductor routes this request using that repository's own engine settings; an omitted key or `default` selects home. If refused with a declared-key list, correct the key; if the target is unavailable, resolve the named target failure before requesting again. The Reviewer reads `diff-summary.<key>.md` and `diff.<key>.patch` in worker context for each non-default key. A `not yet provisioned` notice means no candidate diff is available yet; obtain the candidate artifacts before completing review. Report a missing repository artifact as a review blocker.
+
+4. **Inspect tuple landing.** Treat landing as an ordered sequence of repository landings. If it fails, inspect the `multi-repository-landing-failed` hold: it names the failing repository, the landing error, compensating commits as `key:sha`, and keys requiring manual repair. Use those receipts to inspect compensation and determine which repositories need operator repair.
+
+5. **Repair the hold.** First inspect `Manual repair required`. If it lists keys, keep the goal held and escalate those keys and the failure receipts to the operator: the repair verb refuses with `manual-repair-required` while the failure record lists any key, even after checkout repairs. If the list is empty, resolve the reported landing cause, then invoke `repair-multi-repository-landing <goal-prefix>` through `scripts/Invoke-OrchestratorCommand.ps1`. This queues repair for the next conductor tick. After successful repair, re-gate every declared repository before landing again. The registered usage is:
+
+   ```text
+   Usage: repair-multi-repository-landing <goal-prefix> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]
+   ```
+
+6. **Publish each repository.** Complete the acceptance, review, canary and applicable restart/activation prerequisites in section 6.2.4 for home adopted-build publication. That publication, including `push-adopted`, covers the home repository only. After the tuple lands, the operator pushes each other repository's landed `main` branch from its own checkout (or its configured integration branch when different).
+
 ### 6.3 Concurrency caps
 
 Build GC controls are off by default: `buildGcConserveMemory=false`, `buildGcConserveMemoryLevel=5`, and `buildGcHeapCount=0`. Conserve memory independently sets `DOTNET_GCConserveMemory` to the level when enabled; a positive heap count independently sets `DOTNET_GCHeapCount` in uppercase hexadecimal (16 becomes `10`), which acts only on Server GC processes such as csc. These keys reach worker build checks, completion and exit-reconcile builds, solo gates and focused-evidence attempts, and grouped gate attempts (cohorts and merge trains). Worker builds read the file once per invocation before the project loop, completion builds read it at each launch, and gate and focused-evidence attempts capture the adopted policy after the next tick's `POLICY_RELOAD`; existing attempts retain their snapshot and builds already running keep their environment. The conductor must run without `--policy` for file reloads. A/B three windows of similar load: **baseline** (conserve false, heap count 0), **heap count 4** (heap count 4, conserve off), and **conserve level 5** (conserve true at level 5, heap count 0). Confirm one `POLICY_RELOAD` at each switch and compare csc peak working set and build wall time per build kind (worker build check, completion build, gate lane). Revert by returning to baseline values. In the baseline, gates and completion builds still inherit whatever `DOTNET_GCConserveMemory` the conductor was launched with (`mcg-orchestrator.cmd` sets 7), while worker build checks get none; record that inheritance in each comparison. An explicit heap count may change DATAS behavior and raise memory, so measure rather than assume a reduction.

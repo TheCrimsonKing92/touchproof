@@ -57,10 +57,10 @@ internal static class CliGateStatsCpuCommand
             if (!hasCpuLine) skipped++;
         }
 
-        foreach (var pair in totals.OrderByDescending(pair => pair.Value.Child + pair.Value.InProcess)
+        foreach (var pair in totals.OrderByDescending(pair => pair.Value.Child)
                      .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(flags.GetValueOrDefault("--top", 20)))
             output.WriteLine(FormattableString.Invariant(
-                $"class={pair.Key}\tgates={pair.Value.Attempts.Count}\tcpu_ms_total={pair.Value.Child + pair.Value.InProcess:F3}\tchild_cpu_ms={pair.Value.Child:F3}\tinproc_cpu_ms_apportioned={pair.Value.InProcess:F3}"));
+                $"class={pair.Key}\tgates={pair.Value.Attempts.Count}\tchild_cpu_ms={pair.Value.Child:F3}\tinproc_active_share_ms={pair.Value.InProcess:F3}"));
         output.WriteLine(FormattableString.Invariant($"attempts={attempts.Length}\tskipped={skipped}"));
     }
 

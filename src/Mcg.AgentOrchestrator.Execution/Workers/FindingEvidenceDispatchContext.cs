@@ -14,10 +14,11 @@ internal static class FindingEvidenceDispatchContext
             ? FindingEvidenceReviewContext.Capture(goal, task, candidate, dispatchedAt, includePeerEvidence) : null;
 
     internal static RetryContextFingerprint RetryFingerprint(Goal goal, TaskSpec task, string? providerName,
-        string? modelName, PaidRouteClassification paidRoute, string? priorCandidate, string? currentCandidate, string? currentMainIdentity)
+        string? modelName, PaidRouteClassification paidRoute, string? priorCandidate, string? currentCandidate, string? currentMainIdentity,
+        IEnumerable<HumanInputRequest> humanInputRequests)
     {
         var fingerprint = RetryContextFingerprintFactory.Build(goal, task, providerName, modelName, paidRoute,
-            priorCandidate, currentCandidate, currentMainIdentity);
+            priorCandidate, currentCandidate, currentMainIdentity, humanInputRequests);
         return Continuation(task) is { } continuation
             ? new RetryContextFingerprint(RetryContextFingerprint.CurrentSchemaVersion, continuation.Key)
             : fingerprint;

@@ -66,6 +66,15 @@ internal sealed partial class ConductorBoardFillHost
         {
             var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", $"{workspace.IntegrationBranch}^{{commit}}");
             return result.Succeeded ? result.Output.Trim() : null;
+        }, (from, to) =>
+        {
+            // Include the source of a rename: a citation to that path is no longer current.
+            var result = GitCli.Run(workspace.ExecutionDirectory, "diff", "--no-renames", "--name-only", from, to);
+            if (!result.Succeeded || result.DrainTimedOut) return null;
+            var paths = result.Output.Split('\n').Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0).ToArray();
+            // Git quotes paths it cannot print verbatim; do not compare an encoded path as if literal.
+            return paths.Any(path => path.StartsWith('"')) ? null : paths;
         });
     }
 

@@ -7,7 +7,7 @@ public static partial class WorkerProfileDispatcher
     private static (string Directory, string? Pointer) WriteDispatchContextArtifacts(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
         string workingDirectory, IReadOnlyList<string>? preflightFindings, string? providerName, string? modelName,
         CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt, string? orchestratorSkillDirectory, WorkerTargetHome? targetHome = null,
-        string? backlogStorePath = null)
+        string? backlogStorePath = null, string? integrationBranch = null)
     {
         var prerequisiteAnswers = kernel.HumanInputRequests
             .Where(request => request.GoalId == goal.Id && request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence
@@ -32,7 +32,7 @@ public static partial class WorkerProfileDispatcher
             orchestratorStoreRoot: resolver?.OrchestratorDirectory,
             answeredEvidenceTexts: prerequisiteAnswers.Concat(clarificationAnswers).ToArray(), clock: new DispatchContextClock(dispatchedAt),
             orchestratorSkillDirectory: orchestratorSkillDirectory, targetHome: targetHome,
-            linkedBacklogRecord: linkedBacklog?.Record);
+            linkedBacklogRecord: linkedBacklog?.Record, integrationBranch: integrationBranch);
         try
         {
             var path = Path.Combine(contextDirectory, LinkedBacklogRecordEvidence.FileName);

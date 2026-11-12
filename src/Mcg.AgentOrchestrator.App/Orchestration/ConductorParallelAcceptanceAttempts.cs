@@ -2075,7 +2075,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = "owner process was not alive, heartbeat was stale, and no terminal result artifact existed",
                 TransientFailureCount = CountConsecutiveTransientFailures(effectiveAttempt) + 1
             };
-            Persist(dead);
+            Persist(dead, emitTerminalEvent: true);
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(dead);
         }
 
@@ -2436,14 +2436,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return attempt with { MetadataPath = canonicalPath };
     }
 
-    private void Persist(ConductorParallelAcceptanceAttempt attempt)
+    private void Persist(ConductorParallelAcceptanceAttempt attempt, bool emitTerminalEvent = false)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory);
         ConductorParallelAcceptanceAttempt persisted;
         lock (MetadataWriteGate)
         {
+            var shouldEmit = emitTerminalEvent && !File.Exists(attempt.ResultPath) &&
+                TryReadAttemptFile(attempt.MetadataPath) is { Outcome: ConductorParallelAcceptanceAttemptOutcome.Running } current &&
+                current.AttemptId == attempt.AttemptId;
             persisted = attempt with { LastHeartbeatAt = _utcNow() };
             WriteAttemptFile(persisted);
+            if (shouldEmit) AppendTerminalAttemptEvent(persisted);
         }
 
         EmitEvidenceEnd(persisted);

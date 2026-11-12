@@ -32,7 +32,8 @@ public static class WorkerContextArtifacts
         IClock? clock = null,
         string? orchestratorSkillDirectory = null,
         WorkerTargetHome? targetHome = null,
-        string? linkedBacklogRecord = null)
+        string? linkedBacklogRecord = null,
+        string? integrationBranch = null)
     {
         return new WorkerArtifactWriter(orchestratorSkillDirectory, targetHome).Write(
             goal,
@@ -45,7 +46,8 @@ public static class WorkerContextArtifacts
             orchestratorStoreRoot,
             answeredEvidenceTexts,
             clock,
-            linkedBacklogRecord);
+            linkedBacklogRecord,
+            integrationBranch);
     }
 
     public static IReadOnlyList<WorkerSkillRequirement> SelectSkillRequirements(

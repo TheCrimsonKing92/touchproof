@@ -204,7 +204,7 @@ public static partial class WorkerProfileDispatcher
         }
         var generatedHandoff = WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var (contextDirectory, linkedBacklogPointer) = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
-            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath);
+            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome, backlogStorePath, integrationBranch);
         var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
@@ -323,7 +323,7 @@ public static partial class WorkerProfileDispatcher
         var retryContextFingerprint = FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
-            currentMainIdentity);
+            currentMainIdentity, kernel.HumanInputRequests);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
         if (retainedDispatch is not null)
             return WorkerDispatchPromptPreparation.RecordRestoredReceipt(kernel, goal, task, retainedDispatch, contextPackageReceipt, preparation);
