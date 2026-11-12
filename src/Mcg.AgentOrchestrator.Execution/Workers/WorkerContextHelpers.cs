@@ -4,6 +4,19 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class WorkerContextHelpers
 {
+    internal static IReadOnlyList<MandatoryContextFileDescriptor>? BuildMandatoryContextFiles(
+        TaskDispatchRecord dispatch, AgentRole role) =>
+        dispatch.ContextPackageReceipt?.Sections
+            .Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile)
+            .Select(section => new MandatoryContextFileDescriptor(
+                section.LogicalIdentity,
+                section.MandatoryRelativePath ?? string.Empty,
+                section.ContentHash,
+                section.ContractVersion,
+                role,
+                section.RoleVisibility))
+            .ToArray();
+
     private static readonly HashSet<string> TypedContextPackageModelAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         AgentCatalog.OpenAiSolSubscriptionModelAlias,

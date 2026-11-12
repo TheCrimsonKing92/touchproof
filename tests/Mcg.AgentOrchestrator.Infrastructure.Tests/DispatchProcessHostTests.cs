@@ -376,7 +376,9 @@ public sealed class DispatchProcessHostTests
                 DisableSharedCompilation: false,
                 Provider: WorkerSandboxProvider.Claude,
                 ChildExitRecordPath: childExitPath,
-                HeartbeatIntervalMilliseconds: 25);
+                HeartbeatIntervalMilliseconds: 25,
+                WorktreeHeadSha: "head", DirtyStateHash: "dirty",
+                WorkerTaskId: "task", DispatchAttemptAt: DateTimeOffset.UtcNow);
             var parametersPath = Path.Combine(dir, "dispatch.json");
             DispatchProcessHost.WriteParameters(parametersPath, parameters);
 
@@ -431,6 +433,15 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(heartbeatChildPid, childExit.RootElement.GetProperty("processId").GetInt32());
             Assert.Equal(23, childExit.RootElement.GetProperty("exitCode").GetInt32());
             Assert.Equal("exited", childExit.RootElement.GetProperty("state").GetString());
+            var integrity = childExit.RootElement.GetProperty("workerIntegrity");
+            Assert.Equal("task", integrity.GetProperty("taskId").GetString());
+            Assert.Equal(parameters.DispatchAttemptAt, integrity.GetProperty("dispatchAttemptAt").GetDateTimeOffset());
+            Assert.Equal("head", integrity.GetProperty("worktreeHeadSha").GetString());
+            Assert.Equal("dirty", integrity.GetProperty("dirtyStateHash").GetString());
+            Assert.NotEqual(heartbeatChildPid, integrity.GetProperty("identity").GetProperty("processId").GetInt32());
+            Assert.Equal(heartbeatChildPid, integrity.GetProperty("completionChildProcessId").GetInt32());
+            Assert.False(string.IsNullOrWhiteSpace(integrity.GetProperty("diagnostic").GetString()));
+            if (OperatingSystem.IsWindows()) Assert.Contains(integrity.GetProperty("low").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         }
         finally
         {

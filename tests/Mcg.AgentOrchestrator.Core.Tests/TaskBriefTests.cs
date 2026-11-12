@@ -1781,6 +1781,8 @@ public sealed class TaskBriefTests
     var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
     Assert.Equal(9500, budget);
     Assert.True(fileAccessBrief.Length <= budget, $"File-access brief has {fileAccessBrief.Length} characters; ceiling is {budget}.");
+    Assert.DoesNotContain(AgentOutputDirectives.WorkerWriteDenialGuidance, fileAccessBrief, StringComparison.Ordinal);
+    Assert.Contains(AgentOutputDirectives.WorkerWriteDenialGuidance, apiBrief, StringComparison.Ordinal);
     Assert.Contains("current-task.md in the context directory", fileAccessBrief, StringComparison.Ordinal);
     Assert.Contains("inline verification output collapsed", fileAccessBrief, StringComparison.Ordinal);
     Assert.Contains("prior-task-summaries.md", fileAccessBrief, StringComparison.Ordinal);

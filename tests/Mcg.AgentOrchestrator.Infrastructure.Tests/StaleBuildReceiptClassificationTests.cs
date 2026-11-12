@@ -173,6 +173,34 @@ public sealed class StaleBuildReceiptClassificationTests : WorkerDispatchTestSup
             outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Classify_BoundDispatch_PreservesHostStaleDiagnostic(bool treeChanged)
+    {
+        var dispatchedAt = DateTimeOffset.Parse("2026-10-28T12:00:00Z");
+        const string workerError = "receipt does not cover project worker-only.csproj";
+        var marker = DispatchFailureDiagnosticMarker.FormatWorkerBuildReceiptStale(
+            treeChanged, ["src/Feature.cs"], treeChanged ? [] : ["src/Feature.csproj"]);
+        var diagnostic = treeChanged
+            ? "the build receipt does not match the final tree; files changed after build: src/Feature.cs"
+            : "receipt does not cover project src/Feature.csproj";
+        var verification = new TaskVerificationRecord("cmd", "C:\\repo", 1, "Worker output",
+            workerError + Environment.NewLine + marker, dispatchedAt.AddMinutes(1),
+            FullStandardOutput: "Worker output", FullStandardError: workerError,
+            EvidenceSource: VerificationEvidenceSource.Dispatch, DispatchAttemptAt: dispatchedAt);
+        var task = new TaskSpec(TaskId.New(), "Implement feature.", AgentRole.Developer);
+        Assert.Equal(dispatchedAt, verification.DispatchAttemptAt);
+        Assert.DoesNotContain(diagnostic, verification.AuthoritativeStandardError!, StringComparison.Ordinal);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal("worker-build-receipt-stale", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+        Assert.Equal("Worker build receipt does not match the final tree. " + diagnostic, outcome.EvidenceSummary);
+        Assert.Contains(diagnostic.Replace(';', ','), outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker-only.csproj", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FormatStaleReceipt_BothCauses_RetainsSortedDistinctPathsAndProjects()
     {

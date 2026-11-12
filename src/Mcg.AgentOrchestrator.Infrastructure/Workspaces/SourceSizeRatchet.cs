@@ -297,7 +297,7 @@ internal static class SourceSizeRatchet
             // Goal 231af3a4 moved declared-repository commit verification into its owning preparation collaborator;
             // dispatch orchestration remains above the prior ceiling by 21 lines after that extraction.
             // Goal 20accfa0 moved completed-process outcome building to CompletedProcessOutcomeBuilder.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 1934),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 1926),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

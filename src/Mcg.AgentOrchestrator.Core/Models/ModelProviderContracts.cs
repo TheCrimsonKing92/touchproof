@@ -115,6 +115,11 @@ public sealed record TaskVerificationRecord(
     public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
 
     public WorkerWriteIntegrityObservation? WriteIntegrityObservation { get; init; }
+    public WorkerWriteIntegrityEvidence? WriteIntegrityEvidence { get; init; }
+    public bool WriteIntegrityEvidenceConflict { get; init; }
+
+    public IReadOnlyList<WorkerWriteIntegrityObservation> GetWriteIntegrityObservations() =>
+        WriteIntegrityEvidence?.Observations ?? (WriteIntegrityObservation is { } singular ? [singular] : []);
 
     public bool Succeeded => ExitCode == 0 && string.IsNullOrWhiteSpace(OrchestratorFailureReason);
 
@@ -156,6 +161,12 @@ public sealed record TaskVerificationRecord(
         {
             ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
             WriteIntegrityObservation = preferred.WriteIntegrityObservation ?? WriteIntegrityObservation,
+            WriteIntegrityEvidence = preferred.WriteIntegrityEvidence ?? WriteIntegrityEvidence,
+            WriteIntegrityEvidenceConflict = WriteIntegrityEvidenceConflict || preferred.WriteIntegrityEvidenceConflict ||
+                WriteIntegrityObservation is not null && preferred.WriteIntegrityObservation is not null &&
+                    WriteIntegrityObservation != preferred.WriteIntegrityObservation ||
+                WriteIntegrityEvidence is not null && preferred.WriteIntegrityEvidence is not null &&
+                    !JsonContentEquals(WriteIntegrityEvidence, preferred.WriteIntegrityEvidence),
             CandidateIdentity = preferred.CandidateIdentity ?? CandidateIdentity,
             AcceptanceCriteriaVersionHash = preferred.AcceptanceCriteriaVersionHash ?? AcceptanceCriteriaVersionHash,
             InconclusiveRoundInputs = InconclusiveRoundInputs ?? preferred.InconclusiveRoundInputs,

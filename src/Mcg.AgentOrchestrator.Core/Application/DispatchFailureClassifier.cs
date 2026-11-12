@@ -595,13 +595,20 @@ public static class DispatchFailureClassifier
         }
 
         if (task.RequiredRole == AgentRole.Developer &&
-            verification.WriteIntegrityObservation is { EstablishesAboveLow: true } writeIntegrity)
+            verification.WriteIntegrityEvidence is { } writeIntegrity && writeIntegrity.EstablishesAllTargets(task, verification) &&
+            providerFailureKind == ProviderFailureKind.Unknown &&
+            string.IsNullOrWhiteSpace(verification.OrchestratorFailureReason) &&
+            !TryGetOrchestratorAuthoredFailure(verification, out _) &&
+            !(WorkerResultBlockers.TryGetTestsStatus(verification, out var writeTestsStatus) && writeTestsStatus == WorkerResultBlockers.TestsStatus.Fail) &&
+            !WorkerResultBlockers.TryFindUnstructuredFailingTests(verification, out _) &&
+            !OutsideRootWriteRefusalClassification.TryFindExternalWrite(task, verification, out _) &&
+            !DispatchEvidenceSummaries.HasScriptingFailureEvidence(verification))
         {
             return BuildOutcome(TaskOutcomeRules.WorkerWriteIntegrityBlocked, task, verification,
                 workerResultPresent, hasCommittedChanges,
                 new DispatchOutcome(DispatchOutcomeKind.UnknownFailure, exitCode, hasZeroByteOutput,
                     null, null, RecoveryRecommendation.OperatorNeeded,
-                    $"Worker write integrity blocked: path={writeIntegrity.WorktreeRelativePath} label={writeIntegrity.ObservedLabel}"));
+                    $"Worker write integrity blocked: {string.Join("; ", writeIntegrity.Observations.Select(observation => $"path={observation.WorktreeRelativePath} label={observation.ObservedLabel}"))}"));
         }
 
         if (task.RequiredRole == AgentRole.Developer &&
@@ -1106,7 +1113,9 @@ public static class DispatchFailureClassifier
         }
         if (failure.Rule == TaskOutcomeRules.WorkerBuildReceiptStale)
         {
-            var diagnostic = DispatchEvidenceSummaries.GetSubstantiveStandardErrorLines(verification).LastOrDefault(line =>
+            // Completion appends this host diagnostic after capturing authoritative worker stderr.
+            // Read the same channel as the authored marker, retaining the current dispatch binding.
+            var diagnostic = DispatchEvidenceSummaries.SplitEvidenceLines(verification.StandardError).LastOrDefault(line =>
                 line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildReceiptTreeChanged, StringComparison.Ordinal) ||
                 line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildReceiptUncoveredProject, StringComparison.Ordinal));
             return diagnostic is null ? description : $"{description} {DispatchEvidenceSummaries.TruncateEvidence(diagnostic)}";

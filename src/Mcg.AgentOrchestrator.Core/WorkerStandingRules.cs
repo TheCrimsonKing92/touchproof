@@ -62,6 +62,8 @@ public static class WorkerStandingRules
         var lines = role == AgentRole.Planner
             ? new[] { "## Planner Standing Rules", AgentOutputDirectives.PlannerStandingRules }
             : RenderBriefSection(role, stack: stack);
+        if (role == AgentRole.Developer)
+            lines = [.. lines, "## Write-denial reports", AgentOutputDirectives.WorkerWriteDenialGuidance];
         Directory.CreateDirectory(contextDirectory);
         File.WriteAllText(Path.Combine(contextDirectory, fileName), string.Join(Environment.NewLine, lines));
     }

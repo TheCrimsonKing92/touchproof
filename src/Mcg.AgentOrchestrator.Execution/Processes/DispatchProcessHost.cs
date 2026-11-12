@@ -95,13 +95,29 @@ public static class DispatchProcessHost
         bool OptOutExecutionThrottling = false,
         NodeDependencyInstall? NodeDependencyInstall = null,
         [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-        IReadOnlyList<GoalRepositoryWorkerPreparation.Target>? RepositoryWorktrees = null);
+        IReadOnlyList<GoalRepositoryWorkerPreparation.Target>? RepositoryWorktrees = null,
+        string? WorkerTaskId = null,
+        DateTimeOffset? DispatchAttemptAt = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
         int? ExitCode,
         DateTimeOffset RecordedAt,
-        string State = "exited");
+        string State = "exited",
+        WorkerExecutionIntegrityObservation? WorkerIntegrity = null);
+
+    // Native evidence captured from the host-launched worker handle while it is live in our job.
+    // Nullable Low distinguishes an unavailable query from a conclusive non-Low token.
+    public sealed record WorkerExecutionIntegrityObservation(
+        string? TaskId,
+        DateTimeOffset? DispatchAttemptAt,
+        string? WorktreeHeadSha,
+        string? DirtyStateHash,
+        SpawnProcessIdentity? Identity,
+        DateTimeOffset ObservedAt,
+        bool? Low,
+        string Diagnostic,
+        int? CompletionChildProcessId = null);
 
     public sealed record DispatchPrepRecord(
         string Kind,
@@ -1528,6 +1544,7 @@ public static void DropToLow() {
         }
         WorkerBuildRequestChannel? buildChannel = null;
         Process? selectedChild = null;
+        WorkerExecutionIntegrityObservation? workerIntegrity = null;
         var selectedChildLock = new object();
         var diagnosticLock = new object();
         var loggedHeartbeatFailures = new HashSet<Type>();
@@ -1648,6 +1665,11 @@ public static void DropToLow() {
                         _ = observedChild.SafeHandle;
                         selectedChild?.Dispose();
                         selectedChild = observedChild;
+                        // The selected child may be a compiler or other tool. Query the actual
+                        // launched worker, once, after it has begun spawning its command children.
+                        workerIntegrity ??= WorkerWriteIntegrityObservationProducer.CaptureLaunch(
+                            worker, parameters,
+                            child => workerGroup?.Contains(child.SafeHandle) == true);
                     }
                     catch
                     {
@@ -1704,7 +1726,8 @@ public static void DropToLow() {
                                 childProcessId,
                                 childExitCode,
                                 DateTimeOffset.UtcNow,
-                                state),
+                                state,
+                                workerIntegrity is null ? null : workerIntegrity with { CompletionChildProcessId = childProcessId }),
                             JsonOptions));
                 }
                 catch (Exception ex)

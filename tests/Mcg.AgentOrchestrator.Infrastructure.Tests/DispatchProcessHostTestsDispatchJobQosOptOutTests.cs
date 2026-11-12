@@ -119,10 +119,13 @@ public sealed class DispatchProcessHostTestsDispatchJobQosOptOutTests : WorkerDi
             Assert.Equal(first.Provider, second.Provider);
             Assert.Equal(first.SandboxInstanceName, second.SandboxInstanceName);
             Assert.Equal(first.MandatoryContextFiles, second.MandatoryContextFiles);
-            // Independent dispatches have different artifact paths; preserve every behavioral member.
+            Assert.All(new[] { first.WorkerTaskId, second.WorkerTaskId }, id => Assert.False(string.IsNullOrEmpty(id)));
+            Assert.NotEqual(first.WorkerTaskId, second.WorkerTaskId);
+            // Independent dispatches have different task ids and artifact paths; preserve every behavioral member.
             Assert.Equal(second, first with
             {
                 OptOutExecutionThrottling = false,
+                WorkerTaskId = second.WorkerTaskId,
                 StdoutPath = second.StdoutPath,
                 StderrPath = second.StderrPath,
                 ExitCodePath = second.ExitCodePath,

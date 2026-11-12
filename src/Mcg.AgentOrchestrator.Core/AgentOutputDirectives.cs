@@ -65,6 +65,15 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLines =>
         WorkerResultTemplateLinesForRole(null);
 
+    public const string WorkerWriteDenialExample = "blockers: exact-blocker - write-denials [{\"kind\":\"filesystem-write-denied\",\"path\":\"src/Feature.cs\",\"osDiagnostic\":\"Access is denied. (os error 5)\"},{\"kind\":\"filesystem-write-denied\",\"path\":\"src/Other.cs\",\"osDiagnostic\":\"Access is denied. (os error 5)\"}]";
+
+    public const string WorkerWriteDenialGuidance =
+        "Developer: for multiple denied writes, use one exact-blocker write-denials JSON array on the blockers line, with 1-8 entries. " +
+        "For each entry assert kind=filesystem-write-denied, its exact worktree-relative path including directory (or absolute path), and the actual nonempty OS diagnostic in osDiagnostic. " +
+        "JSON-escape paths and diagnostics; keep each path within 1024 characters, each diagnostic within 2048 characters, and the blockers value within 16384 characters. " +
+        "Report every denied target once. Use the actual attempted paths and diagnostics in this example: " + WorkerWriteDenialExample +
+        " The host independently establishes target labels and actual Low execution. Existing single-target Cannot write <path> reports remain supported.";
+
     public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role, string? contextDirectory = null)
     {
         var lines = new List<string>();
@@ -73,6 +82,9 @@ public static class AgentOutputDirectives
             lines.Add(
                 "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.");
             lines.Add("Developer: if the build host returned a queue deadline, a compile deadline or an apparatus failure and printed no compiler error, that is not a code blocker; finish the edits, put the host message and invocation id in `commands`, keep `blockers: none`, and set `assigned_scope_complete` from the edits alone; the conductor then builds the candidate.");
+            // File-access workers receive the complete procedure in the existing standing-rules artifact.
+            if (string.IsNullOrWhiteSpace(contextDirectory))
+                lines.Add(WorkerWriteDenialGuidance);
         }
         else if (role == AgentRole.Planner)
         {

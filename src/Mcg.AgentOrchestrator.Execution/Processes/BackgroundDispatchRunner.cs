@@ -353,21 +353,13 @@ public sealed partial class BackgroundDispatchRunner
             PrepExitCodePath: prepExitCodePath,
             ChildExitRecordPath: childExitRecordPath,
             HostDiagnosticPath: hostDiagnosticPath,
-            MandatoryContextFiles: dispatch.ContextPackageReceipt?.Sections
-                .Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile)
-                .Select(section => new MandatoryContextFileDescriptor(
-                    section.LogicalIdentity,
-                    section.MandatoryRelativePath ?? string.Empty,
-                    section.ContentHash,
-                    section.ContractVersion,
-                    task.RequiredRole,
-                    section.RoleVisibility))
-                .ToArray(),
+            MandatoryContextFiles: WorkerContextHelpers.BuildMandatoryContextFiles(dispatch, task.RequiredRole),
             ClaudeCredentialSelection: credentialSelection,
             TaskIntentAdmission: taskIntentAdmission,
             StartGatePath: startGatePath, OptOutExecutionThrottling: ExecutionThrottlingOptOut?.Invoke() == true,
             NodeDependencyInstall: NodeDependencyInstall?.Invoke(dispatch.WorkingDirectory),
-            RepositoryWorktrees: repositoryWorktrees.Count == 0 ? null : repositoryWorktrees);
+            RepositoryWorktrees: repositoryWorktrees.Count == 0 ? null : repositoryWorktrees,
+            WorkerTaskId: taskId.Value, DispatchAttemptAt: dispatch.DispatchedAt);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
