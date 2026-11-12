@@ -15,7 +15,9 @@ public sealed record InquiryDispatchRequest(
     string PromptDirectory,
     string ReceiptDirectory,
     string GoalLifecycleEventsDirectory,
-    InquiryAdmissionOptions? AdmissionOptions = null);
+    InquiryAdmissionOptions? AdmissionOptions = null,
+    InquiryAgentSelection? AgentSelection = null,
+    TimeSpan? Timeout = null);
 
 public sealed record InquiryCommandPlan(
     string ParentDispatchId,
@@ -26,7 +28,7 @@ public sealed record InquiryCommandPlan(
     InquiryAdmissionDecision Admission,
     string? ParentSessionId);
 
-public sealed record InquiryDispatchResult(InquiryAnswerReceipt Receipt, string ReceiptPath);
+public sealed record InquiryDispatchResult(InquiryAnswerReceipt Receipt, string ReceiptPath, string? StandardOutput = null, bool TimedOut = false);
 
 public sealed class InquiryDispatcher
 {
@@ -53,7 +55,7 @@ public sealed class InquiryDispatcher
     public InquiryCommandPlan Compose(InquiryDispatchRequest request)
     {
         var dispatch = RequireCompletedDispatch(request.Task);
-        var providerKind = ResolveProviderKind(dispatch);
+        var providerKind = request.AgentSelection?.ProviderKind ?? ResolveProviderKind(dispatch);
         var worktree = dispatch.WorkingDirectory;
         var now = _clock.UtcNow;
         var currentHead = _headResolver(worktree);
@@ -66,7 +68,7 @@ public sealed class InquiryDispatcher
             request.Task.Id,
             request.Task.RequiredRole,
             providerKind,
-            dispatch.ModelName,
+            request.AgentSelection?.ModelName ?? dispatch.ModelName,
             worktree,
             currentHead,
             capturedHeadIsAncestor,
@@ -81,14 +83,17 @@ public sealed class InquiryDispatcher
             dispatch,
             context,
             request.AdmissionOptions);
-        var executionMode = admission.AllowsResume
+        var executionMode = request.AgentSelection is null && admission.AllowsResume
             ? providerKind == ProviderKind.AnthropicClaudeCli
                 ? InquiryExecutionMode.ForkedResume
                 : InquiryExecutionMode.Resume
             : InquiryExecutionMode.FreshExec;
         var promptContent = BuildPrompt(request, dispatch, admission, executionMode);
         var promptPath = WritePrompt(request, promptContent, now);
-        var command = BuildCommand(providerKind, dispatch, worktree, parentSessionId, executionMode);
+        var answeringDispatch = request.AgentSelection is { } agent
+            ? dispatch with { ModelName = agent.ModelName, ReasoningEffort = agent.ReasoningEffort }
+            : dispatch;
+        var command = BuildCommand(providerKind, answeringDispatch, worktree, parentSessionId, executionMode);
         ThrowIfForbiddenResumeLast(command);
         return new InquiryCommandPlan(
             parentDispatchId,
@@ -108,7 +113,7 @@ public sealed class InquiryDispatcher
             new WorkerProcessRunRequest(
                 plan.Command,
                 request.Task.LastDispatch!.WorkingDirectory,
-                Timeout: TimeSpan.FromMinutes(20),
+                Timeout: request.Timeout ?? TimeSpan.FromMinutes(20),
                 StandardInput: plan.PromptContent),
             cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
@@ -125,8 +130,8 @@ public sealed class InquiryDispatcher
             plan.ParentDispatchId,
             request.Goal.Id,
             request.Task.Id,
-            request.Task.LastDispatch!.WorkerName,
-            ResolveProviderKind(request.Task.LastDispatch),
+            request.AgentSelection?.WorkerName ?? request.Task.LastDispatch!.WorkerName,
+            request.AgentSelection?.ProviderKind ?? ResolveProviderKind(request.Task.LastDispatch!),
             plan.ExecutionMode,
             plan.ParentSessionId,
             plan.ExecutionMode == InquiryExecutionMode.ForkedResume ? forkedSessionId : null,
@@ -139,7 +144,7 @@ public sealed class InquiryDispatcher
             result.ExitCode,
             completedAt);
         var receiptPath = new InquiryReceiptStore(request.ReceiptDirectory).Save(receipt);
-        return new InquiryDispatchResult(receipt, receiptPath);
+        return new InquiryDispatchResult(receipt, receiptPath, result.StandardOutput, result.TimedOut);
     }
 
     public static string BuildParentDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
