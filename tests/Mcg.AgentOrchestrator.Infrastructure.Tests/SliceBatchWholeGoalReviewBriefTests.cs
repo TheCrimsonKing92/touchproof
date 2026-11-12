@@ -162,6 +162,7 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
         ### 1. Spec compliance (do this first)
         - Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.
         - Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.
+        - A finding may be blocking only if a Developer can change code or tests to resolve it, or a Tester evidence_request naming test classes can produce the evidence. Evidence that only the acceptance gate produces (full-gate receipts, gate-owned criteria execution) is recorded as not-verifiable for its criterion and is never a blocking finding.
         - For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.
         ### 2. Code quality (only after section 1)
         - Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.
