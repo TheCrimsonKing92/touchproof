@@ -129,8 +129,7 @@ internal sealed partial class ConductorDriver
                 var admissionState = admission is null
                     ? "none"
                     : $"{admission.Decision}/{admission.Route}/{admission.Cause}";
-                return $"{task.Id.Value[..8]}:status={task.Status}:admission={admissionState}" +
-                    SandboxPreparationFailure.Suffix(task);
+                return $"{task.Id.Value[..8]}:status={task.Status}:admission={admissionState}{SandboxPreparationFailure.Suffix(task)}";
             })
             .ToArray();
         var omitted = result.Dispatches.Count - preparedState.Length;

@@ -1322,8 +1322,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
                     state,
-                    SandboxPreparationStartStatus.RunningReason(goal) ?? runningHoldReason ??
-                    "Worker process running; auto-reconcile will handle completion")),
+                    SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason))),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),

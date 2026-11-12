@@ -6,6 +6,20 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class SandboxPreparationStartStatus
 {
+    internal static string HoldReason(Goal goal, string? runningHoldReason) =>
+        RunningReason(goal) ?? runningHoldReason ?? "Worker process running; auto-reconcile will handle completion";
+
+    internal static string EscalationReason(Goal goal, string reason, Action<GoalId, TaskId, string> record) =>
+        reason + RecordFailedNotes(goal, record);
+
+    internal static TaskId RecoveryTarget(Goal goal, FailedGoalRecoveryDecision decision, Action<GoalId, TaskId, string> record)
+    {
+        var taskId = decision.Identity.TaskId ??
+            throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
+        RecordNote(goal, taskId, record);
+        return taskId;
+    }
+
     internal static void RecordNote(Goal goal, TaskId taskId, Action<GoalId, TaskId, string> record)
     {
         if (goal.Tasks.FirstOrDefault(task => task.Id == taskId) is { } task &&
