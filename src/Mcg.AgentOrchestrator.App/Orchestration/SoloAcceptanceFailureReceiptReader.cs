@@ -16,31 +16,31 @@ internal static class SoloAcceptanceFailureReceiptReader
     internal static SoloAcceptanceFailureRead Read(Goal goal, SoloAcceptanceConsumptionContext? current)
     {
         var summary = goal.LatestAcceptanceFailure;
-        if (summary?.SoloFailureReceipt is not { } receipt) return Refuse("solo-receipt-absent");
-        if (current is null) return Refuse("solo-current-identity-unavailable");
+        if (summary?.SoloFailureReceipt is not { } receipt) return Refuse(SoloHoldReasons.ReceiptAbsent);
+        if (current is null) return Refuse(SoloHoldReasons.CurrentIdentityUnavailable);
         if (receipt.ContractVersion != 1 || receipt.CaptureError is not null)
-            return Refuse("solo-evidence-capture-unavailable: " + receipt.CaptureError);
+            return Refuse(SoloHoldReasons.CaptureUnavailable + ": " + receipt.CaptureError);
         if (receipt.GoalId != goal.Id.Value || string.IsNullOrWhiteSpace(receipt.AttemptId) ||
-            receipt.AttemptId != summary.AttemptId) return Refuse("solo-goal-or-attempt-mismatch");
+            receipt.AttemptId != summary.AttemptId) return Refuse(SoloHoldReasons.GoalOrAttemptMismatch);
         if (receipt.CandidateSha != summary.BranchHeadSha || receipt.MainSha != summary.MainHeadSha ||
             receipt.CandidateSha != current.CandidateSha || receipt.MainSha != current.MainSha ||
             receipt.CandidateTreeSha != current.CandidateTreeSha || receipt.BaselineSha != current.BaselineSha ||
             new[] { receipt.CandidateSha, receipt.CandidateTreeSha, receipt.MainSha, receipt.BaselineSha }
-                .Any(string.IsNullOrWhiteSpace)) return Refuse("solo-revision-mismatch");
+                .Any(string.IsNullOrWhiteSpace)) return Refuse(SoloHoldReasons.RevisionMismatch);
         try
         {
             var proof = JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(ReadArtifact(receipt.Evidence, receipt.ResultsRoot))
                 ?? throw new InvalidDataException("solo-proof-null");
             // The inner identity was written before the envelope digest existed.
             if (proof.Identity != receipt with { Evidence = receipt.Evidence with { Sha256 = "" } })
-                return Refuse("solo-proof-identity-mismatch");
+                return Refuse(SoloHoldReasons.ProofIdentityMismatch);
             if (proof.Checks is null || proof.BaselineChecks is null || proof.Bindings is null || proof.Baseline is null ||
                 proof.Baseline.Sha != receipt.BaselineSha || proof.Baseline.Arm != FindingEvidenceArm.Baseline ||
                 !proof.Baseline.Accepted || proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
-                return Refuse("solo-baseline-unavailable");
+                return Refuse(SoloHoldReasons.BaselineUnavailable);
             if (!SameNames(proof.Checks.Select(item => item.Check.Name), summary.FailedChecks) ||
                 !SameNames(proof.BaselineChecks.Select(item => item.Check.Name), proof.Baseline.Checks.Select(check => check.Name)))
-                return Refuse("solo-check-mismatch");
+                return Refuse(SoloHoldReasons.CheckMismatch);
             var feedback = new SortedDictionary<string, string>(StringComparer.Ordinal);
             var checks = proof.Checks.Select(item => item.Check).ToArray();
             foreach (var item in proof.Checks)
@@ -73,52 +73,52 @@ internal static class SoloAcceptanceFailureReceiptReader
                 var attribution = summary.CheckAttributions?.Where(attr => attr.CheckName == check.Name).ToArray();
                 if (attribution is not { Length: 1 } || attribution[0].Origin != AcceptanceFailureOrigin.Introduced ||
                     attribution[0].Cause != AcceptanceFailureCause.NotClassified)
-                    return Refuse("solo-authoritative-attribution-mismatch");
+                    return Refuse(SoloHoldReasons.AuthoritativeAttributionMismatch);
                 var rows = ReadRows(item, receipt.ResultsRoot);
                 foreach (var identity in identities)
                 {
                     var bindings = proof.Bindings.Where(binding => binding.CheckName == check.Name && binding.TestIdentity == identity).ToArray();
-                    if (bindings.Length != 1) return Refuse("solo-test-binding-mismatch");
+                    if (bindings.Length != 1) return Refuse(SoloHoldReasons.TestBindingMismatch);
                     var baselineChecks = proof.BaselineChecks.Where(b => b.Check.Name == bindings[0].BaselineCheckName).ToArray();
-                    if (baselineChecks.Length != 1) return Refuse("solo-baseline-check-mismatch");
+                    if (baselineChecks.Length != 1) return Refuse(SoloHoldReasons.BaselineCheckMismatch);
                     var baseline = baselineChecks[0];
                     // Recheck the persisted authoritative arm and the retained check as well.
                     var armChecks = proof.Baseline.Checks.Where(b => b.Name == baseline.Check.Name).ToArray();
                     if (armChecks.Length != 1 || JsonSerializer.Serialize(armChecks[0]) != JsonSerializer.Serialize(baseline.Check))
-                        return Refuse("solo-baseline-result-mismatch");
+                        return Refuse(SoloHoldReasons.BaselineResultMismatch);
                     var selector = AcceptanceFailureAttributionPlanner.NormalizeIdentity(identity);
                     if (baseline.Check.BaselineSourceAbsence is { } absent)
                     {
                         if (absent.BaselineSha != receipt.BaselineSha || absent.Selector != selector ||
                             baseline.Check.FailureClassification != AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline ||
                             baseline.Check.ExecutedTestCount != 0 || baseline.Check.Passed || baseline.Artifacts.Count != 0)
-                            return Refuse("solo-source-absence-invalid");
+                            return Refuse(SoloHoldReasons.SourceAbsenceInvalid);
                     }
                     else
                     {
-                        if (!Usable(baseline.Check)) return Refuse("solo-baseline-apparatus-or-unknown");
+                        if (!Usable(baseline.Check)) return Refuse(SoloHoldReasons.BaselineApparatusOrUnknown);
                         var baselineRows = ReadRows(baseline, receipt.ResultsRoot);
                         var selected = baselineRows.Where(row => AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key) == selector).ToArray();
                         if (selected.Length == 0 || selected.Any(row => row.Key == identity && row.Value.Outcome == "Failed"))
-                            return Refuse("solo-baseline-inherited-or-uncovered");
+                            return Refuse(SoloHoldReasons.BaselineInheritedOrUncovered);
                         if (baseline.Check.Passed)
                         {
                             var exact = baselineRows.Where(row => row.Key == identity).ToArray();
                             if (exact.Length != 1 || exact[0].Value.Outcome != "Passed" ||
-                                baselineRows.Any(row => row.Value.Outcome != "Passed")) return Refuse("solo-baseline-green-uncovered");
+                                baselineRows.Any(row => row.Value.Outcome != "Passed")) return Refuse(SoloHoldReasons.BaselineGreenUncovered);
                         }
                         else if (identity == selector || selected.Any(row => row.Key == AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key)) ||
-                            !selected.Any(row => row.Value.Outcome == "Failed")) return Refuse("solo-data-case-ambiguous");
+                            !selected.Any(row => row.Value.Outcome == "Failed")) return Refuse(SoloHoldReasons.DataCaseAmbiguous);
                     }
                     var rerun = check.FailingTestAttributions.Single(attr => attr.TestIdentity == identity).CandidateRerun;
                     if (rerun is not null)
                     {
                         if (rerun.Outcome != "Failed" || rerun.Error is not null ||
                             !item.CandidateReruns.TryGetValue(identity, out var artifact))
-                            return Refuse("solo-candidate-rerun-unconfirmed");
+                            return Refuse(SoloHoldReasons.CandidateRerunUnconfirmed);
                         var repeated = ReadTrx(artifact, receipt.ResultsRoot).Where(row => row.Key == identity).ToArray();
                         if (repeated.Length != 1 || repeated[0].Value.Outcome != "Failed")
-                            return Refuse("solo-candidate-rerun-unconfirmed");
+                            return Refuse(SoloHoldReasons.CandidateRerunUnconfirmed);
                     }
                     var failed = rows.First(row => row.Key == identity && row.Value.Outcome == "Failed");
                     var message = failed.Value.Message;
@@ -127,19 +127,19 @@ internal static class SoloAcceptanceFailureReceiptReader
                     feedback[identity] = (first.Length <= 2000 ? first : first[..1997] + "...") + $" (trx: {failed.Path})";
                 }
             }
-            return feedback.Count == 0 ? Refuse("solo-failing-tests-absent") : new(
+            return feedback.Count == 0 ? Refuse(SoloHoldReasons.FailingTestsAbsent) : new(
                 new("solo", receipt.AttemptId, receipt.CandidateSha, feedback.Keys.ToArray(),
                     string.Join(Environment.NewLine, feedback.Select(row => $"reproduced {row.Key}: {row.Value}"))), "solo-evidence-validated");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or XmlException or
             ArgumentException or InvalidOperationException or NullReferenceException)
         {
-            return Refuse("solo-evidence-invalid: " + ex.GetType().Name + ": " + ex.Message);
+            return Refuse(SoloHoldReasons.EvidenceInvalid + ": " + ex.GetType().Name + ": " + ex.Message);
         }
     }
 
     private static SoloAcceptanceFailureRead NotIntroduced(string predicate, AcceptanceCheckResult check, string? detail = null) =>
-        Refuse($"solo-candidate-not-introduced: predicate={predicate}; check={DiagnosticValue(check.Name)}; " +
+        Refuse($"{SoloHoldReasons.CandidateNotIntroduced}: predicate={predicate}; check={DiagnosticValue(check.Name)}; " +
             $"tests={(check.FailingTestIdentities is { Count: > 0 } identities ? DiagnosticNames(identities) : "(unavailable)")}" +
             $"; origins={(check.FailingTestAttributions is { Count: > 0 } attributions
                 ? "[" + string.Join(", ", attributions.Select(attr => attr is null ? "(absent)" :
@@ -182,12 +182,12 @@ internal static class SoloAcceptanceFailureReceiptReader
         {
             // Listing the same artifact twice is not evidence of a second execution.
             if (group.Select(row => row.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != group.Count())
-                RequireUnambiguousFailures(group, "solo-duplicate-test-row");
+                RequireUnambiguousFailures(group, SoloHoldReasons.DuplicateTestRow);
             if (group.Any(row => row.Value.Outcome == "Passed"))
                 throw new InvalidDataException($"solo-repeated-execution-flake: identity={group.Key}; " +
                     $"outcome={AcceptanceLaneRerunEvidence.Flake}; outcomes={string.Join(",", group.Select(row => row.Value.Outcome))}");
             if (group.Any(row => row.Value.Outcome != "Failed"))
-                RequireUnambiguousFailures(group, "solo-duplicate-test-row");
+                RequireUnambiguousFailures(group, SoloHoldReasons.DuplicateTestRow);
             repeatedFailure = true;
         }
         // Narrowed reruns (AcceptanceLaneRerunNarrowing.ComposeResult) record per-run maxima,

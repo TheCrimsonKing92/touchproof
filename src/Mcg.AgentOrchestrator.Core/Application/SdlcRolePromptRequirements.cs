@@ -33,8 +33,9 @@ internal static class SdlcRolePromptRequirements
     private const string ReviewerDeliveredEvidenceRule =
         "- Inspect delivered receipts before re-raising a stable finding. Name the remaining source/test change, missing scenario and current anchor; cite the receipt. Passing classes alone never close source or coverage findings.";
     // Add 223 chars for receipt-aware re-raise guidance (221 plus CRLF); preserve existing headroom.
-    internal const int ReviewerComplexRequirementsMaxChars = 5946;
-    internal const int ReviewerCompactRequirementsMaxChars = 4855;
+    // The shared blocking-actor rule adds 345 chars per Reviewer block with CRLF separators.
+    internal const int ReviewerComplexRequirementsMaxChars = 6291;
+    internal const int ReviewerCompactRequirementsMaxChars = 5200;
     internal const int TesterCompactRequirementsMaxChars = 3882;
 
     private const string ReviewerExhaustiveFindingsContract =
@@ -139,6 +140,7 @@ internal static class SdlcRolePromptRequirements
                 "### 1. Spec compliance (do this first)",
                 "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                ReviewerBlockingFindingActorRule.RequirementLine,
                 SelfCheckAttestation,
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
@@ -315,6 +317,7 @@ internal static class SdlcRolePromptRequirements
                 "### 1. Spec compliance (do this first)",
                 "- Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                ReviewerBlockingFindingActorRule.RequirementLine,
                 SelfCheckAttestation,
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",

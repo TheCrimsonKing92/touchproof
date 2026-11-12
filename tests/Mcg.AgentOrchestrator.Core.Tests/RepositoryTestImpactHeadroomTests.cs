@@ -62,12 +62,12 @@ public sealed class RepositoryTestImpactHeadroomTests
 
         Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
         Xunit.Assert.Equal(ReverseDependencyDegradationKind.IndexedSourceBound, selection.DegradationKind);
-        var expected = new RepositoryTestImpactHeadroom(3, 2, null, 96, null, 64);
+        var expected = new RepositoryTestImpactHeadroom(3, 2, null, 1000, null, 64);
         Xunit.Assert.Equal(expected, selection.Headroom);
         Xunit.Assert.Null(selection.CacheReceipt);
         var plan = PlanSelection(selection);
         Xunit.Assert.Equal(expected, plan.ReverseDependencyHeadroom);
-        Xunit.Assert.Equal("headroom indexed-files=3/2 selected-classes=n/a/96 frontier-symbols=n/a/64",
+        Xunit.Assert.Equal("headroom indexed-files=3/2 selected-classes=n/a/1000 frontier-symbols=n/a/64",
             plan.ReverseDependencyHeadroom!.Render());
         // No receipt means no suffix: the protected indexed-bound reason remains exact.
         Xunit.Assert.Equal("Reverse-dependency indexing exceeded the 2-source-file bound.",

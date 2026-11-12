@@ -11,6 +11,14 @@ public sealed record CriterionVerdict(
 
 public static partial class WorkerResultBlockers
 {
+    internal static bool TryFindUnactionableNeedsWorkFindings(
+        string verdict, ReviewFindingRound round, out string repairMessage)
+    {
+        var unactionable = ReviewerBlockingFindingActorRule.IsUnactionableNeedsWork(verdict, round.Findings);
+        repairMessage = unactionable ? ReviewerBlockingFindingActorRule.RepairMessage : string.Empty;
+        return unactionable;
+    }
+
     public enum TestsStatus
     {
         Unknown,

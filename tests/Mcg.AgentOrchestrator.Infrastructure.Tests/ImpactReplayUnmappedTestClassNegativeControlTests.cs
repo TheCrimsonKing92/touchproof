@@ -69,11 +69,22 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
         var sectionStart = markdown.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(sectionStart >= 0, "Unmapped test classes section was not written.");
         Assert.Equal(legacy, markdown[..sectionStart]);
-        Assert.Equal(Environment.NewLine + string.Join(Environment.NewLine, new[]
+        var unmappedSection = Environment.NewLine + string.Join(Environment.NewLine, new[]
         {
             "## Unmapped test classes", "", "- not-scanned: 0", "- no-lane: 0", "- ambiguous: 0", "",
             "No unmapped test classes were found."
-        }) + Environment.NewLine, markdown[sectionStart..]);
+        }) + Environment.NewLine;
+        var unboundedSection = abandoned
+            ? Environment.NewLine + string.Join(Environment.NewLine, new[]
+            {
+                "## Unbounded selections for bound abandonments", "",
+                "- ChangedSourceFileCount: 1 attempts; class count unavailable: 0; duration share unavailable: 1", "",
+                "| Abandonment kind | Attempt | Unbounded selected classes | Share of non-floor test seconds |",
+                "| --- | --- | ---: | ---: |",
+                "| ChangedSourceFileCount | control | 1 | unavailable: incomplete TRX duration or class evidence |", ""
+            }) + Environment.NewLine
+            : "";
+        Assert.Equal(unmappedSection + unboundedSection, markdown[sectionStart..]);
 
         var diagnostics = Assert.IsType<ImpactReplayUnmappedTestClasses>(report.UnmappedTestClasses);
         Assert.Equal(3, diagnostics.CountsByReason.Count);

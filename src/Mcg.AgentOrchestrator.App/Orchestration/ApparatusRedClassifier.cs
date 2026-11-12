@@ -235,7 +235,7 @@ internal static class ApparatusRedClassifier
                 evidence.RegateCap);
     }
 
-    private static bool MessageNamesCandidatePath(string? message, IReadOnlyList<string> changedPaths)
+    internal static bool MessageNamesCandidatePath(string? message, IReadOnlyList<string> changedPaths)
     {
         if (string.IsNullOrWhiteSpace(message))
         {
