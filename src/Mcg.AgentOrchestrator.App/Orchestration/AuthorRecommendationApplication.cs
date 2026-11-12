@@ -56,19 +56,15 @@ internal sealed class AuthorRecommendationApplication(
                 JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], "author", "conductor-author",
                 "author", utcNow(), ActorKind: OperatorActorKind.Agent);
 
-            // Re-read target and queued answers immediately before submission. Passing the deadline
-            // does not reserve this question against an answer already recorded by a person.
+            // The store rechecks queued/applied answers atomically with insertion. Passing the
+            // deadline does not reserve this question against an answer already recorded by a person.
             if (!IsUnanswered(kernel, goal, kind, question.TargetId)) continue;
-            var recorded = intents.ListForGoalAsync(goal.Id.Value, int.MaxValue).GetAwaiter().GetResult();
-            if (recorded.Any(intent => intent.IdempotencyKey == candidate.IdempotencyKey ||
-                    intent.Status != OperatorIntentStatus.Rejected && Targets(intent, kind, question.TargetId))) continue;
             if (goal.IsTerminal || goal.Status == GoalStatus.Parked || goal.CurrentHold != hold) continue;
 
-            var submitted = intents.EnqueueAsync(candidate).GetAwaiter().GetResult();
-            if (submitted.Id != candidate.Id) continue;
+            if (!intents.TryEnqueueUnansweredAnswerAsync(candidate).GetAwaiter().GetResult()) continue;
             conduct.Append("author", goal.Id.Value,
                 $"item={item.Identity} kind=recommendation-applied reason={question.Reason} " +
-                $"class={question.Reversibility.ToString().ToLowerInvariant()} wait-seconds={Seconds(wait)} intent={submitted.Id}");
+                $"class={question.Reversibility.ToString().ToLowerInvariant()} wait-seconds={Seconds(wait)} intent={candidate.Id}");
         }
     }
 
@@ -84,17 +80,6 @@ internal sealed class AuthorRecommendationApplication(
             !request.IsCompleted && request.AuthoritativeAnswer is null),
         _ => false
     };
-
-    private static bool Targets(OperatorIntentRecord intent, OperatorAnswerTargetKind kind, string targetId)
-    {
-        if (intent.Verb != OperatorIntentVerbs.Answer) return false;
-        try
-        {
-            var answer = JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options);
-            return answer?.TargetKind == kind && answer.TargetId == targetId;
-        }
-        catch (JsonException) { return false; }
-    }
 
     private static string Seconds(TimeSpan wait) => wait.TotalSeconds.ToString("0.#######", CultureInfo.InvariantCulture);
 }

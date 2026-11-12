@@ -65,6 +65,10 @@ public interface IOperatorIntentStore
         OperatorIntentRecord intent,
         CancellationToken cancellationToken = default);
 
+    Task<bool> TryEnqueueUnansweredAnswerAsync(
+        OperatorIntentRecord intent, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This store does not support atomic unanswered-answer enqueue.");
+
     Task<OperatorIntentRecord?> ClaimNextAsync(
         string goalId,
         string claimOwner,
@@ -182,6 +186,19 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         CancellationToken cancellationToken = default) =>
         Task.Run(() => TaskIntentAdmission.Serialize(_dbPath, intent.GoalId, intent.TaskId,
             () => EnqueueCoreAsync(intent, cancellationToken).GetAwaiter().GetResult()), cancellationToken);
+
+    public Task<bool> TryEnqueueUnansweredAnswerAsync(
+        OperatorIntentRecord intent, CancellationToken cancellationToken = default) =>
+        Task.Run(() => TaskIntentAdmission.Serialize(_dbPath, intent.GoalId, null, () =>
+        {
+            EnsureWritable();
+            ValidateNewIntent(intent);
+            using var connection = OpenConnection();
+            var enqueued = UnansweredOperatorAnswerEnqueue.TryEnqueueAsync(connection, intent,
+                BindIntent, cancellationToken).GetAwaiter().GetResult();
+            if (enqueued) TouchWakeFile(intent.Id);
+            return enqueued;
+        }), cancellationToken);
 
     private async Task<OperatorIntentRecord> EnqueueCoreAsync(
         OperatorIntentRecord intent,

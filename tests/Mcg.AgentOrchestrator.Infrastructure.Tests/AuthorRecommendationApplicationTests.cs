@@ -50,20 +50,24 @@ public sealed class AuthorRecommendationApplicationTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(299)]
-    [Xunit.InlineData(300)]
-    [Xunit.InlineData(3000)]
-    public async Task RecordedHumanAnswer_AtAnyDeadline_PreventsApplication(int seconds)
+    [Xunit.InlineData(299, false)]
+    [Xunit.InlineData(300, false)]
+    [Xunit.InlineData(3000, false)]
+    [Xunit.InlineData(299, true)]
+    [Xunit.InlineData(300, true)]
+    [Xunit.InlineData(3000, true)]
+    public async Task RecordedHumanAnswer_AtAnyDeadline_PreventsApplication(int seconds, bool applied)
     {
         using var fixture = new Fixture();
         await fixture.EscalateFromAuthor();
         var hold = fixture.Goal.CurrentHold;
         fixture.Now = hold!.StartedAt + TimeSpan.FromSeconds(seconds);
         await fixture.EnqueueHumanAnswer();
+        if (applied) fixture.ApplyPending();
         fixture.Tick();
         Assert.Equal(OperatorActorKind.Human, Assert.Single(await fixture.Answers()).ActorKind);
         Assert.Empty(fixture.ApplicationEvents());
-        Assert.Equal(hold, fixture.Goal.CurrentHold);
+        Assert.Equal(applied ? null : hold, fixture.Goal.CurrentHold);
     }
 
     [Xunit.Theory]
