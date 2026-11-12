@@ -7,7 +7,13 @@ public sealed record OrphanWorktreeSweepOutcome(
     string Path, GoalId? GoalId, string Reason, int ProcessId, string? ExecutablePath, string? CallerRole)
 {
     internal static void Write(OrphanWorktreeSweepOutcome outcome) =>
-        Write(outcome, Console.Error);
+        Write(outcome, Console.Error, OrphanWorktreeSweepOutcomeLedger.Process);
+
+    internal static void Write(OrphanWorktreeSweepOutcome outcome, TextWriter writer,
+        OrphanWorktreeSweepOutcomeLedger ledger)
+    {
+        if (ledger.Observe(outcome)) Write(outcome, writer);
+    }
 
     internal static void Write(OrphanWorktreeSweepOutcome outcome, TextWriter writer)
     {

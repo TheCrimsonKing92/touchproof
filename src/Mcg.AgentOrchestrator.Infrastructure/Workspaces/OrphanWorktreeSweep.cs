@@ -20,7 +20,7 @@ internal static class OrphanWorktreeSweep
         }
         using (rootLock)
         {
-            var eligibility = new OrphanWorktreeSweepEligibility(kernel);
+            var eligibility = new OrphanWorktreeSweepEligibility(kernel, new(hooks.ReadStoredGoalMetadata));
             var directories = Directory.GetDirectories(root);
             if (rootLock is null)
             {
