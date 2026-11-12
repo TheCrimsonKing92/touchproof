@@ -27,7 +27,8 @@ internal sealed class OwnerConsoleBoardSelection(
         }
     }
 
-    internal void Select(int index, bool refresh = false, int direction = 0, bool allowHeader = false)
+    internal void Select(int index, bool refresh = false, int direction = 0, bool allowHeader = false,
+        bool refreshPreview = true)
     {
         if (!refresh) CopyValid = true;
         using var trace = diagnostics?.Begin("select-board", traceState);
@@ -43,7 +44,7 @@ internal sealed class OwnerConsoleBoardSelection(
         var row = model.Board[Index];
         GoalId = row.IsDiagnostic ? null : row.GoalId;
         Project = selectable < 0 ? null : row.Project;
-        if (!previewPane.Select(row.IsForeign || row.IsDiagnostic ? null : GoalId, refresh))
+        if (!previewPane.Select(row.IsForeign || row.IsDiagnostic ? null : GoalId, refresh && refreshPreview))
             previewPane.Render();
         if (selectable < 0 || boardTable.Rows.Count == 0) return;
         if (board.Value?.SelectedCell.Y != Index)

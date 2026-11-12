@@ -17,7 +17,7 @@ public sealed class OnboardingQuestionResolutionTests
                 IntegrationBranch = new("main", OnboardingConsoleFixture.Source, FactConfidence.Low)
             });
         var harness = new OwnerConsoleHarness(fixture.Clock);
-        var board = OwnerConsoleBoardSource.FromRegistry(project, fixture.Home, fixture.Registry, fixture.Clock);
+        using var board = OwnerConsoleBoardSource.FromRegistry(project, fixture.Home, fixture.Registry, fixture.Clock);
         var source = new OnboardingQuestionSource(harness.Questions, board.InScopeProjects, fixture.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, source,
             harness.Liveness, new Epics(), fixture.Clock);

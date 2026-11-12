@@ -8,39 +8,16 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleFullScreenHost
 {
-    // Eager history/model helper retained for callers that need a complete snapshot.
-    // Production progressive startup uses OwnerConsoleStartupLoader.FillAsync.
-    internal static async Task<(OwnerConsoleViewModel Model, List<OwnerConductEvent> Recent)> BuildInitialViewModelAsync(
+    internal static Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null, OwnerConsoleBoardSource? boardSource = null) =>
+        OwnerConsoleFullScreenHostStartup.RunAsync(workspace, cancellationToken, inputTracePath, owners, boardSource);
+
+    internal static Task<(OwnerConsoleViewModel Model, List<OwnerConductEvent> Recent)> BuildInitialViewModelAsync(
         OwnerConsoleViewModelBuilder builder, string conductLogPath, DateTimeOffset opened,
-        DateTimeOffset? last, CancellationToken token)
-    {
-        var history = OwnerConsoleStartupActivity.ReadHistory(conductLogPath, null, TimeProvider.System, token);
-        var recent = history.Recent.ToList();
-        var model = await builder.BuildAsync(new(opened, last, recent, history.LandedToday), token);
-        return (model, recent);
-    }
+        DateTimeOffset? last, CancellationToken token) =>
+        OwnerConsoleFullScreenHostStartup.BuildInitialViewModelAsync(builder, conductLogPath, opened, last, token);
 
-    internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
-        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null, OwnerConsoleBoardSource? boardSource = null)
-    {
-        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null, owners, boardSource);
-        try
-        {
-            using var destination = OwnerConsoleInputTraceOptions.OpenDestination(inputTracePath);
-            var diagnostics = new OwnerConsoleInputDiagnostics();
-            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics, owners, boardSource);
-            // RunCoreAsync has disposed the application and restored the terminal before export.
-            diagnostics.Export(destination);
-            return result;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            System.Console.Error.WriteLine($"Input trace failed: {ex.Message}");
-            return 1;
-        }
-    }
-
-    private static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+    internal static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
         OwnerConsoleInputDiagnostics? diagnostics, OwnerConsoleHostRowOwner? owners, OwnerConsoleBoardSource? boardSource)
     {
         var clock = TimeProvider.System;
@@ -49,7 +26,12 @@ internal static class OwnerConsoleFullScreenHost
         IConductEventSource? events = null;
         OwnerConsoleActivityLoader? activityLoader = null;
         Task? fill = null;
+        Task<OwnerConsoleViewModel>? initialBoardRead = null;
+        OwnerConsoleStartupLoader? startup = null;
         OwnerRefreshCoordinator? refresh = null;
+        SqliteStoreChangeObservation? stateChanges = null;
+        SqliteStoreChangeObservation? questionChanges = null;
+        SqliteStoreChangeObservation? portfolioChanges = null;
         using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
         using var backoff = new OwnerConsoleLoopBackoff(clock,
             rate => GuiApplication.MaximumIterationsPerSecond = (ushort)rate, GuiApplication.MaximumIterationsPerSecond);
@@ -74,14 +56,25 @@ internal static class OwnerConsoleFullScreenHost
         }
         try
         {
-            IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
-                ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
+            IOrchestratorStateQueries state = new EmptyOwnerConsoleStateQueries(workspace.SqliteStatePath);
+            stateChanges = new(workspace.SqliteStatePath);
+            questionChanges = new(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db"));
+            portfolioChanges = new(workspace.PortfolioStorePath);
+            string? QuestionVersion()
+            {
+                var stateVersion = stateChanges.Observe();
+                var questionVersion = questionChanges.Observe();
+                return stateVersion is not null && questionVersion is not null ? stateVersion + "/" + questionVersion : null;
+            }
             var refreshFilter = new OwnerConsoleEventRefreshFilter();
             var snapshots = new OwnerConsoleRefreshGoalSnapshots(state);
-            IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(state, workspace.OrchestratorDirectory, snapshots));
+            // The inner SQLite snapshot is reusable; onboarding files/registry remain conservatively read.
+            // Do not join a board generation whose state token may predate a question read.
+            IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(
+                state, workspace.OrchestratorDirectory, changeMarker: QuestionVersion, stateMarker: stateChanges.Observe));
             if (boardSource is not null)
                 questions = new OnboardingQuestionSource(questions, boardSource.InScopeProjects, clock,
-                    () => coalescer?.Request(null, OwnerConsoleRefreshScope.All));
+                    () => coalescer?.Request(null, OwnerConsoleRefreshScope.All), boardSource.HasLandedAsync);
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateEvidenceStore(new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory).Observe, clock);
@@ -105,12 +98,9 @@ internal static class OwnerConsoleFullScreenHost
                 gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots,
                 candidateGate: goal =>
                 {
-                    var head = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify",
-                        $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}");
-                    return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
+                    return (Candidate: OwnerConsoleCandidateRevision.Read(workspace.ExecutionDirectory, goal.Id),
                         Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
-                }, decisionsMarker: boardSource is null ? OwnerConsoleStoreFingerprint.For(workspace.SqliteStatePath,
-                    Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")) : null);
+                }, boardMarker: stateChanges.Observe, epicMarker: portfolioChanges.Observe);
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             refresh = new(clock, token, builder, boardSource, snapshots, timings, refreshFilter, diagnostics,
                 activityLoader.ReadNew, new OwnerConsoleLandedTodayScan(workspace.GoalLifecycleEventsDirectory, clock).Current,
@@ -122,11 +112,12 @@ internal static class OwnerConsoleFullScreenHost
             {
                 // Keep Init, initial Render and Run on this host thread. Metadata is
                 // read on the pool before GUI initialization, with the existing bound.
-                var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(async () =>
+                initialBoardRead = Task.Run(async () =>
                 {
                     var own = refresh.TrackBoard(await builder.BuildBoardAsync(token));
                     return boardSource is null ? own : await boardSource.ComposeAsync(own, token);
-                }, token)
+                }, token);
+                var board = OwnerConsoleStartupLoader.LoadingBoard(initialBoardRead
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
                 app.Init();
                 keyboard = app.Keyboard;
@@ -163,9 +154,9 @@ internal static class OwnerConsoleFullScreenHost
                 view = new(app, controller, () => refresh.RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
                     projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);
-                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock,
+                startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock,
                     evidence: evidence);
-                fill = startup.FillAsync(board, model => view.Render(model), refresh.StartupInputs(), refresh.Seed,
+                fill = startup.FillAsync(board, model => { refresh.SeedPublished(model); view.Render(model); }, refresh.StartupInputs(), refresh.Seed,
                     token, ownBoardGoalIds: refresh.BoardIds);
             }
             catch { refresh.Release(); throw; }
@@ -215,31 +206,30 @@ internal static class OwnerConsoleFullScreenHost
             app.LayoutAndDrawComplete -= OnDraw;
             backoff.Dispose();
             linked.Cancel();
-            try { await periodicRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
-            catch (OperationCanceledException) { }
-            catch (TimeoutException) { }
-            try { await streamRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
-            catch (OperationCanceledException) { }
-            catch (TimeoutException) { }
-            if (reader is not null)
-            {
-                try { await reader.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
-                catch (OperationCanceledException) { }
-                catch (TimeoutException) { }
-            }
-            if (coalescer is not null)
-            {
-                try { await coalescer.Completion.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
-                catch (OperationCanceledException) { }
-                catch (TimeoutException) { }
-            }
-            if (events is not null || activityLoader is not null)
-            {
-                try { await (events?.DisposeAsync() ?? activityLoader!.DisposeAsync()).AsTask().WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
-                catch (TimeoutException) { }
-            }
             view?.Dispose();
-            refresh?.Dispose();
+            var pending = Task.WhenAll(new[] { reader, fill, periodicRefresh, streamRefresh, coalescer?.Completion }
+                .OfType<Task>());
+            async ValueTask DisposeReads()
+            {
+                // These are read cursors, observers and semaphores; no mandatory write flush
+                // is deferred. In particular, startup may create Events after its bound.
+                try
+                {
+                    if (events is not null || activityLoader is not null)
+                        await (events?.DisposeAsync() ?? activityLoader!.DisposeAsync());
+                }
+                finally
+                {
+                    refresh?.Dispose();
+                    boardSource?.Dispose();
+                    stateChanges?.Dispose();
+                    questionChanges?.Dispose();
+                    portfolioChanges?.Dispose();
+                }
+            }
+            await OwnerConsoleScreenOperation.DrainAsync(pending,
+                () => Task.WhenAll(new[] { initialBoardRead, startup?.Completion, refresh?.Completion, view?.Completion }.OfType<Task>()),
+                DisposeReads, clock, ex => System.Console.Error.WriteLine($"Console shutdown read cleanup: {ex.Message}"));
         }
     }
 }

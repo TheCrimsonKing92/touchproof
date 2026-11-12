@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal interface IOwnerGoalEpicLookup
 {
+    bool CanReuse => true;
     Task<string> GetTitleAsync(string goalId, CancellationToken cancellationToken);
 
     async Task<IReadOnlyDictionary<string, string>> GetTitlesAsync(

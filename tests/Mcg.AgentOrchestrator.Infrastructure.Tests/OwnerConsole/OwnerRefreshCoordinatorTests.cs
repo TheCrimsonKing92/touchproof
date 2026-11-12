@@ -145,6 +145,55 @@ public sealed class OwnerRefreshCoordinatorTests
         Assert.Equal(1, fixture.Renders);
     }
 
+    [Fact]
+    public async Task CanceledRefresh_DrainsUnderlyingReadBeforeDisposal()
+    {
+        using var stop = new CancellationTokenSource();
+        using var fixture = new Fixture(stop.Token);
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var error = new IOException("late lifecycle read failure");
+        fixture.ReadLifecycle = () =>
+        {
+            entered.SetResult();
+            release.Wait(); // An uncooperative synchronous source, released only by this test.
+            throw error;
+        };
+        var clock = new ManualStewardTimeProvider();
+        var disposals = 0;
+        var refresh = fixture.Refresh.RefreshAsync();
+        Task? shutdown = null;
+        try
+        {
+            await Finished(entered.Task);
+            stop.Cancel();
+            await Finished(refresh);
+            shutdown = OwnerConsoleScreenOperation.DrainAsync(refresh, () => fixture.Refresh.Completion, () =>
+            {
+                Interlocked.Increment(ref disposals);
+                disposed.SetResult();
+                return ValueTask.CompletedTask;
+            }, clock, ex => observed.TrySetResult(ex));
+            await Finished(clock.TimerCreated.Task);
+            clock.Advance(OwnerConsoleLoopOptions.Default.ShutdownBound);
+            await Finished(shutdown);
+            Assert.Equal(0, Volatile.Read(ref disposals));
+        }
+        finally
+        {
+            stop.Cancel();
+            release.Set();
+            await Finished(refresh);
+            if (shutdown is not null) await Finished(disposed.Task);
+        }
+        await Finished(observed.Task);
+        Assert.Same(error, observed.Task.Result);
+        Assert.Equal(1, disposals);
+        Assert.Empty(fixture.View.NoticeStrip.Visible);
+    }
+
     private static OwnerConductEvent Landing(DateTimeOffset at) =>
         new(at, "loop-relaunch", "11111111", "LOOP_RELAUNCH_NOT_REQUIRED");
 

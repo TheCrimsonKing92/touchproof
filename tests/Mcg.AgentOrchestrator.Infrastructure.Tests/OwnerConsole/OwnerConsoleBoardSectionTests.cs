@@ -21,6 +21,30 @@ public sealed class OwnerConsoleBoardSectionTests
     private static readonly string[] Columns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE"];
 
     [Fact]
+    public async Task Scene_DisposeAfterRefresh_ReleasesObservedProjectStores()
+    {
+        using var projects = await Projects.CreateAsync();
+        using (var scene = new Scene(projects))
+        {
+            await scene.RefreshAsync();
+            Assert.True(scene.Source.RetainedProjects > 0);
+            // Prove a retained observer really owns this file before testing its release.
+            if (OperatingSystem.IsWindows())
+                Assert.Throws<IOException>(() =>
+                {
+                    using var held = new FileStream(projects.Alpha.SqliteStatePath,
+                        FileMode.Open, FileAccess.Read, FileShare.None);
+                });
+        }
+        foreach (var workspace in new[] { projects.Home, projects.Alpha, projects.Beta })
+        {
+            using var released = new FileStream(workspace.SqliteStatePath,
+                FileMode.Open, FileAccess.Read, FileShare.None);
+            Assert.True(released.Length > 0);
+        }
+    }
+
+    [Fact]
     public async Task AllProjects_Screen_DrawsOneHeaderAndGroupedFooter()
     {
         using var projects = await Projects.CreateAsync();
@@ -763,7 +787,7 @@ public sealed class OwnerConsoleBoardSectionTests
             finally { app.End(session); }
         }
 
-        public void Dispose() { View.Dispose(); _app.Dispose(); }
+        public void Dispose() { View.Dispose(); _app.Dispose(); Source.Dispose(); }
     }
 
     private sealed record BoardScreen(Rectangle Bounds, string[] Lines, Terminal.Gui.Drawing.Attribute?[,] Attributes);

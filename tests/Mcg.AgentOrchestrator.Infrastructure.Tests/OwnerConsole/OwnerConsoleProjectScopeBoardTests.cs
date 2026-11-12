@@ -335,7 +335,7 @@ public sealed class OwnerConsoleProjectScopeBoardTests
             Assert.Equal(OwnerConsolePane.Board, View.FocusedPane);
         }
 
-        public void Dispose() { View.Dispose(); _app.Dispose(); }
+        public void Dispose() { View.Dispose(); _app.Dispose(); Source.Dispose(); }
     }
 
     private sealed class Epics : IOwnerGoalEpicLookup

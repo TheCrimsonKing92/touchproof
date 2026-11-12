@@ -27,7 +27,7 @@ public sealed class OwnerConsoleOnboardingBoardTests
         _ = StateDbMigrations.EnsureUpToDate(running.SqliteStatePath);
         await new SqliteOrchestratorStateRepository(running.SqliteStatePath).SaveAsync(harness.Kernel, TestContext.Current.CancellationToken);
         Assert.False(File.Exists(onboarding.SqliteStatePath), "Onboarding fixture must exercise the no-state-database path.");
-        var source = new OwnerConsoleBoardSource("running", OwnerConsoleProjectScope.All,
+        using var source = new OwnerConsoleBoardSource("running", OwnerConsoleProjectScope.All,
             () => [OnboardingConsoleFixture.Describe(onboarding), OnboardingConsoleFixture.Describe(running)], fixture.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), fixture.Clock);
         var model = OwnerConsoleBoardSection.Arrange(builder.WithDecisions(
@@ -95,7 +95,7 @@ public sealed class OwnerConsoleOnboardingBoardTests
         OnboardingConsoleFixture.InstallManifest(project);
         var harness = new OwnerConsoleHarness(fixture.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), fixture.Clock);
-        var source = new OwnerConsoleBoardSource("price-selector", OwnerConsoleProjectScope.All,
+        using var source = new OwnerConsoleBoardSource("price-selector", OwnerConsoleProjectScope.All,
             () => [OnboardingConsoleFixture.Describe(project)], fixture.Clock);
         var board = await source.ComposeAsync(await builder.BuildBoardAsync(), TestContext.Current.CancellationToken);
         var header = Assert.Single(board.Board);

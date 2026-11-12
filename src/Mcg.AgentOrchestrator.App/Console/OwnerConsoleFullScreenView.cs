@@ -44,7 +44,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
-    private bool _editingCommand;
     private string? _completionHint;
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
@@ -53,6 +52,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     internal string? ActivityFilter => _activityPane.Filter;
     private View? _commandReturnFocus;
     public bool ActionRunning => _acting || _operation.IsRunning;
+    internal Task Completion => _operation.Completion;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
     public DataTable BoardTable { get; } = OwnerConsoleFullScreenComposer.CreateBoardTable();
@@ -73,7 +73,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
     public OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
-    public bool EditingCommand { get => _editingCommand; set => _editingCommand = value; }
+    public bool EditingCommand { get; set; }
     string? IOwnerConsoleKeySurface.CompletionHint { set => _completionHint = value; }
     public View? CommandReturnFocus { get => _commandReturnFocus; set => _commandReturnFocus = value; }
     int IOwnerConsoleKeySurface.HintWidth => _hints.Viewport.Width;
@@ -110,9 +110,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
             _activityPane, _board, _notice, _status, _hints, _epicHint, _state, _collapse, () => _completionHint, value => _completionHint = value);
     }
 
-    internal void Render(OwnerConsoleViewModel model)
+    internal void Render(OwnerConsoleViewModel model) => Render(model, refreshPreview: true);
+
+    internal void Render(OwnerConsoleViewModel model, bool refreshPreview)
     {
-        _paneRenderer.Render(model);
+        _paneRenderer.Render(model, refreshPreview);
         SettingsView.Refresh();
     }
 
@@ -216,7 +218,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
         RenderHints();
     }
 
-    public void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
+    public void RenderHints() => _hints.Text = EditingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
             ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
@@ -224,9 +226,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable, IOwnerConsoleKey
 
     public void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false) =>
         _selection.Select(index, refresh, direction, allowHeader);
-
     internal void RenderPreview() => _previewPane.Render();
-
     public bool RefuseSelectedBoardRow() => _selection.Refuse();
 
     internal void Invoke(Action action)

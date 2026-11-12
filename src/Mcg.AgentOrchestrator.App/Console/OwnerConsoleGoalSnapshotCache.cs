@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleGoalSnapshotCache
 {
     private readonly Dictionary<string, (string Version, OwnerConsoleLoadedGoals Loaded)> _entries = new(StringComparer.Ordinal);
+    internal void Clear() => _entries.Clear();
 
     internal Dictionary<string, string> Observe(IReadOnlyList<GoalSummary> rows)
     {

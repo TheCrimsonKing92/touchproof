@@ -6,8 +6,10 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Project identity plus the fact key owns routing; these items never acquire a goal id.
 internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
-    Func<IReadOnlyList<OwnerConsoleBoardProject>> projects, TimeProvider clock, Action? changed = null) : IOwnerQuestionSource
+    Func<IReadOnlyList<OwnerConsoleBoardProject>> projects, TimeProvider clock, Action? changed = null,
+    Func<OwnerConsoleBoardProject, CancellationToken, Task<bool>>? hasLanded = null) : IOwnerQuestionSource
 {
+    public void Invalidate() => inner.Invalidate();
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
         (await ReadAsync(cancellationToken)).Live;
 
@@ -28,7 +30,8 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase) || project.Error is not null) continue;
-            var goalLanded = await ProjectOnboardingCompletion.HasLandedGoalAsync(project.StatePath, cancellationToken);
+            var goalLanded = await (hasLanded is null ? ProjectOnboardingCompletion.HasLandedGoalAsync(project.StatePath, cancellationToken)
+                : hasLanded(project, cancellationToken));
             var state = Read(project, goalLanded);
             if (!state.IsOnboarding || state.Model is null) continue;
             var answers = ProjectOwnerAnswerRecorder.ReadAnswers(DirectoryFor(project)).Answers;
