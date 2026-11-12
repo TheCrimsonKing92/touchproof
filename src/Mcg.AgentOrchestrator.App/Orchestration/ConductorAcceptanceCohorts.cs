@@ -95,13 +95,6 @@ internal sealed record ConductorAcceptanceCohortRunResult(
     IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
     string Detail);
 
-// What a cohort run reports to the conduct tick: the ordinary run result, plus the typed fault when the
-// run ended in a cohort gate fault. The fault rides beside the result rather than inside it so the shared
-// ConductorAcceptanceCohortRunResult shape stays as it is for every other cohort caller.
-internal sealed record ConductorAcceptanceCohortRunOutcome(
-    ConductorAcceptanceCohortRunResult Run,
-    ConductorAcceptanceCohortGateFault? Fault = null);
-
 // A background acceptance cohort gate that ended in an exception, carried as data so the conduct tick
 // can classify it and hold or escalate the members instead of receiving a throw across the tick boundary.
 internal sealed record ConductorAcceptanceCohortGateFault(
@@ -467,139 +460,6 @@ internal static class ConductorAcceptanceCohortAttribution
         return AcceptanceCohortAttributionOutcome.Indeterminate;
     }
 }
-
-internal sealed partial class ConductorBatchLoop
-{
-    private ConductorAcceptanceCohortSelectionResult SelectAndReportAcceptanceCohort(
-        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
-        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts,
-        ConductorAcceptanceCohortFairnessPriority? fairnessPriority,
-        ConductorDriver driver)
-    {
-        var fairnessContext = fairnessPriority is null
-            ? null
-            : new ConductorAcceptanceCohortFairnessContext(
-                fairnessPriority.GoalId,
-                fairnessPriority.OvertakeCount,
-                BuildAcceptanceHeldResources(liveAttempts));
-        var decision = ConductorAcceptanceCohortSelector.Select(
-            candidates,
-            fairnessPriority?.GoalId,
-            driver.ReadSuppressedGroupedPairs(),
-            fairnessContext,
-            driver.ReadCohortAttributedMemberKeys(),
-            driver.ReadTrainImplicatedMemberKeys());
-        EmitAcceptanceCohortFairnessDecision(decision.FairnessDecision);
-        return decision;
-    }
-
-    internal void EmitAcceptanceCohortFairnessDecision(
-        ConductorAcceptanceCohortFairnessDecision? decision)
-    {
-        if (decision is null) return;
-        var candidateConflicts = decision.CandidateConflicts.Count == 0
-            ? "none"
-            : string.Join(',', decision.CandidateConflicts.Select(conflict =>
-                $"{conflict.CandidateGoalId.Value}:{conflict.HolderGoalId}:{conflict.Kind}:{SanitizeReason(conflict.ConflictKey)}"));
-        EmitProgress(
-            $"ACCEPTANCE_COHORT_FAIRNESS outcome={decision.Outcome} " +
-            $"blocked={decision.BlockedHeadGoalId.Value} selected={decision.SelectedGoalId?.Value ?? "none"} " +
-            $"holder={decision.HeadConflict.HolderGoalId} conflict_kind={decision.HeadConflict.Kind} " +
-            $"conflict={SanitizeReason(decision.HeadConflict.ConflictKey)} " +
-            $"overtakes={decision.OvertakeCount} candidate_conflicts={candidateConflicts}");
-    }
-
-    private void EmitAcceptanceCohortFairnessTransition(CohortAdmissionFairnessTransition? transition)
-    {
-        if (transition is null) return;
-        EmitProgress(
-            $"ACCEPTANCE_COHORT_FAIRNESS_TRANSITION oldest={transition.OldestEligibleGoalId.Value} " +
-            $"previous={transition.PreviousOvertakeCount} resulting={transition.ResultingOvertakeCount} " +
-            $"oldest_admitted={transition.OldestAdmitted} " +
-            $"admitted={string.Join(',', transition.AdmittedGoalIds.Select(goalId => goalId.Value))}");
-    }
-
-    private static IReadOnlyList<ConductorAcceptanceHeldResource> BuildAcceptanceHeldResources(
-        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts) =>
-        liveAttempts
-            .Where(attempt => attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
-            .OrderBy(attempt => attempt.GoalId, StringComparer.Ordinal)
-            .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal)
-            .Select(attempt =>
-            {
-                var scope = RepositoryLandingScopeNormalization.Normalize(
-                    attempt.ScopePaths ?? [],
-                    reserveUnknownScope: true);
-                return new ConductorAcceptanceHeldResource(
-                    attempt.GoalId,
-                    scope.ConflictPaths,
-                    scope.ResourceKeys);
-            })
-            .ToArray();
-
-    // The infrastructure faults the background attempt path treats as transient (IsRetryableAcceptanceRun).
-    // A cohort gate that fails this way is retried on a later tick, not turned into a candidate verdict.
-    private static bool IsTransientCohortGateFault(Exception exception) =>
-        exception is AcceptanceInfrastructureDeferredException or
-            AcceptanceGateEngineException or
-            DotnetBuildSlotsBusyException or
-            BuildLockBlockedException or
-            OperationCanceledException;
-
-    private static (string Outcome, string Reason) DescribeAcceptanceCohortGateFault(
-        ConductorAcceptanceCohortGateFault fault) =>
-        ("gate-fault", $" fault={fault.FaultType} detail={SanitizeReason(fault.Message)}");
-
-    // Counts a transient fault against the member pair the way CompleteParallelAcceptanceRun counts a
-    // single candidate's transient failures: hold and retry below the cap, escalate both members at it.
-    // A fault outside that class is not retryable and escalates immediately rather than holding stale.
-    private static ConductorAcceptanceCohortRunResult ResolveFaultedAcceptanceCohort(
-        ConductorDriver driver,
-        ConductorAutonomyPolicy policy,
-        IReadOnlyList<Goal> cohortEligible,
-        ConductorAcceptanceCohortRunResult cohortRun,
-        ConductorAcceptanceCohortGateFault fault,
-        int tick,
-        List<string> changedGoalLines)
-    {
-        var protectedBoundary = IsProtectedBoundaryRegistrationFault(fault.Fault);
-        var transient = !protectedBoundary && IsTransientCohortGateFault(fault.Fault);
-        var failureCount = transient ? driver.RecordCohortGateTransientFault(fault.MemberPairKey) : 0;
-        var escalate = !transient || failureCount >= ParallelAcceptanceTransientFailureCap;
-        var classification = protectedBoundary ? "terminal" : transient ? "transient" : "non-transient";
-        var memberResults = new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal);
-        foreach (var goal in cohortEligible.Where(goal => fault.MemberGoalIds.Contains(goal.Id.Value)))
-        {
-            memberResults[goal.Id.Value] = escalate
-                ? EscalateParallelAcceptanceSafely(
-                    driver,
-                    goal,
-                    policy,
-                    $"infrastructure-hold acceptance cohort gate fault ({classification} " +
-                    $"{failureCount}/{ParallelAcceptanceTransientFailureCap}): " +
-                    $"{fault.FaultType}: {SanitizeReason(fault.Message)}")
-                : ParallelAcceptanceHeld(
-                    goal,
-                    policy,
-                    $"Acceptance cohort gate fault ({failureCount}/{ParallelAcceptanceTransientFailureCap}); " +
-                    $"retry on next conduct tick. {fault.FaultType}: {fault.Message}");
-            RecordParallelAcceptanceProgress(
-                $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result={(escalate ? "escalated" : "held")} " +
-                $"fault={fault.FaultType} classification={classification} " +
-                $"failures={failureCount}/{ParallelAcceptanceTransientFailureCap} " +
-                $"fingerprint={fault.PairFingerprint} detail={SanitizeReason(fault.Message)}",
-                changedGoalLines);
-        }
-
-        if (escalate)
-        {
-            driver.ClearCohortGateTransientFaults(fault.MemberPairKey);
-        }
-
-        return cohortRun with { MemberResults = memberResults };
-    }
-}
-
 internal sealed partial class ConductorDriver
 {
     internal IReadOnlyList<ConductorAcceptanceCohortSelection> FindLandablePassedCohortSelections(
@@ -620,39 +480,6 @@ internal sealed partial class ConductorDriver
         GroupedGateIdentityInspector.HasCurrentPassedCohortIdentity(selection, receipt,
             _cohortKernel, _cohortWorkspace, _cohortAcceptanceVerifier, _integrationBranch, _cohortCleanupHooks);
 
-    internal ConductorAcceptanceCohortFairnessPriority? SelectForcedCohortCandidate(
-        IReadOnlyList<Goal> orderedGoals)
-    {
-        if (_cohortAcceptanceStore is null) return null;
-        foreach (var goal in orderedGoals)
-        {
-            var count = _cohortAcceptanceStore.ReadOvertakeCount(goal.Id);
-            if (count >= ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)
-            {
-                return new ConductorAcceptanceCohortFairnessPriority(goal.Id, count);
-            }
-        }
-
-        return null;
-    }
-
-    internal CohortAdmissionFairnessTransition RecordCohortAdmissionFairness(
-        IReadOnlyList<Goal> orderedGoals,
-        ConductorAcceptanceCohortSelection selection)
-    {
-        if (_cohortAcceptanceStore is null)
-        {
-            throw new InvalidOperationException("Cohort admission fairness store is unavailable.");
-        }
-        if (orderedGoals.Count == 0)
-        {
-            throw new InvalidOperationException("Cohort admission fairness requires an ordered eligible goal.");
-        }
-        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
-        var oldest = orderedGoals[0].Id;
-        return _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
-    }
-
     // A background cohort gate that faulted is parked here as a typed fault instead of being rethrown
     // into the conduct tick, and drained by the next RunAcceptanceCohort call for the same member pair.
     private readonly ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault> _cohortGateFaults =
@@ -662,34 +489,6 @@ internal sealed partial class ConductorDriver
     // is the stable identity of "this cohort keeps faulting".
     private readonly ConcurrentDictionary<string, int> _cohortGateFaultCounts = new(StringComparer.Ordinal);
     private readonly object _cohortGateRegistrationSync = new();
-
-    // The conduct tick's entry point. A background cohort gate that ended in an exception is reported here
-    // as a typed fault beside the held run result, so the tick classifies the fault instead of receiving a
-    // throw from a thread that finished several ticks ago. A parked fault is taken before anything else,
-    // including an injected cohort runner, so it can never be lost or turned into a fresh gate start.
-    internal ConductorAcceptanceCohortRunOutcome RunAcceptanceCohortForTick(
-        ConductorAcceptanceCohortSelection selection,
-        IReadOnlyList<Goal> orderedGoals,
-        ConductorAutonomyPolicy policy,
-        CancellationToken cancellationToken = default,
-        Action? onGateAdmitted = null,
-        bool runGateInBackground = false)
-    {
-        ArgumentNullException.ThrowIfNull(selection);
-        ArgumentNullException.ThrowIfNull(orderedGoals);
-        return TakeNextCohortGateFault() is { } fault
-            ? new ConductorAcceptanceCohortRunOutcome(
-                CohortGateFaulted(orderedGoals, policy, fault),
-                fault)
-            : new ConductorAcceptanceCohortRunOutcome(
-                RunAcceptanceCohort(
-                    selection,
-                    orderedGoals,
-                    policy,
-                    cancellationToken,
-                    onGateAdmitted,
-                    runGateInBackground));
-    }
 
     private void SweepCompletedCohortGateRuns()
     {
@@ -811,23 +610,6 @@ internal sealed partial class ConductorDriver
         return _cohortGateFaults.TryRemove(memberPairKey, out var fault) ? fault : null;
     }
 
-    // A completed run belongs to the pair that started it, not whichever pair happens to be selected on the
-    // next tick. Drain by stable key so every parked fault is surfaced and counted for its own
-    // members before the newly selected pair can start another gate.
-    private ConductorAcceptanceCohortGateFault? TakeNextCohortGateFault()
-    {
-        SweepCompletedCohortGateRuns();
-        foreach (var memberPairKey in _cohortGateFaults.Keys.OrderBy(key => key, StringComparer.Ordinal))
-        {
-            if (_cohortGateFaults.TryRemove(memberPairKey, out var fault))
-            {
-                return fault;
-            }
-        }
-
-        return null;
-    }
-
     // Observes a completed background cohort gate without rethrowing: a fault is parked as typed data
     // for its member pair, and a clean completion clears that pair's transient-fault count.
     private void ObserveCohortGateCompletion(string memberPairKey, CohortGateRun run)
@@ -871,23 +653,6 @@ internal sealed partial class ConductorDriver
             ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
             completion);
     }
-
-    internal static ConductorAcceptanceCohortGateFault CreateCohortGateFault(
-        ConductorAcceptanceCohortSelection selection,
-        Exception fault) =>
-        new(
-            CohortGateMemberPairKey(selection),
-            selection.Members
-                .Select(member => member.GoalId.Value)
-                .ToHashSet(StringComparer.Ordinal),
-            ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
-            fault);
-
-    internal int RecordCohortGateTransientFault(string memberPairKey) =>
-        _cohortGateFaultCounts.AddOrUpdate(memberPairKey, 1, (_, count) => count + 1);
-
-    internal void ClearCohortGateTransientFaults(string memberPairKey) =>
-        _cohortGateFaultCounts.TryRemove(memberPairKey, out _);
 
     private ConductorAcceptanceCohortRunResult CohortGateFaulted(
         IReadOnlyList<Goal> orderedGoals,

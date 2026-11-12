@@ -21,7 +21,6 @@ public sealed class AcceptanceCohortWorkflowTestsLongCohortRepeatedRuns : Accept
         await using var production = new AcceptanceCohortWorkflowTestsProductionBatchReconciliation();
         Action[] siblingFacts =
         [
-            progress.ConductLog_FairnessYield_PersistsTypedDecision,
             progress.CohortProgressEvents_AreStructuredForBothMembersWithoutUnknownGoal,
             membership.BackgroundCohortGate_MainAdvanceDoesNotLaunchDuplicateForSameMembers,
             membership.BackgroundCohortGate_OverlappingMembersAreHeldByActualOwner,

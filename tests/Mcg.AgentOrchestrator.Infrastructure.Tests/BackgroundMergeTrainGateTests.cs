@@ -95,17 +95,6 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
             Assert.Equal(1, verifier.RunCount);
             Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
 
-            var pair = ConductorAcceptanceCohortSelector.Select(goals.Take(2).Select(goal =>
-                new ConductorSpeculativeAcceptanceCandidate(goal.Id,
-                    driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray()).Selection;
-            Assert.NotNull(pair);
-            var cohort = driver.RunAcceptanceCohortForTick(pair, goals.Take(2).ToArray(),
-                ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
-            Assert.Null(cohort.Fault);
-            Assert.DoesNotContain("gate infrastructure failure", cohort.Run.Detail, StringComparison.Ordinal);
-            Assert.Equal(2, starts.StartCount);
-            starts.RunPending();
-            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             var trainFault = driver.RunMergeTrain(train, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("OperationCanceledException", trainFault.Detail, StringComparison.Ordinal);
