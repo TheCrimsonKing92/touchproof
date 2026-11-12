@@ -88,9 +88,10 @@ public sealed class RetryAdmissionHoldAnswerDispatchTests : WorkerDispatchTestSu
         Xunit.Assert.Contains("Background dispatch process start is disabled", startRefusal.Message);
         Xunit.Assert.True(processStartCheckpoints > 0);
         var creditedTask = kernel.GetTask(goal.Id, planner.Id);
+        Xunit.Assert.NotEqual(fingerprint, creditedTask.LastDispatch?.RetryContextFingerprint);
         Xunit.Assert.Contains(creditedTask.RetryAdmissionHistory, receipt =>
             receipt.Decision == RetryAdmissionDecision.Allowed &&
-            receipt.Fingerprint == fingerprint &&
+            receipt.Fingerprint == creditedTask.LastDispatch?.RetryContextFingerprint &&
             receipt.LinkedDispatchAt == creditedTask.LastDispatch?.DispatchedAt);
         Xunit.Assert.Equal(new HumanInputRequestCounts(1, 0),
             kernel.GetHumanInputRequestCounts(goal.Id, planner.Id));
