@@ -45,6 +45,7 @@ internal sealed partial class ConductorDriver
                     changedPaths.Concat(earlier.ChangedPaths), workspace.ExecutionDirectory,
                     new AcceptanceTestSourceResolver.Request(workspace.ExecutionDirectory).ResolveIdentity);
                 if (shared.Count == 0) continue;
+                RecurringUnrelatedHandler?.FileInherited(goal, acceptance, shared, earlier.GoalId, candidateSha);
 
                 var fingerprint = Convert.ToHexString(SHA256.HashData(
                     Encoding.UTF8.GetBytes(string.Join('\n', shared)))).ToLowerInvariant();
