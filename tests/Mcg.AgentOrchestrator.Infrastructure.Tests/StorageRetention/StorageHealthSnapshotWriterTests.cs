@@ -19,7 +19,7 @@ public sealed class StorageHealthSnapshotWriterTests
         File.WriteAllText(Path.Combine(fixture.OrchestratorDirectory, "unknown"), "unregistered");
         var retiredPath = Path.Combine(fixture.OrchestratorDirectory, "retired-during-sweep");
         File.WriteAllText(retiredPath, "must be removed before measuring");
-        CliStorageHealthQueryCommand.Report? captured = null;
+        StorageHealthMeasurement.Report? captured = null;
         var calls = 0;
         var writer = new StorageHealthSnapshotWriter((directory, registry) =>
         {
@@ -52,7 +52,7 @@ public sealed class StorageHealthSnapshotWriterTests
         using var fixture = new RetentionReclaimFixture();
         Run(fixture, StorageHealthSnapshotWriter.Default);
         var previousSize = new FileInfo(SnapshotPath(fixture)).Length;
-        CliStorageHealthQueryCommand.Report? captured = null;
+        StorageHealthMeasurement.Report? captured = null;
         var result = Run(fixture, new((directory, entries) =>
             captured = CliStorageHealthQueryCommand.Build(directory, entries)));
 
@@ -151,7 +151,7 @@ public sealed class StorageHealthSnapshotWriterTests
             new OrchestratorArtifactRegistry.Entry(name, "fixture", OrchestratorArtifactRegistry.WriterKind.Source,
                 null, OrchestratorArtifactRegistry.RetentionKind.KeepForever, null, 1, "fixture"))).ToArray();
 
-    private static void AssertPublished(RetentionReclaimFixture fixture, CliStorageHealthQueryCommand.Report captured)
+    private static void AssertPublished(RetentionReclaimFixture fixture, StorageHealthMeasurement.Report captured)
     {
         Assert.True(File.Exists(SnapshotPath(fixture)));
         using var document = JsonDocument.Parse(File.ReadAllText(SnapshotPath(fixture)));

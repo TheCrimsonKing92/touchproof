@@ -1,10 +1,8 @@
-using Mcg.AgentOrchestrator.App.Cli;
-
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Called only under the retention lease; status readers never invoke measurement.
 internal sealed class StorageHealthSnapshotWriter(
-    Func<string, IReadOnlyList<OrchestratorArtifactRegistry.Entry>, CliStorageHealthQueryCommand.Report>? measure = null,
+    Func<string, IReadOnlyList<OrchestratorArtifactRegistry.Entry>, StorageHealthMeasurement.Report>? measure = null,
     IReadOnlyList<OrchestratorArtifactRegistry.Entry>? entries = null)
 {
     internal const string FileName = "storage-health-snapshot.json";
@@ -18,7 +16,7 @@ internal sealed class StorageHealthSnapshotWriter(
         var path = Path.Combine(orchestratorDirectory, FileName);
         try
         {
-            var report = (measure ?? CliStorageHealthQueryCommand.Build)(orchestratorDirectory,
+            var report = (measure ?? StorageHealthMeasurement.Build)(orchestratorDirectory,
                 entries ?? OrchestratorArtifactRegistry.Entries);
             var snapshot = new StorageHealthSnapshot(report.Totals.Bytes, report.Totals.Files,
                 report.Totals.Over, report.Totals.Unregistered,
