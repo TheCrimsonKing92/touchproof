@@ -95,6 +95,7 @@ internal static class OrchestratorArtifactRegistry
         Source("state-log-divergence-state.json", "App/Orchestration/StateLogDivergenceCheckRunner.cs"),
         Source("terminal-goal-sweep-cache.json", "App/Orchestration/TerminalGoalSweep.cs"),
         Source("storage-retention-cursor.json", "App/Orchestration/StorageRetentionResumeCursor.cs"),
+        Source("storage-health-snapshot.json", "App/Orchestration/StorageHealthSnapshotWriter.cs"),
         Source("landing-escalations.json", "App/Orchestration/OperatorInbox.cs"),
         Source("landing-escalations.lock", "App/Orchestration/OperatorInbox.cs"),
         Source("operator-inbox-acks.json", "App/Orchestration/OperatorInbox.cs"),

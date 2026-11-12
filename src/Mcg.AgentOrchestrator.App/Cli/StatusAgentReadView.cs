@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class StatusAgentReadView
 {
-    internal static string Render(Goal goal, string? label, string status, TimeProvider? time = null) =>
+    internal static string Render(Goal goal, string? label, string status, TimeProvider? time = null,
+        object? storage = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.StatusSchema, AgentReadEnvelope.StatusSchemaVersion,
             new
             {
@@ -23,7 +24,8 @@ internal static class StatusAgentReadView
                     task.AssignedAgentId is null ? null : CliIdentifierText.ShortId(task.AssignedAgentId.Value),
                     task.WorkerBuildInvocations.Count == 0 ? null : task.WorkerBuildInvocations.Select(i =>
                         new InvocationRow(i.Id, i.DispatchId, i.TreeDigest, i.Phase.ToString(),
-                            i.Outcome?.ToString(), i.Consumed, i.CustodyReleased)).ToArray())).ToArray()
+                            i.Outcome?.ToString(), i.Consumed, i.CustodyReleased)).ToArray())).ToArray(),
+                storage = storage ?? StorageHealthStatusView.UnknownJson()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 
     private sealed record TaskRow(int Number, string Status, string Role, string Description, string? Agent,
