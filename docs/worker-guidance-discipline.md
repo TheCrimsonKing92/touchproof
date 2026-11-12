@@ -128,6 +128,22 @@ obligation. Worker completion leaves acceptance and landing held until the ownin
 valid current required evidence and deterministic gates pass. See the
 [`role-capability-matrix`](role-capability-matrix.md) for execution boundaries.
 
+## Briefs about a queue, a cap or a slot
+
+A slot, semaphore, serialization key or capacity setting exists because something behind it is
+expensive. When work queues behind one, the brief goes after that expense, and the end state is
+that the limiter is gone.
+
+- Name the cost the limiter rations, with a measurement (per-test git repositories and process launches sit behind `HostCapacityTestBudget`).
+- Reduce or remove that cost in the goal. Ask first whether the waiting work needs the limiter at all.
+- A change that narrows or tunes a limiter is acceptable only as a step. The brief then names the later slice that deletes the limiter, so the refinement does not become the permanent design.
+- A capacity value set from a trial is evidence with a date and conditions. If the right value moves with load, the deliverable is a controller that keeps measuring it.
+- Work that repeats what a later stage will run anyway (evidence before the gate) needs a measured expected payoff in the brief, which is its predicted cost against the measured chance that it saves the later run. A fixed class or file count does not stand in for that measurement.
+
+We kept refining limiters while the cost behind them stayed (`HostCapacityTestBudget`, 2026-10-30).
+On 2026-11-12 a 3-file change ran 1,490 test classes as pre-review evidence for 3 h 48 min beside
+the gate, because nothing priced that run against what it could save.
+
 ## Corollaries
 
 **State the mechanism, not the property.** "Durable" is an adjective; "persisted to the outbox,
