@@ -47,7 +47,8 @@ public sealed class ImpactReplayCommandTests
         Assert.Equal("Beta lane", failure.Lane);
         Assert.Equal(false, failure.WouldRun);
         Assert.True(failure.IsMiss);
-        Assert.True(attempt.MissCheckComplete);
+        Assert.False(attempt.MissCheckComplete);
+        Assert.Contains(attempt.EvidenceWarnings, warning => warning.Contains("Recover authoritative exact-identity coverage", StringComparison.Ordinal));
         Assert.Equal("Failed", Assert.Single(attempt.LaneOutcomes, lane => lane.Lane == "Beta lane").Outcome);
         Assert.Contains("| miss-attempt | SampleTests.BetaTests | Beta lane |", markdown);
     }

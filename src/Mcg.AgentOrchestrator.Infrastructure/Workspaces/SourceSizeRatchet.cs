@@ -578,7 +578,7 @@ internal static class SourceSizeRatchet
             // Follower removal integrated with direct test seams: measured 13753 lines in 68 partial files.
             // Goal 9eb2f8ba: eight measured wiring lines connect the separate recurrence handler; no new partial.
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
-            new SourceClassCeiling("ConductorDriver", 13514, 68),
+            new SourceClassCeiling("ConductorDriver", 13513, 68),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

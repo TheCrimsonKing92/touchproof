@@ -1,0 +1,9 @@
+Retained projection supplied by operator answer to prerequisite `342ae73d7b784568b17fa328c1e75d69`, in goal `3d6a586035df415e86d564634965a6f4`'s packaged `goal/timeline.json`. The JSON is the exact supplied projection, extracted without changing its rows.
+
+Source: `.orchestrator/operator-evidence/impact-selection-20261109-full/impact-replay.json`; source SHA-256 `54c820df31da09770d865112421eaad29b38a1b5a3adc4dbb6a8825f7bca4ca2`; runtime `599721fd7`. Projection SHA-256 `3e1fe4b38f293a571e1c402776be7ef361ec78c281182c57c5dc957ef9cbd9c6`.
+
+The projection contains 85 rows, including incomplete rows, and 258 failing-class observations. Its full-report counts describe 94 replayable cases: the projection is not the full report. It retains 2 misses, 119 flake exclusions, and the exact evidence labels, including one historical aggregate. The old summary count of 121 includes flakes and is not a true-miss count.
+
+The operator independently inspected original and rerun evidence for both misses. `IsolatedProcessSpawningRemainderChainTests` failed both with missing `WorkerBuildScopeToolCacheDigestTests` and `WorkerBuildScopeToolCacheTests` measurements and inventory expected 1/actual 3. `PreTesterTestSourceGuardClassesTests.LiveTreeSelectsEveryGuardStemAndSharedClassWithinCountBound` failed both with range 1..46/actual 47.
+
+Raw original/rerun TRX and diagnostic arrays were not supplied. The fixture preserves supplied receipt/history labels and classifications; it does not reconstruct XML or invent missing diagnostics. Native rerun semantics are covered separately by `ImpactReplayRecordedFlakeTests`, `ImpactReplayHistoricalFlakeClassifierTests`, and `ImpactReplayHistoryQueryTests`. Where complete authoritative history is absent, the production query must disclose incomplete coverage instead of promising this projection's historical exclusion.

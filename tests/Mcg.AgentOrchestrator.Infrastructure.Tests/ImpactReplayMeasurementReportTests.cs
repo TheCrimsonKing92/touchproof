@@ -18,7 +18,8 @@ public sealed class ImpactReplayMeasurementReportTests
         Assert.Equal(9d / 13, summary.ShareOfTestSecondsSkipped);
         Assert.Equal(1, summary.MissCount);
         Assert.Equal(0, summary.FlakeExcludedCount);
-        Assert.Equal(1, summary.CompleteMissCheckCount);
+        // The skipped failure remains a miss, but this fixture has no authoritative history coverage.
+        Assert.Equal(0, summary.CompleteMissCheckCount);
         Assert.Equal(0, summary.IncompleteDurationCoverageCount);
         Assert.Contains("Maximum changed source files: 20", markdown);
         Assert.Contains("Changed source file count distribution: 1: 1", markdown);
@@ -27,10 +28,11 @@ public sealed class ImpactReplayMeasurementReportTests
         Assert.Contains("Share of Infrastructure test seconds skipped (readable TRX durations): 69.2", markdown);
         Assert.Contains("Miss count (true misses): 1", markdown);
         Assert.Contains("Flake-excluded count (known flaky skipped failures): 0", markdown);
-        Assert.Contains("Complete miss checks: 1", markdown);
+        Assert.Contains("Complete miss checks: 0", markdown);
         using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json")));
         Assert.Equal(8d, json.RootElement.GetProperty("measurement").GetProperty("balancedPoolSecondsSaved").GetDouble());
         var measurement = json.RootElement.GetProperty("measurement");
+        Assert.Equal(0, measurement.GetProperty("completeMissCheckCount").GetInt32());
         Assert.Equal(summary.MissCount, measurement.GetProperty("missCount").GetInt32());
         Assert.Equal(summary.FlakeExcludedCount, measurement.GetProperty("flakeExcludedCount").GetInt32());
         var interpretation = measurement.GetProperty("interpretation").GetString()!;

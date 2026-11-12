@@ -17,6 +17,11 @@ internal static class GateStatsReport
     internal static FlakeReport Flakes(string directory, int last, int top)
     {
         var attempts = GateStatsReader.ReadGateRuns(directory, last, out var skipped);
+        return Flakes(attempts, skipped, top);
+    }
+
+    internal static FlakeReport Flakes(IReadOnlyList<GateStatsReader.GateRunAttempt> attempts, int skipped, int top)
+    {
         var outcomes = new Dictionary<string, List<TestAttemptOutcome>>(StringComparer.Ordinal);
         var nonterminal = 0;
         foreach (var attempt in attempts)

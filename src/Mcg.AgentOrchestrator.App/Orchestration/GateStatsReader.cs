@@ -166,7 +166,7 @@ internal static class GateStatsReader
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { skipped++; return []; }
     }
 
-    private static IReadOnlyList<TestResult>? ReadTrx(string path)
+    internal static IReadOnlyList<TestResult>? ReadTrx(string path)
     {
         try
         {

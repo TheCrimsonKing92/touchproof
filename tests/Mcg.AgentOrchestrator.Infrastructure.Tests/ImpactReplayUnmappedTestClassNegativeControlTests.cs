@@ -4,6 +4,27 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 // Parallel-safe: each case owns its Git repository, receipts and output files.
 public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
 {
+    [Fact]
+    public void CliFailure_PreservesScopedHistoryAndCheckpoint()
+    {
+        using var fixture = new ImpactReplayFixture();
+        fixture.AddAttempt("history-and-progress", failingBeta: true);
+
+        var (report, _) = fixture.Run();
+
+        var attempt = Assert.Single(report.Attempts);
+        Assert.True(Assert.Single(attempt.FailingClasses).IsMiss);
+        Assert.False(attempt.MissCheckComplete);
+        Assert.Contains(attempt.EvidenceWarnings, warning => warning.Contains("Historical evidence incomplete", StringComparison.Ordinal));
+        Assert.NotNull(report.HistoricalEvidence);
+        Assert.Equal(new[] { "SampleTests.BetaTests.Works" }, report.HistoricalEvidence.QueriedIdentities);
+        Assert.Equal(1, report.HistoricalEvidence.MetadataReads);
+        Assert.Equal(0, report.HistoricalEvidence.TrxParses);
+        Assert.Empty(report.HistoricalEvidence.ParsedPaths);
+        Assert.NotNull(report.Run);
+        Assert.True(File.Exists(report.Run.CheckpointPath));
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(6)]
@@ -79,8 +100,15 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
         Assert.Empty(diagnostics.TopClasses);
         Assert.Empty(diagnostics.Occurrences);
         var json = JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.OutputDirectory, "impact-replay.json")))!.AsObject();
-        Assert.Equal(new[] { "attempts", "attemptsGainingChangedTestClasses", "cleanupErrors", "floorLanes", "floorSource",
+        Assert.Equal(new[] { "attempts", "attemptsGainingChangedTestClasses", "cleanupErrors", "floorLanes", "floorSource", "historicalEvidence",
             "run", "skippedInputs", "unmappedTestClasses", "unreplayableAttempts" }, json.Select(item => item.Key).Order(StringComparer.Ordinal));
+        var history = json["historicalEvidence"]!.AsObject();
+        Assert.Equal(new[] { "metadataReads", "parsedPaths", "queriedIdentities", "trxParses" },
+            history.Select(item => item.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(0, history["metadataReads"]!.GetValue<int>());
+        Assert.Equal(0, history["trxParses"]!.GetValue<int>());
+        Assert.Empty(history["queriedIdentities"]!.AsArray());
+        Assert.Empty(history["parsedPaths"]!.AsArray());
         Assert.Equal(report.Run!.RunId, json["run"]!["runId"]!.GetValue<string>());
         Assert.Equal(0, json["unmappedTestClasses"]!["countsByReason"]!["not-scanned"]!.GetValue<int>());
         Assert.Equal(0, json["unmappedTestClasses"]!["countsByReason"]!["no-lane"]!.GetValue<int>());

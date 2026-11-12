@@ -47,9 +47,8 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var tester = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Tester);
-        if (tester is null)
-            throw new InvalidDataException("Deferred no-change evidence has no Tester evidence owner.");
+        if (DeferredNoChangeEvidenceOwner.Resolve(goal, developer.Id, outcome.CandidateSha, out var owner) is { } ownerAbsent)
+        { result = Escalate(goal, goalPrefix, policy, fromState, ownerAbsent); return true; }
         var worktreePath = GoalWorktrees.WorktreePath(_executionDirectory, goal.Id);
         var declaration = DeveloperDeferredTestSelections.Resolve(
             worktreePath, "deferred - " + string.Join(", ", outcome.TestClasses),
@@ -82,7 +81,7 @@ internal sealed partial class ConductorDriver
         }
 
         if (prior is null)
-            _recordFindingEvidenceRequest(goal.Id, tester.Id,
+            _recordFindingEvidenceRequest(goal.Id, owner.Id,
                 DeferredNoChangeEvidenceIndexLines.FormatMarker(new DeferredNoChangeEvidenceEntry(
                     "started", developer.Id, outcome.CandidateSha, receiptId,
                     selectionNames, notRun, null, [], Declared: outcome.TestClasses)));
@@ -153,7 +152,7 @@ internal sealed partial class ConductorDriver
 
         void RecordDeferredNoChangeEvidence(
             string verdict, IReadOnlyList<string> failures, string? resultPath) =>
-            _recordFindingEvidenceRun(goal.Id, tester.Id,
+            _recordFindingEvidenceRun(goal.Id, owner.Id,
                 DeferredNoChangeEvidenceIndexLines.FormatMarker(new DeferredNoChangeEvidenceEntry(
                     verdict, developer.Id, outcome.CandidateSha, receiptId,
                     selectionNames, notRun, resultPath, failures, Declared: outcome.TestClasses)));
