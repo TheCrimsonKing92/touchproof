@@ -892,8 +892,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
                 (call.Contains("--filter-class") || call.Contains("--filter-not-class")),
                 "Each infrastructure shard must run the MTP executable with a translated class filter.");
         Assert.Contains(result.Checks!, check => check.Name == "core tests");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        var expectedLaneChecks = AcceptanceInfrastructureLaneResolver.ResolveExecution(
+                AcceptanceGateEngineSettings.Load(root), root).Lanes
+            .Where(lane => !lane.RequiresBuildSystemChange)
+            .Select(lane => $"infrastructure tests: {lane.Name}")
+            .Order(StringComparer.Ordinal).ToArray();
+        Assert.NotEmpty(expectedLaneChecks);
+        Assert.Equal(expectedLaneChecks, result.Checks!
+            .Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
+            .Select(check => check.Name).Order(StringComparer.Ordinal).ToArray());
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&

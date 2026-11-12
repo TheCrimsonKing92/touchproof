@@ -1264,7 +1264,7 @@ internal sealed partial class ConductorDriver
         () => _cohortKernel ?? _conductorTickKernel, _recordAcceptanceFailure, _utcNow,
         goal => SoloAcceptanceContextReader is { } reader ? reader(goal) :
             SoloAcceptanceFailureHandler.ReadContext(goal, _executionDirectory, ReadCurrentCohortAttributionRevisions(goal)),
-        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation);
+        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation, goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value));
 
     internal EnvironmentContractGate? EnvironmentGate { get; set; }
 
@@ -1292,7 +1292,7 @@ internal sealed partial class ConductorDriver
         if (_plannerEvidenceReadiness.GetHold(goal, state) is { } plannerHold)
             return MakeResult(goalId, goalPrefix, policy, plannerHold);
         if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
-            return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, "solo-start-claimed-reconciliation-required");
+            return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, SoloHoldReasons.StartClaimedReconciliationRequired);
         ConductorParkedWaitEscalationResolution.Resolve(_resolveParkedWaitEscalations, goal, state);
 
         if (state == GoalLifecycleState.CleanedUp)

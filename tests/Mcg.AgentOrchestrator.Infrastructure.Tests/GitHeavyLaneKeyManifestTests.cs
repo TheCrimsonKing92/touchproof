@@ -8,8 +8,6 @@ public sealed class GitHeavyLaneKeyManifestTests
     private static readonly string[] GitHeavyLaneNames =
     [
         "Remainder",
-        "Remainder balance A",
-        "Remainder balance D",
         "Remainder merge train and ratchet"
     ];
 
@@ -17,7 +15,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     public void ShippedManifest_NoLaneDeclaresTheSharedKey()
     {
         var lanes = LoadLanes();
-        Assert.Equal(30, lanes.Count);
+        Assert.Equal(20, lanes.Count);
         Assert.All(lanes, lane => Assert.DoesNotContain(SharedKey, lane.ExclusiveResourceKeys));
         foreach (var name in GitHeavyLaneNames)
         {
@@ -50,33 +48,6 @@ public sealed class GitHeavyLaneKeyManifestTests
                 lane.ExclusiveResourceKeys, lane.RequiresBuildSystemChange, shippedMachineLocalKeys));
             Assert.Null(RemoteLaneResourceEligibility.ExclusionReason(
                 lane.ExclusiveResourceKeys, lane.RequiresBuildSystemChange, extendedMachineLocalKeys));
-        }
-
-        var keylessLane = Assert.Single(lanes, lane => lane.Name == "Remainder balance B");
-        Assert.Null(RemoteLaneResourceEligibility.ExclusionReason(
-            keylessLane.ExclusiveResourceKeys, keylessLane.RequiresBuildSystemChange, shippedMachineLocalKeys));
-    }
-
-    [Fact]
-    public void ShippedManifest_FormerBalanceAAndDClassesHaveExactlyOneBalancedLane()
-    {
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var settings = AcceptanceGateEngineSettings.Load(root);
-        var classes = AcceptanceTestClassSourceScanner.Scan(root);
-        Assert.NotNull(settings.BalancedLanePool);
-        var expanded = AcceptanceBalancedLaneExpander.Expand(settings.InfrastructureTestLanes, classes,
-            new Dictionary<string, double>(), settings.BalancedLanePool);
-        foreach (var name in new[] { "Remainder balance A", "Remainder balance D" })
-        {
-            var originalLane = Assert.Single(settings.InfrastructureTestLanes, lane => lane.Name == name);
-            var members = classes.Where(item =>
-                AcceptanceLaneMembership.LanesIncluding([originalLane], item.FullName).Count > 0).ToArray();
-            Assert.NotEmpty(members);
-            foreach (var item in members)
-            {
-                var lane = Assert.Single(AcceptanceLaneMembership.LanesIncluding(expanded.Lanes, item.FullName));
-                Assert.StartsWith(settings.BalancedLanePool.LaneNamePrefix, lane.Name);
-            }
         }
     }
 

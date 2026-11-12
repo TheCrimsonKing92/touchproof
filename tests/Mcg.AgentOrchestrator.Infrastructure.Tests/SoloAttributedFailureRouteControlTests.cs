@@ -88,7 +88,7 @@ public sealed class SoloAttributedFailureRouteControlTests
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    public async Task ThrowingBaseline_ReloadAndRestart_HoldsWithoutRetry()
+    public async Task ThrowingBaseline_ReloadAndRestart_AdmitsFreshGateWithoutRetry()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce(baselineThrows: true);
@@ -110,10 +110,14 @@ public sealed class SoloAttributedFailureRouteControlTests
         await fixture.Restart();
         var driver = fixture.Driver();
         driver.BeginTick(fixture.Kernel, 2);
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(
             driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
-        Assert.Contains("solo-receipt-absent", held.Reason);
-        Assert.Equal("solo-acceptance-correction", Assert.IsType<PolicyDecisionRecord>(held.Decision).Stage);
+        var decision = Assert.IsType<PolicyDecisionRecord>(executed.Decision);
+        Assert.Equal("solo-receipt-absent", decision.DiscriminatingEvidence);
+        Assert.Equal("solo-acceptance-correction", decision.Stage);
+        Assert.Equal("FreshGate", decision.Action);
+        Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+        Assert.Null(fixture.Goal.LatestAcceptanceFailure);
         Assert.Empty(fixture.Starts);
         Assert.Empty(MarkerRetries(fixture.Goal));
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
@@ -144,7 +148,7 @@ public sealed class SoloAttributedFailureRouteControlTests
     [InlineData("apparatus", "solo-candidate-not-introduced")]
     [InlineData("rerun-unavailable", "solo-candidate-rerun-unconfirmed")]
     [InlineData("baseline-uncovered", "solo-incomplete-check-rows")]
-    public async Task InvalidEvidenceHoldsWithoutRetryOrDispatch(string fault, string reason)
+    public async Task MissingOrInvalidEvidence_SelectsFreshGateOrHoldWithoutRetryOrDispatch(string fault, string reason)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce();
@@ -219,17 +223,32 @@ public sealed class SoloAttributedFailureRouteControlTests
         if (fault == "current-candidate") driver.SoloAcceptanceContextReader = _ => fixture.Context with { CandidateSha = "changed" };
         if (fault == "current-main") driver.SoloAcceptanceContextReader = _ => fixture.Context with { MainSha = "changed" };
         driver.BeginTick(fixture.Kernel, 2);
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
-        Assert.Contains(reason, held.Reason);
-        Assert.Contains("evidence=", held.Reason);
-        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
-        Assert.Equal("solo-acceptance-correction", decision.Stage);
-        Assert.Equal("Hold", decision.Action);
-        Assert.Contains(reason, decision.DiscriminatingEvidence);
-        Assert.Equal(held.Reason, decision.Reason);
-        Assert.Contains(new PolicyDecisionFact("goalId", fixture.Goal.Id.Value), decision.Facts);
-        Assert.Contains(new PolicyDecisionFact("attemptId", summary.AttemptId!), decision.Facts);
-        Assert.Contains(new PolicyDecisionFact("evidencePath", summary.SoloFailureReceipt?.Evidence.Path ?? "absent"), decision.Facts);
+        var outcome = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome;
+        if (reason is "solo-receipt-absent" or "solo-revision-mismatch")
+        {
+            var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(outcome);
+            var decision = Assert.IsType<PolicyDecisionRecord>(executed.Decision);
+            Assert.Equal("solo-acceptance-correction", decision.Stage);
+            Assert.Equal("FreshGate", decision.Action);
+            Assert.Equal(reason, decision.DiscriminatingEvidence);
+            Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+            Assert.Null(fixture.Goal.LatestAcceptanceFailure);
+            Assert.Single(fixture.Goal.Timeline.Where(evt => evt.Message.StartsWith("SOLO_FRESH_GATE ", StringComparison.Ordinal)));
+        }
+        else
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(outcome);
+            Assert.Contains(reason, held.Reason);
+            Assert.Contains("evidence=", held.Reason);
+            var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+            Assert.Equal("solo-acceptance-correction", decision.Stage);
+            Assert.Equal("Hold", decision.Action);
+            Assert.Contains(reason, decision.DiscriminatingEvidence);
+            Assert.Equal(held.Reason, decision.Reason);
+            Assert.Contains(new PolicyDecisionFact("goalId", fixture.Goal.Id.Value), decision.Facts);
+            Assert.Contains(new PolicyDecisionFact("attemptId", summary.AttemptId!), decision.Facts);
+            Assert.Contains(new PolicyDecisionFact("evidencePath", summary.SoloFailureReceipt?.Evidence.Path ?? "absent"), decision.Facts);
+        }
         Assert.Empty(fixture.Starts);
         Assert.Empty(MarkerRetries(fixture.Goal));
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);

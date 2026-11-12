@@ -12,12 +12,13 @@ internal sealed class SoloAcceptanceFailureHandler(
     Func<Goal, SoloAcceptanceConsumptionContext?> readContext,
     Func<GoalId, TaskId, IReadOnlyList<string>, int> recordRetryFeedback,
     Func<Goal, string, ConductorAutonomyPolicy, AttributedFailureRouteDecision, ConductorAdvanceResult> routeFailure,
-    Action<Goal, GoalLifecycleState, string> recordEscalation)
+    Action<Goal, GoalLifecycleState, string> recordEscalation,
+    Func<Goal, ConductorParallelAcceptanceAttempt?>? readAttempt = null)
 {
     internal ConductorAdvanceResult Complete(Goal goal, string prefix, ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance)
     {
         Record(goal, acceptance);
-        return Hold(goal, prefix, policy, "solo-evidence-awaiting-consumption");
+        return Hold(goal, prefix, policy, SoloHoldReasons.AwaitingConsumption);
     }
 
     private void Record(Goal goal, AcceptanceVerificationSummary acceptance)
@@ -43,11 +44,39 @@ internal sealed class SoloAcceptanceFailureHandler(
     {
         var current = readContext(goal);
         var evidence = SoloAcceptanceFailureReceiptReader.Read(goal, current);
-        var route = AttributedFailureDeveloperRoute.Decide(goal, evidence.Failure, current?.CandidateSha);
+        var failure = evidence.Failure;
+        if (evidence.Reason == SoloHoldReasons.RevisionMismatch)
+        {
+            if (current is not null && SoloFreshGateAdmission.WasAdmitted(goal, evidence.Reason, current.CandidateSha, current.MainSha))
+                return Hold(goal, prefix, policy, evidence.Reason);
+            return SoloFreshGateAdmission.TryAdmit(kernelReader(), goal, prefix, policy, current, evidence.Reason)
+                ?? Hold(goal, prefix, policy, SoloHoldReasons.FreshGateUnavailable);
+        }
+        if (evidence.Reason == SoloHoldReasons.ReceiptAbsent)
+        {
+            if (goal.LatestAcceptanceFailure?.CheckAttributions?.Any(check => check.Origin == AcceptanceFailureOrigin.Inherited) == true)
+                return Hold(goal, prefix, policy, SoloHoldReasons.ReceiptAbsentInherited);
+            failure = SoloAttemptTrxFailureReader.Read(goal, readAttempt?.Invoke(goal));
+            if (failure is null)
+            {
+                if (current is not null && SoloFreshGateAdmission.WasAdmitted(goal, evidence.Reason, current.CandidateSha))
+                    return Hold(goal, prefix, policy, evidence.Reason);
+                return SoloFreshGateAdmission.TryAdmit(kernelReader(), goal, prefix, policy, current, evidence.Reason)
+                    ?? Hold(goal, prefix, policy, SoloHoldReasons.FreshGateUnavailable);
+            }
+        }
+        var route = AttributedFailureDeveloperRoute.Decide(goal, failure, current?.CandidateSha);
+        if (route.DeclineReason == SoloHoldReasons.CandidateMismatch)
+        {
+            if (current is not null && SoloFreshGateAdmission.WasAdmitted(goal, route.DeclineReason, current.CandidateSha, current.MainSha))
+                return Hold(goal, prefix, policy, route.DeclineReason);
+            return SoloFreshGateAdmission.TryAdmit(kernelReader(), goal, prefix, policy, current, route.DeclineReason)
+                ?? Hold(goal, prefix, policy, SoloHoldReasons.FreshGateUnavailable);
+        }
         if (!route.IsRoute)
-            return Hold(goal, prefix, policy, evidence.Failure is null ? evidence.Reason : route.DeclineReason!);
-        if (goal.AutomaticAcceptanceRetryCount >= policy.MaxCriterionRetries)
-            return Hold(goal, prefix, policy, "solo-acceptance-retry-cap");
+            return Hold(goal, prefix, policy, failure is null ? evidence.Reason : route.DeclineReason!);
+        if (SoloCorrectionRetryBudget.HoldReason(goal, failure!, policy.MaxCriterionRetries) is { } capReason)
+            return Hold(goal, prefix, policy, capReason);
         // The existing accounting and route marker are included in the dispatch
         // checkpoint before any worker starts. Replay never charges another retry.
         recordRetryFeedback(goal.Id, route.DeveloperTaskId!, [route.Feedback!]);

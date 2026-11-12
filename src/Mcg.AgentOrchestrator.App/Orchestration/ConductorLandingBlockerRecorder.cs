@@ -8,6 +8,8 @@ internal static class ConductorLandingBlockerRecorder
     internal static readonly IReadOnlyDictionary<string, (string Actor, string Verb)> NextActions =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)
         {
+            [RecurringUnrelatedTestDisposition.HoldKey] = ("operator", "land-fix-item"),
+            [RecurringUnrelatedTestDisposition.RegateKey] = ("conductor", "next-tick"),
             ["multi-repository-landing-failed"] = ("operator", "repair-multi-repository-landing"),
             ["multi-repository-tuple-landing"] = ("conductor", "next-tick"),
             ["multi-repository-acceptance-stale"] = ("conductor", "next-tick"),

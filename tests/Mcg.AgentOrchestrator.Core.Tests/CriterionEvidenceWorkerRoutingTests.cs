@@ -91,7 +91,8 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         var passes = scenario == "current" || role == AgentRole.Reviewer &&
             owner == CriterionEvidenceOwner.Acceptance && scenario is "foreign-candidate" or "legacy";
         if (passes) Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        else if (scenario == "invalid-contract") Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        else if (scenario == "invalid-contract" || role == AgentRole.Reviewer && scenario == "category-mismatch")
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         else Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(passes, kernel.BuildVerificationGate(goal.Id).IsSatisfied);
         Assert.DoesNotContain(goal.CriterionEvidenceObligations, item => item.State == CriterionEvidenceState.Satisfied);
@@ -110,7 +111,8 @@ public sealed class CriterionEvidenceWorkerRoutingTests
         else
         {
             Assert.Contains(goal.Timeline, item => item.Kind ==
-                (scenario == "invalid-contract" ? ProgressKind.TaskRetried : ProgressKind.TaskFailed));
+                (scenario == "invalid-contract" || role == AgentRole.Reviewer && scenario == "category-mismatch"
+                    ? ProgressKind.TaskRetried : ProgressKind.TaskFailed));
             Assert.DoesNotContain(goal.Timeline, item => item.Message.Contains("rule=deferred-off-worker-evidence", StringComparison.Ordinal));
         }
     }

@@ -7,6 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class CrossGoalTestFailureHistory(
     string? censusPath, string? stateRoot, Func<IReadOnlyCollection<Goal>> goals)
 {
+    internal IReadOnlyList<RecurringTestFailureOccurrence> ReadOccurrences(DateTimeOffset now) =>
+        new RecurringTestFailureOccurrenceReader(censusPath, stateRoot).Read(now);
+
     internal static string? TestKey(string? identity)
     {
         if (string.IsNullOrWhiteSpace(identity) || AcceptanceTestSourceResolver.ExtractClassName(identity) is not { } name)

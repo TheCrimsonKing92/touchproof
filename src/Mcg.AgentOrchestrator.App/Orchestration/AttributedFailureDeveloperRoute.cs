@@ -76,27 +76,27 @@ internal static class AttributedFailureDeveloperRoute
 
     internal static AttributedFailureRouteDecision Decide(Goal goal, AttributedFailure? failure, string? currentCandidate)
     {
-        if (failure is null) return AttributedFailureRouteDecision.Decline("no-attributed-failure");
+        if (failure is null) return AttributedFailureRouteDecision.Decline(SoloHoldReasons.NoAttributedFailure);
         var tests = failure.FailingTests.Select(test => test.Trim()).Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray();
         if (tests.Length == 0 || tests.Any(test => failure.Source == "solo"
                 ? test.Length == 0 || test.Any(char.IsControl)
                 : !AttributedCohortFailureDetail.IsRepresentableTestName(test)))
-            return AttributedFailureRouteDecision.Decline("unrepresentable-failing-tests");
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.UnrepresentableFailingTests);
         if (string.IsNullOrWhiteSpace(currentCandidate) ||
             !string.Equals(failure.CandidateSha, currentCandidate, StringComparison.Ordinal))
-            return AttributedFailureRouteDecision.Decline("candidate-mismatch");
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.CandidateMismatch);
         if (goal.LatestAcceptanceFailure is { } recorded && (recorded.IsEnvironmentalApparatus ||
             recorded.CheckAttributions?.Any(check => check.Cause != AcceptanceFailureCause.NotClassified) == true))
-            return AttributedFailureRouteDecision.Decline("classified-acceptance-failure");
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.ClassifiedAcceptanceFailure);
         var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer &&
             task.Status == WorkTaskStatus.Completed &&
             (task.VerificationHistory.Any(verification => verification.HasCommittedChanges) ||
              task.DispatchHistory.Any(dispatch => !string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
                  !string.Equals(dispatch.ResultCommit, dispatch.BaseCommit, StringComparison.OrdinalIgnoreCase))));
-        if (developer is null) return AttributedFailureRouteDecision.Decline("no-committed-developer");
+        if (developer is null) return AttributedFailureRouteDecision.Decline(SoloHoldReasons.NoCommittedDeveloper);
         if (goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }))
-            return AttributedFailureRouteDecision.Decline("worker-still-running");
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.WorkerStillRunning);
 
         var signature = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(failure.CandidateSha + "\n" + string.Join(',', tests)))).ToLowerInvariant()[..16];
@@ -105,7 +105,7 @@ internal static class AttributedFailureDeveloperRoute
             .Select(evt => evt.Message.Split('\n')[0].TrimEnd('\r').Split(' ', StringSplitOptions.RemoveEmptyEntries))
             .Any(tokens => tokens.Contains("candidate_sha=" + failure.CandidateSha, StringComparer.Ordinal) &&
                 tokens.Contains("signature=" + signature, StringComparer.Ordinal)))
-            return AttributedFailureRouteDecision.Decline("already-routed");
+            return AttributedFailureRouteDecision.Decline(SoloHoldReasons.AlreadyRouted);
         return new(developer.Id, BuildFeedback(goal, failure with { FailingTests = tests }, signature), signature, null);
     }
 

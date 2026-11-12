@@ -7,6 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly ApparatusRedGate? _apparatusRedGate;
+    internal RecurringUnrelatedTestDisposition? RecurringUnrelatedTests { get; set; }
+    private RecurringUnrelatedTestDisposition? RecurringUnrelatedHandler =>
+        RecurringUnrelatedTests ??= RecurringUnrelatedTestDisposition.Create(_cohortWorkspace, _utcNow);
 
     private sealed record AcceptanceRetryDisposition(
         IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
@@ -109,7 +112,11 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        return _apparatusRedGate.Classify(goal, reading) switch
+        var disposition = _apparatusRedGate.Classify(goal, reading);
+        if (disposition is ApparatusRedDisposition.Genuine && RecurringUnrelatedHandler?.TryDispose(
+            goal, goalPrefix, policy, acceptance, reading, RestoreVerifiedAfterAcceptanceClassification,
+            _recordAcceptanceFailure, RecordEscalation) is { } recurring) return recurring;
+        return disposition switch
         {
             ApparatusRedDisposition.Regate regate =>
                 HoldApparatusRedRegate(goal, goalPrefix, policy, acceptance, reading, regate),
