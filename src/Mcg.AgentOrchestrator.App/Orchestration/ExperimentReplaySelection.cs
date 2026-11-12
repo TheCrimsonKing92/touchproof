@@ -47,8 +47,9 @@ internal static class ExperimentReplaySelectionReader
                 .Concat(routing.TestProjects.SelectMany(p => p.Sources).Where(File.Exists));
             var sources = new ImpactReplayTestSourceIndex(sourceFiles, routing.TestProjects, checkout);
             var guards = SourceReadingGuardTestClasses.Read(sources, descriptors);
+            var settings = AcceptanceGateEngineSettings.Load(checkout);
             impact = ImpactReplaySelectionAugmentation.Apply(impact, changedFiles, sources, descriptors, guards,
-                out _, changed.QualifiedClasses);
+                out _, changed.QualifiedClasses, ChangedFileTestClassPathMapper.TestProjectDirectories(settings));
             fallback |= impact.Outcome != ReverseDependencySelectionOutcome.Resolved;
             if (impact.Reason is { } diagnostic) diagnostics.Add(diagnostic);
             foreach (var selector in impact.TestClassNames)
@@ -58,7 +59,6 @@ internal static class ExperimentReplaySelectionReader
                 if (matches.Length != 1) { fallback = true; diagnostics.Add($"Ambiguous/unavailable selector: {selector}"); }
                 foreach (var match in matches) selected.Add(match.FullName);
             }
-            var settings = AcceptanceGateEngineSettings.Load(checkout);
             var lanes = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes, descriptors);
             foreach (var lane in lanes.Where(l => IsFloor(l.Name)))
                 foreach (var item in descriptors.Where(c => AcceptanceLaneMembership.LanesIncluding(lanes, c.FullName).Any(l => l.Name == lane.Name)))

@@ -11,6 +11,8 @@ public sealed class ReverseDependencySelectionTransportTests
     [InlineData(96, true)]
     [InlineData(300, true)]
     [InlineData(1000, true)]
+    [InlineData(2000, true)]
+    [InlineData(5000, true)]
     public void PlannerCheck_AtCapacity_UsesExistingLauncherTransport(int count, bool spills)
     {
         using var fixture = Create(count, out var names);
@@ -37,6 +39,9 @@ public sealed class ReverseDependencySelectionTransportTests
 
         var invocation = AcceptanceMtpFilterResponseFile.Apply(args);
         var expected = names.SelectMany(name => new[] { "--filter-class", "*" + name + "*" }).ToArray();
+        var effective = invocation.SelectMany(argument => argument.StartsWith('@')
+            ? File.ReadAllText(argument[1..]).Split('\n') : new[] { argument }).ToArray();
+        Assert.Equal(expected, effective.Skip(Array.IndexOf(effective, "--filter-class")));
         if (spills)
         {
             var reference = Assert.Single(invocation.Where(argument => argument.StartsWith('@')));
@@ -65,27 +70,27 @@ public sealed class ReverseDependencySelectionTransportTests
     }
 
     [Fact]
-    public void PlannerCheck_AboveCapacity_ReportsCompleteCountAndKeepsFullSuite()
+    public void PlannerCheck_OneThousandAndOneClasses_PreservesCompleteSelection()
     {
-        using var fixture = Create(1001, out _);
+        using var fixture = Create(1001, out var names);
         var check = InfrastructureCheck(fixture);
-        Assert.DoesNotContain("--filter", check.Command);
-        Assert.Null(check.TestClassSelections);
-        Assert.Contains("selection of 1001 test classes", check.Reason);
-        Assert.Contains("1000-test-class bound", check.Reason);
+        Assert.Contains("--filter", check.Command);
+        Assert.Equal(names, check.TestClassSelections);
+        Assert.Contains(string.Join("|", names.Select(name => "FullyQualifiedName~" + name)), check.Command);
     }
 
     [Fact]
-    public void ClassBound_AcrossFilesAndHops_CountsBeyondFirstCrossing()
+    public void Selection_AcrossFilesAndHops_PreservesEveryClass()
     {
-        using var fixture = Create(1001, out _);
+        using var fixture = Create(1001, out var names);
         fixture.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ZSupport.cs",
             "public class Support { private NewContract contract; }");
         fixture.Test("LateConsumerTests", "Support");
         var selected = ReverseDependencyTestImpactReader.Read(fixture.Root, [Fixture.Source], bypassCache: true);
-        Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
+        Assert.Null(selected.DegradationKind);
+        Assert.Equal(names.Append("LateConsumerTests").Order(StringComparer.Ordinal), selected.TestClassNames);
         Assert.Equal(1002, selected.Headroom!.SelectedTestClassCount);
-        Assert.Contains("selection of 1002 test classes", selected.Reason);
     }
 
     private static RepositoryTestImpactCheck InfrastructureCheck(Fixture fixture) =>
@@ -97,8 +102,10 @@ public sealed class ReverseDependencySelectionTransportTests
         var fixture = new Fixture();
         fixture.Write(Fixture.Source, "public class NewContract {}");
         names = Enumerable.Range(0, count).Select(index => $"TransportConsumerContractFixture{index:D4}Tests").ToArray();
-        fixture.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Consumers.cs",
-            string.Join("\n", names.Select(name => $"public class {name} {{ [Fact] public void Works() {{ _ = new NewContract(); }} }}")));
+        var batch = 0;
+        foreach (var chunk in names.Chunk(250))
+            fixture.Write($"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Consumers{batch++}.cs",
+                string.Join("\n", chunk.Select(name => $"public class {name} {{ [Fact] public void Works() {{ _ = new NewContract(); }} }}")));
         return fixture;
     }
 }

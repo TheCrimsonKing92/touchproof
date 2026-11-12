@@ -223,7 +223,7 @@ public sealed class RetryAdmissionReservationStoreTests
     [Xunit.InlineData(true, null)]
     [Xunit.InlineData(true, "running")]
     [Xunit.InlineData(true, "prepared")]
-    [Xunit.InlineData(true, "dispatch-after-retry")]
+    [Xunit.InlineData(true, "unsettled-dispatch-after-retry")]
     [Xunit.InlineData(true, "process-after-retry")]
     public async Task RetryMarkerReplay_RunningDurableSnapshot_DoesNotRejectSettledInMemoryRetry(
         bool automaticSubscriptionRetry, string? invalidState)
@@ -290,9 +290,10 @@ public sealed class RetryAdmissionReservationStoreTests
             {
                 LastDispatch = retryReplayTask.LastDispatch! with { DispatchedAt = secondAt }
             },
-            "dispatch-after-retry" => retryReplayTask with
+            "unsettled-dispatch-after-retry" => retryReplayTask with
             {
-                LastDispatch = retryReplayTask.LastDispatch! with { DispatchedAt = retriedTask.LatestRetryAt!.Value.AddTicks(1) }
+                LastDispatch = retryReplayTask.LastDispatch! with { DispatchedAt = retriedTask.LatestRetryAt!.Value.AddTicks(1) },
+                LastProcess = retryReplayTask.LastProcess! with { CompletedAt = null }
             },
             "process-after-retry" => retryReplayTask with
             {

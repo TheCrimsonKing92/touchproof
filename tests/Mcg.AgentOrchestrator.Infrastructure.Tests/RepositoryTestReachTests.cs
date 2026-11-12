@@ -9,7 +9,7 @@ public sealed class RepositoryTestReachTests
     [InlineData(1)]
     [InlineData(100)]
     [InlineData(1001)]
-    public void TwoHopReach_ReturnsEveryConsumerBeyondPlannerClassCap(int count)
+    public void TwoHopReach_ReturnsEveryConsumerAtAnySelectionSize(int count)
     {
         using var fixture = new RepositoryFixture();
         fixture.Write(RepositoryFixture.Intermediate, "public class Intermediate { private ChangedSource source; }");
@@ -19,8 +19,7 @@ public sealed class RepositoryTestReachTests
         var reach = RepositoryTestReach.TryReadReachableTestClasses(fixture.Root, [RepositoryFixture.Source]);
         Assert.NotNull(reach);
         Assert.Equal(Enumerable.Range(0, count).Select(index => $"Consumer{index}Tests").Order(), reach.Order());
-        Assert.Equal(count > ReverseDependencyTestImpactReader.MaximumSelectedTestClasses
-            ? "Abandoned" : "Resolved", ReaderOutcome(fixture.Root));
+        Assert.Equal("Resolved", ReaderOutcome(fixture.Root));
     }
 
     [Fact]

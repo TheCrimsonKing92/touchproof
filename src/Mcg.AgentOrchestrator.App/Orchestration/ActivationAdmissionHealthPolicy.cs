@@ -7,4 +7,6 @@ internal static class ActivationAdmissionHealthPolicy
     internal const int CensusFailureTicks = 8;
     internal const int OccupiedWithoutLiveGateTicks = 12;
     internal static readonly TimeSpan StreakElapsedCap = TimeSpan.FromMinutes(5);
+    // Ordinary gaps measured Nov 11/12 were 3–4 minutes; allow at least 2.5 times that.
+    internal static readonly TimeSpan OwnerIdleLimit = TimeSpan.FromMinutes(10);
 }

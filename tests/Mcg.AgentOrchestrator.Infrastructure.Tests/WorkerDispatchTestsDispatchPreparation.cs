@@ -1025,7 +1025,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 }
 
     [Xunit.Fact]
-    public void PaidRetryWithoutDurableGoalFailsClosedBeforeCheckpointOrProcessStart()
+    public void PaidRetryWithoutDurableGoalDiscardsDispatchAfterCheckpointWithoutProcessStart()
     {
         var root = CreateTempDirectory();
         var workingDirectory = Path.Combine(root, "repo");
@@ -1051,7 +1051,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             retryCause: RetryCause.ProviderInterruption);
         var checkpointCalls = 0;
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<AbortedDispatchStartException>(() =>
             new GoalDispatchOperations().StartSubscriptionReadyTasks(
                 kernel,
                 workspace,
@@ -1063,10 +1063,16 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 sandboxOptions: DisabledSandbox));
 
         Assert.Contains("Durable retry-admission reservation", ex.Message, StringComparison.Ordinal);
+        var admissionError = Assert.IsType<InvalidOperationException>(ex.InnerException);
         // Paid retries flush current-tick state before the durable reservation read. The
         // reservation still fails closed and never starts a worker when no durable goal exists.
         Assert.Equal(1, checkpointCalls);
+        Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
+        Assert.Null(planner.LastDispatch);
         Assert.Null(planner.LastProcess);
+        Assert.Contains(goal.Timeline, entry => entry.TaskId == planner.Id &&
+            entry.Kind == ProgressKind.TaskNote &&
+            entry.Message == AbortedDispatchStartRecovery.NotePrefix + admissionError.Message);
     }
 
     [Xunit.Fact]

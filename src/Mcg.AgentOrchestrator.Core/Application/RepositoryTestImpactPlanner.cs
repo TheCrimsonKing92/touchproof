@@ -40,12 +40,11 @@ public sealed record RepositoryTestImpactHeadroom(
     int? IndexedSourceFileCount,
     int IndexedSourceFileCap,
     int? SelectedTestClassCount,
-    int SelectedTestClassCap,
     int? LargestFrontierSymbolCount)
 {
     internal string Render() =>
         $"headroom indexed-files={Count(IndexedSourceFileCount)}/{IndexedSourceFileCap} " +
-        $"selected-classes={Count(SelectedTestClassCount)}/{SelectedTestClassCap} " +
+        $"selected-classes={Count(SelectedTestClassCount)} " +
         $"frontier-symbols={Count(LargestFrontierSymbolCount)}";
 
     private static string Count(int? value) =>

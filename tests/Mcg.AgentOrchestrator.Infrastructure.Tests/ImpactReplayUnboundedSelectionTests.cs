@@ -17,10 +17,9 @@ public sealed class ImpactReplayUnboundedSelectionTests
         using var fixture = new Fixture();
         var input = Arrange(fixture, kind, count);
         var bounded = ReverseDependencyTestImpactReader.Read(fixture.Root, input.Changed);
-        Assert.Equal(count > 1000 ? ReverseDependencySelectionOutcome.Abandoned :
-            ReverseDependencySelectionOutcome.Resolved, bounded.Outcome);
-        Assert.Equal(count > 1000 ? ReverseDependencyDegradationKind.SelectedTestClassBound :
-            (ReverseDependencyDegradationKind?)null, bounded.DegradationKind);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, bounded.Outcome);
+        Assert.Null(bounded.DegradationKind);
+        Assert.Equal(count, bounded.TestClassNames.Count);
 
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(input.Attempt, fixture.Root,
             input.Changed, input.Sources, input.Classes, null, []);

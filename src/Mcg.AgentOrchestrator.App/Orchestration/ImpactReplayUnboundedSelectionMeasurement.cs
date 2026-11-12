@@ -14,18 +14,17 @@ internal static class ImpactReplayUnboundedSelectionMeasurement
     internal static ImpactReplayAttemptRecord Apply(ImpactReplayAttemptRecord attempt, string checkout,
         IReadOnlyList<string> productionSources, ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
-        IReadOnlyList<string> additionalClasses)
+        IReadOnlyList<string> additionalClasses, IReadOnlyList<string>? testProjectDirectories = null)
     {
         if (attempt.SelectionOutcome != "Abandoned" || !IsBound(attempt.DegradationKind)) return attempt;
         try
         {
             var selection = productionSources.Count == 0
                 ? ReverseDependencyTestSelection.Resolved([], headroom: new(null,
-                    ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles, 0, int.MaxValue, null))
-                : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
-                    maximumSelectedTestClasses: int.MaxValue);
+                    ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles, 0, null))
+                : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true);
             selection = ImpactReplaySelectionAugmentation.Apply(selection, attempt.ChangedFiles, sources,
-                classes, guards, out _, additionalClasses);
+                classes, guards, out _, additionalClasses, testProjectDirectories);
             if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
                 return Unavailable(attempt, selection.Reason ?? $"Unbounded selection {selection.Outcome}.");
 

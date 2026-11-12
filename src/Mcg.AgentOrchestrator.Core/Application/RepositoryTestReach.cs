@@ -3,8 +3,6 @@ namespace Mcg.AgentOrchestrator.Core;
 /// <summary>Bounded test membership evidence, independent of command-line filter limits.</summary>
 public static class RepositoryTestReach
 {
-    private const int MaximumReachableTestClasses = 4_000;
-
     public static IReadOnlySet<string>? TryReadReachableTestClasses(
         string repositoryRoot, IReadOnlyList<string> changedSourcePaths)
     {
@@ -14,7 +12,7 @@ public static class RepositoryTestReach
             // partially readable member as a complete reach set and exclude its candidacy.
             if (changedSourcePaths.Any(path => !File.Exists(Path.Combine(repositoryRoot, path.Trim())))) return null;
             var selection = ReverseDependencyTestImpactReader.Read(repositoryRoot, changedSourcePaths,
-                maximumSelectedTestClasses: MaximumReachableTestClasses, propagateShippingSourceReach: true);
+                propagateShippingSourceReach: true);
             return selection.Outcome == ReverseDependencySelectionOutcome.Resolved
                 ? selection.TestClassNames.ToHashSet(StringComparer.Ordinal)
                 : null;

@@ -1242,23 +1242,8 @@ internal sealed partial class ConductorDriver
             : DispatchStartOutcome.SpawnFailed(reason);
     }
 
-    internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
-    {
-        if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-            return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
-        if (result.Tasks.Count > 0)
-            return DispatchStartOutcome.Started(result.Tasks);
-        if (result.StartFailures?.FirstOrDefault() is { } startFailure)
-            return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
-
-        if (result.RequeueSkippedCount > 0)
-        {
-            return DispatchStartOutcome.EmptyBatch(
-                $"Skipped {result.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
-        }
-
-        return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
-    }
+    internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result) =>
+        RecordedDispatchStartClassifier.Classify(result);
 
     internal Func<Goal, SoloAcceptanceConsumptionContext?>? SoloAcceptanceContextReader { get; set; }
     private SoloAcceptanceFailureHandler SoloAcceptanceFailure => new(
@@ -1291,10 +1276,12 @@ internal sealed partial class ConductorDriver
         if (goal.Status == GoalStatus.Parked)
             return MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
+        if (NeverStartedDispatchReconciliation.BeforeAdvance(_conductorTickKernel, goal, state, policy,
+            reason => SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, reason),
+            task => PreparedDispatchRecoveryEligibility.IsHeld(this, goal, task, _cohortWorkspace)) is { } startHold)
+            return startHold;
         if (_plannerEvidenceReadiness.GetHold(goal, state) is { } plannerHold)
             return MakeResult(goalId, goalPrefix, policy, plannerHold);
-        if (goal.Tasks.Any(GoalDispatchOperations.HasUncertainSoloCorrectionStart))
-            return SoloAcceptanceFailure.Hold(goal, goalPrefix, policy, SoloHoldReasons.StartClaimedReconciliationRequired);
         ConductorParkedWaitEscalationResolution.Resolve(_resolveParkedWaitEscalations, goal, state);
 
         if (state == GoalLifecycleState.CleanedUp)
@@ -1322,7 +1309,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
                     state,
-                    runningHoldReason ?? "Worker process running; auto-reconcile will handle completion")),
+                    SandboxPreparationStartStatus.HoldReason(goal, runningHoldReason))),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, AwaitingVerificationHoldReasonBuilder.Build(goal))),
             GoalLifecycleState.Verifying => ExecuteVerifying(goal, goalPrefix, policy),

@@ -8,9 +8,12 @@ internal sealed class OrphanWorktreeSweepEligibility
 {
     internal static readonly TimeSpan GraceWindow = TimeSpan.FromMinutes(10);
     private readonly (GoalId Id, bool IsTerminal)[] goals;
+    private readonly OrphanWorktreeStoredGoalLookup storedGoals;
 
-    internal OrphanWorktreeSweepEligibility(AgentOrchestratorKernel? kernel)
+    internal OrphanWorktreeSweepEligibility(AgentOrchestratorKernel? kernel,
+        OrphanWorktreeStoredGoalLookup? storedGoals = null)
     {
+        this.storedGoals = storedGoals ?? new(null);
         try { goals = kernel?.Goals.Select(goal => (goal.Id, goal.IsTerminal)).ToArray() ?? []; }
         catch (InvalidOperationException) { goals = []; }
     }
@@ -19,7 +22,8 @@ internal sealed class OrphanWorktreeSweepEligibility
     {
         var name = System.IO.Path.GetFileName(directory);
         var matches = goals.Where(goal => goal.Id.Value.StartsWith(name, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return matches.Length == 0 ? null : matches.FirstOrDefault(goal => !goal.IsTerminal, matches[0]).Id;
+        return matches.Length == 0 ? storedGoals.ResolveObservedGoal(directory)
+            : matches.FirstOrDefault(goal => !goal.IsTerminal, matches[0]).Id;
     }
 
     internal string Classify(string directory, IReadOnlySet<string> registered, DateTimeOffset referenceTime,
@@ -31,7 +35,8 @@ internal sealed class OrphanWorktreeSweepEligibility
         var name = System.IO.Path.GetFileName(directory);
         var matches = goals.Where(goal => goal.Id.Value.StartsWith(name, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Any(goal => !goal.IsTerminal)) return "non-terminal-goal";
-        if (matches.Length == 0 && name.Length == 8 && name.All(Uri.IsHexDigit)) return "goal-state-unavailable";
+        if (matches.Length == 0 && name.Length == 8 && name.All(Uri.IsHexDigit))
+            return storedGoals.Classify(directory, referenceTime);
 
         return WorktreeTreeFreshness.Classify(directory, referenceTime, GraceWindow);
     }

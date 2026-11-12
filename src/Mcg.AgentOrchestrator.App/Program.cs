@@ -464,9 +464,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
 WorktreeCleanupContext cleanupContext;
 try
 {
-    cleanupContext = new WorktreeCleanupContext(
-        WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
-        workspace.OrchestratorDirectory);
+    cleanupContext = new WorktreeCleanupContext(OrphanSweepHostWiring.Create(
+        workspace, WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
+        CliPersistentStateRunner.IsConductLoop(startupArgs)));
 }
 catch (Exception ex)
 {

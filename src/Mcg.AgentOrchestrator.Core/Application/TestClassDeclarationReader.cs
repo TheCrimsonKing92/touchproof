@@ -112,16 +112,13 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     private static readonly string[] ExcludedDirectorySegments = ["bin", "obj", "artifacts", ".scratch"];
     private readonly string _repositoryRoot;
     private readonly int _maximumIndexedSourceFiles;
-    private readonly int _maximumSelectedTestClasses;
 
     internal FileSystemTestClassDeclarationReader(
         string repositoryRoot,
-        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles,
-        int maximumSelectedTestClasses = ReverseDependencyTestImpactReader.MaximumSelectedTestClasses)
+        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _maximumIndexedSourceFiles = maximumIndexedSourceFiles;
-        _maximumSelectedTestClasses = maximumSelectedTestClasses;
     }
 
     internal static ITestClassDeclarationReader CreateForCurrentRepository()
@@ -185,8 +182,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) =>
         ReverseDependencyTestImpactReader.Read(
-            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles,
-            maximumSelectedTestClasses: _maximumSelectedTestClasses);
+            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles);
 
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {

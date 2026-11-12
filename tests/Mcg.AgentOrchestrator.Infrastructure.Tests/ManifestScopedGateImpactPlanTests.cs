@@ -23,7 +23,7 @@ public sealed class ManifestScopedGateImpactPlanTests
             new("no project", ["dotnet", "test"], "default"),
             legacy,
             new("manual", [], "review")
-        ], new(ReverseDependencyDegradationKind.Unreadable, "unreadable"), new(1, 10, 2, 20, 3));
+        ], new(ReverseDependencyDegradationKind.Unreadable, "unreadable"), new(1, 10, 2, 3));
 
         var filtered = declared.Filter(plan);
 

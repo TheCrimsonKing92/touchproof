@@ -91,6 +91,9 @@ public sealed class HoldNextActionRenderingTests
         "Developer", "route the Developer because the failure reproduced")]
     [InlineData("solo-acceptance-retry-cap", "solo acceptance correction retry cap", "operator",
         "review the solo acceptance correction evidence")]
+    [InlineData("dispatch-start-aborted-repeatedly",
+        "retry admission failed twice in a row with the same failure text; the unstarted dispatch was discarded each time", "operator",
+        "read the failure text in the task note, then run adjudicate --goal <goal-prefix> <task-number> route --cause <cause> --text-file <note> --evidence <reference>")]
     [InlineData("solo-receipt-absent", "solo attempt evidence recovery", "operator",
         "inspect the named attempt's results and re-gate the current candidate")]
     [InlineData("solo-evidence-awaiting-consumption: wrapped", "unmapped", "unmapped", "unmapped")]

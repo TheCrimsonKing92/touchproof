@@ -23,8 +23,8 @@ internal static partial class CliCommandHandlers
         var operation = selector is null ? null : task.CompletionBuildEvidence;
         if (selector is not null && (operation is null || !string.Equals(selector, operation.Id, StringComparison.Ordinal)))
             throw new InvalidOperationException("Completion build operation selector mismatch; use the exact attached operation id.");
-        var process = operation?.WorkerProcess ?? task.LastProcess ??
-            throw new InvalidOperationException($"Task '{task.Id}' has no background process to cancel.");
+        var process = operation?.WorkerProcess ?? task.LastProcess;
+        var identity = NeverStartedDispatchReconciliation.CancellationIdentity(goal, task, process);
         var dispatch = operation is not null ? null : task.LastDispatch ??
             throw new InvalidOperationException($"Task '{task.Id}' has no dispatch for cancellation.");
         if (operation is null && task.Status != WorkTaskStatus.Running &&
@@ -37,7 +37,7 @@ internal static partial class CliCommandHandlers
             parts, CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
         var intentId = Guid.NewGuid().ToString("N");
         var payload = new CancelDispatchOperatorIntentPayload(
-            process.ProcessId, process.StartedAt,
+            identity.ProcessId, identity.StartedAt,
             operation?.DispatchId ?? BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, dispatch!),
             operation is null ? null : CompletionBuildEvidenceTarget.From(operation));
         var intent = new OperatorIntentRecord(
@@ -57,7 +57,7 @@ internal static partial class CliCommandHandlers
                 context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory))
             .EnqueueAsync(intent).GetAwaiter().GetResult();
 
-        if (operation is null) (stopProcessTree ?? new BackgroundDispatchRunner().StopProcessTree)(process);
+        if (operation is null && process is not null) (stopProcessTree ?? new BackgroundDispatchRunner().StopProcessTree)(process);
         OperatorIntentSubmissionOutput.PrintCancelDispatch(persisted, context.Workspace.OrchestratorDirectory,
             goal.Id.Value, task.Id.Value,
             operation is not null ? "Conductor will reconcile the exact completion build operation and release proven custody." :

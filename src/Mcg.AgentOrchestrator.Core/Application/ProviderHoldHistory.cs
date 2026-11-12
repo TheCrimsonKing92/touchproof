@@ -3,7 +3,19 @@ namespace Mcg.AgentOrchestrator.Core;
 /// <summary>Read-only goal history retained while it changes a hold, diagnosis or probe schedule.</summary>
 public sealed class ProviderHoldHistory
 {
+    internal delegate ProviderBudgetHoldSchedule? Evaluator(
+        IReadOnlyCollection<Goal> scope, string provider, string? credential);
+
     private readonly SortedDictionary<string, Goal> _retained = new(StringComparer.Ordinal);
+    private readonly Evaluator _evaluate;
+
+    public ProviderHoldHistory() : this(Answer) { }
+
+    internal ProviderHoldHistory(Evaluator evaluator)
+    {
+        ArgumentNullException.ThrowIfNull(evaluator);
+        _evaluate = evaluator;
+    }
 
     public IReadOnlyCollection<Goal> Retained => _retained.Values;
 
@@ -23,20 +35,31 @@ public sealed class ProviderHoldHistory
         foreach (var goal in leaving)
             if (!ids.Contains(goal.Id.Value)) _retained[goal.Id.Value] = goal;
 
+        var scope = Scope(working);
+        var answers = new Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?>();
+        var exhaustedBindings = ExhaustedBindings(scope);
         bool dropped;
         do
         {
             dropped = false;
             foreach (var goal in _retained.Values.ToArray())
             {
-                var scope = Scope(working);
                 // An ingested working-set copy already shadows the retained copy.
-                var without = ids.Contains(goal.Id.Value)
-                    ? scope
-                    : scope.Where(item => item.Id != goal.Id).ToArray();
-                if (!SameAnswers(goal, scope, without)) continue;
+                if (ids.Contains(goal.Id.Value))
+                {
+                    _retained.Remove(goal.Id.Value);
+                    dropped = true;
+                    continue;
+                }
+
+                var without = scope.Where(item => item.Id != goal.Id).ToArray();
+                if (!SameAnswers(goal, scope, without, answers, exhaustedBindings, out var withoutAnswers)) continue;
                 _retained.Remove(goal.Id.Value);
                 dropped = true;
+                // Only answers computed over this exact smaller scope survive a removal.
+                scope = without;
+                answers = withoutAnswers;
+                exhaustedBindings = ExhaustedBindings(scope);
             }
         } while (dropped);
     }
@@ -68,18 +91,47 @@ public sealed class ProviderHoldHistory
         return candidates.Where(id => !workingGoalIds.Contains(id)).Order(StringComparer.Ordinal).ToArray();
     }
 
-    private static bool SameAnswers(Goal goal, IReadOnlyCollection<Goal> scope, IReadOnlyCollection<Goal> without)
+    private bool SameAnswers(Goal goal, IReadOnlyCollection<Goal> scope, IReadOnlyCollection<Goal> without,
+        Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> answers,
+        HashSet<SubscriptionLimitEvidence.ProviderBindingKey> exhaustedBindings,
+        out Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> withoutAnswers)
     {
+        withoutAnswers = new();
         var bindings = goal.Tasks.SelectMany(task => task.DispatchHistory)
             .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
                 Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
         foreach (var binding in bindings)
-            if (Answer(scope, binding.Provider, binding.Credential) != Answer(without, binding.Provider, binding.Credential))
-                return false;
+        {
+            // TryGetProviderBudgetExhaustionHold requires a matched exhaustion verification.
+            // Without one on this binding, neither this scope nor any subset can hold it.
+            if (!exhaustedBindings.Contains(SubscriptionLimitEvidence.BuildProviderBindingKey(
+                    binding.Provider, binding.Credential))) continue;
+            if (!answers.TryGetValue(binding, out var answer))
+            {
+                answer = _evaluate(scope, binding.Provider, binding.Credential);
+                answers.Add(binding, answer);
+            }
+            var withoutAnswer = _evaluate(without, binding.Provider, binding.Credential);
+            withoutAnswers.Add(binding, withoutAnswer);
+            if (answer != withoutAnswer) return false;
+        }
         return true;
     }
 
-    private static ProviderBudgetHoldSchedule? Answer(
+    private static HashSet<SubscriptionLimitEvidence.ProviderBindingKey> ExhaustedBindings(
+        IReadOnlyCollection<Goal> scope)
+    {
+        var bindings = new HashSet<SubscriptionLimitEvidence.ProviderBindingKey>();
+        foreach (var task in scope.SelectMany(goal => goal.Tasks))
+            foreach (var verification in task.VerificationHistory)
+                if (verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
+                    SubscriptionLimitEvidence.FindDispatchForVerification(task, verification) is { } dispatch)
+                    bindings.Add(SubscriptionLimitEvidence.BuildProviderBindingKey(
+                        dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory));
+        return bindings;
+    }
+
+    internal static ProviderBudgetHoldSchedule? Answer(
         IReadOnlyCollection<Goal> scope, string provider, string? credential) =>
         ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scope, provider, credential, out var hold)
             ? ProviderBudgetHoldSchedules.Evaluate(scope, hold, hold.PlacedAt)

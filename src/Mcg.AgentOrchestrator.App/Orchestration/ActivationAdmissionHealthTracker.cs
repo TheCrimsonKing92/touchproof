@@ -5,12 +5,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ActivationAdmissionSample(
     int Tick, bool CensusFailed, int WaitingVerified, int Occupied, int LiveGates, int EvidenceHeldPermits = 0,
-    int PreparingAttempts = 0)
+    int PreparingAttempts = 0, string PreparingOwners = "")
 {
     internal const string Prefix = "ACTIVATION_ADMISSION_HEALTH ";
 
     internal string Format() => FormattableString.Invariant(
-        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates} evidenceHeld={EvidenceHeldPermits} preparing={PreparingAttempts}");
+        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates} evidenceHeld={EvidenceHeldPermits} preparing={PreparingAttempts}") +
+        (PreparingOwners.Length == 0 ? "" : $" owners={PreparingOwners}");
 
     internal static bool TryParse(string line, out ActivationAdmissionSample sample)
     {
@@ -26,12 +27,19 @@ internal sealed record ActivationAdmissionSample(
         if (parts.Length > 5 && parts[5].StartsWith("evidenceHeld=", StringComparison.Ordinal) &&
             !ReadCount(parts[5], "evidenceHeld=", out evidenceHeld)) return false;
         var preparing = 0;
+        var owners = "";
         foreach (var part in parts.Skip(5))
         {
             if (part.StartsWith("preparing=", StringComparison.Ordinal) &&
                 !ReadCount(part, "preparing=", out preparing)) return false;
+            if (part.StartsWith("owners=", StringComparison.Ordinal))
+            {
+                if (!ActivationAdmissionPreparingOwnerToken.TryParse(part[7..], out var parsedOwners) ||
+                    parsedOwners.Count == 0) return false;
+                owners = ActivationAdmissionPreparingOwnerToken.Format(parsedOwners);
+            }
         }
-        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live, evidenceHeld, preparing);
+        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live, evidenceHeld, preparing, owners);
         return true;
     }
 
@@ -53,6 +61,11 @@ internal sealed record ActivationAdmissionHealthVerdict(
 // One activation window owns this tracker; its monitor serializes observations.
 internal sealed class ActivationAdmissionHealthTracker
 {
+    private readonly ActivationAdmissionOwnerIdleTracker _ownerIdle;
+
+    internal ActivationAdmissionHealthTracker(Func<TimeSpan>? elapsedNow = null) =>
+        _ownerIdle = new(elapsedNow);
+
     private bool _failureStreak;
     private int _count;
     private int _firstTick;
@@ -63,9 +76,11 @@ internal sealed class ActivationAdmissionHealthTracker
     internal ActivationAdmissionHealthVerdict Observe(ActivationAdmissionSample sample, DateTimeOffset now)
     {
         if (Verdict.State == ActivationAdmissionHealthState.Tripped) return Verdict;
+        if (_ownerIdle.Observe(sample) is { } ownerIdle) return Verdict = ownerIdle;
         var failure = sample.CensusFailed;
         var occupied = !failure && sample.WaitingVerified >= 1 && sample.Occupied >= 1 && sample.LiveGates == 0 &&
-            sample.EvidenceHeldPermits < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+            sample.EvidenceHeldPermits < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount &&
+            sample.PreparingAttempts == 0;
         if (!failure && !occupied)
         {
             _count = 0;

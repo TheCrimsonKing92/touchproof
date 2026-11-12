@@ -61,13 +61,13 @@ public sealed class ImpactReplayGuardExecutionTests
     [Theory]
     [InlineData(95, false, "Resolved")]
     [InlineData(95, true, "Resolved")]
-    [InlineData(999, true, "Abandoned")]
-    public void ExecuteCase_ChangedSupportAndGuard_EnforcesCombinedCap(
+    [InlineData(999, true, "Resolved")]
+    public void ExecuteCase_ChangedSupportAndGuard_PreservesCombinedSelection(
         int referencers, bool declaredGuard, string expected)
     {
         // Reverse dependency selection contributes AlphaTests. Changing a test helper
         // contributes its referencers through changed-test augmentation. Beta is an
-        // unchanged guard, giving 1,001 identities in the overflow case.
+        // unchanged guard, giving 1,001 identities in the largest case.
         var extraTests = "namespace SampleTests; " + string.Join("\n", Enumerable.Range(0, referencers)
             .Select(index => $"public class AlphaTestsExtra{index} {{ [Xunit.Fact] public void Works() {{ var helper = new Support.Helpers(); }} }}"));
         using var fixture = new ImpactReplayFixture(initialTestFiles: new Dictionary<string, string>
@@ -95,21 +95,9 @@ public sealed class ImpactReplayGuardExecutionTests
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Support.cs"]);
         else Assert.Empty(record.DeclaredGuards!.Selections);
         Assert.Null(record.DeclaredGuards!.DegradationReason);
-        if (expected == "Abandoned")
-        {
-            Assert.Equal("SelectedTestClassBound", record.DegradationKind);
-            Assert.Contains("1000-test-class bound", record.SelectionReason);
-            Assert.Contains("1001 test classes", record.SelectionReason);
-            Assert.Equal(1001, record.UnboundedSelectedClassCount);
-            Assert.Empty(record.SkippedLanes);
-            Assert.Equal(record.RanLanes.Order(StringComparer.Ordinal), record.WouldRunLanes);
-        }
-        else
-        {
-            Assert.Null(record.DegradationKind);
-            Assert.Equal(declaredGuard, record.WouldRunLanes.Contains("Beta lane"));
-            Assert.Equal(!declaredGuard, record.SkippedLanes.Contains("Beta lane"));
-        }
+        Assert.Null(record.DegradationKind);
+        Assert.Equal(declaredGuard, record.WouldRunLanes.Contains("Beta lane"));
+        Assert.Equal(!declaredGuard, record.SkippedLanes.Contains("Beta lane"));
         AssertReconciled(fixture, report);
     }
 

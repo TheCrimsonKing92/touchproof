@@ -106,7 +106,8 @@ internal sealed partial class ConductorDriver
             if (decision.DiscriminatingEvidence == "failed-terminal-fallthrough" && goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed) is { } tester &&
                 _getPreReviewEvidenceContext(goal).CandidateSha is { } candidate && AttributedFailureDeveloperRoute.Decide(goal, AttributedFailureDeveloperRoute.ReadTesterReceipt(goal, tester, candidate), candidate) is { IsRoute: true } route)
                 return RouteAttributedFailure(goal, goalPrefix, policy, route);
-            var escalated = Escalate(goal, goalPrefix, policy, state, decision.Reason);
+            var escalated = Escalate(goal, goalPrefix, policy, state,
+                SandboxPreparationStartStatus.EscalationReason(goal, decision.Reason, _recordTaskNote));
             return escalated with
             {
                 Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
@@ -127,8 +128,7 @@ internal sealed partial class ConductorDriver
                 { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
-        var targetTaskId = decision.Identity.TaskId ??
-            throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
+        var targetTaskId = SandboxPreparationStartStatus.RecoveryTarget(goal, decision, _recordTaskNote);
         FindingEvidenceContinuationCoordinator.RecordObservation(this, goal, targetTaskId, decision, verifyingFindingObservation);
         var conflictMessage = FailedGoalRetryApplicationExecutor.Apply(
             goal.Id,

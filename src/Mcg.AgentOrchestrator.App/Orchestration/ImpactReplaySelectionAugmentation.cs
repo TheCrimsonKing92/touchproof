@@ -13,11 +13,12 @@ internal static class ImpactReplaySelectionAugmentation
     internal static ReverseDependencyTestSelection Apply(ReverseDependencyTestSelection selection,
         IEnumerable<string> changedFiles, ImpactReplayTestSourceIndex sources,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, ImpactReplaySourceGuardReport? guards,
-        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses = null)
+        out ImpactReplayDeclaredGuardReport declaredGuards, IReadOnlyList<string>? additionalClasses = null,
+        IReadOnlyList<string>? testProjectDirectories = null)
     {
         var changed = changedFiles.ToArray();
         declaredGuards = ImpactReplayDeclaredGuardSelection.Read(changed, sources, classes);
-        var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes);
+        var mapped = ChangedFileTestClassPathMapper.Read(changed, sources, classes, testProjectDirectories ?? []);
         if (mapped.Outcome != ReverseDependencySelectionOutcome.Resolved) return mapped;
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved) return selection;
         if (declaredGuards.DegradationReason is { } reason)
@@ -34,11 +35,7 @@ internal static class ImpactReplaySelectionAugmentation
                 .Select(item => item.FullName).ToArray();
             return matches.Length == 0 ? [name] : matches;
         }).Distinct(StringComparer.Ordinal).Count();
-        var cap = selection.Headroom?.SelectedTestClassCap ?? ReverseDependencyTestImpactReader.MaximumSelectedTestClasses;
         var headroom = selection.Headroom is { } prior ? prior with { SelectedTestClassCount = count } : null;
-        if (count > cap)
-            return ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.SelectedTestClassBound,
-                ReverseDependencySelectedClassBoundReason.Render("Augmented replay", count, cap), selection.CacheReceipt, headroom);
         return selection with { TestClassNames = names, Headroom = headroom };
     }
 }

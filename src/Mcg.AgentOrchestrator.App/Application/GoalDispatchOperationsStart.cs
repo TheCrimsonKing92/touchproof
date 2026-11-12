@@ -150,24 +150,27 @@ internal sealed partial class GoalDispatchOperations
             }
             // Each paid reservation hydrates a whole goal. Preserve earlier admissions as well
             // as the mutations already accumulated before this batch.
+            var checkpointCommitted = false;
             if (RequiresDurableAdmissionSnapshotReplacement(currentTask))
             {
                 if (checkpointBeforeWorkerStart is null)
                     throw new InvalidOperationException(
                         $"Paid retry start requires a durable process checkpoint for task '{currentTask.Id}'.");
                 checkpointBeforeWorkerStart(kernel, goal.Id, currentTask.Id, DispatchRecordCheckpointPhase.BeforeRetryAdmission);
+                checkpointCommitted = true;
                 goal = kernel.GetGoal(goal.Id);
                 currentTask = kernel.GetTask(goal.Id, prepared.Task.Id);
                 if (currentTask.LastDispatch?.DispatchedAt != prepared.Task.LastDispatch?.DispatchedAt)
                     continue;
             }
-            var admission = EnsurePreparedRetryAdmission(
+            var admission = AbortedDispatchStartRecovery.Admit(kernel, goal.Id, currentTask.Id, checkpointCommitted,
+                () => EnsurePreparedRetryAdmission(
                 kernel,
                 workspace,
                 goal.Id,
                 currentTask,
                 retryReplayTask: retryReplayTasks.GetValueOrDefault(prepared.Task.Id),
-                recordDurableGoalBaseline: recordDurableGoalBaseline);
+                recordDurableGoalBaseline: recordDurableGoalBaseline));
             if (admission.AllowsProcessStart)
                 admittedTaskIds.Add(prepared.Task.Id);
         }
@@ -366,22 +369,25 @@ internal sealed partial class GoalDispatchOperations
                     goal = kernel.GetGoal(goal.Id);
                     continue;
                 }
+                var checkpointCommitted = false;
                 if (RequiresDurableAdmissionSnapshotReplacement(task))
                 {
                     if (checkpointBeforeWorkerStart is null)
                         throw new InvalidOperationException(
                             $"Paid retry start requires a durable process checkpoint for task '{task.Id}'.");
                     checkpointBeforeWorkerStart(kernel, goal.Id, task.Id, DispatchRecordCheckpointPhase.BeforeRetryAdmission);
+                    checkpointCommitted = true;
                     goal = kernel.GetGoal(goal.Id);
                     task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
                 }
-                admission = EnsurePreparedRetryAdmission(
+                admission = AbortedDispatchStartRecovery.Admit(kernel, goal.Id, task.Id, checkpointCommitted,
+                    () => EnsurePreparedRetryAdmission(
                     kernel,
                     workspace,
                     goal.Id,
                     task,
                     recoveringPreparedReservation,
-                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+                    recordDurableGoalBaseline: recordDurableGoalBaseline));
                 goal = kernel.GetGoal(goal.Id);
                 task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
                 if (!admission.AllowsProcessStart)
@@ -599,12 +605,12 @@ internal sealed partial class GoalDispatchOperations
         task.LatestRetryAt is not null &&
         (task.LastDispatch is { PaidRoute: PaidRouteClassification.Paid } || IsSoloCorrection(task));
 
-    private static bool IsSoloCorrection(TaskSpec task) => task.PendingRetryCause == RetryCause.NewTestFinding &&
+    internal static bool IsSoloCorrection(TaskSpec task) => task.PendingRetryCause == RetryCause.NewTestFinding &&
         task.CriterionRetryFeedback.Any(line => line.StartsWith("ATTRIBUTED_FAILURE_ROUTE source=solo ", StringComparison.Ordinal));
 
     internal static bool HasUncertainSoloCorrectionStart(TaskSpec task) => IsSoloCorrection(task) &&
         task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) &&
-        task.RetryAdmissionHistory.Any(receipt => receipt.LinkedDispatchAt >= task.LatestRetryAt &&
+        task.RetryAdmissionHistory.Any(receipt => receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
             receipt.WorkerStartClaimedAt is not null &&
             (receipt.WorkerStartedAt is null || task.LastProcess is null));
 
@@ -646,11 +652,14 @@ internal sealed partial class GoalDispatchOperations
         task.LastDispatch is { } dispatch &&
         EffectiveModelAssignment.Normalize(dispatch.ProviderName, dispatch.ModelName) != dispatch.ModelName;
 
-    private static bool RequiresRetiredPreparedDispatchRefresh(TaskSpec task) =>
+    internal static bool RequiresRetiredPreparedDispatchRefresh(TaskSpec task) =>
         HasRetiredPreparedModel(task) && task.LastProcess is null &&
         !task.RetryAdmissionHistory.Any(receipt =>
             receipt.LinkedDispatchAt == task.LastDispatch!.DispatchedAt &&
             (receipt.WorkerStartClaimedAt is not null || receipt.WorkerStartedAt is not null));
+
+    internal static string? PreparedDeveloperTestLaneBlocker(Goal goal, OrchestratorWorkspace workspace, TaskSpec task) =>
+        DeveloperTestLaneBlocker(goal, workspace, [task.Id]);
 
     private static bool PreparedDispatchMatchesAcknowledgedAssignment(TaskSpec task) =>
         task.LastDispatch is { } preparedDispatch &&

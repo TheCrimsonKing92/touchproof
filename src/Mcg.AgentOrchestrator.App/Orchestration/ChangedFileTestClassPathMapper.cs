@@ -9,7 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ChangedFileTestClassPathMapper
 {
     internal static ReverseDependencyTestSelection Read(IEnumerable<string> changedFiles,
-        ImpactReplayTestSourceIndex sources, IReadOnlyList<AcceptanceTestClassDescriptor> classes)
+        ImpactReplayTestSourceIndex sources, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
+        IReadOnlyList<string> testProjectDirectories)
     {
         var eligible = changedFiles.Select(Normalize).Where(IsEligible)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -34,7 +35,9 @@ internal static class ChangedFileTestClassPathMapper
             var matches = new HashSet<string>(StringComparer.Ordinal);
             if (literals.TryGetValue(path, out var byPath)) matches.UnionWith(byPath);
             if (literals.TryGetValue(path.Split('/').Last(), out var byName)) matches.UnionWith(byName);
-            if (matches.Count == 0)
+            if (matches.Count == 0 && !testProjectDirectories.Any(directory =>
+                    Normalize(directory).TrimEnd('/') is { Length: > 0 } folder &&
+                    path.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase)))
                 return ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped,
                     $"Changed file has no naming test class: {path}");
             selected.UnionWith(matches);
@@ -45,6 +48,11 @@ internal static class ChangedFileTestClassPathMapper
     private static bool IsEligible(string path) => !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
         (Path.GetExtension(path).ToLowerInvariant() is ".ps1" or ".cmd" or ".sh" ||
          path.Split('/').SkipLast(1).Contains("Fixtures", StringComparer.OrdinalIgnoreCase));
+
+    internal static string[] TestProjectDirectories(AcceptanceGateEngineSettings settings) =>
+        DeclaredTestProjectInventory.DeclaredProjects(settings, settings.DeclaredDotnetTestChecks)
+            .Select(project => Normalize(project)[..Normalize(project).LastIndexOf('/')])
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     private static string Normalize(string value)
     {
