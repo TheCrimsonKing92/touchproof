@@ -17,6 +17,7 @@ internal sealed partial class ConductorAuthorHost
     private readonly ConductEventLogWriter _conduct;
     private readonly ConductorLessonSelector? _lessons;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly AuthorRecommendationApplication _recommendations;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<string, (ConductorAuthorItem Item, Task<string> Round)> _rounds = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -27,7 +28,7 @@ internal sealed partial class ConductorAuthorHost
         SpecRefinerPrecedentStore precedents, Func<Goal, string> workingDirectory,
         IGoalLifecycleEventWriter lifecycle, ConductEventLogWriter conduct,
         Func<DateTimeOffset>? utcNow = null, bool enabled = true,
-        ConductorLessonSelector? lessons = null)
+        ConductorLessonSelector? lessons = null, Func<TimeSpan?>? recommendationWait = null)
     {
         _claims = claims;
         _collaboration = collaboration;
@@ -39,6 +40,9 @@ internal sealed partial class ConductorAuthorHost
         _conduct = conduct;
         _lessons = lessons;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _recommendations = new AuthorRecommendationApplication(collaboration, intents, conduct, _utcNow,
+            recommendationWait ?? (() => TimeSpan.FromSeconds(
+                Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy.DefaultAuthorRecommendationWaitSeconds)));
         Enabled = enabled;
     }
 
@@ -58,13 +62,15 @@ internal sealed partial class ConductorAuthorHost
         enabled: enabled,
         lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
             message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
-                .Append("author-lessons", null, message)));
+                .Append("author-lessons", null, message)),
+        recommendationWait: () => AuthorRecommendationApplication.LoadWait(workspace.OrchestratorDirectory));
 
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
         var changed = new HashSet<GoalId>();
         AuthorOwnerQuestionHoldReconciler.Reconcile(kernel, _collaboration, _conduct, onlyGoalId, changed);
         if (!Enabled) return changed;
+        _recommendations.ServiceTick(kernel, onlyGoalId);
         (_model as IConductorModelBindingRefresh)?.RefreshBindings();
         Harvest(kernel, onlyGoalId, changed);
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&

@@ -56,11 +56,13 @@ public sealed record ConductorAutonomyPolicy(
     int BuildGcHeapCount = 0,
     int BuildRootRetentionDays = 0,
     int AutomaticRetryOperatorRoutingHoldSeconds = 180,
-    bool AdoptedBuildPushEnabled = false)
+    bool AdoptedBuildPushEnabled = false,
+    int AuthorRecommendationWaitSeconds = 300)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int DefaultAutomaticRetryOperatorRoutingHoldSeconds = 180;
+    public const int DefaultAuthorRecommendationWaitSeconds = 300;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
 
@@ -198,6 +200,8 @@ public sealed record ConductorAutonomyPolicy(
             errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
         if (AutomaticRetryOperatorRoutingHoldSeconds < 0)
             errors.Add($"automaticRetryOperatorRoutingHoldSeconds must be zero or greater (got {AutomaticRetryOperatorRoutingHoldSeconds}).");
+        if (AuthorRecommendationWaitSeconds <= 0)
+            errors.Add($"authorRecommendationWaitSeconds must be greater than zero (got {AuthorRecommendationWaitSeconds}).");
 
         if (string.IsNullOrWhiteSpace(CascadeCheapModelAlias))
             errors.Add("cascadeCheapModelAlias must not be empty.");
@@ -245,6 +249,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
         sb.AppendLine($"  \"automaticRetryOperatorRoutingHoldSeconds\": {AutomaticRetryOperatorRoutingHoldSeconds},");
+        sb.AppendLine($"  \"authorRecommendationWaitSeconds\": {AuthorRecommendationWaitSeconds},");
         sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"acceptanceChildrenOptOutExecutionThrottling\": {AcceptanceChildrenOptOutExecutionThrottling.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"buildGcConserveMemory\": {BuildGcConserveMemory.ToString().ToLowerInvariant()},");
@@ -336,6 +341,12 @@ public sealed record ConductorAutonomyPolicy(
                 : 2;
             var gatherWindowSeconds = DefaultAcceptanceCohortGatherWindowSeconds;
             var routingHoldSeconds = DefaultAutomaticRetryOperatorRoutingHoldSeconds;
+            var authorRecommendationWaitSeconds = DefaultAuthorRecommendationWaitSeconds;
+            if (root.TryGetProperty("authorRecommendationWaitSeconds", out var authorWaitElement))
+            {
+                if (authorWaitElement.ValueKind != JsonValueKind.Number || !authorWaitElement.TryGetInt32(out authorRecommendationWaitSeconds))
+                    throw new FormatException($"conductor-policy.json{src}: authorRecommendationWaitSeconds must be an integer.");
+            }
             if (root.TryGetProperty("automaticRetryOperatorRoutingHoldSeconds", out var routingHoldElement))
             {
                 if (routingHoldElement.ValueKind != JsonValueKind.Number || !routingHoldElement.TryGetInt32(out routingHoldSeconds))
@@ -514,7 +525,8 @@ public sealed record ConductorAutonomyPolicy(
                 buildGcHeapCount,
                 buildRootRetentionDays,
                 routingHoldSeconds,
-                adoptedBuildPushEnabled)
+                adoptedBuildPushEnabled,
+                authorRecommendationWaitSeconds)
             {
                 Features = ParseFeatures(root, src)
             };
