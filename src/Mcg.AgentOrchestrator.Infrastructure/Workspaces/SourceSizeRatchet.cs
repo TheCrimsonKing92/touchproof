@@ -237,7 +237,7 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe includes parked goals only in owned-attempt reconciliation, keeping
             // them outside admission candidates at the existing batch selection boundary.
             // b596bd5a: grouped workspace-probe backoff exclusion adds 5 lines, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 812), // Goal 1f6500ae: follower admission and receipt carry removed.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 808), // Goal 1f6500ae: follower admission and receipt carry removed.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
