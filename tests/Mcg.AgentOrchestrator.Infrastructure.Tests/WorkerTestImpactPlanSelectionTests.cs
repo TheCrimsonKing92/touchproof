@@ -265,7 +265,7 @@ public sealed class WorkerTestImpactPlanSelectionTests
             ProjectCheck(BuiltInProject), new("non-project evidence", [], "no command")
         ],
         new(ReverseDependencyDegradationKind.Unreadable, "synthetic degradation"),
-        new(1, 2, 3, 4, 5));
+        new(1, 2, 3, 5));
 
     private static RepositoryTestImpactCheck ProjectCheck(string project) =>
         new(project, ["dotnet", "test", "--project", project], "synthetic project check");

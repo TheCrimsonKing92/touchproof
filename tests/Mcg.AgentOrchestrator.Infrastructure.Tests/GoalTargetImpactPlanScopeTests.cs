@@ -204,7 +204,7 @@ public sealed class GoalTargetImpactPlanScopeTests
 
     private static RepositoryTestImpactPlan SyntheticPlan() => new(
         true, true, "synthetic plan", [ProjectCheck(BuiltInProject)],
-        new(ReverseDependencyDegradationKind.Unreadable, "synthetic degradation"), new(1, 2, 3, 4, 5));
+        new(ReverseDependencyDegradationKind.Unreadable, "synthetic degradation"), new(1, 2, 3, 5));
 
     private static void AssertMetadataEqual(RepositoryTestImpactPlan expected, RepositoryTestImpactPlan actual)
     {
