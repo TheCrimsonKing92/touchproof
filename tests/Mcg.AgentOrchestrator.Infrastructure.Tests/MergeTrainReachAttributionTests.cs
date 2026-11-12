@@ -8,12 +8,20 @@ using Fixture = RepositoryTestReachTests.RepositoryFixture;
 public sealed class MergeTrainReachAttributionTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void WholeProjectPlans_UniqueReachAttributesAllClassesInSortedOrder(bool sourcePeer)
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(true, 7)]
+    public void WholeProjectPlans_UniqueReachAttributesAllClassesInSortedOrder(bool sourcePeer, int sourceCount)
     {
         using var fixture = CreateFixture();
-        var members = new[] { Member('a', Fixture.Source), Member('b', sourcePeer ? Fixture.Other : "docs/b.md"), Member('c') };
+        var sources = new List<string> { Fixture.Source };
+        foreach (var index in Enumerable.Range(1, sourceCount - 1))
+        {
+            var source = $"src/Mcg.AgentOrchestrator.App/Additional{index}.cs";
+            fixture.Write(source, $"public class Additional{index} {{ }}");
+            sources.Add(source);
+        }
+        var members = new[] { Member('a', sources.ToArray()), Member('b', sourcePeer ? Fixture.Other : "docs/b.md"), Member('c') };
         Assert.Contains(RepositoryTestImpactPlanner.Plan(members[0].LandingPaths, fixture.Root).Checks,
             check => check.TestProject == RepositoryTestProject.Infrastructure && check.TestClassSelections is null);
         if (sourcePeer)
@@ -31,7 +39,7 @@ public sealed class MergeTrainReachAttributionTests
     [Theory]
     [InlineData("shared")]
     [InlineData("unreached")]
-    [InlineData("unresolved-later-batch")]
+    [InlineData("wide-member-deleted-source")]
     [InlineData("unreadable")]
     [InlineData("apparatus")]
     [InlineData("guard")]
@@ -48,7 +56,7 @@ public sealed class MergeTrainReachAttributionTests
                 fixture.Write(Fixture.Intermediate, "public class Intermediate { private ChangedSource first; private OtherSource second; }");
                 break;
             case "unreached": paths = Trx(fixture.Root, "UnreachedTests.Fails"); break;
-            case "unresolved-later-batch":
+            case "wide-member-deleted-source":
                 var sources = Enumerable.Range(0, 7).Select(index => $"src/Mcg.AgentOrchestrator.App/Source{index}.cs").ToArray();
                 foreach (var source in sources) fixture.Write(source, $"public class {Path.GetFileNameWithoutExtension(source)} {{ }}");
                 File.Delete(Path.Combine(fixture.Root, sources[^1]));

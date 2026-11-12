@@ -13,7 +13,7 @@ public sealed class ImpactReplayGuardCompatibilityTests
     public void Apply_DeclaredGuardsOverflowEffectiveCap_AbandonsWithoutTruncation()
     {
         var original = ReverseDependencyTestSelection.Resolved(["Sample.Existing"],
-            headroom: new(null, 8000, 1, 1, null, 64));
+            headroom: new(null, 8000, 1, 1, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out var report,
             [new("Sample.Guard", null)], original);
         Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selected.Outcome);
@@ -27,7 +27,7 @@ public sealed class ImpactReplayGuardCompatibilityTests
     public void Apply_AtCap_DeduplicatesQualifiedAliasesAndAdditionalSelections()
     {
         var original = ReverseDependencyTestSelection.Resolved(["Guard"],
-            headroom: new(null, 8000, 1, 1, null, 64));
+            headroom: new(null, 8000, 1, 1, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out _,
             [new("Sample.Guard", null)], original, ["Sample.Guard"]);
         Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selected.Outcome);
@@ -39,7 +39,7 @@ public sealed class ImpactReplayGuardCompatibilityTests
     public void Apply_ChangedTestClassesOverflowCap_Abandons()
     {
         var original = ReverseDependencyTestSelection.Resolved([],
-            headroom: new(null, 8000, 0, 1, null, 64));
+            headroom: new(null, 8000, 0, 1, null));
         var selected = Apply(Sources(Guard), ["src/Input.cs"], out _,
             [new("Sample.Guard", null)], original, ["Sample.Added"]);
         Assert.Equal(ReverseDependencyDegradationKind.SelectedTestClassBound, selected.DegradationKind);

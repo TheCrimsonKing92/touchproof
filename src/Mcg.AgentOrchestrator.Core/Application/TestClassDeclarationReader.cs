@@ -113,18 +113,15 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     private readonly string _repositoryRoot;
     private readonly int _maximumIndexedSourceFiles;
     private readonly int _maximumSelectedTestClasses;
-    private readonly int? _maximumFrontierSymbols;
 
     internal FileSystemTestClassDeclarationReader(
         string repositoryRoot,
         int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles,
-        int maximumSelectedTestClasses = ReverseDependencyTestImpactReader.MaximumSelectedTestClasses,
-        int? maximumFrontierSymbols = null)
+        int maximumSelectedTestClasses = ReverseDependencyTestImpactReader.MaximumSelectedTestClasses)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _maximumIndexedSourceFiles = maximumIndexedSourceFiles;
         _maximumSelectedTestClasses = maximumSelectedTestClasses;
-        _maximumFrontierSymbols = maximumFrontierSymbols;
     }
 
     internal static ITestClassDeclarationReader CreateForCurrentRepository()
@@ -189,7 +186,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
         IReadOnlyList<string> changedSourcePaths) =>
         ReverseDependencyTestImpactReader.Read(
             _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles,
-            maximumSelectedTestClasses: _maximumSelectedTestClasses, maximumFrontierSymbols: _maximumFrontierSymbols);
+            maximumSelectedTestClasses: _maximumSelectedTestClasses);
 
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {

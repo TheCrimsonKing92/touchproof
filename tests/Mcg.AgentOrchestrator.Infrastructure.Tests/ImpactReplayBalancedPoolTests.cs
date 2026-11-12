@@ -45,16 +45,18 @@ public sealed class ImpactReplayBalancedPoolTests
     }
 
     [Fact]
-    public void AbandonedSelection_SkipsNothingAndKeepsObservedCost()
+    public void WideSelection_SkipsUnselectedClassesAndKeepsObservedCost()
     {
         using var fixture = new ImpactReplayFixture(changedSourceCount: 7, balancedPool: true);
         fixture.AddAttempt("abandoned");
         var (report, _) = fixture.Run();
         var attempt = Assert.Single(report.Attempts);
-        Assert.Equal("ChangedSourceFileCount", attempt.DegradationKind);
-        Assert.All(attempt.BalancedClasses!, c => Assert.True(c.WouldRun));
-        Assert.Equal(0d, attempt.PoolSecondsSaved);
-        Assert.Equal(0d, attempt.NamedLaneObservedSecondsSaved);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.True(Assert.Single(attempt.BalancedClasses!, c => c.ClassName == "SampleTests.PoolAlphaTests").WouldRun);
+        Assert.False(Assert.Single(attempt.BalancedClasses!, c => c.ClassName == "SampleTests.PoolBetaTests").WouldRun);
+        Assert.Equal(8d, attempt.PoolSecondsSaved);
+        Assert.Equal(1d, attempt.NamedLaneObservedSecondsSaved);
         Assert.Equal(13d, attempt.ObservedInfrastructureSeconds);
         Assert.Equal(1, report.Measurement!.ChangedSourceFileCountDistribution[7]);
     }

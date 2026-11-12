@@ -24,11 +24,10 @@ internal static class MergeTrainReachAttribution
                         path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var reach = new HashSet<string>(StringComparer.Ordinal);
-                // The focused command's source-count limit is not an attribution limit.
-                // Preserve every member's complete reach: any unresolved batch declines.
-                foreach (var batch in sources.Chunk(ReverseDependencyTestImpactReader.MaximumChangedSourceFiles))
+                // Read the complete member reach together; a member without sources has no reach.
+                if (sources.Length > 0)
                 {
-                    var selected = RepositoryTestReach.TryReadReachableTestClasses(workspacePath, batch);
+                    var selected = RepositoryTestReach.TryReadReachableTestClasses(workspacePath, sources);
                     if (selected is null) return null;
                     reach.UnionWith(selected);
                 }

@@ -79,7 +79,7 @@ public sealed class ReverseDependencyScannerShapeTests
     }
 
     [Fact]
-    public void DistinctNonPartialDeclarationsRemainAmbiguous()
+    public void DistinctNonPartialDeclarationsResolveAsOneSymbol()
     {
         using var repository = new Repository();
         const string path = "src/Fixture/ShadowDuplicate.cs";
@@ -89,9 +89,9 @@ public sealed class ReverseDependencyScannerShapeTests
 
         var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.NotEqual(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
-        Assert.Equal(ReverseDependencyDegradationKind.AmbiguousDeclaration, selection.DegradationKind);
-        Assert.Empty(selection.TestClassNames);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Null(selection.DegradationKind);
+        Assert.Equal(["ShadowDuplicateTests"], selection.TestClassNames);
     }
 
     [Theory]

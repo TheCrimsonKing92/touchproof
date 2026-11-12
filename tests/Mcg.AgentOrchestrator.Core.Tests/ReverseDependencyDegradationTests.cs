@@ -21,7 +21,7 @@ public sealed class ReverseDependencyDegradationTests
     }
 
     [Xunit.Fact]
-    public void Read_SixChangedSources_ReportsChangedSourceFileCount()
+    public void Read_SixChangedSources_Resolves()
     {
         using var repository = Repository.Create();
         var paths = Enumerable.Range(0, 6)
@@ -30,9 +30,8 @@ public sealed class ReverseDependencyDegradationTests
 
         var selection = ReverseDependencyTestImpactReader.Read(repository.Root, paths, bypassCache: true);
 
-        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
-        Xunit.Assert.Equal(ReverseDependencyDegradationKind.ChangedSourceFileCount, selection.DegradationKind);
-        Xunit.Assert.Equal("Focused reverse-dependency selection supports 1-5 changed source files.", selection.Reason);
+        Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Xunit.Assert.Null(selection.DegradationKind);
     }
 
     [Xunit.Fact]
@@ -51,7 +50,7 @@ public sealed class ReverseDependencyDegradationTests
     }
 
     [Xunit.Fact]
-    public void Plan_SixChangedSources_CarriesRoutineDegradation()
+    public void Plan_SixChangedSources_HasNoDegradation()
     {
         using var repository = Repository.Create();
         var paths = Enumerable.Range(0, 6)
@@ -61,9 +60,7 @@ public sealed class ReverseDependencyDegradationTests
         var plan = RepositoryTestImpactPlanner.Plan(RepositoryChangeClassifier.Classify(paths),
             new FileSystemTestClassDeclarationReader(repository.Root));
 
-        Xunit.Assert.Equal(new RepositoryTestImpactDegradation(
-            ReverseDependencyDegradationKind.ChangedSourceFileCount,
-            "Focused reverse-dependency selection supports 1-5 changed source files."), plan.ReverseDependencyDegradation);
+        Xunit.Assert.Null(plan.ReverseDependencyDegradation);
     }
 
     [Xunit.Fact]

@@ -410,8 +410,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         {
             Assert.True(bypassed.Outcome == ReverseDependencySelectionOutcome.Abandoned &&
                 bypassed.DegradationKind is ReverseDependencyDegradationKind.IndexedSourceBound or
-                    ReverseDependencyDegradationKind.SelectedTestClassBound or
-                    ReverseDependencyDegradationKind.FrontierSymbolBound,
+                    ReverseDependencyDegradationKind.SelectedTestClassBound,
                 $"Unexpected reverse-dependency outcome: {bypassed.Outcome}, {bypassed.DegradationKind}");
             Assert.Equal(bypassed.DegradationKind, warm.ReverseDependencyDegradation?.Kind);
             Assert.DoesNotContain("--filter", warmInfrastructure.Command);
@@ -456,7 +455,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
-    public void ChangedCoreSourceCountAboveFocusedBoundWidensToFullInfrastructureSuite()
+    public void SixChangedCoreSourcesResolveWithoutDegradation()
     {
         using var repository = ReverseDependencyRepository.Create();
         var changedPaths = Enumerable.Range(1, 6)
@@ -471,10 +470,11 @@ public sealed class RepositoryTestImpactFilterResolutionTests
 
         var plan = RepositoryTestImpactPlanner.Plan(changedPaths, repository.Root);
 
-        var infrastructureCheck = Assert.Single(plan.Checks, check =>
-            check.TestProject == RepositoryTestProject.Infrastructure);
-        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains("supports 1-5 changed source files", infrastructureCheck.Reason, StringComparison.Ordinal);
+        var selection = new FileSystemTestClassDeclarationReader(repository.Root)
+            .ReadReverseDependentTestClasses(changedPaths);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Null(plan.ReverseDependencyDegradation);
+        Assert.DoesNotContain(plan.Checks, check => check.TestProject == RepositoryTestProject.Infrastructure);
     }
 
     [Xunit.Fact]

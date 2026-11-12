@@ -20,8 +20,7 @@ internal sealed class TestImpactHeadroomWarning(Func<string?> measurementRoot, i
         (string Kind, int? Count, int Cap)[] bounds =
         [
             ("IndexedSourceFiles", indexed?.IndexedSourceFileCount, indexed?.IndexedSourceFileCap ?? indexedSourceFileCap),
-            ("SelectedTestClasses", planned?.SelectedTestClassCount, planned?.SelectedTestClassCap ?? 0),
-            ("FrontierSymbols", planned?.LargestFrontierSymbolCount, planned?.FrontierSymbolCap ?? 0)
+            ("SelectedTestClasses", planned?.SelectedTestClassCount, planned?.SelectedTestClassCap ?? 0)
         ];
         foreach (var bound in bounds)
         {

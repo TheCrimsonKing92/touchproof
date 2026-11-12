@@ -57,7 +57,7 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
     }
 
     [Fact]
-    public void SourceBoundAbandonmentStillReportsAmbiguousClass()
+    public void WideSourceChangeAbandonsForUnmappedAmbiguousClass()
     {
         using var fixture = new ImpactReplayFixture(changedSourceCount: 6, changedTestFiles: new Dictionary<string, string>
         {
@@ -69,7 +69,7 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
 
         var attempt = Assert.Single(report.Attempts);
         Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("ChangedSourceFileCount", attempt.DegradationKind);
+        Assert.Equal("UnmappedTestClass", attempt.DegradationKind);
         Assert.Empty(attempt.SkippedLanes);
         var diagnostic = Assert.Single(report.UnmappedTestClasses!.Occurrences);
         Assert.Equal("source-bound", diagnostic.AttemptId);

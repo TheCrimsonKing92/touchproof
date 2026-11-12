@@ -12,14 +12,15 @@ public sealed class ImpactReplayUnboundedSelectionTests
     [InlineData("SelectedTestClassBound", 1001)]
     [InlineData("ChangedSourceFileCount", 1001)]
     [InlineData("FrontierSymbolBound", 2)]
-    public void BoundAbandonment_ReportsUnboundedCountAndShare(string kind, int count)
+    public void CurrentSelectionAndHistoricalBoundReport_KeepUnboundedCountAndShare(string kind, int count)
     {
         using var fixture = new Fixture();
         var input = Arrange(fixture, kind, count);
-        var bounded = ReverseDependencyTestImpactReader.Read(fixture.Root, input.Changed,
-            maximumChangedSourceFiles: 20);
-        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, bounded.Outcome);
-        Assert.Equal(kind, bounded.DegradationKind.ToString());
+        var bounded = ReverseDependencyTestImpactReader.Read(fixture.Root, input.Changed);
+        Assert.Equal(count > 1000 ? ReverseDependencySelectionOutcome.Abandoned :
+            ReverseDependencySelectionOutcome.Resolved, bounded.Outcome);
+        Assert.Equal(count > 1000 ? ReverseDependencyDegradationKind.SelectedTestClassBound :
+            (ReverseDependencyDegradationKind?)null, bounded.DegradationKind);
 
         var measured = ImpactReplayUnboundedSelectionMeasurement.Apply(input.Attempt, fixture.Root,
             input.Changed, input.Sources, input.Classes, null, []);

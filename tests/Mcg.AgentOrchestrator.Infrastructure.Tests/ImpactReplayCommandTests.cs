@@ -53,7 +53,7 @@ public sealed class ImpactReplayCommandTests
     }
 
     [Fact]
-    public void SixSourceChangesAreCountedAsAbandonedWithoutSkippingAnyLanes()
+    public void SixSourceChangesResolveAndSkipUnselectedLanes()
     {
         using var fixture = new ImpactReplayFixture(changedSourceCount: 6);
         fixture.AddAttempt("over-cap");
@@ -62,14 +62,14 @@ public sealed class ImpactReplayCommandTests
 
         var attempt = Assert.Single(report.Attempts);
         Assert.Equal(6, attempt.ChangedFiles.Count);
-        Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("ChangedSourceFileCount", attempt.DegradationKind);
-        Assert.Empty(attempt.SkippedLanes);
-        Assert.Equal(attempt.RanLanes.ToArray(), attempt.WouldRunLanes.ToArray());
-        Assert.Equal(0, attempt.EstimatedSerialSecondsSaved);
-        Assert.Equal(0, attempt.ShareOfLanesSkipped);
-        Assert.Contains("- ChangedSourceFileCount: 1", markdown);
-        Assert.Contains("Total estimated lane-seconds saved: 0", markdown);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.Equal(new[] { "Beta lane" }, attempt.SkippedLanes);
+        Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
+        Assert.Equal(23.5, attempt.EstimatedSerialSecondsSaved);
+        Assert.Equal(1d / 3, attempt.ShareOfLanesSkipped);
+        Assert.DoesNotContain("- ChangedSourceFileCount: 1", markdown);
+        Assert.Contains("Total estimated lane-seconds saved: 23.5", markdown);
     }
 
     [Fact]

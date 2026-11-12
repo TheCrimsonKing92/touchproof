@@ -41,13 +41,12 @@ public sealed record RepositoryTestImpactHeadroom(
     int IndexedSourceFileCap,
     int? SelectedTestClassCount,
     int SelectedTestClassCap,
-    int? LargestFrontierSymbolCount,
-    int FrontierSymbolCap)
+    int? LargestFrontierSymbolCount)
 {
     internal string Render() =>
         $"headroom indexed-files={Count(IndexedSourceFileCount)}/{IndexedSourceFileCap} " +
         $"selected-classes={Count(SelectedTestClassCount)}/{SelectedTestClassCap} " +
-        $"frontier-symbols={Count(LargestFrontierSymbolCount)}/{FrontierSymbolCap}";
+        $"frontier-symbols={Count(LargestFrontierSymbolCount)}";
 
     private static string Count(int? value) =>
         value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a";
