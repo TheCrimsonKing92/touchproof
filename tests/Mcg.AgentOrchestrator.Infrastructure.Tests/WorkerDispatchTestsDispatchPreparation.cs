@@ -4587,7 +4587,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Path.Combine(workingDirectory, changedPath.Replace('/', Path.DirectorySeparatorChar)),
         Environment.NewLine + "// changed");
     var kernel = new AgentOrchestratorKernel();
-    var task = new TaskSpec(TaskId.New(), "Review cache evidence.", AgentRole.Reviewer);
+    var task = new TaskSpec(TaskId.New(), "Prepare cache evidence.", AgentRole.Developer);
     var goal = kernel.CreateGoal("Write reverse-dependency cache evidence", [task]);
 
     _ = WorkerContextArtifacts.Write(goal, task, workingDirectory);

@@ -42,7 +42,8 @@ internal sealed partial class WorkerArtifactWriter
         string? orchestratorStoreRoot = null,
         IReadOnlyList<string>? answeredEvidenceTexts = null,
         IClock? clock = null,
-        string? linkedBacklogRecord = null)
+        string? linkedBacklogRecord = null,
+        string? integrationBranch = null)
     {
         var preserveCompleteArtifacts = WorkerContextHelpers.UsesTypedContextPackage(
             task.RequiredRole,
@@ -117,13 +118,39 @@ internal sealed partial class WorkerArtifactWriter
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
+        ReviewerChangedFileScopeException? reviewerScopeError = null;
+        IReadOnlyList<string> changedFiles;
+        if (task.RequiredRole == AgentRole.Reviewer)
+        {
+            try
+            {
+                changedFiles = _gitContext.ReadReviewerChangedFileScope(
+                    workingDirectory, TrunkBranchName.Resolve(integrationBranch)).ChangedFiles;
+            }
+            catch (ReviewerChangedFileScopeException exception)
+            {
+                changedFiles = [];
+                reviewerScopeError = exception;
+            }
+        }
+        else
+        {
+            changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
+        }
         var testImpactPlan = WorkerTestImpactPlanSelection.For(changedFiles, workingDirectory, _targetHome);
+        if (task.RequiredRole == AgentRole.Reviewer && (reviewerScopeError is not null || !testImpactPlan.RequiresBuild))
+            testImpactPlan = testImpactPlan with
+            {
+                Summary = reviewerScopeError is not null
+                    ? "Committed branch diff and its test-impact assessment are unavailable."
+                    : "No test command selected for the listed files; build evidence is reported separately.",
+                Checks = []
+            };
         var repositoryDiffs = WorkerRepositoryDiffArtifacts.Write(
             goal, contextDirectory, _gitContext, PriorVerificationMaxChars, preserveCompleteArtifacts);
         WriteText(
             Path.Combine(contextDirectory, "deterministic-verification.md"),
-            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
+            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan, reviewerScopeError));
         WriteText(
             Path.Combine(contextDirectory, "workflow-brokers.md"),
             BuildWorkflowBrokers(
@@ -466,7 +493,8 @@ internal sealed partial class WorkerArtifactWriter
         TaskSpec task,
         string workingDirectory,
         IReadOnlyList<string> changedFiles,
-        RepositoryTestImpactPlan testImpactPlan)
+        RepositoryTestImpactPlan testImpactPlan,
+        ReviewerChangedFileScopeException? reviewerScopeError = null)
     {
         var priorTasks = goal.Tasks.TakeWhile(t => t.Id != task.Id).ToList();
         var completedPriorTasks = priorTasks.Where(t => t.Status == WorkTaskStatus.Completed).ToList();
@@ -487,6 +515,24 @@ internal sealed partial class WorkerArtifactWriter
             lines.AddRange(WorkerStackVerificationGuidance.DeterministicVerificationSection(
                 ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), goal.Id));
 
+        if (task.RequiredRole == AgentRole.Reviewer)
+        {
+            lines.Add(string.Empty);
+            lines.Add("## Reviewed Branch Diff");
+            if (reviewerScopeError is not null)
+            {
+                lines.Add($"Committed branch diff unavailable: {reviewerScopeError.ErrorCode}: {reviewerScopeError.Message}");
+                lines.Add("Test-impact assessment unavailable; the working-tree list is not the reviewed branch scope.");
+            }
+            else
+            {
+                lines.Add($"Committed branch-diff files: {changedFiles.Count}");
+                lines.AddRange(changedFiles.Take(120).Select(file => $"- `{file}`"));
+                if (changedFiles.Count > 120)
+                    lines.Add($"- {changedFiles.Count - 120} additional files omitted from this display; all files inform test impact.");
+            }
+        }
+
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
@@ -505,8 +551,9 @@ internal sealed partial class WorkerArtifactWriter
 
         lines.Add(string.Empty);
         lines.Add("## Required Verification Policy");
-        lines.Add(verificationPolicy.Summary);
-        lines.Add($"Requires tests: {(verificationPolicy.RequiresTests ? "yes" : "no")}");
+        lines.Add(task.RequiredRole == AgentRole.Reviewer && !verificationPolicy.RequiresTests
+            ? testImpactPlan.Summary : verificationPolicy.Summary);
+        lines.Add($"Requires tests: {(reviewerScopeError is not null ? "unknown" : verificationPolicy.RequiresTests ? "yes" : "no")}");
         lines.Add($"Requires human review: {(verificationPolicy.RequiresHumanReview ? "yes" : "no")}");
         foreach (var check in verificationPolicy.Checks)
         {
@@ -561,6 +608,7 @@ internal sealed partial class WorkerArtifactWriter
                 : $"- fail: current task latest verification failed with exit {currentVerification.ExitCode}: `{currentVerification.Command}`.");
         }
 
+        lines.AddRange(ReviewerCompletionBuildEvidenceSection.Build(goal, task, workingDirectory));
         return string.Join(Environment.NewLine, lines);
     }
 
