@@ -1,10 +1,11 @@
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class AdoptedBuildPushTrigger(
     Func<ConductorAutonomyPolicy> readPolicy, Action<string> push,
-    Action<string> append, Action<string> attention)
+    Action<string> append, Action<string> attention, Action<string>? publishRepositories = null)
 {
     internal void OnFinalized(string commit, string pending, string failed)
     {
@@ -28,6 +29,18 @@ internal sealed class AdoptedBuildPushTrigger(
         {
             Hold("service-failed");
         }
+        try { publishRepositories?.Invoke(commit); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            AdoptedBuildPublicationReporting.Try(
+                () => append($"ADOPTED_BUILD_PUSH_HELD commit={commit} reason=repository-publication-failed"),
+                "repository-trigger-held-event");
+            AdoptedBuildPublicationReporting.Try(
+                () => attention($"Non-default repository publication failed. commit={commit} reason=repository-publication-failed. " +
+                    "Next: inspect the landing records and manually publish the non-default repositories from their checkouts."),
+                "repository-trigger-held-attention");
+        }
     }
 
     internal static AdoptedBuildPushTrigger CreateDefault(Action<string> append)
@@ -41,10 +54,18 @@ internal sealed class AdoptedBuildPushTrigger(
         var workspace = project?.ResolveWorkspace() ?? OrchestratorWorkspace.ForDirectory(
             root, root, OrchestratorWorkspace.DefaultTenantName, registry);
         var service = AdoptedBuildPushService.CreateDefault(root, append);
+        var landings = new MultiRepositoryLandingRecordStore(workspace.OrchestratorDirectory);
+        var publisher = new MultiRepositoryAdoptedBuildPublisher(new(workspace, registry),
+            Path.Combine(root, AdoptedBuildLeakScanner.GenericPatternPath),
+            AdoptedBuildLeakScanner.OwnerPatternPath(OrchestratorDataRoot.Resolve().RootDirectory), append,
+            body => CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
+                    "Adopted build push held", body, "adopted-build-push-held:" + body.Split('\n')[0]).GetAwaiter().GetResult());
         return new(() => ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)),
             commit => service.Push(commit, branch: workspace.IntegrationBranch), append,
             body => Mcg.AgentOrchestrator.Infrastructure.CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
                 .RaiseAsync(Mcg.AgentOrchestrator.Core.CollaborationItemType.Decision, null,
-                    "Adopted build push held", body, "adopted-build-push-policy").GetAwaiter().GetResult());
+                    "Adopted build push held", body, "adopted-build-push-policy").GetAwaiter().GetResult(),
+            commit => publisher.Publish(landings.FindByLandedHomeCommit(commit)));
     }
 }

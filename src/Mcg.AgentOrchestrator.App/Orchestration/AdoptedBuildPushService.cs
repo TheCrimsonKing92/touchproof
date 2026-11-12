@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class AdoptedBuildPushService(
     string repository, string genericPatterns, string ownerPatterns,
     Action<string> append, Action<string> attention,
-    Func<string, string[], GitCli.GitResult>? git = null)
+    Func<string, string[], GitCli.GitResult>? git = null, string? repositoryLabel = null)
 {
     private readonly object _gate = new();
 
@@ -32,12 +32,7 @@ internal sealed class AdoptedBuildPushService(
         }
         bool Hold(string reason, IReadOnlyList<AdoptedBuildLeakScanner.Location>? matches = null)
         {
-            AdoptedBuildPublicationReporting.Try(
-                () => append($"ADOPTED_BUILD_PUSH_HELD commit={commit} remote={destinationName} reason={reason}"), "held-event");
-            var locations = matches is null ? "" : string.Join("\n", matches.Select(hit => $"{hit.File}:{hit.Line}"));
-            AdoptedBuildPublicationReporting.Try(
-                () => attention($"Adopted build publication held. commit={commit} remote={destinationName} reason={reason}\n" +
-                    locations + $"\nNext: push-adopted {commit} --remote {destinationName} --branch {branchName}"), "held-attention");
+            ReportHeld(commit, destinationName, branchName, reason, repositoryLabel, append, attention, matches);
             return false;
         }
 
@@ -96,16 +91,36 @@ internal sealed class AdoptedBuildPushService(
                 return Hold(phase);
             // Publication is already verified. A receipt failure must not turn it into a held push.
             if (!AdoptedBuildPublicationReporting.Try(
-                () => append($"ADOPTED_BUILD_PUSHED commit={commit} remote={remote} added_lines={scan.AddedLines}"), "pushed-event"))
+                () => append($"ADOPTED_BUILD_PUSHED commit={commit} remote={remote}{RepositoryField(repositoryLabel)} added_lines={scan.AddedLines}"), "pushed-event"))
                 AdoptedBuildPublicationReporting.Try(
-                    () => attention($"Adopted build publication verified. commit={commit} remote={destinationName} " +
+                    () => attention($"Adopted build publication verified. commit={commit} remote={destinationName}{RepositoryField(repositoryLabel)} " +
                         "reason=pushed-event-write-failed. The push succeeded; its event could not be recorded. " +
-                        $"Next: push-adopted {commit} --remote {destinationName} --branch {branchName}"), "pushed-attention");
+                        NextStep(commit, destinationName, branchName, repositoryLabel)), "pushed-attention");
             return true;
         }
         catch (RegexMatchTimeoutException) { return Hold("scan-timeout"); }
+        catch (OperationCanceledException) when (repositoryLabel is not null) { throw; }
         catch (Exception) { return Hold(phase); } // Never echo git stderr, pattern contents or raw exception text.
     }
+
+    internal static void ReportHeld(string commit, string remote, string branch, string reason,
+        string? repositoryLabel, Action<string> append, Action<string> attention,
+        IReadOnlyList<AdoptedBuildLeakScanner.Location>? matches = null)
+    {
+        var field = RepositoryField(repositoryLabel);
+        AdoptedBuildPublicationReporting.Try(
+            () => append($"ADOPTED_BUILD_PUSH_HELD commit={commit} remote={remote}{field} reason={reason}"), "held-event");
+        var locations = matches is null ? "" : string.Join("\n", matches.Select(hit => $"{hit.File}:{hit.Line}"));
+        AdoptedBuildPublicationReporting.Try(
+            () => attention($"Adopted build publication held. commit={commit} remote={remote}{field} reason={reason}\n" +
+                locations + "\n" + NextStep(commit, remote, branch, repositoryLabel)), "held-attention");
+    }
+
+    private static string RepositoryField(string? label) => label is null ? "" : $" repository={label}";
+
+    private static string NextStep(string commit, string remote, string branch, string? label) => label is null
+        ? $"Next: push-adopted {commit} --remote {remote} --branch {branch}"
+        : $"Next: resolve the hold and manually publish commit {commit} to branch {branch} on remote {remote} from the repository={label} checkout.";
 
     internal static AdoptedBuildPushService CreateDefault(string repository, Action<string> append)
     {
