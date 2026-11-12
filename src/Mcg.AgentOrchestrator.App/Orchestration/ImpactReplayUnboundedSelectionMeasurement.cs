@@ -21,10 +21,9 @@ internal static class ImpactReplayUnboundedSelectionMeasurement
         {
             var selection = productionSources.Count == 0
                 ? ReverseDependencyTestSelection.Resolved([], headroom: new(null,
-                    ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles, 0, int.MaxValue, null, int.MaxValue))
+                    ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles, 0, int.MaxValue, null))
                 : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
-                    maximumSelectedTestClasses: int.MaxValue, maximumFrontierSymbols: int.MaxValue,
-                    maximumChangedSourceFiles: int.MaxValue);
+                    maximumSelectedTestClasses: int.MaxValue);
             selection = ImpactReplaySelectionAugmentation.Apply(selection, attempt.ChangedFiles, sources,
                 classes, guards, out _, additionalClasses);
             if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)

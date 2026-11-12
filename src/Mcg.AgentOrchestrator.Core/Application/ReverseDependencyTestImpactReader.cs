@@ -8,9 +8,7 @@ internal static class ReverseDependencyTestImpactReader
 {
     private const string InfrastructureTestProject =
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
-    internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
-    private const int MaximumFrontierSymbols = 64;
     // ReverseDependencySelectionTransportTests exercises the existing launcher response file at
     // 1,000 classes. Keep this inclusive capacity bound independent of inline command-line length.
     internal const int MaximumSelectedTestClasses = 1_000;
@@ -30,18 +28,16 @@ internal static class ReverseDependencyTestImpactReader
         bool bypassCache = false,
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
         int maximumSelectedTestClasses = MaximumSelectedTestClasses,
-        int? maximumFrontierSymbols = MaximumFrontierSymbols,
-        bool propagateShippingSourceReach = false,
-        int maximumChangedSourceFiles = MaximumChangedSourceFiles)
+        bool propagateShippingSourceReach = false)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null, maximumSelectedTestClasses,
-            null, maximumFrontierSymbols ?? MaximumFrontierSymbols);
-        if (changedSourcePaths.Count == 0 || changedSourcePaths.Count > maximumChangedSourceFiles)
+            null);
+        if (changedSourcePaths.Count == 0)
         {
             return ReverseDependencyTestSelection.Abandoned(
                 ReverseDependencyDegradationKind.ChangedSourceFileCount,
-                $"Focused reverse-dependency selection supports 1-{maximumChangedSourceFiles} changed source files.",
+                "Reverse-dependency selection requires at least one changed source file.",
                 headroom: headroom);
         }
 
@@ -196,10 +192,6 @@ internal static class ReverseDependencyTestImpactReader
                 return ReverseDependencyTestSelection.Unavailable with { CacheReceipt = receipt, Headroom = headroom };
             }
 
-            var declarationsByName = indexedFiles.Values
-                .SelectMany(file => file.Symbols!.DeclaredTypes.Select(declaration => (file, declaration)))
-                .GroupBy(pair => pair.declaration.Name, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
             var frontier = changedPaths
                 .SelectMany(path => indexedFiles[path].Symbols!.DeclaredTypes)
                 .Select(declaration => new FrontierSymbol(
@@ -221,31 +213,10 @@ internal static class ReverseDependencyTestImpactReader
             var classBoundExceeded = false;
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
-                if (!classBoundExceeded) headroom = headroom with
+                headroom = headroom with
                 {
                     LargestFrontierSymbolCount = Math.Max(headroom.LargestFrontierSymbolCount!.Value, frontier.Length)
                 };
-                if (!classBoundExceeded && frontier.Length > headroom.FrontierSymbolCap)
-                {
-                    return ReverseDependencyTestSelection.Abandoned(
-                        ReverseDependencyDegradationKind.FrontierSymbolBound,
-                        $"Reverse-dependency hop {hop} exceeded the {headroom.FrontierSymbolCap}-symbol frontier bound.",
-                        receipt, headroom);
-                }
-
-                foreach (var symbol in frontier.Select(item => item.Name).Distinct(StringComparer.Ordinal)
-                    .Where(_ => !classBoundExceeded))
-                {
-                    if (declarationsByName.TryGetValue(symbol, out var declarations) &&
-                        declarations.Length > 1 &&
-                        declarations.Any(pair => !pair.declaration.IsPartial))
-                    {
-                        return ReverseDependencyTestSelection.Abandoned(
-                            ReverseDependencyDegradationKind.AmbiguousDeclaration,
-                            $"Reverse-dependency symbol '{symbol}' has ambiguous non-partial declarations.",
-                            receipt, headroom);
-                    }
-                }
 
                 var frontierSet = frontier
                     .Select(symbol => symbol.Name)
@@ -280,8 +251,7 @@ internal static class ReverseDependencyTestImpactReader
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
                             .Select(declaration => declaration.Name));
 
-                    // Preserve the first abandonment kind, but finish traversal to report a complete
-                    // count. Later frontier checks cannot replace this already-decided fallback.
+                    // Finish traversal after the class bound is exceeded to report a complete count.
                     classBoundExceeded |= selectedTestClasses.Count > headroom.SelectedTestClassCap;
                 }
 
@@ -377,7 +347,7 @@ internal static class ReverseDependencyTestImpactReader
             var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out _);
             return closure is null ? null : new RepositoryTestImpactHeadroom(
                 closure.Value.SourceOwnership.Count, maximumIndexedSourceFiles,
-                null, MaximumSelectedTestClasses, null, MaximumFrontierSymbols);
+                null, MaximumSelectedTestClasses, null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             System.Xml.XmlException or ArgumentException or NotSupportedException)

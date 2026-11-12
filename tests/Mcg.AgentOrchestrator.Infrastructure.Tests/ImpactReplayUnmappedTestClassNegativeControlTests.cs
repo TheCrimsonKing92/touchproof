@@ -14,15 +14,14 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
 
         var (report, markdown) = fixture.Run();
 
-        var abandoned = sourceCount == 6;
         var attempt = Assert.Single(report.Attempts);
-        Assert.Equal(abandoned ? "Abandoned" : "Resolved", attempt.SelectionOutcome);
-        Assert.Equal(abandoned ? "ChangedSourceFileCount" : null, attempt.DegradationKind);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
         Assert.Equal(new[] { "Alpha lane", "Beta lane", "Chaos gate" }, attempt.RanLanes);
-        Assert.Equal(abandoned ? new[] { "Alpha lane", "Beta lane", "Chaos gate" } : new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
-        Assert.Equal(abandoned ? Array.Empty<string>() : new[] { "Beta lane" }, attempt.SkippedLanes);
-        Assert.Equal(abandoned ? 0 : 1d / 3, attempt.ShareOfLanesSkipped);
-        Assert.Equal(abandoned ? 0 : 23.5, attempt.EstimatedSerialSecondsSaved);
+        Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
+        Assert.Equal(new[] { "Beta lane" }, attempt.SkippedLanes);
+        Assert.Equal(1d / 3, attempt.ShareOfLanesSkipped);
+        Assert.Equal(23.5, attempt.EstimatedSerialSecondsSaved);
         Assert.Empty(attempt.FailingClasses);
         Assert.True(attempt.MissCheckComplete);
         Assert.Equal(0, report.AttemptsGainingChangedTestClasses);
@@ -41,13 +40,13 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
             "Unreplayable attempts: 0",
             "Skipped inputs: 0",
             "Incomplete miss checks: 0",
-            $"Median share of lanes skipped: {(abandoned ? "0.0 %" : "33.3 %")}",
-            $"P90 share of lanes skipped: {(abandoned ? "0.0 %" : "33.3 %")}",
-            $"Total estimated lane-seconds saved: {(abandoned ? "0" : "23.5")}",
+            "Median share of lanes skipped: 33.3 %",
+            "P90 share of lanes skipped: 33.3 %",
+            "Total estimated lane-seconds saved: 23.5",
             "",
             "## Selections abandoned, by kind",
             "",
-            abandoned ? "- ChangedSourceFileCount: 1" : "None.",
+            "None.",
             "",
             "## Misses",
             "",
@@ -57,9 +56,7 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
             "",
             "| Attempt | Selection | Lanes ran | Would run | Skipped | Estimated seconds saved |",
             "| --- | --- | --- | --- | --- | --- |",
-            abandoned
-                ? "| control | Abandoned: ChangedSourceFileCount | Alpha lane, Beta lane, Chaos gate | Alpha lane, Beta lane, Chaos gate |  | 0 |"
-                : "| control | Resolved | Alpha lane, Beta lane, Chaos gate | Alpha lane, Chaos gate | Beta lane | 23.5 |",
+            "| control | Resolved | Alpha lane, Beta lane, Chaos gate | Alpha lane, Chaos gate | Beta lane | 23.5 |",
             "",
             "## Input and evidence diagnostics",
             ""
@@ -74,17 +71,7 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
             "## Unmapped test classes", "", "- not-scanned: 0", "- no-lane: 0", "- ambiguous: 0", "",
             "No unmapped test classes were found."
         }) + Environment.NewLine;
-        var unboundedSection = abandoned
-            ? Environment.NewLine + string.Join(Environment.NewLine, new[]
-            {
-                "## Unbounded selections for bound abandonments", "",
-                "- ChangedSourceFileCount: 1 attempts; class count unavailable: 0; duration share unavailable: 1", "",
-                "| Abandonment kind | Attempt | Unbounded selected classes | Share of non-floor test seconds |",
-                "| --- | --- | ---: | ---: |",
-                "| ChangedSourceFileCount | control | 1 | unavailable: incomplete TRX duration or class evidence |", ""
-            }) + Environment.NewLine
-            : "";
-        Assert.Equal(unmappedSection + unboundedSection, markdown[sectionStart..]);
+        Assert.Equal(unmappedSection, markdown[sectionStart..]);
 
         var diagnostics = Assert.IsType<ImpactReplayUnmappedTestClasses>(report.UnmappedTestClasses);
         Assert.Equal(3, diagnostics.CountsByReason.Count);

@@ -4,19 +4,24 @@ using Mcg.AgentOrchestrator.App.Cli;
 public sealed class ImpactReplayChangedSourceLimitTests
 {
     [Fact]
-    public void SevenChangedSources_DefaultAbandonsAndExplicitTwentyResolves()
+    public void SevenChangedSources_CompatibilityOptionDoesNotChangeSelection()
     {
         using var fixture = new ImpactReplayFixture(changedSourceCount: 7);
         fixture.AddAttempt("seven-sources");
         var (defaultReport, _) = fixture.Run();
-        Assert.Equal("ChangedSourceFileCount", Assert.Single(defaultReport.Attempts).DegradationKind);
+        var baseline = Assert.Single(defaultReport.Attempts);
+        Assert.Equal("Resolved", baseline.SelectionOutcome);
+        Assert.Null(baseline.DegradationKind);
         var (overridden, _) = fixture.Run(extraArguments: ["--max-changed-source-files", "20"]);
         var attempt = Assert.Single(overridden.Attempts);
         Assert.Equal("Resolved", attempt.SelectionOutcome);
         Assert.Equal(7, attempt.ChangedSourceFileCount);
         Assert.Equal(20, overridden.Measurement!.MaximumChangedSourceFiles);
         Assert.Contains("AlphaTests", attempt.SelectedTestClasses);
-        Assert.Equal("ChangedSourceFileCount", Assert.Single(fixture.Run().Report.Attempts).DegradationKind);
+        Assert.Equal(baseline.SelectedTestClasses, attempt.SelectedTestClasses);
+        var belowCount = Assert.Single(fixture.Run(extraArguments: ["--max-changed-source-files", "1"]).Report.Attempts);
+        Assert.Equal("Resolved", belowCount.SelectionOutcome);
+        Assert.Equal(baseline.SelectedTestClasses, belowCount.SelectedTestClasses);
     }
 
     [Theory]

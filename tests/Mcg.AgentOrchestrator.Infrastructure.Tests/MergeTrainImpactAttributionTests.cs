@@ -38,13 +38,25 @@ public sealed class MergeTrainImpactAttributionTests
         Assert.Equal(new[] { "ProbeTests", "RepositoryTestImpactFilterResolutionTests" }, classes);
     }
 
+    [Fact]
+    public void SixSourceMember_AttributesWithoutDegradation()
+    {
+        using var fixture = new Fixture();
+        var sources = Enumerable.Range(0, 6).Select(index => $"src/Mcg.AgentOrchestrator.Core/Source{index}.cs").ToArray();
+        foreach (var path in sources) fixture.Write(path, $"public class Source{Path.GetFileNameWithoutExtension(path)} {{ }}");
+        var members = new[] { Member('a', sources), Member('b'), Member('c') };
+        Assert.Null(RepositoryTestImpactPlanner.Plan(sources, fixture.Root).ReverseDependencyDegradation);
+        Assert.Same(members[0], MergeTrainImpactAttribution.TryAttribute(
+            fixture.Trx("RepositoryTestImpactFilterResolutionTests"), fixture.Root, members, out var classes));
+        Assert.Equal(new[] { "RepositoryTestImpactFilterResolutionTests" }, classes);
+    }
+
     [Theory]
     [InlineData("no-impact")]
     [InlineData("two-filtered")]
     [InlineData("different-members")]
     [InlineData("two-core-sources")]
     [InlineData("core-filtered-peer")]
-    [InlineData("degraded")]
     [InlineData("full-suite")]
     [InlineData("unmapped")]
     [InlineData("abandoned-filter")]
@@ -72,12 +84,7 @@ public sealed class MergeTrainImpactAttributionTests
                 Assert.Contains(RepositoryTestImpactPlanner.Plan(members[1].LandingPaths, fixture.Root).Checks,
                     check => check.TestProject == RepositoryTestProject.Core && check.TestClassSelections is not null);
                 break;
-            case "degraded":
-                var sources = Enumerable.Range(0, 6).Select(index => $"src/Mcg.AgentOrchestrator.Core/Source{index}.cs").ToArray();
-                foreach (var path in sources) fixture.Write(path, $"public class Source{Path.GetFileNameWithoutExtension(path)} {{ }}");
-                members[0] = Member('a', sources);
-                Assert.NotNull(RepositoryTestImpactPlanner.Plan(sources, fixture.Root).ReverseDependencyDegradation);
-                break;
+
             case "full-suite":
                 fixture.Write("Directory.Build.props", "<Project />");
                 members[1] = Member('b', "Directory.Build.props");

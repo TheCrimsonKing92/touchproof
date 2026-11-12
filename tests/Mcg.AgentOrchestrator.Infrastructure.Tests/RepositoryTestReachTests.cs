@@ -41,12 +41,14 @@ public sealed class RepositoryTestReachTests
     }
 
     [Fact]
-    public void SixChangedSources_ReturnsNull()
+    public void SixChangedSources_ResolvesEmptyReach()
     {
         using var fixture = new RepositoryFixture();
         var paths = Enumerable.Range(0, 6).Select(index => $"src/Mcg.AgentOrchestrator.Infrastructure/Source{index}.cs").ToArray();
         foreach (var path in paths) fixture.Write(path, $"public class {Path.GetFileNameWithoutExtension(path)} {{ }}");
-        Assert.Null(RepositoryTestReach.TryReadReachableTestClasses(fixture.Root, paths));
+        var reach = RepositoryTestReach.TryReadReachableTestClasses(fixture.Root, paths);
+        Assert.NotNull(reach);
+        Assert.Empty(reach);
     }
 
     [Fact]
