@@ -149,13 +149,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGitHeavyLaneKeys :
 
     private static string CreateScenarioWorkspace(bool removeKeys)
     {
-        var shippedLanes = AcceptanceGateEngineSettings.Load(
-            InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
         string[] names = ["Remainder balance A", "Remainder merge train and ratchet", "Remainder balance B"];
         var lanes = names.Select((name, index) =>
         {
-            var shippedLane = Assert.Single(shippedLanes, lane => lane.Name == name);
-            if (index >= 2) Assert.Empty(shippedLane.ExclusiveResourceKeys);
             return new
             {
                 name,

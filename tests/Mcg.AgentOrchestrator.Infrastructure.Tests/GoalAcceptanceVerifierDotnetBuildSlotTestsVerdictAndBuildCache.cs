@@ -1057,17 +1057,24 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
     private static string CreateStaticPartitionVerdictManifestWorkspace(string? manifestJson = null)
     {
-        // These cache scenarios mutate/reuse named hand-written partitions. Pin membership
-        // so scanner discovery and duration history cannot dissolve the partition under test.
+        // Cache scenarios need stable named partitions, independent of the shipped lane layout.
         var root = manifestJson is null ? CreateCheckedInManifestShapeWorkspace() : CreateManifestWorkspace(manifestJson);
         var path = Path.Combine(root, "config", "acceptance-manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
-        manifest["engine"]!.AsObject().Remove("balancedLanePool");
+        var engine = manifest["engine"]!.AsObject();
+        engine.Remove("balancedLanePool");
+        engine["infrastructureTestLanes"] = JsonNode.Parse("""
+            [
+              { "name": "Cli", "filter": "FullyQualifiedName~CliCommandTests" },
+              { "name": "Goal acceptance verifier", "filter": "FullyQualifiedName~GoalAcceptanceVerifierTests" },
+              { "name": "Remainder", "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&Category!=HostIntegration" }
+            ]
+            """);
         File.WriteAllText(path, manifest.ToJsonString());
         var settings = AcceptanceGateEngineSettings.Load(root);
         Assert.Null(settings.BalancedLanePool);
-        Assert.NotEmpty(settings.InfrastructureTestLanes);
-        Assert.Contains(settings.InfrastructureTestLanes, lane => lane.Name == "Cli");
+        Assert.Equal(["Cli", "Goal acceptance verifier", "Remainder"],
+            settings.InfrastructureTestLanes.Select(lane => lane.Name));
         return root;
     }
 
