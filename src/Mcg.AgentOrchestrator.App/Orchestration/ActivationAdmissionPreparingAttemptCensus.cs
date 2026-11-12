@@ -12,7 +12,21 @@ internal static class ActivationAdmissionPreparingAttemptCensus
         IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates,
         DateTimeOffset now) => Evaluate(activeAttempts, liveGates, now,
             attempt => AcceptanceHolderIdentity.Classify(attempt.OwnerProcessId,
-                attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath));
+                attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath),
+            ActivationAdmissionSlotOwnerSource.Read());
+
+    internal static ActivationAdmissionLiveGateTally Evaluate(
+        IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,
+        IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates,
+        DateTimeOffset now,
+        Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus> classifyOwner,
+        IReadOnlyList<ActivationAdmissionSlotOwner> slotOwners)
+    {
+        var tally = Evaluate(activeAttempts, liveGates, now, classifyOwner);
+        var owners = ActivationAdmissionPreparingOwnerCensus.Evaluate(slotOwners, liveGates);
+        return tally with { Preparing = tally.Preparing + owners.Count,
+            PreparingOwners = ActivationAdmissionPreparingOwnerToken.Format(owners) };
+    }
 
     internal static ActivationAdmissionLiveGateTally Evaluate(
         IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,

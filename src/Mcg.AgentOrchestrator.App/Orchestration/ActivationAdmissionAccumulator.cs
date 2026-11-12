@@ -14,6 +14,7 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
     private int _live;
     private int _evidenceHeld;
     private int _preparing;
+    private string _preparingOwners = "";
 
     internal static IDisposable Begin(bool emit)
     {
@@ -23,7 +24,7 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
     }
 
     internal void Record(bool failed = false, int? waiting = null, int? occupied = null, int? live = null,
-        int? evidenceHeld = null, int? preparing = null)
+        int? evidenceHeld = null, int? preparing = null, string? preparingOwners = null)
     {
         lock (_gate)
         {
@@ -34,20 +35,22 @@ internal sealed class ActivationAdmissionAccumulator : IDisposable
             if (live is { } l) _live = l;
             if (evidenceHeld is { } e) _evidenceHeld = e;
             if (preparing is { } p) _preparing = p;
+            if (preparingOwners is { } owners) _preparingOwners = owners;
         }
     }
 
     internal void RecordCensus(int occupied, ActivationAdmissionLiveGateTally tally) =>
-        Record(occupied: occupied, live: tally.Live, preparing: tally.Preparing,
+        Record(occupied: occupied, live: tally.Live, preparing: tally.Preparing, preparingOwners: tally.PreparingOwners,
             evidenceHeld: occupied >= 1 && tally.Live == 0 ? ActivationAdmissionPermitHolders.CountEvidenceHeld() : 0);
 
     internal ActivationAdmissionSample Take(int tick)
     {
         lock (_gate)
         {
-            var sample = new ActivationAdmissionSample(tick, _failed, _waiting, _occupied, _live, _evidenceHeld, _preparing);
+            var sample = new ActivationAdmissionSample(tick, _failed, _waiting, _occupied, _live, _evidenceHeld, _preparing, _preparingOwners);
             _failed = false;
             _waiting = _occupied = _live = _evidenceHeld = _preparing = 0;
+            _preparingOwners = "";
             return sample;
         }
     }

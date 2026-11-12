@@ -12,7 +12,8 @@ internal enum ConductorActivationRevertReason
     AdmissionCensusFailing,
     AdmissionStalled,
     ProbeNotAdmitted,
-    ProbeNotCompleted
+    ProbeNotCompleted,
+    AdmissionOwnerIdle
 }
 
 internal sealed record ConductorActivationBuild(
