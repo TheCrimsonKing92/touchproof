@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -32,54 +33,86 @@ internal static class MergeTrainDropBacktest
         };
     }
 
-    internal static IReadOnlyList<string> Run(IReadOnlyList<MergeTrainReceipt> receipts, int trainingCount)
+    internal static IReadOnlyList<string> Run(IReadOnlyList<MergeTrainReceipt> receipts, int trainingCount) =>
+        Compute(receipts, trainingCount).Lines;
+
+    internal static ReplayHarnessResult Replay(IReadOnlyList<MergeTrainReceipt> receipts, int trainingCount) =>
+        Compute(receipts, trainingCount).Result;
+
+    private static (ReplayHarnessResult Result, IReadOnlyList<string> Lines) Compute(
+        IReadOnlyList<MergeTrainReceipt> source, int trainingCount)
     {
         if (trainingCount <= 0) throw new ArgumentOutOfRangeException(nameof(trainingCount));
-        var split = Math.Min(trainingCount, receipts.Count);
+        IReadOnlyList<MergeTrainReceipt> receipts = source.OrderBy(receipt => receipt.CompletedAt)
+            .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
+        var splitAt = receipts.Count == 0 ? DateTimeOffset.MinValue :
+            receipts[Math.Min(trainingCount, receipts.Count) - 1].CompletedAt;
+        var split = receipts.Count(receipt => receipt.CompletedAt <= splitAt);
         var horizon = receipts.Count == 0 ? DateTimeOffset.MinValue : receipts[^1].CompletedAt.AddHours(-24);
-        var training = new List<(int Index, MergeTrainMemberBinding Culprit)>();
-        var evaluation = new List<(int Index, MergeTrainMemberBinding Culprit)>();
-        var pairs = 0;
-        var recent = 0;
-        var noCulprit = 0;
-        var ambiguous = 0;
+        var cases = new List<ReplayHarnessCase>();
+        // Receipt ids may repeat; attribution belongs to this particular case instance.
+        var points = new Dictionary<ReplayHarnessCase, (int Index, MergeTrainMemberBinding Culprit)>(
+            ReferenceEqualityComparer.Instance);
         for (var i = 0; i < receipts.Count; i++)
         {
             var receipt = receipts[i];
             if (receipt.Outcome != MergeTrainGateOutcome.Failed) continue;
-            var isEvaluation = i >= split;
-            if (receipt.Identity.Members.Count < 3) { if (isEvaluation) pairs++; continue; }
-            if (receipt.CompletedAt > horizon) { if (isEvaluation) recent++; continue; }
-            var suspects = receipt.Identity.Members.Where(member => !receipts.Any(later =>
-                later.CompletedAt > receipt.CompletedAt && later.Outcome == MergeTrainGateOutcome.Passed &&
-                later.Identity.Members.Any(passed => passed.GoalId == member.GoalId &&
-                    passed.CandidateRevision == member.CandidateRevision))).ToArray();
-            if (suspects.Length == 0) { if (isEvaluation) noCulprit++; continue; }
-            if (suspects.Length > 1) { if (isEvaluation) ambiguous++; continue; }
-            (isEvaluation ? evaluation : training).Add((i, suspects[0]));
+            string? reason;
+            MergeTrainMemberBinding[] suspects = [];
+            if (receipt.Identity.Members.Count < 3) reason = "pair";
+            else if (receipt.CompletedAt > horizon) reason = "recent";
+            else
+            {
+                suspects = receipt.Identity.Members.Where(member => !receipts.Any(later =>
+                    later.CompletedAt > receipt.CompletedAt && later.Outcome == MergeTrainGateOutcome.Passed &&
+                    later.Identity.Members.Any(passed => passed.GoalId == member.GoalId &&
+                        passed.CandidateRevision == member.CandidateRevision))).ToArray();
+                reason = suspects.Length switch { 0 => "no-culprit", 1 => null, _ => "ambiguous" };
+            }
+            var item = reason is null
+                ? ReplayHarnessCase.CreateReplayable(receipt.ReceiptId, receipt.CompletedAt,
+                    receipt.Identity.Members[^1].GoalId.Value)
+                : ReplayHarnessCase.CreateNonReplayable(receipt.ReceiptId, receipt.CompletedAt, reason);
+            cases.Add(item);
+            if (item.Replayable) points.Add(item, (i, suspects[0]));
         }
 
         MergeTrainMemberBinding Pick(int index, string feature) => receipts[index].Identity.Members
             .Select((member, order) => (Member: member, Order: order, Value: Feature(feature, receipts, index, member)))
             .OrderByDescending(item => item.Value).ThenByDescending(item => item.Order).First().Member;
-        var featureHits = Features.Select(feature => (Name: feature,
-            Hits: training.Count(point => Pick(point.Index, feature) == point.Culprit))).ToArray();
-        var chosen = featureHits.OrderByDescending(feature => feature.Hits).First();
-        var passedMinutes = receipts.Take(split).Where(receipt => receipt.Outcome == MergeTrainGateOutcome.Passed)
+        var holdout = ReplayHoldoutSplit.Create(cases, splitAt);
+        var chosen = holdout.Learn(trainingCases => Features.Select(feature => (Name: feature,
+                Hits: trainingCases.Where(item => item.Replayable)
+                    .Count(item => Pick(points[item].Index, feature) == points[item].Culprit)))
+            .OrderByDescending(feature => feature.Hits).First());
+        var training = holdout.Training.Where(item => item.Replayable).ToList();
+        var evaluatedCases = holdout.Evaluation.Select(item =>
+        {
+            if (!item.Replayable) return item;
+            var evaluated = item with { CandidateDecision = Pick(points[item].Index, chosen.Name).GoalId.Value };
+            points.Add(evaluated, points[item]);
+            return evaluated;
+        }).ToArray();
+        var evaluation = evaluatedCases.Where(item => item.Replayable).ToList();
+        var pairs = evaluatedCases.Count(item => item.NotReplayableReason == "pair");
+        var recent = evaluatedCases.Count(item => item.NotReplayableReason == "recent");
+        var noCulprit = evaluatedCases.Count(item => item.NotReplayableReason == "no-culprit");
+        var ambiguous = evaluatedCases.Count(item => item.NotReplayableReason == "ambiguous");
+        var passedMinutes = receipts.Where(receipt => receipt.CompletedAt <= splitAt && receipt.Outcome == MergeTrainGateOutcome.Passed)
             .Select(receipt => receipt.GateElapsedMilliseconds / 60000.0).Order().ToArray();
         var median = passedMinutes.Length == 0 ? 0 :
             (passedMinutes[(passedMinutes.Length - 1) / 2] + passedMinutes[passedMinutes.Length / 2]) / 2;
 
-        (int Hits, int Landings, double Minutes) Cost(Func<int, MergeTrainMemberBinding> pick)
+        (int Hits, int Landings, double Minutes) Cost(Func<ReplayHarnessCase, string?> pick)
         {
             var hits = 0;
             var landings = 0;
             var minutes = 0.0;
             foreach (var point in evaluation)
             {
-                var receipt = receipts[point.Index];
+                var receipt = receipts[points[point].Index];
                 var redMinutes = receipt.GateElapsedMilliseconds / 60000.0;
-                if (pick(point.Index) == point.Culprit)
+                if (pick(point) == points[point].Culprit.GoalId.Value)
                 {
                     hits++;
                     landings += receipt.Identity.Members.Count - 1;
@@ -89,8 +122,19 @@ internal static class MergeTrainDropBacktest
             }
             return (hits, landings, minutes);
         }
-        var newest = Cost(index => receipts[index].Identity.Members[^1]);
-        var risk = Cost(index => Pick(index, chosen.Name));
+        var newest = Cost(item => item.RecordedDecision);
+        var risk = Cost(item => item.CandidateDecision);
+        var result = new ReplayHarnessResult(holdout.Training.Concat(evaluatedCases), new Dictionary<string, double>
+        {
+            ["drop-newest.hits"] = newest.Hits,
+            ["drop-newest.landings"] = newest.Landings,
+            ["drop-newest.gate-minutes"] = newest.Minutes,
+            ["risk-ordered.hits"] = risk.Hits,
+            ["risk-ordered.landings"] = risk.Landings,
+            ["risk-ordered.gate-minutes"] = risk.Minutes,
+            ["training.decision-points"] = training.Count,
+            ["evaluation.decision-points"] = evaluation.Count
+        });
         string PerLanding((int Hits, int Landings, double Minutes) cost) => cost.Landings == 0 ? "none" :
             (cost.Minutes / cost.Landings).ToString("F1", CultureInfo.InvariantCulture);
         var verdict = evaluation.Count < 10 || passedMinutes.Length == 0 ? "inconclusive" :
@@ -101,14 +145,15 @@ internal static class MergeTrainDropBacktest
         {
             $"receipts: total={receipts.Count} training={split} evaluation={receipts.Count - split}",
             $"decision points: training={training.Count} evaluation={evaluation.Count}; evaluation excluded: pairs={pairs} recent={recent} no-culprit={noCulprit} ambiguous={ambiguous}",
+            $"replay: replayability={result.ReplayableCount}/{result.Cases.Count} rate={result.ReplayabilityRateText} diff-cases={result.DecisionDiff.Count}",
             $"chosen feature: {chosen.Name} training hits={chosen.Hits}/{training.Count}",
             $"drop-newest: hits={newest.Hits}/{evaluation.Count} gate-minutes per landing={PerLanding(newest)}",
             $"risk-ordered: hits={risk.Hits}/{evaluation.Count} gate-minutes per landing={PerLanding(risk)}"
         };
         lines.AddRange(Features.Select(feature =>
-            $"feature {feature}: evaluation hits={evaluation.Count(point => Pick(point.Index, feature) == point.Culprit)}/{evaluation.Count}"));
+            $"feature {feature}: evaluation hits={evaluation.Count(point => Pick(points[point].Index, feature) == points[point].Culprit)}/{evaluation.Count}"));
         lines.Add("bar: risk hits >= 1.5x newest hits and gate-minutes per landing <= 0.9x newest, with at least 10 evaluation decision points");
         lines.Add($"verdict: {verdict}");
-        return lines;
+        return (result, lines);
     }
 }

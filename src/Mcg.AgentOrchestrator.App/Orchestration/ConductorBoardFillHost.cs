@@ -19,6 +19,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly StalledEpicAttention? _stalledEpics;
     private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
+    private readonly Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? _revise;
     private readonly CancellationTokenSource _shutdown = new();
     private BoardFillDraftRound? _running;
     private Task<BoardFillRoundResult>? _round;
@@ -38,7 +39,8 @@ internal sealed partial class ConductorBoardFillHost
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
         Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null,
-        StalledEpicAttention? stalledEpics = null)
+        StalledEpicAttention? stalledEpics = null,
+        Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null)
     {
         _store = store;
         _draft = draft;
@@ -48,6 +50,7 @@ internal sealed partial class ConductorBoardFillHost
         _events = events;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _verifier = verifier;
+        _revise = revise;
         _filingSeams = filing;
         _mainHead = mainHead ?? (() => null);
         _staleMainHead = staleMainHead ?? _mainHead;
@@ -130,7 +133,7 @@ internal sealed partial class ConductorBoardFillHost
         _store.Finish(_running, result.Outcome, now);
         var finished = _store.ReadAll().Single(round => round.Id == _running.Id);
         _trackedEditsHold.Enter(finished);
-        Assess(finished, result.Markdown, result.Verification, _kernel!);
+        Assess(finished, result.Markdown, result.Verification, _kernel!, result.RevisionAttempted, result.FirstPass);
         _running = null;
         _round = null;
         if (result.Outcome.Kind == "held" && !string.IsNullOrWhiteSpace(result.Outcome.HeldMainHead))

@@ -117,6 +117,7 @@ internal sealed partial class GoalRefinementService
         CancellationToken cancellationToken = default)
     {
         var goal = kernel.GetGoal(goalId);
+        var intakeDiagnostic = AcceptanceCriteriaIntakeDiagnostic.Evaluate(goal.Objective);
         var includeObjectiveInNextClarification = !(await _collaboration.ListAsync(goalId.Value, cancellationToken))
             .Any(item =>
                 item.Type == CollaborationItemType.Clarification &&
@@ -156,6 +157,8 @@ internal sealed partial class GoalRefinementService
             if (raisedOwnershipClarification)
                 kernel.RecordGoalClarificationRound(goalId);
             kernel.RecordGoalPolicyDecision(goalId, FallbackVerificationClassPolicy.BuildOwnershipReceipt(fallback));
+            if (intakeDiagnostic is not null)
+                kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner parse diagnostic: {intakeDiagnostic.Message}");
             return RefinementResult.Fallback(
                 fallback,
                 attempt.Invocation,
@@ -188,6 +191,8 @@ internal sealed partial class GoalRefinementService
             .Where(diagnostic => declaredCriteria.Count > 0 ||
                 !diagnostic.Contains("declared_index", StringComparison.Ordinal))
             .ToList();
+        if (intakeDiagnostic is not null)
+            parseDiagnostics.Add(intakeDiagnostic.Message);
         AddDuplicateDeclaredCriterionDiagnostics(rawDeclaredCriteria, parseDiagnostics);
         List<string> acceptanceGateOwnedCriteria;
         if (declaredCriteria.Count > 0)

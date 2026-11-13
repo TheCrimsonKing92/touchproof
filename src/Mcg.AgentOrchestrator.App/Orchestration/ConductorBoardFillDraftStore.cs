@@ -10,7 +10,8 @@ internal sealed record BoardFillDraftRound(string Id, string BacklogItemId, Date
     string? Failure = null, bool Reported = false, BoardFillDraftAssessment? Assessment = null,
     IReadOnlyList<BoardFillFilingAttempt>? Filings = null, bool StaleHead = false,
     string? FailureKind = null, string? HoldReason = null, IReadOnlyList<string>? HeldPaths = null,
-    bool HoldStartReported = false, DateTimeOffset? HoldReleasedAt = null, bool HoldReleaseReported = false)
+    bool HoldStartReported = false, DateTimeOffset? HoldReleasedAt = null, bool HoldReleaseReported = false,
+    bool? RevisionAttempted = null, IReadOnlyList<string>? FirstPassFailingReasons = null)
 {
     internal DateTimeOffset ChangeStamp => ItemNewestNoteAt is { } note && note > ItemUpdatedAt ? note : ItemUpdatedAt;
 }
@@ -20,8 +21,12 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
 {
     internal static string DefaultPath(OrchestratorWorkspace workspace) => Path.Combine(workspace.OrchestratorDirectory, "board-fill.db");
 
-    internal void Assess(string id, BoardFillDraftAssessment assessment) => Update(id, current =>
-        current.Outcome is not null && current.Assessment is null ? current with { Assessment = assessment } :
+    internal void Assess(string id, BoardFillDraftAssessment assessment, bool? revisionAttempted = null,
+        IReadOnlyList<string>? firstPassFailingReasons = null) => Update(id, current =>
+        current.Outcome is not null && current.Assessment is null ? current with
+        {
+            Assessment = assessment, RevisionAttempted = revisionAttempted, FirstPassFailingReasons = firstPassFailingReasons
+        } :
         throw new InvalidOperationException("Cannot assess an unfinished or already assessed board-fill round."));
 
     internal IReadOnlyList<BoardFillDraftRound> ReadAll(bool newestFirst = false)
