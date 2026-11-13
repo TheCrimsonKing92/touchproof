@@ -39,7 +39,7 @@ public sealed class OwnerConsoleGateViewTests
             harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
-        var model = new OwnerConsoleViewModel(new(true, 0, 0, 0, null, 0), [], [], [], Gate: Model());
+        var model = new OwnerConsoleViewModel(new(ConductorLiveness.Running, 0, 0, 0, null, 0), [], [], [], Gate: Model());
         view.Render(model);
         view.FocusDecisions();
         await view.HandleKeyAsync(Key.Tab);

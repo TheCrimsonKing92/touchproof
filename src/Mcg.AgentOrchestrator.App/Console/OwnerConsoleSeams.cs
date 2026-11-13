@@ -43,7 +43,7 @@ internal sealed record OwnerAnswerIntentStatus(
 
 internal interface IConductorLiveness
 {
-    bool IsRunning();
+    ConductorLiveness IsRunning();
 }
 
 internal interface IOwnerDigestSummary

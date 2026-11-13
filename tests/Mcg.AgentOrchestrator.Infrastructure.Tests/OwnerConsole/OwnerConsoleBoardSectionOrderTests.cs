@@ -100,7 +100,7 @@ public sealed class OwnerConsoleBoardSectionOrderTests
 
     private static OwnerConsoleViewModel Model(string[] projects, ImmutableArray<OwnerConsoleBoardRow> rows,
         ImmutableArray<OwnerConsoleDecision> decisions) =>
-        new(new(false, 0, decisions.Length, 0, null, 0), decisions, rows, [],
+        new(new(ConductorLiveness.NotRunning, 0, decisions.Length, 0, null, 0), decisions, rows, [],
             BoardScope: new("all", projects.Length, "home", projects));
 
     private static IEnumerable<string> Projects(OwnerConsoleViewModel model) =>

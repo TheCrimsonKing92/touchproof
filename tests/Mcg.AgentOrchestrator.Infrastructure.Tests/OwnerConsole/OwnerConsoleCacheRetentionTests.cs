@@ -75,7 +75,7 @@ public sealed class OwnerConsoleCacheRetentionTests
                 projects.Add(new(name, path, Path.Combine(directory, "portfolio.db"), OrchestratorDirectory: directory));
             }
             using var source = new OwnerConsoleBoardSource("launch", OwnerConsoleProjectScope.All, () => projects, clock);
-            var own = new OwnerConsoleViewModel(new(false, 0, 0, 0, null, 0), [], [], []);
+            var own = new OwnerConsoleViewModel(new(ConductorLiveness.NotRunning, 0, 0, 0, null, 0), [], [], []);
             for (var round = 0; round < 20; round++)
             {
                 var name = round % 2 == 0 ? "alpha" : "beta";

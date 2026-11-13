@@ -196,7 +196,7 @@ public sealed class OwnerConsoleSoundSelectionTests
         actual.Remove("calmSoundFile");
         Assert.True(JsonNode.DeepEquals(expected, actual));
     }
-    private static OwnerConsoleViewModel Model(int landed) => new(new(false, 0, 0, 0, null, landed), [], [], []);
+    private static OwnerConsoleViewModel Model(int landed) => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
     private sealed class ManualClock : TimeProvider
     {
         internal DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);

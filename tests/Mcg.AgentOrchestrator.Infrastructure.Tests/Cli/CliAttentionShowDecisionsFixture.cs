@@ -101,7 +101,7 @@ internal sealed class CliAttentionShowDecisionsFixture : CliTaskQueryTestSupport
 
     private sealed class Stopped : IConductorLiveness
     {
-        public bool IsRunning() => false;
+        public ConductorLiveness IsRunning() => ConductorLiveness.NotRunning;
     }
 
     private sealed class NoEpics : IOwnerGoalEpicLookup

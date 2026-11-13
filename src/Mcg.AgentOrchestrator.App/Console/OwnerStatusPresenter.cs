@@ -5,11 +5,14 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerStatusPresenter
 {
+    private ConductorLiveness _lastStableLiveness = ConductorLiveness.NotRunning;
+
     internal string Compose(OwnerConsoleStatus status, OwnerConsoleGateProgress? gate, string bellText,
         DateTimeOffset? refreshedAt, DateTimeOffset now, TimeZoneInfo localZone,
         TimeSpan refreshInterval, IReadOnlyCollection<string> working, int width = 0)
     {
-        var state = status.ConductorRunning ? "running" : "stopped";
+        if (status.ConductorRunning != ConductorLiveness.Unknown) _lastStableLiveness = status.ConductorRunning;
+        var state = _lastStableLiveness == ConductorLiveness.Running ? "running" : "stopped";
         var protectedParts = new List<string> { "conductor: " + state };
         if (gate is not null) protectedParts.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
         protectedParts.Add($"active: {status.ActiveGoals}");

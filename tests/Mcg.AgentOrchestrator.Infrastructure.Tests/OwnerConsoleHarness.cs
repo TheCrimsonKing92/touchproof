@@ -143,7 +143,7 @@ internal sealed class OwnerConsoleHarness
 
     internal sealed class FakeLiveness : IConductorLiveness
     {
-        public bool IsRunning() => true;
+        public ConductorLiveness IsRunning() => ConductorLiveness.Running;
     }
 
     private sealed class FixedClock : TimeProvider

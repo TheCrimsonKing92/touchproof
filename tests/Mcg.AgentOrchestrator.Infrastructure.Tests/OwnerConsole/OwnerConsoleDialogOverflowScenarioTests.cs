@@ -344,7 +344,7 @@ public sealed class OwnerConsoleDialogOverflowScenarioTests
         (_, _, _) => Task.CompletedTask, _ => Task.FromResult<OwnerQuestionResolution?>(null), _ => Task.CompletedTask);
 
     private static OwnerConsoleViewModel Model(OwnerConsoleGateProgress? gate) =>
-        new(new(true, 0, 0, 0, null, 0), [], [], [], Gate: gate);
+        new(new(ConductorLiveness.Running, 0, 0, 0, null, 0), [], [], [], Gate: gate);
 
     private static OwnerConsoleGateProgress Gate(int count) => new(true, "solo", [new("11111111", "")],
         DateTimeOffset.UnixEpoch, TimeSpan.FromMinutes(5), Enumerable.Range(1, count).Select(i =>

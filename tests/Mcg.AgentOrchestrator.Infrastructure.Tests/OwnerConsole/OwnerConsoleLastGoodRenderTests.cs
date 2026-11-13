@@ -153,7 +153,7 @@ public sealed class OwnerConsoleLastGoodRenderTests
         Assert.Equal(1, list.Viewport.Y);
     }
 
-    private static OwnerConsoleViewModel Model() => new(new(false, 0, 0, 0, null, 0), [], [], []);
+    private static OwnerConsoleViewModel Model() => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, 0), [], [], []);
 
     private sealed class PreviewScene : IDisposable
     {

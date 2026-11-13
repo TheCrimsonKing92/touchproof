@@ -160,7 +160,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
             public Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken token) =>
                 Task.FromResult<IReadOnlyList<OwnerQuestion>>([]);
         }
-        private sealed class NoLiveness : IConductorLiveness { public bool IsRunning() => false; }
+        private sealed class NoLiveness : IConductorLiveness { public ConductorLiveness IsRunning() => ConductorLiveness.NotRunning; }
     }
 
     internal static string ForeignRowMessage(OwnerConsoleBoardRow row) =>

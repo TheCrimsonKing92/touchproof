@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.App.OwnerConsole;
 public sealed class OwnerStatusPresenterTests
 {
     private static readonly DateTimeOffset Now = new(2026, 1, 1, 0, 5, 0, TimeSpan.Zero);
-    private static readonly OwnerConsoleStatus Status = new(false, 3, 2, 0, TimeSpan.FromSeconds(42), 5);
+    private static readonly OwnerConsoleStatus Status = new(ConductorLiveness.NotRunning, 3, 2, 0, TimeSpan.FromSeconds(42), 5);
     private readonly OwnerStatusPresenter _presenter = new();
 
     [Theory]
@@ -12,7 +12,7 @@ public sealed class OwnerStatusPresenterTests
     [InlineData(true, "conductor: running | active: 3 | decisions: 2 | last event: 42s | landed today: 5 | bell: off")]
     public void FormatsConductorState(bool running, string expected)
     {
-        Assert.Equal(expected, Compose(Status with { ConductorRunning = running }));
+        Assert.Equal(expected, Compose(Status with { ConductorRunning = running ? ConductorLiveness.Running : ConductorLiveness.NotRunning }));
     }
 
     [Fact]

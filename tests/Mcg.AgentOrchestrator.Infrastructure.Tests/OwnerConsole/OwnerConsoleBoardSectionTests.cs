@@ -331,7 +331,7 @@ public sealed class OwnerConsoleBoardSectionTests
     {
         using var projects = await Projects.CreateAsync();
         using var lease = ConductorLoopLease.Acquire(projects.Alpha.OrchestratorDirectory);
-        Assert.True(new ConductorLeaseLiveness(projects.Alpha.OrchestratorDirectory).IsRunning());
+        Assert.True(new ConductorLeaseLiveness(projects.Alpha.OrchestratorDirectory).IsRunning() == ConductorLiveness.Running);
         using var scene = new Scene(projects);
         await scene.RefreshAsync();
 
@@ -559,7 +559,7 @@ public sealed class OwnerConsoleBoardSectionTests
     {
         using var projects = await Projects.CreateAsync();
         using var lease = ConductorLoopLease.Acquire(projects.Alpha.OrchestratorDirectory);
-        Assert.True(new ConductorLeaseLiveness(projects.Alpha.OrchestratorDirectory).IsRunning());
+        Assert.True(new ConductorLeaseLiveness(projects.Alpha.OrchestratorDirectory).IsRunning() == ConductorLiveness.Running);
         var state = new SqliteOrchestratorStateRepository(projects.Alpha.SqliteStatePath);
         await state.RecordPromotionFactsAsync([new("22222222-verified", new('a', 40), new('b', 40),
             new('c', 40), projects.Clock.GetUtcNow().AddHours(-2), GoalPromotionFact.SoloProvenance)], Token);

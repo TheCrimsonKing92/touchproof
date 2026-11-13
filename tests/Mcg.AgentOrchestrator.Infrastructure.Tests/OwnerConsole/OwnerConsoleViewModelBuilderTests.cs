@@ -44,9 +44,9 @@ public sealed class OwnerConsoleViewModelBuilderTests
         var now = harness.Clock.GetUtcNow();
         var model = await builder.BuildAsync(new(now.AddMinutes(-5), now.AddSeconds(-20), [], 3));
 
-        Assert.Equal(new OwnerConsoleStatus(true, 1, 1, 1, TimeSpan.FromSeconds(20), 3), model.Status);
+        Assert.Equal(new OwnerConsoleStatus(ConductorLiveness.Running, 1, 1, 1, TimeSpan.FromSeconds(20), 3), model.Status);
         var stopped = await Builder(harness, questions, new Stopped()).BuildAsync(new(now, null, [], 0));
-        Assert.False(stopped.Status.ConductorRunning);
+        Assert.Equal(ConductorLiveness.NotRunning, stopped.Status.ConductorRunning);
         Assert.Null(stopped.Status.LastEventAge);
     }
 
@@ -141,6 +141,6 @@ public sealed class OwnerConsoleViewModelBuilderTests
 
     private sealed class Stopped : IConductorLiveness
     {
-        public bool IsRunning() => false;
+        public ConductorLiveness IsRunning() => ConductorLiveness.NotRunning;
     }
 }

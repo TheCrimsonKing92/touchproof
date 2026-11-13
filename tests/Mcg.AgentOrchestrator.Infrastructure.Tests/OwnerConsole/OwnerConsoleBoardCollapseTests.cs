@@ -165,7 +165,7 @@ public sealed class OwnerConsoleBoardCollapseTests
                 [new("eeeeeeee", "", "Other goal", "Active", "working", null, "eeeeeeee-other")
                     { Project = "other", IsForeign = true }], false, null, harness.Clock.GetUtcNow());
             string[] projects = homeFirst ? ["home", "other"] : ["other", "home"];
-            Base = new(new(false, homeGoals + 1, 0, 0, null, 0), [],
+            Base = new(new(ConductorLiveness.NotRunning, homeGoals + 1, 0, 0, null, 0), [],
                 OwnerConsoleBoardSection.Flatten(homeFirst ? [home, other] : [other, home]), [],
                 BoardScope: new("all", 2, "home", projects));
             View.Render(Base);

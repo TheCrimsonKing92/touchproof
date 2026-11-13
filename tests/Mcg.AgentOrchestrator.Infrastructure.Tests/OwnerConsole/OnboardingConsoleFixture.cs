@@ -53,7 +53,7 @@ internal sealed class OnboardingConsoleFixture : IDisposable
     internal void StartConductor(OrchestratorWorkspace workspace)
     {
         _leases.Add(ConductorLoopLease.Acquire(workspace.OrchestratorDirectory));
-        Assert.True(new ConductorLeaseLiveness(workspace.OrchestratorDirectory).IsRunning(), "Fixture must own a live lease.");
+        Assert.True(new ConductorLeaseLiveness(workspace.OrchestratorDirectory).IsRunning() == ConductorLiveness.Running, "Fixture must own a live lease.");
     }
 
     internal static OwnerConsoleBoardProject Describe(OrchestratorWorkspace workspace, bool useLearnedBranch = false) =>

@@ -40,7 +40,7 @@ internal sealed class OwnerConsoleEpicViewFixture : IDisposable
     internal readonly IApplication App = Terminal.Gui.App.Application.Create();
     internal readonly OwnerConsoleScreenController Controller;
     internal readonly OwnerConsoleFullScreenView View;
-    internal readonly OwnerConsoleViewModel Model = new(new(true, 3, 0, 0, null, 0), [], [], []);
+    internal readonly OwnerConsoleViewModel Model = new(new(ConductorLiveness.Running, 3, 0, 0, null, 0), [], [], []);
     internal readonly OwnerConsoleEpicViewClock Time = new();
 
     internal OwnerConsoleEpicViewFixture(bool wired = true)

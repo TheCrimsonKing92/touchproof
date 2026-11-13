@@ -43,7 +43,7 @@ public sealed class OwnerConsoleNotificationDetectorNegativeControlTests
         var detector = new OwnerConsoleNotificationDetector(new());
         var decision = new OwnerConsoleDecision("q", 1, "goal", "goal", OwnerQuestionKind.HumanInput,
             "Answer?", "Answer?", null, null, null, Now.AddMinutes(-29));
-        var model = new OwnerConsoleViewModel(new(true, 0, 1, 0, null, 0, LatestTickAt: Now.AddMinutes(-14)), [decision], [], []);
+        var model = new OwnerConsoleViewModel(new(ConductorLiveness.Running, 0, 1, 0, null, 0, LatestTickAt: Now.AddMinutes(-14)), [decision], [], []);
         detector.Detect(null, model, Now, OwnerConsoleBellTiers.All);
         var result = detector.Detect(model, model, Now.AddMinutes(2), OwnerConsoleBellTiers.All.With(tier, false));
         Assert.DoesNotContain(tier, result);
@@ -56,7 +56,7 @@ public sealed class OwnerConsoleNotificationDetectorNegativeControlTests
         var detector = new OwnerConsoleNotificationDetector(new());
         var decision = new OwnerConsoleDecision("q", 1, "goal", "goal", OwnerQuestionKind.HumanInput,
             "Answer?", "Answer?", null, null, null, Now.AddMinutes(-29));
-        var baseline = Model(0) with { Decisions = [decision], Status = Model(0).Status with { ConductorRunning = true } };
+        var baseline = Model(0) with { Decisions = [decision], Status = Model(0).Status with { ConductorRunning = ConductorLiveness.Running } };
         detector.Detect(null, baseline, Now, OwnerConsoleBellTiers.All);
         var stopped = Model(0) with { Decisions = [decision] };
         Assert.Empty(detector.Detect(baseline, stopped, Now.AddSeconds(30), OwnerConsoleBellTiers.All));
@@ -65,5 +65,5 @@ public sealed class OwnerConsoleNotificationDetectorNegativeControlTests
             detector.Detect(stopped, current, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
     }
 
-    private static OwnerConsoleViewModel Model(int landed) => new(new(false, 0, 0, 0, null, landed), [], [], []);
+    private static OwnerConsoleViewModel Model(int landed) => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
 }

@@ -19,7 +19,7 @@ public sealed class OwnerQuestionResolutionDialogTests
         var item = scene.Activity(id, question, Scene.At);
         using IApplication app = Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, scene.Controller, () => Task.CompletedTask);
-        view.Render(new(new(true, 1, 0, 0, null, 0), [], [], [item]));
+        view.Render(new(new(ConductorLiveness.Running, 1, 0, 0, null, 0), [], [], [item]));
         await view.HandleKeyAsync(Key.Tab); // BOARD
         await view.HandleKeyAsync(Key.Tab); // ACTIVITY
         await view.HandleKeyAsync(Key.Enter);

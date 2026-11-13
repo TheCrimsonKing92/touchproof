@@ -19,7 +19,7 @@ public sealed class OwnerConsoleFieldResidualTests
         if (live) harness.Questions.Items.Add(decision.ToQuestion());
         using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
-        controller.Apply(new(new(false, 1, 1, 0, null, 0), [decision], [], []));
+        controller.Apply(new(new(ConductorLiveness.NotRunning, 1, 1, 0, null, 0), [decision], [], []));
         var item = new OwnerConsoleActivityItem(At, "event", "tag", "11111111", "detail", "Goal",
             Why: "original reason", Next: "original next", Act: "original no action", Subject: decision.FullText,
             OwnerQuestionId: decision.Id, GoalId: goal.Id.Value);

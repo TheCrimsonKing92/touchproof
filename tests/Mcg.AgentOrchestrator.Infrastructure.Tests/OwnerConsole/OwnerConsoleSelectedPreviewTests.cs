@@ -204,7 +204,7 @@ public sealed class OwnerConsoleSelectedPreviewTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         Assert.False(app.Initialized);
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: clock);
-        var model = new OwnerConsoleViewModel(new(false, 1, 0, 0, null, 0), [],
+        var model = new OwnerConsoleViewModel(new(ConductorLiveness.NotRunning, 1, 0, 0, null, 0), [],
             [new("11111111", "Console", Title, "Active", Stage, null, goal.Id.Value)], []);
         view.Render(model);
         try
