@@ -1,9 +1,20 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
     private ConductorTickStepLedger? _stepLedger;
     private Action<string>? _stepProbe;
+    private GitLaunchWindowCensus? _gitCensus;
+    private GitLaunchWindowCensus.Window? _tickGitWindow;
+    private DiagnosticTimer? _tickGitTimer;
+
+    internal ConductorBatchLoop WithGitCensus(GitLaunchWindowCensus census)
+    {
+        _gitCensus = census;
+        return this;
+    }
 
     // Like janitorialPhaseProbe, this advances a deterministic injected CPU fixture
     // at the existing call sites without replacing any of their behavior.
@@ -17,7 +28,15 @@ internal sealed partial class ConductorBatchLoop
     {
         BeginTickCpuAccounting();
         _stepLedger = new(ReadProcessCpu, _stepProbe);
-        return ActivateDiagnosticTime(_stepLedger.Activate());
+        var scope = ActivateDiagnosticTime(_stepLedger.Activate());
+        _tickGitWindow = _gitCensus?.OpenWindow("tick");
+        _tickGitTimer = _gitCensus is null ? null : StartDiagnosticTimer();
+        return new TickGitScope(scope, _tickGitWindow);
+    }
+
+    private sealed class TickGitScope(IDisposable scope, GitLaunchWindowCensus.Window? window) : IDisposable
+    {
+        public void Dispose() { window?.Dispose(); scope.Dispose(); }
     }
 
     private void AddLedgerPhaseTimings(List<string> lines, int tick, string phase, TimeSpan elapsed, string detail, long cpuMs)

@@ -41,7 +41,15 @@ internal sealed partial class ConductorBatchLoop
     private static bool ShouldEmitTickSummary(int changedCount, int parkedExcludedCount, int tick) =>
         changedCount > 0 || parkedExcludedCount > 0 || tick % QuietSummaryEveryTicks == 0;
 
-    private void AppendTickCpuLedger(int tick, bool hadGoalChanges) => TickCpuLedger.TryAppend(
-        _workspace?.ExecutionDirectory, tick, CpuDeltaMs(_tickCpuStart, _lastCpuReading),
-        _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, hadGoalChanges);
+    private void AppendTickCpuLedger(int tick, bool hadGoalChanges)
+    {
+        TickCpuLedger.TryAppend(_workspace?.ExecutionDirectory, tick, CpuDeltaMs(_tickCpuStart, _lastCpuReading),
+            _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, hadGoalChanges);
+        if (_tickGitWindow is { } window && _tickGitTimer is { } timer)
+        {
+            timer.Stop();
+            EmitProgress(GitLaunchWindowCensus.FormatTick(tick, timer.Elapsed.TotalMilliseconds, window.Close()));
+            _tickGitWindow = null;
+        }
+    }
 }

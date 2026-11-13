@@ -84,7 +84,27 @@ internal static class GateLaneReceiptLedger
                 row["slot_wait_ms"] = slotTiming.WaitMs;
                 row["slot_held_ms"] = slotTiming.HeldMs;
                 row["slot_count"] = slotTiming.SlotCount;
-                if (slotTiming.GitLaunches is { } launches) row["slot_git_launches"] = launches;
+                if (!result.TestResultIsExplicitCrossAttemptReuse)
+                {
+                    if (slotTiming.GitLaunches is { } launches)
+                    {
+                        row["slot_git_launches"] = launches;
+                        // Only measured lanes need an attempt identity for git report grouping.
+                        if (!string.IsNullOrWhiteSpace(result.TestResultAttemptId))
+                            row["attempt_id"] = result.TestResultAttemptId;
+                    }
+                    if (slotTiming.GitWallMs is { } gitWall) row["slot_git_wall_ms"] = gitWall;
+                    // The sidecar omits timings when its census observed no git processes.
+                    else if (slotTiming.GitLaunches == 0) row["slot_git_wall_ms"] = 0;
+                    if (slotTiming.GitCallSites is { } sites)
+                    {
+                        var top = sites.OrderByDescending(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal).Take(10)
+                            .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+                        var other = sites.Where(p => !top.ContainsKey(p.Key)).Sum(p => p.Value);
+                        if (other > 0) top["other"] = top.GetValueOrDefault("other") + other;
+                        row["slot_git_call_sites"] = top;
+                    }
+                }
             }
             if (snapshot?.SlotTimingUnavailableReason is { } slotReason)
                 row["slot_timing_unavailable_reason"] = slotReason;
