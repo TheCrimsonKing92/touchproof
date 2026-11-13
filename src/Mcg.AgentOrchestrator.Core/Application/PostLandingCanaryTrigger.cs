@@ -139,6 +139,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner.CandidateTree",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProcessRunner",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProjectTopologySource",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRetryEvidenceRetentionFailure",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSession",
