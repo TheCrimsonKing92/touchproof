@@ -143,6 +143,14 @@ public static class AcceptanceCriteriaParser
         return lines.Length;
     }
 
+    internal static (int LineNumber, string Heading, string[] Body)? FindDeclaredSection(string objectiveText)
+    {
+        var lines = objectiveText.ReplaceLineEndings("\n").Split('\n');
+        var start = FindAcceptanceSection(lines);
+        return start < 0 ? null :
+            (start, lines[start - 1], lines[start..FindAcceptanceSectionEnd(lines, start)]);
+    }
+
     private static bool IsH2Heading(string line)
     {
         var t = line.TrimStart();
@@ -163,10 +171,15 @@ public static class AcceptanceCriteriaParser
     }
 
     private static bool IsAcceptanceSectionBoundary(string line) =>
-        IsH2Heading(line) || IsStandaloneAcceptanceCriteriaLabel(line);
+        IsH2Heading(line) || IsStandaloneAcceptanceCriteriaLabel(line) ||
+        IsStandaloneLabel(line, "Operating instructions");
 
     private static bool IsStandaloneAcceptanceCriteriaLabel(string line) =>
-        string.Equals(line.Trim(), "Acceptance criteria:", StringComparison.OrdinalIgnoreCase);
+        IsStandaloneLabel(line, "Acceptance criteria");
+
+    private static bool IsStandaloneLabel(string line, string label) =>
+        string.Equals(line.Trim(), label, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(line.Trim(), label + ":", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryStripListPrefix(string trimmedLine, out string criterionText)
     {

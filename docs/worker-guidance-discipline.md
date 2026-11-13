@@ -111,6 +111,22 @@ only the specific path is declared; name the directory alone when the exact file
 - Describe the in-process test seam explicitly instead of naming conductor start or stop commands or tick counts, because those phrases trip live-conductor and sandbox feasibility checks.
 - Give workers fixture data inline instead of pointing them at runtime state under `.orchestrator/`, because workers cannot read that state.
 
+For example, keep product criteria and operating context in separate sections:
+
+```text
+Implement the in-process intake preview using the fixture supplied in this brief.
+
+Acceptance criteria
+1. The preview shows the declared items in order. Developer owns; Acceptance executes. TEST-VERIFIABLE.
+2. The preview retains each declared owner. Developer owns; Acceptance executes. TEST-VERIFIABLE.
+3. The diff preserves the ownership checks. Reviewer owns; Reviewer executes. TEST-VERIFIABLE.
+
+Operating instructions
+- Include the Planner's source trace in its plan.
+- Use the configured Reviewer.
+- Keep the parent backlog item open until all its slices land.
+```
+
 ## Completing reachable scope with off-worker evidence
 
 For Tester and Reviewer results, check each remaining blocking finding against the authoritative
