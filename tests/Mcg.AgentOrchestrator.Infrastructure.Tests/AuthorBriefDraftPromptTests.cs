@@ -6,6 +6,21 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AuthorBriefDraftPromptTests
 {
     [Fact]
+    public void Prompt_defines_unlanded_dependency_premises_and_result_field()
+    {
+        var item = new BacklogItem("item", "Draft title", "Draft body", BacklogItemStatus.Open,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, null);
+        var prompt = AuthorBriefDraftPrompt.Render(item, ConductorLessonSelection.Empty,
+            CliAuthorDraftCommandTests.Fixture.MainSha);
+        var lines = prompt.ReplaceLineEndings("\n").Split('\n');
+
+        Assert.Contains("When the item names a goal it builds on that has not landed, draft against that goal's brief and criteria for the parts it provides.", lines);
+        Assert.Contains("Write those premise bullets as provided-by-<goal-prefix>: <claim> without a HEAD citation, and return the goal prefixes in dependsOnGoals (6 to 32 hexadecimal characters each).", lines);
+        Assert.Contains("Never return a refused result solely because that dependency has not landed.", lines);
+        Assert.Contains("or {\"kind\":\"draft\",\"markdown\":\"<complete brief markdown>\",\"dependsOnGoals\":[\"<goal-prefix>\"]}", lines);
+    }
+
+    [Fact]
     public async Task Command_prompt_carries_backlog_annotations_lessons_rules_and_clarification_launcher_settings()
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();

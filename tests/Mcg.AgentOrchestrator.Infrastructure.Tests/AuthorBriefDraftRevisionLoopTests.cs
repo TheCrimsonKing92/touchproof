@@ -88,23 +88,26 @@ public sealed class AuthorBriefDraftRevisionLoopTests
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         var revision = failure switch
         {
-            "unparseable" => new WorkerProcessRunResult(0, "not JSON", ""),
+            "unparseable" => new WorkerProcessRunResult(0,
+                "{\"kind\":\"draft\",\"markdown\":\"# Draft\",\"dependsOnGoals\":null}", ""),
             "stale" => new WorkerProcessRunResult(0, JsonSerializer.Serialize(new
             {
                 kind = "stale", staleKind = "refused", reason = detail,
                 evidenceReferences = new[] { "docs/role-capability-matrix.md:1" }
             }), ""),
-            _ => new WorkerProcessRunResult(17, Draft(ValidDraft).StandardOutput, "fake model failure")
+            _ => new WorkerProcessRunResult(17, Draft(ValidDraft, ["123456"]).StandardOutput, "fake model failure")
         };
         var requests = new List<WorkerProcessRunRequest>();
 
-        var outcome = Run(fixture, requests, Draft(InvalidDraft), revision, Draft(ValidDraft));
+        var outcome = Run(fixture, requests, Draft(InvalidDraft, ["ABCdef"]), revision, Draft(ValidDraft));
 
         Assert.Equal(1, outcome.ExitCode);
         Assert.Equal(2, requests.Count);
         Assert.Equal(InvalidDraft, File.ReadAllText(outcome.DraftPath!));
         Assert.Equal(outcome.DraftPath, Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md")));
         Assert.Equal("premise-citations", Assert.Single(outcome.Checks.Where(check => !check.Passed)).Name);
+        Assert.Equal($"goal --brief-file \"{outcome.DraftPath}\" --backlog-item {fixture.Item.Id} --backlog-coverage full --depends-on ABCdef",
+            fixture.Output.ToString().ReplaceLineEndings("\n").TrimEnd('\n').Split('\n')[^1]);
         using var receipt = fixture.Receipt();
         var rounds = Rounds(receipt, 2);
         AssertCheckedRound(rounds[0], 1, "premise-citations");
@@ -185,8 +188,63 @@ public sealed class AuthorBriefDraftRevisionLoopTests
         Assert.Equal(2, receipt.RootElement.GetProperty("roundCount").GetInt32());
     }
 
-    private static WorkerProcessRunResult Draft(string markdown) =>
-        new(0, JsonSerializer.Serialize(new { kind = "draft", markdown }), "");
+    [Fact]
+    public void Returned_goals_append_one_flag_per_entry_in_order_with_original_casing()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var requests = new List<WorkerProcessRunRequest>();
+
+        var outcome = Run(fixture, requests, Draft(ValidDraft, ["ABCdef", "123456", "ABCdef"]));
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Single(requests);
+        Assert.Equal($"goal --brief-file \"{outcome.DraftPath}\" --backlog-item {fixture.Item.Id} --backlog-coverage full --depends-on ABCdef --depends-on 123456 --depends-on ABCdef",
+            fixture.Output.ToString().ReplaceLineEndings("\n").TrimEnd('\n').Split('\n')[^1]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Revised_dependencies_are_used_for_checks_and_the_printed_command(bool replacePreviousList)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var requests = new List<WorkerProcessRunRequest>();
+        var providedDraft = ValidDraft.Replace("- Observed in `docs/role-capability-matrix.md:1`.",
+            "- provided-by-ABCdef: Supplies `missing/provided.cs:1`.");
+        var first = replacePreviousList ? Draft(InvalidDraft, ["fedcba"]) : Draft(providedDraft);
+
+        var outcome = Run(fixture, requests, first, Draft(providedDraft, ["abcdef", "123456"]));
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal(2, requests.Count);
+        Assert.NotEmpty(outcome.Checks);
+        Assert.All(outcome.Checks, check => Assert.True(check.Passed, check.Detail));
+        Assert.Equal(providedDraft, File.ReadAllText(outcome.DraftPath!));
+        Assert.Equal($"goal --brief-file \"{outcome.DraftPath}\" --backlog-item {fixture.Item.Id} --backlog-coverage full --depends-on abcdef --depends-on 123456",
+            fixture.Output.ToString().ReplaceLineEndings("\n").TrimEnd('\n').Split('\n')[^1]);
+        using var receipt = fixture.Receipt();
+        var rounds = Rounds(receipt, 2);
+        AssertCheckedRound(rounds[0], 1, replacePreviousList ? "premise-citations" : "provided-by-goals");
+        AssertCheckedRound(rounds[1], 2);
+    }
+
+    [Fact]
+    public void Revision_without_dependencies_removes_previous_command_flags()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var requests = new List<WorkerProcessRunRequest>();
+
+        var outcome = Run(fixture, requests, Draft(InvalidDraft, ["ABCdef"]), Draft(ValidDraft));
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal(2, requests.Count);
+        Assert.Equal($"goal --brief-file \"{outcome.DraftPath}\" --backlog-item {fixture.Item.Id} --backlog-coverage full",
+            fixture.Output.ToString().ReplaceLineEndings("\n").TrimEnd('\n').Split('\n')[^1]);
+    }
+
+    private static WorkerProcessRunResult Draft(string markdown, string[]? dependsOnGoals = null) =>
+        new(0, dependsOnGoals is null ? JsonSerializer.Serialize(new { kind = "draft", markdown }) :
+            JsonSerializer.Serialize(new { kind = "draft", markdown, dependsOnGoals }), "");
 
     private static AuthorBriefDraftOutcome Run(CliAuthorDraftCommandTests.Fixture fixture,
         List<WorkerProcessRunRequest> requests, params WorkerProcessRunResult[] results) =>

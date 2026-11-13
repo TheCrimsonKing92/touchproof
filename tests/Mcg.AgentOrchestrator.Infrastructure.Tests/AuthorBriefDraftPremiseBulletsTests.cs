@@ -77,6 +77,66 @@ public sealed class AuthorBriefDraftPremiseBulletsTests
         Assert.Empty(rounds[1].GetProperty("failedChecks").EnumerateArray());
     }
 
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void Provided_bullets_pass_and_count_without_head_citations(string newline)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(
+            "- Observed in `docs/role-capability-matrix.md:1`.",
+            "  - provided-by-ABCdef: Supplies `missing/first.cs:1`.\n" +
+            "    Continued claim at `missing/continued.cs:2`.\n" +
+            "* provided-by-123456: Supplies the second part.").ReplaceLineEndings(newline);
+
+        var checks = AuthorBriefDraftChecks.Run(markdown,
+            CliAuthorDraftCommandTests.Fixture.MainSha, fixture.Repository,
+            dependencyGoals: ["abcdef", "123456", "fedcba"]);
+
+        Assert.NotEmpty(checks);
+        Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
+        Assert.Equal("2 premise bullets.", Assert.Single(checks, check => check.Name == "premise-bullets").Detail);
+        Assert.True(Assert.Single(checks, check => check.Name == "provided-by-goals").Passed);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void Provided_bullet_does_not_exempt_an_ordinary_bullet(string newline)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(
+            "- Observed in `docs/role-capability-matrix.md:1`.",
+            "- provided-by-abcdef: Supplies `missing/provided.cs:1`.\n" +
+            "- Observed in `missing/ordinary.cs:1`.").ReplaceLineEndings(newline);
+
+        var checks = AuthorBriefDraftChecks.Run(markdown,
+            CliAuthorDraftCommandTests.Fixture.MainSha, fixture.Repository, dependencyGoals: ["abcdef"]);
+
+        var failed = Assert.Single(checks.Where(check => !check.Passed));
+        Assert.Equal("premise-citations", failed.Name);
+        Assert.Contains("missing/ordinary.cs:1", failed.Detail);
+        Assert.DoesNotContain("missing/provided.cs", failed.Detail);
+        Assert.Equal("2 premise bullets.", Assert.Single(checks, check => check.Name == "premise-bullets").Detail);
+    }
+
+    [Fact]
+    public void Skipped_citations_do_not_replace_the_preceding_continuation_path()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(
+            "- Observed in `docs/role-capability-matrix.md:1`.",
+            "- Observed in `docs/role-capability-matrix.md:1`.\n" +
+            "- provided-by-abcdef: Supplies `missing/provided.cs:1`.\n" +
+            "- Continued at `:2`.");
+
+        var checks = AuthorBriefDraftChecks.Run(markdown,
+            CliAuthorDraftCommandTests.Fixture.MainSha, fixture.Repository, dependencyGoals: ["abcdef"]);
+
+        Assert.NotEmpty(checks);
+        Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
+    }
+
     private static string Bulletless(string markdown) => markdown.Replace("- Observed", "Observed");
 
     private static WorkerProcessRunResult Draft(string markdown) =>

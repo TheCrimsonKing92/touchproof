@@ -15,7 +15,8 @@ internal static class AuthorBriefDraftChecks
         RegexOptions.CultureInvariant);
 
     internal static IReadOnlyList<AuthorBriefDraftCheck> Run(string markdown, string mainHead,
-        IAuthorBriefDraftRepository repository, Toolchain? stack = null)
+        IAuthorBriefDraftRepository repository, Toolchain? stack = null,
+        IReadOnlyList<string>? dependencyGoals = null)
     {
         var headings = Headings.Matches(markdown).Cast<Match>().ToArray();
         var missing = Sections.Where(section => !headings.Any(heading =>
@@ -23,6 +24,7 @@ internal static class AuthorBriefDraftChecks
         var criteria = DeclaredTestRemovalSet.FromObjective(markdown).Ordinary;
         var ownerFailures = criteria.Where(criterion => !Owner.IsMatch(criterion)).ToArray();
         var citationFailures = new List<string>();
+        IReadOnlyList<AuthorBriefDraftProvidedPremise> providedPremises = [];
         var premiseBulletCount = BoardFillVerifierContract.BulletCount(BoardFillVerifierContract.Premise(markdown));
         var premise = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()
             .Equals("Measured premise", StringComparison.OrdinalIgnoreCase));
@@ -30,9 +32,11 @@ internal static class AuthorBriefDraftChecks
         {
             var end = headings.FirstOrDefault(heading => heading.Index > premise.Index)?.Index ?? markdown.Length;
             var text = markdown[(premise.Index + premise.Length)..end];
+            providedPremises = AuthorBriefDraftProvidedPremise.Find(text);
             string? previousPath = null;
             foreach (Match citation in Regex.Matches(text, @"`([^`\r\n]+)`", RegexOptions.CultureInvariant))
             {
+                if (providedPremises.Any(provided => provided.Contains(citation.Index))) continue;
                 var token = citation.Groups[1].Value;
                 var parsed = BoardFillCitation.Parse(token);
                 if (parsed.IsContinuation)
@@ -54,6 +58,8 @@ internal static class AuthorBriefDraftChecks
                     citationFailures.Add($"{token}: line is outside file (line count {count})");
             }
         }
+        var unlistedGoals = providedPremises.Where(provided => !provided.IsListed(dependencyGoals ?? []))
+            .Select(provided => provided.GoalPrefix).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var bulletedLines = UnfencedLines(SectionText("Acceptance criteria"))
             .Select(line => line.Text)
             .Where(line => line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal))
@@ -88,6 +94,9 @@ internal static class AuthorBriefDraftChecks
             new("premise-citations", citationFailures.Count == 0, citationFailures.Count == 0 ? "All premise file citations resolve at main HEAD." : string.Join(" | ", citationFailures)),
             new("premise-bullets", premiseBulletCount > 0, premiseBulletCount > 0 ?
                 $"{premiseBulletCount} premise bullets." : "Measured premise contains no bullets. Restate each source claim as one bullet."),
+            new("provided-by-goals", unlistedGoals.Length == 0, unlistedGoals.Length == 0 ?
+                "Every provided-by premise names a listed dependency goal." :
+                $"Unlisted goals: {string.Join(", ", unlistedGoals)}. Add each to dependsOnGoals or restate the bullet as a cited source claim."),
             new("numbered-criteria", numberedCriteria, criteria.Count == 0 ? "No declared criteria; criteria-present reports the absence." :
                 numberedCriteria ? "No bulleted criteria outside fenced code blocks." : $"Observed bulleted lines: {string.Join(" | ", bulletedLines)}"),
             new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
