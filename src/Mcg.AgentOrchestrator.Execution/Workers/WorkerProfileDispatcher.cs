@@ -520,7 +520,7 @@ public static partial class WorkerProfileDispatcher
         // ONE resolution for this whole preparation, shared with the preflight below, so the Claude
         // credential source recorded on the dispatch is the source the preflight finding reports.
         claudeAuthProbe ??= ClaudeCliAuthProbe.ForOneDispatchPreflight();
-        var agent = ResolveAssignedAgent(kernel, goal, task, agents);
+        var agent = ResolveAssignedAgent(task, agents);
         var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
         roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
@@ -620,7 +620,7 @@ public static partial class WorkerProfileDispatcher
         {
             EnsureTaskNeedsExecution(task);
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-            var agent = ResolveAssignedAgent(null, goal, task, agents);
+            var agent = ResolveAssignedAgent(task, agents);
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
             roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
@@ -1101,7 +1101,7 @@ public static partial class WorkerProfileDispatcher
         TaskSpec task,
         IReadOnlyList<AgentDefinition> agents)
     {
-        var agent = ResolveAssignedAgent(null, null, task, agents);
+        var agent = ResolveAssignedAgent(task, agents);
         var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
         var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
         var brief = kernel.BuildTaskBrief(
@@ -1168,13 +1168,8 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
         Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null, string? backlogStorePath = null, Func<Goal, string?, IReadOnlyList<string>>? preparationFindingsResolver = null)
     {
-        var selections = goal.Tasks
+        var tasks = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
-            .Select(task => new
-            {
-                Task = task,
-                Agent = ResolveAssignedAgent(kernel, goal, task, agents)
-            })
             .ToList();
 
         // When the Low-IL sandbox is active, the worker runs at low integrity and physically cannot
@@ -1188,27 +1183,38 @@ public static partial class WorkerProfileDispatcher
 
         var results = new List<WorkerProfileDispatchResult>();
         var blocked = new List<ReadyBlockedDiagnostic>();
-        foreach (var selection in selections)
+        foreach (var task in tasks)
         {
+            AgentDefinition agent;
+            try
+            {
+                agent = ResolveAssignedAgent(task, agents);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                blocked.Add(BuildReadyBlockedDiagnostic(goal, task,
+                    new WorkerSubscriptionPreflightResult(false, "unknown", "blocked", [$"blocked: {ex.Message}"])));
+                continue;
+            }
             // ONE resolution per prepared task, shared by model-lane selection, the preflight auth
             // finding, and the credential source recorded for the dispatch start boundary to transport.
             var taskClaudeAuthProbe = claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight();
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(
-                selection.Agent,
+                agent,
                 goal,
-                selection.Task,
+                task,
                 profiles: profiles,
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
-            roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
-            var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection, profiles);
-            var resolvedModelName = ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection);
+            roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
+            var profile = ResolveSubscriptionProfile(agent, roleSelection, profiles);
+            var resolvedModelName = ResolveEffectiveSubscriptionModelName(agent, roleSelection);
             var reasoningEffortSelection = new EffectiveReasoningEffortSelection(
-                ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection),
+                ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection),
                 roleSelection.ReasoningEffortReason);
             var preflight = PreflightSubscriptionTask(
-                goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
+                goal, task, agents, profiles, workingDirectory, dispatchedAt,
                 allowGitReference: sandboxConfinesWrites,
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
@@ -1216,12 +1222,12 @@ public static partial class WorkerProfileDispatcher
                 providerHoldScope: kernel.ProviderHoldScope, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
             if (!preflight.Allowed)
             {
-                TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
-                blocked.Add(BuildReadyBlockedDiagnostic(goal, selection.Task, preflight));
+                TryResolveMissingArtifactDependency(kernel, goal, task, preflight);
+                blocked.Add(BuildReadyBlockedDiagnostic(goal, task, preflight));
                 continue;
             }
 
-            if (taskIdsToPrepare is not null && !taskIdsToPrepare.Contains(selection.Task.Id))
+            if (taskIdsToPrepare is not null && !taskIdsToPrepare.Contains(task.Id))
             {
                 continue;
             }
@@ -1231,12 +1237,12 @@ public static partial class WorkerProfileDispatcher
             results.Add(PrepareTask(
                 kernel,
                 goal,
-                selection.Task,
+                task,
                 profile,
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                BuildSubscriptionTemplateVariables(selection.Agent, roleSelection),
+                BuildSubscriptionTemplateVariables(agent, roleSelection),
                 dispatchProviderName,
                 resolvedModelName,
                 reasoningEffortSelection.Effort,
@@ -1252,7 +1258,7 @@ public static partial class WorkerProfileDispatcher
                 reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,
                 dispatchLane: roleSelection.DispatchLane ?? profile.Name,
                 modelSelectionReason: roleSelection.Reason,
-                reviewRetryCap: selection.Task.RequiredRole == AgentRole.Reviewer
+                reviewRetryCap: task.RequiredRole == AgentRole.Reviewer
                     ? ReviewRetryCapReceipt.Create(
                         goal,
                         reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
@@ -1450,7 +1456,7 @@ public static partial class WorkerProfileDispatcher
 
     public static WorkerProfile ResolveSubscriptionProfile(TaskSpec task, IReadOnlyList<AgentDefinition> agents, WorkerProfileCatalog profiles)
     {
-        var agent = ResolveAssignedAgent(null, null, task, agents);
+        var agent = ResolveAssignedAgent(task, agents);
         return ResolveSubscriptionProfile(agent, profiles);
     }
 
@@ -1754,7 +1760,7 @@ public static partial class WorkerProfileDispatcher
 
     private sealed record EffectiveReasoningEffortSelection(string? Effort, string Reason);
 
-    private static AgentDefinition ResolveAssignedAgent(AgentOrchestratorKernel? kernel, Goal? goal, TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+    private static AgentDefinition ResolveAssignedAgent(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
     {
         if (task.AssignedAgentId is null)
         {
@@ -1767,21 +1773,8 @@ public static partial class WorkerProfileDispatcher
             return assignedAgent;
         }
 
-        var replacement = agents.FirstOrDefault(agent => agent.Role == task.RequiredRole)
-            ?? throw new KeyNotFoundException($"Assigned agent '{task.AssignedAgentId}' was not found and no current {task.RequiredRole} agent is registered.");
-        var staleAgentId = task.AssignedAgentId.Value;
-        var warning = $"Warning: assigned agent '{staleAgentId}' for {task.RequiredRole} task '{task.Id}' was not found; using current role agent '{replacement.Id.Value}'.";
-        Console.Error.WriteLine(warning);
-        if (kernel is not null && goal is not null)
-        {
-            kernel.ReassignTaskAgent(
-                goal.Id,
-                task.Id,
-                replacement,
-                $"Warning: repaired stale {task.RequiredRole} assignment from missing agent '{staleAgentId}' to '{replacement.Id.Value}'.");
-        }
-
-        return replacement;
+        throw new KeyNotFoundException(
+            $"Assigned agent '{task.AssignedAgentId}' for {task.RequiredRole} task '{task.Id}' is absent from the agent catalog; restore it or run reassign-agent.");
     }
 
     private static void EnsureRealSubscriptionProfile(WorkerProfile profile)

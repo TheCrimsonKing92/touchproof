@@ -81,21 +81,70 @@ public sealed class ProviderHoldAgentSubstitutionTests
     }
 
     [Xunit.Fact]
-    public void StaleAgentRepairDoesNotPinTheRepairedAssignment()
+    public void MissingPinnedAgentFailsClosedWhilePeerTaskStillPrepares()
     {
         using var scenario = new Scenario();
-        var goal = scenario.NewGoal();
-        scenario.Kernel.ReassignTaskAgent(goal.Id, goal.Tasks.Single().Id,
+        var task = new TaskSpec(TaskId.New(), "Verify the missing pin.", AgentRole.Tester);
+        var peer = new TaskSpec(TaskId.New(), "Verify the present pin.", AgentRole.Tester);
+        var goal = InfrastructureTestSupport.MarkGoalRefined(scenario.Kernel,
+            scenario.Kernel.CreateGoal("Check the change.", [task, peer]));
+        scenario.Kernel.ActivateGoal(goal.Id, scenario.Agents);
+        GoalWorktrees.Ensure(scenario.Root, goal.Id);
+        scenario.Kernel.ReassignTaskAgent(goal.Id, task.Id,
             scenario.Primary with { Id = new AgentId("removed-agent") });
+        scenario.Kernel.ReassignTaskAgent(goal.Id, peer.Id, scenario.Alternate);
+        var redelegations = goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRedelegated);
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(scenario.Kernel, goal,
             scenario.Agents, scenario.Profiles, scenario.Workspace.PromptDirectory,
             scenario.Workspace.ResolveExecutionDirectory(goal.Id), Scenario.ObservedAt,
             sandboxOptions: scenario.Sandbox, commandExists: _ => true, cascadeTesterCheapFirst: false,
             claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
-        Assert.Empty(batch.Dispatches);
-        Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRedelegated &&
-            evt.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase));
-        Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(scenario.Resolve(goal));
+        Assert.Equal(peer.Id, Assert.Single(batch.Dispatches).Task.Id);
+        Assert.Equal(scenario.Alternate.Id, peer.AssignedAgentId);
+        Assert.Equal("codex-cli", peer.LastDispatch!.WorkerName);
+        Assert.Equal("OpenAI", peer.LastDispatch.ProviderName);
+        Assert.Equal(new AgentId("removed-agent"), task.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(task.LastDispatch);
+        Assert.Equal(redelegations, goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRedelegated));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase));
+        var diagnostic = Assert.Single(batch.Blocked);
+        Assert.Equal(task.Id.Value, diagnostic.TaskId);
+        Assert.Equal("unknown", diagnostic.Provider);
+        Assert.Equal("preflight-blocked", diagnostic.Reason);
+        var detail = Assert.Single(diagnostic.Details!);
+        Assert.Contains("removed-agent", detail, StringComparison.Ordinal);
+        Assert.Contains(task.Id.Value, detail, StringComparison.Ordinal);
+        Assert.Contains(nameof(AgentRole.Tester), detail, StringComparison.Ordinal);
+        Assert.Contains("reassign-agent", detail, StringComparison.Ordinal);
+        Assert.Contains("removed-agent", diagnostic.ToLine(), StringComparison.Ordinal);
+        Assert.IsType<ProviderHoldAgentSubstitution.Result.None>(scenario.Resolver().Resolve(goal, task));
+    }
+
+    [Xunit.Fact]
+    public void MissingPinnedAgentSingleTaskDispatchHoldsAsAgentNotFound()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        scenario.Kernel.ReassignTaskAgent(goal.Id, task.Id,
+            scenario.Primary with { Id = new AgentId("removed-agent") });
+        var redelegations = goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRedelegated);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
+        repository.SaveAsync(scenario.Kernel).GetAwaiter().GetResult();
+        var error = Assert.Throws<DispatchAssignmentHoldException>(() =>
+            new GoalDispatchOperations().SubscriptionDispatchTask(scenario.Kernel, scenario.Workspace,
+                goal, task, scenario.Agents, scenario.Profiles, cascadeTesterCheapFirst: false));
+        Assert.Equal(DispatchAssignmentHoldCode.AgentNotFound, error.Hold.Code);
+        Assert.Equal("removed-agent", error.Hold.AssignedAgentId);
+        Assert.Contains("removed-agent", error.Message, StringComparison.Ordinal);
+        Assert.Contains(task.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(AgentRole.Tester), error.Message, StringComparison.Ordinal);
+        Assert.Contains("reassign-agent", error.Message, StringComparison.Ordinal);
+        Assert.Equal(new AgentId("removed-agent"), task.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(task.LastDispatch);
+        Assert.Equal(redelegations, goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRedelegated));
     }
 
     [Xunit.Fact]

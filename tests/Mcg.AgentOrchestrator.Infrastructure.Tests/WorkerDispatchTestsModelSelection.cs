@@ -88,18 +88,19 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         Assert.Equal("GPT-6-SOL", agent.ComplexModel!.ModelName);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_and_persists_when_assigned_agent_is_missing")]
-    public void WorkerProfileDispatcherFallsBackAndPersistsWhenAssignedAgentIsMissing()
+    [Xunit.Fact]
+    public void MissingAssignedAgentRejectsWithoutReassignment()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Plan the fallback repair.", AgentRole.Planner);
-        var goal = kernel.CreateGoal("Repair stale agent pin", [task]);
+        var task = new TaskSpec(TaskId.New(), "Plan with a missing assigned agent.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep missing agent pin", [task]);
         var oldAgent = SubscriptionPlannerAgent("old-planner", "Old Planner");
         var newAgent = SubscriptionPlannerAgent("new-planner", "New Planner");
         kernel.ActivateGoal(goal.Id, [oldAgent]);
+        Assert.Equal(oldAgent.Id, task.AssignedAgentId);
 
-        var stderr = CaptureConsoleError(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        var error = Assert.Throws<KeyNotFoundException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,
             task,
@@ -109,22 +110,19 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             root,
             DateTimeOffset.UtcNow,
             sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
-            claudeAuthProbe: () => new ClaudeCliAuthState(
-                HasAnthropicApiKey: false,
-                HasCliCredentialArtifact: true,
-                CredentialArtifactPath: null),
-            commandExists: RealClaudeLauncherExists));
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: _ => true));
 
-        Assert.Equal(newAgent.Id, task.AssignedAgentId);
-        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-        Assert.Contains("Warning: assigned agent 'old-planner'", stderr);
-        Assert.Contains("Planner", stderr);
-        Assert.Contains("new-planner", stderr);
-        Assert.Contains(goal.Timeline, evt =>
+        Assert.Contains(oldAgent.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Contains(task.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(AgentRole.Planner), error.Message, StringComparison.Ordinal);
+        Assert.Contains("reassign-agent", error.Message, StringComparison.Ordinal);
+        Assert.Equal(oldAgent.Id, task.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(task.LastDispatch);
+        Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskRedelegated &&
-            evt.Message.Contains("old-planner", StringComparison.Ordinal) &&
-            evt.Message.Contains("new-planner", StringComparison.Ordinal));
+            evt.Kind == ProgressKind.TaskRedelegated);
     }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_valid_assigned_agent_without_warning")]
@@ -161,8 +159,8 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             evt.Kind == ProgressKind.TaskRedelegated);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_replace_midflight_role_agent_dispatches_with_repaired_assignment")]
-    public void WorkerProfileDispatcherReplaceMidflightRoleAgentDispatchesWithRepairedAssignment()
+    [Xunit.Fact]
+    public void ReplacedRoleAgentRequiresExplicitReassignment()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -173,8 +171,11 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         kernel.ActivateGoal(goal.Id, agents);
         var newAgent = SubscriptionPlannerAgent("new-planner", "New Planner");
         agents = new AgentCatalog(agents).UpsertRole(newAgent).Agents;
+        Assert.DoesNotContain(agents, agent => agent.Id == oldAgent.Id);
+        Assert.Equal(newAgent.Id, Assert.Single(agents).Id);
+        Assert.Equal(oldAgent.Id, task.AssignedAgentId);
 
-        WorkerProfileDispatcher.PrepareSubscriptionTask(
+        var error = Assert.Throws<KeyNotFoundException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,
             task,
@@ -184,15 +185,19 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             root,
             DateTimeOffset.UtcNow,
             sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
-            claudeAuthProbe: () => new ClaudeCliAuthState(
-                HasAnthropicApiKey: false,
-                HasCliCredentialArtifact: true,
-                CredentialArtifactPath: null),
-            commandExists: RealClaudeLauncherExists);
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: _ => true));
 
-        Assert.Equal(newAgent.Id, task.AssignedAgentId);
-        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-        Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+        Assert.Contains(oldAgent.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Contains(task.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(AgentRole.Planner), error.Message, StringComparison.Ordinal);
+        Assert.Contains("reassign-agent", error.Message, StringComparison.Ordinal);
+        Assert.Equal(oldAgent.Id, task.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(task.LastDispatch);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRedelegated);
     }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_light_role_dispatch_uses_codex_when_injected_launcher_check_reports_claude_absent")]

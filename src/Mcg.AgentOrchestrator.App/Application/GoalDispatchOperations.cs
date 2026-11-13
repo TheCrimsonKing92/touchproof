@@ -489,25 +489,34 @@ internal sealed partial class GoalDispatchOperations
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         EnsureDeveloperTestLaneReadiness(kernel.GetGoal(goal.Id), workspace, [task.Id]);
         var home = _resolveHome(workspace);
-        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
-            kernel,
-            goal,
-            task,
-            agents,
-            profiles,
-            workspace.PromptDirectory,
-            GoalWorkerDirectory.Resolve(workspace, goal.Id),
-            DateTimeOffset.UtcNow,
-            modelOverride,
-            allowGitReference,
-            reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
-            citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
-            cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: WorkerTargetHomeFactory.For(home, workspace),
-            deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
+        WorkerProfileDispatchResult prepared;
+        try
+        {
+            prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+                kernel,
+                goal,
+                task,
+                agents,
+                profiles,
+                workspace.PromptDirectory,
+                GoalWorkerDirectory.Resolve(workspace, goal.Id),
+                DateTimeOffset.UtcNow,
+                modelOverride,
+                allowGitReference,
+                reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
+                citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
+                plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
+                cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+                cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
+                orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+                targetHome: WorkerTargetHomeFactory.For(home, workspace),
+                deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace), backlogStorePath: workspace.BacklogStorePath, preparationFindingsResolver: CreateSelectorDiagnosticResolver(kernel, workspace));
+        }
+        catch (KeyNotFoundException ex) when (task.AssignedAgentId is not null &&
+            !agents.Any(agent => agent.Id == task.AssignedAgentId))
+        {
+            throw AssignmentHold(DispatchAssignmentHoldCode.AgentNotFound, task, ex.Message, task.AssignedAgentId.Value);
+        }
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
     }
