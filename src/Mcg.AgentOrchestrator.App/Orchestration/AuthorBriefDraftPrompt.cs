@@ -61,10 +61,10 @@ internal static class AuthorBriefDraftPrompt
         ## Acceptance criteria
         ## Scope
         Number acceptance criteria `1.`, `2.` and so on, with no bulleted criteria and no nested bullets.
-        A step that happens after the goal lands belongs in prose outside the numbered criteria, never as a numbered criterion.
+        A step that happens after the goal lands is never a numbered criterion and is left out of the draft.
         A new class goes in a separately named type in its own file, never in a new partial file of an existing class.
         A criterion that needs a test to fail against the pre-change code is never assigned to Acceptance, because focused evidence runs only on the candidate; the pre-change half belongs to a Reviewer reading or to a committed negative-control test that runs on the candidate.
-        A step observed by a person after the goal lands, including a check on a particular operating system, goes in prose outside the numbered criteria, and no criterion is owned by the Operator for such a step.
+        A step observed by a person after the goal lands, including a check on a particular operating system, is left out of the draft, and no criterion is owned by the Operator for such a step.
         Every criterion asks for evidence only from files in the target repository, so a Reviewer criterion never asks for a comparison against source outside the worktree.
         End EVERY acceptance criterion with an owner sentence of the form "X owns; Y executes."
         followed by TEST-VERIFIABLE or REAL-WORLD-DEPENDENT.
@@ -85,7 +85,12 @@ internal static class AuthorBriefDraftPrompt
         {{stackCriteria.Criterion}}{{(stackCriteria.WorkerNote is { } note ? Environment.NewLine + note : "")}}
         Keep What to build to at most four numbered items.
         When the backlog item needs more, draft only the first slice and list the remaining slices under Scope in a line beginning `Follow-up slices:`.
-        Keep scope concrete and name integration and evidence owners. Do not create a goal or change any files.
+        Scope names only the files in scope and follow-up slices.
+        Outside the numbered acceptance criteria, remove every sentence that names an owner, a gate or an after-landing action unless it is rewritten as a numbered criterion ending with an owner sentence.
+        Check each sentence: does it say who owns, integrates, executes or supplies evidence for this goal's work; does it say a gate or test run is or remains required for this goal; or does it say what anyone does or observes after this goal lands? If any answer is yes, apply the rule above.
+        Examples to remove from prose: "The Tester's evidence_request runs the deferred tests."; "Integration owner: the Developer; evidence owners: the Tester and the Reviewer."; "The normal broad gate remains required."; "After the goal lands, the Operator confirms the receipt."
+        A rewritten criterion must still satisfy every criterion rule above, so an after-landing step is removed from the draft rather than rewritten as a criterion.
+        Do not create a goal or change any files.
         Return exactly one JSON object, with no surrounding commentary or fences:
         {"kind":"draft","markdown":"<complete brief markdown>"}
         or {"kind":"draft","markdown":"<complete brief markdown>","dependsOnGoals":["<goal-prefix>"]}

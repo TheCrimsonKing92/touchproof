@@ -63,8 +63,24 @@ public sealed class AuthorBriefDraftStackCriteriaTests
     {
         var lines = Render(stack).ReplaceLineEndings("\n").Split('\n');
 
-        Assert.Contains("A step observed by a person after the goal lands, including a check on a particular operating system, goes in prose outside the numbered criteria, and no criterion is owned by the Operator for such a step.", lines);
+        Assert.Contains("A step observed by a person after the goal lands, including a check on a particular operating system, is left out of the draft, and no criterion is owned by the Operator for such a step.", lines);
         Assert.Contains("Every criterion asks for evidence only from files in the target repository, so a Reviewer criterion never asks for a comparison against source outside the worktree.", lines);
+    }
+
+    [Theory]
+    [MemberData(nameof(Stacks))]
+    public void Render_EveryStack_ConfinesObligationsToNumberedCriteria(Toolchain? stack)
+    {
+        var prompt = Render(stack);
+        var lines = prompt.ReplaceLineEndings("\n").Split('\n');
+
+        Assert.Contains("Outside the numbered acceptance criteria, remove every sentence that names an owner, a gate or an after-landing action unless it is rewritten as a numbered criterion ending with an owner sentence.", lines);
+        Assert.Contains("Scope names only the files in scope and follow-up slices.", lines);
+        Assert.Contains("Check each sentence: does it say who owns, integrates, executes or supplies evidence for this goal's work; does it say a gate or test run is or remains required for this goal; or does it say what anyone does or observes after this goal lands? If any answer is yes, apply the rule above.", lines);
+        Assert.Contains("A rewritten criterion must still satisfy every criterion rule above, so an after-landing step is removed from the draft rather than rewritten as a criterion.", lines);
+        Assert.DoesNotContain("name integration and evidence owners", prompt);
+        Assert.DoesNotContain("belongs in prose outside the numbered criteria", prompt);
+        Assert.DoesNotContain("goes in prose outside the numbered criteria", prompt);
     }
 
     [Theory]

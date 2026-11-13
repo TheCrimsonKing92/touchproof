@@ -117,6 +117,7 @@ internal static class AuthorBriefDraftChecks
                 string.Join(" | ", preChangeCriteria.Select(criterion =>
                     $"criterion {criterion.Index} matched \"{criterion.Match.Groups["anchor"].Value}\"")) +
                 ". " + BriefLint.PreChangeFailureRemedy),
+            AuthorBriefDraftProseObligationCheck.Run(markdown),
             .. AuthorBriefDraftTargetChecks.Run(markdown, mainHead, repository)
         ];
 
@@ -132,7 +133,7 @@ internal static class AuthorBriefDraftChecks
         }
     }
 
-    private static IEnumerable<(string Text, int Index)> UnfencedLines(string text)
+    internal static IEnumerable<(string Text, int Index)> UnfencedLines(string text)
     {
         char fenceCharacter = '\0';
         var fenceLength = 0;
