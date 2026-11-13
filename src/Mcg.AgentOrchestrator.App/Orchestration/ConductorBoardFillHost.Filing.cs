@@ -56,7 +56,12 @@ internal sealed partial class ConductorBoardFillHost
                 return Finish(previous with { Id = attempt.Id, StartedAt = attempt.StartedAt,
                     Result = "replayed", Reported = false });
             BoardFillIntakeResult intake;
-            try { intake = _filingSeams!.Intake.File(new(draft.Id, Path.GetFullPath(draft.DraftPath!), draft.BacklogItemId), token); }
+            try
+            {
+                var path = Path.GetFullPath(draft.DraftPath!);
+                var coverage = AuthorBriefDraftService.BacklogCoverage(File.ReadAllText(path));
+                intake = _filingSeams!.Intake.File(new(draft.Id, path, draft.BacklogItemId, coverage), token);
+            }
             catch (Exception exception)
             {
                 return Finish(attempt with { Result = "failed", Reason = "intake-exception",

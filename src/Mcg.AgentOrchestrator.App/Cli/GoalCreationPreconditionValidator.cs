@@ -13,7 +13,8 @@ internal static class GoalCreationPreconditionValidator
         GoalSnapshot preparedSnapshot,
         OrchestratorWorkspace workspace,
         string? replacementPredecessorGoalId = null,
-        IReadOnlyCollection<string>? preparedSourceBacklogDependencies = null)
+        IReadOnlyCollection<string>? preparedSourceBacklogDependencies = null,
+        bool allowTerminalSourceClaimTakeover = false)
     {
         if (currentKernel.Goals.Any(goal => goal.Id.Value == preparedSnapshot.Id))
             throw Changed("prepared-goal-id-exists", ("goal", preparedSnapshot.Id));
@@ -43,7 +44,8 @@ internal static class GoalCreationPreconditionValidator
                     currentKernel,
                     backlogItemId,
                     preparedSnapshot.Id,
-                    preparedSnapshot.SourceBacklogCoverage ?? SourceBacklogCoverage.Full)
+                    preparedSnapshot.SourceBacklogCoverage ?? SourceBacklogCoverage.Full,
+                    allowTerminalSourceClaimTakeover)
                 : claimStore.ResolveOrMaterializeClaim(currentKernel, backlogItemId);
         }
         catch (LegacySourceBacklogOwnerAmbiguousException ambiguous)
@@ -78,6 +80,10 @@ internal static class GoalCreationPreconditionValidator
                     ("competingGoal", claim.OwnerGoalId),
                     ("claimVersion", claim.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             }
+
+            if (allowTerminalSourceClaimTakeover)
+                throw Changed("source-backlog-consumed", ("backlogItem", backlogItemId),
+                    ("competingGoal", claim.OwnerGoalId));
 
             var facts = CliCommandHandlers.BuildSourceBacklogSiblingFacts(
                 workspace.ExecutionDirectory,

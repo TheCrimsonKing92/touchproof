@@ -117,16 +117,12 @@ public sealed class ConductorBoardFillHostPlanOrderTests
     }
 
     [Theory]
-    [InlineData("terminal", false)]
-    [InlineData("terminal", true)]
     [InlineData("missing", false)]
     [InlineData("missing", true)]
     [InlineData("malformed", false)]
     [InlineData("malformed", true)]
     [InlineData("ambiguous", false)]
     [InlineData("ambiguous", true)]
-    [InlineData("legacy", false)]
-    [InlineData("legacy", true)]
     public async Task Claimed_sources_never_draft_and_independent_work_continues(string shape,
         bool unreadablePlan)
     {

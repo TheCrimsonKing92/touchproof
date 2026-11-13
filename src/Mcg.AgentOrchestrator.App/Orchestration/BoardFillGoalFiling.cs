@@ -9,11 +9,12 @@ internal interface IBoardFillGoalIntake
     BoardFillIntakeResult Depend(string goalId, string dependencyGoalId, CancellationToken token);
 }
 
-internal sealed record BoardFillIntakeRequest(string DraftId, string BriefPath, string BacklogItemId)
+internal sealed record BoardFillIntakeRequest(string DraftId, string BriefPath, string BacklogItemId,
+    string Coverage = "full")
 {
     internal string RequestKey => "board-fill-" + DraftId;
     internal IReadOnlyList<string> Arguments => ["goal", "--brief-file", BriefPath,
-        "--backlog-item", BacklogItemId, "--backlog-coverage", "full", "--request-key", RequestKey];
+        "--backlog-item", BacklogItemId, "--backlog-coverage", Coverage, "--request-key", RequestKey];
 }
 
 internal sealed record BoardFillIntakeResult(string Kind, string? GoalId, string Stdout, string Stderr,

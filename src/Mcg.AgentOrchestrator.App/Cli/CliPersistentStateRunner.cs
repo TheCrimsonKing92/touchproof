@@ -49,7 +49,8 @@ internal static partial class CliPersistentStateRunner
         Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
         bool skipReadOnlyRoute = false,
         ConductorLoopLeaseController? startupLoopLease = null,
-        Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
+        Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null,
+        bool allowTerminalSourceClaimTakeover = false)
     {
         CliCommandHelp.ValidateGoalCreationOptions(args);
         if (CliArgumentParser.IsAskGoal(args))
@@ -177,9 +178,11 @@ internal static partial class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceCleanupContext);
         }
 
-        if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
+        if (IsGoalCreateCommand(args) ||
+            (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args)))
         {
-            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal, allowTerminalSourceClaimTakeover);
         }
 
         if (IsBacklogIntakeCommand(args))
@@ -207,11 +210,6 @@ internal static partial class CliPersistentStateRunner
         {
             return CliRunGoalExecution.Execute(args, stateRepository, workspace, ref agents, providers,
                 ref workerProfiles, ref currentGoal);
-        }
-
-        if (IsGoalCreateCommand(args))
-        {
-            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
         if (IsGoalMarkLandedCommand(args))
@@ -1955,7 +1953,8 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        bool allowTerminalSourceClaimTakeover = false)
     {
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
         {
@@ -2000,7 +1999,8 @@ internal static partial class CliPersistentStateRunner
                     {
                         GoalCreationPreconditionValidator.Validate(
                             currentKernel, preparedSnapshot, workspace,
-                            preparedSourceBacklogDependencies: preparedSourceBacklogDependencies);
+                            preparedSourceBacklogDependencies: preparedSourceBacklogDependencies,
+                            allowTerminalSourceClaimTakeover: allowTerminalSourceClaimTakeover);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
                         if (request is not null)
                         {
