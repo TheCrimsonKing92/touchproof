@@ -142,6 +142,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceProjectTopologySource",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRetryEvidenceRetentionFailure",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionInput",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionMode",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSession",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSourceMutation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStartupContractValidator",

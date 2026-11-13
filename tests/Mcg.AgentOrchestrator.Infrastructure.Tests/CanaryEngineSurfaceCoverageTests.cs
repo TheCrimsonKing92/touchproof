@@ -55,6 +55,8 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Theory]
+    [InlineData("AcceptanceSelectedExecutionInput")]
+    [InlineData("AcceptanceSelectedExecutionMode")]
     [InlineData("AcceptanceSelectedExecutionSession")]
     [InlineData("BuildReceiptLedger")]
     [InlineData("BuildReceiptSite")]
