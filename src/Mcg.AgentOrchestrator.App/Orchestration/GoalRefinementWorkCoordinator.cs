@@ -412,12 +412,21 @@ internal static partial class GoalRefinementWorkCoordinator
             return new GoalRefinementWorkLaunchResult(false, null, "executor-launch-deferred-outside-app-host");
         }
 
+        return LaunchExecutor(workspace, goalId, ConductorLoopHandoff.LaunchDetached);
+    }
+
+    internal static GoalRefinementWorkLaunchResult LaunchExecutor(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        Func<ConductLoopLaunchRequest, ConductLoopLaunchResult> launcher)
+    {
         try
         {
             Directory.CreateDirectory(workspace.LogDirectory);
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
             var request = CreateLaunchRequest(workspace, goalId, stamp);
-            var launched = ConductorLoopHandoff.LaunchDetached(request);
+            var launched = launcher(request);
+            GoalRefinementExecutorCustodyReceipt.RecordLaunch(workspace.LogDirectory, goalId, stamp, launched);
             return new GoalRefinementWorkLaunchResult(true, launched.ProcessId, launched.LaunchDetail);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
