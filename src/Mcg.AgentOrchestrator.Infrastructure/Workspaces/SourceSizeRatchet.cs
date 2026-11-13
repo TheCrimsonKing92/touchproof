@@ -360,7 +360,7 @@ internal static class SourceSizeRatchet
             // Goal 554f7db9: current candidate selector findings are captured once during Tester/Reviewer
             // preparation and delivered through this shared context boundary; keep that dispatch binding
             // beside the existing task-package preparation until the planned preflight extraction.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2555),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2548),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
