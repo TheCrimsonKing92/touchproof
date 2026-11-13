@@ -232,8 +232,8 @@ public sealed record OrchestratorWorkspace(
     public string SpecRefinementLaunchAttemptsDirectory =>
         Path.Combine(OrchestratorDirectory, "spec-refinement-launch-attempts");
 
-    // Goal work runs in the goal's worktree when one exists so concurrent
-    // goals do not contend for the shared execution directory.
+    // Falls back to the execution directory when the goal worktree is missing.
+    // Must not be used to choose a worker's working directory; use GoalWorkerDirectory.Resolve.
     public string ResolveExecutionDirectory(GoalId goalId)
     {
         return GoalWorktrees.TryResolve(ExecutionDirectory, goalId) ?? ExecutionDirectory;

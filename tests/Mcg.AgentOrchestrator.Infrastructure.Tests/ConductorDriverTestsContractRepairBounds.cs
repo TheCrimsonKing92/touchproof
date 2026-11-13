@@ -1156,6 +1156,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             var kernel = new AgentOrchestratorKernel();
             var reviewer = new TaskSpec(TaskId.New(), "Review configured cap", AgentRole.Reviewer);
             var goal = kernel.CreateGoal("Use the configured review cap", [reviewer]);
+            GoalWorktrees.Ensure(workspace.ExecutionDirectory, goal.Id);
             kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
                 "Review configured cap",
                 ["The dispatch receipt uses the configured stop round."],
@@ -1213,5 +1214,4 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.Equal(9, Prepare("profile").StopRound);
         Assert.Equal(9, Prepare("refresh").StopRound);
     }
-
 }
