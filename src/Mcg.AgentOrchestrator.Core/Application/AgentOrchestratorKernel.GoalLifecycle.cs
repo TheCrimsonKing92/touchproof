@@ -583,16 +583,16 @@ public sealed partial class AgentOrchestratorKernel
         else
         {
             var previousRetryAt = task.LatestRetryAt;
-            ResetTaskForRetry(goal.Id, task, retryAt, retryCause, retryRoundKind);
+            var preserveFinding = !authoritativeRetryFeedback && PendingRoutedFindingRetention.ShouldPreserve(task, retryCause);
+            ResetTaskForRetry(goal.Id, task, retryAt, preserveFinding ? task.PendingRetryCause : retryCause,
+                preserveFinding ? task.PendingRetryRoundKind : retryRoundKind);
             if (authoritativeRetryFeedback)
             {
                 task.RecordCriterionRetryFeedback([retryMessage], previousRetryAt);
                 task.RecordAcceptedRetryFeedback(retryMessage, retryAt, retryFeedbackSource ?? correctionSource, obligation);
             }
-            else
-            {
+            else if (!preserveFinding)
                 ReplaceEarlierRoundCriterionRetryFeedback(task, previousRetryAt, retryAt, retryMessage);
-            }
             RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage, correctionSource);
             Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
             if (TerminalContractRepairStreak.OperatorRetryResetNote(task, correctionSource) is { } resetNote)
