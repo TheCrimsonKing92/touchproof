@@ -8,14 +8,17 @@ internal sealed class AcceptanceSelectedExecutionSession(
     AcceptanceSelectedExecutionMode mode, string worktreePath, IReadOnlyList<string>? changedFiles,
     bool attributionScoped = false,
     Func<string, IReadOnlyList<string>, AcceptanceSelectedExecutionInput>? read = null,
-    AcceptanceGateEngineSettings? engineSettings = null)
+    AcceptanceGateEngineSettings? engineSettings = null,
+    AcceptanceSelectedExecutionSessionSuspension? suspension = null)
 {
+    private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
+        ? AcceptanceSelectedExecutionMode.Shadow : mode;
     private AcceptanceSelectedExecutionPlan? _plan;
     private IReadOnlyList<AcceptanceTestClassDescriptor> _classes = [];
     private IReadOnlyList<AcceptanceTestLane> _actual = [];
     private double _milliseconds;
 
-    internal bool Applied => mode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
+    internal bool Applied => _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
     internal Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? LaneTransform =>
         mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;
 
@@ -56,7 +59,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
     {
         if (mode == AcceptanceSelectedExecutionMode.Off)
             return observation with { SelectedExecution = AcceptanceSelectedExecutionRecord.Disabled };
-        var shadow = mode == AcceptanceSelectedExecutionMode.Shadow;
+        var shadow = _effectiveMode == AcceptanceSelectedExecutionMode.Shadow;
         var proposed = _plan?.Lanes ?? [];
         var kept = proposed.SelectMany(lane => lane.SelectedClasses).Distinct(StringComparer.Ordinal).ToArray();
         var original = proposed.SelectMany(lane => lane.SelectedClasses.Concat(lane.SkippedClasses))
@@ -64,7 +67,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
         var scheduled = _actual.Where(lane => observation.Scheduled.Contains(lane.Name, StringComparer.Ordinal)).ToArray();
         var executed = CountExecuted(scheduled);
         var skipped = original.Except(kept, StringComparer.Ordinal).Count();
-        var record = new AcceptanceSelectedExecutionRecord(mode.ToString(), _plan?.HasPlan == true ? "plan" : "full-gate",
+        var record = new AcceptanceSelectedExecutionRecord(_effectiveMode.ToString(), _plan?.HasPlan == true ? "plan" : "full-gate",
             _plan?.Outcome.ToString(), _plan?.FullGateReason, _plan?.FloorLanes ?? [], _plan?.GuardClasses ?? [],
             proposed.Select(lane => lane with
             {
@@ -74,7 +77,9 @@ internal sealed class AcceptanceSelectedExecutionSession(
                     ? AcceptanceGateLaneSkip.ShadowClassNotSelected : AcceptanceGateLaneSkip.ClassNotSelected : null
             }).ToArray(), executed, Applied ? skipped : 0,
             _plan?.HasPlan == true ? kept.Length : null, _plan?.HasPlan == true ? skipped : null,
-            _milliseconds, Applied);
+            _milliseconds, Applied, Applied,
+            mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null ? "suspended-by-backstop-miss" : null,
+            mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null);
         return observation with { SelectedExecution = record };
     }
 

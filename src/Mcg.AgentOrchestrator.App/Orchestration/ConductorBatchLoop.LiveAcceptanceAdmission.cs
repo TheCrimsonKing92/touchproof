@@ -63,12 +63,18 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,
         IReadOnlySet<string> activeAttemptIds,
         ConductorAcceptanceCapacitySnapshot activeCohorts,
-        IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates)
+        IReadOnlyList<GateLoadContextProbe.LiveGateOccupant> liveGates,
+        string? backstopRequestId = null)
     {
         var occupants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var claimedProcessIds = new HashSet<int>();
         var claimedGoalIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var claimedRunIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (backstopRequestId is not null)
+        {
+            occupants.Add("backstop:" + backstopRequestId, "backstop:" + backstopRequestId);
+            claimedRunIds.Add(backstopRequestId);
+        }
 
         foreach (var attemptId in activeAttemptIds.OrderBy(id => id, StringComparer.Ordinal))
         {
@@ -160,7 +166,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorAcceptanceCapacitySnapshot activeCohorts,
         int tick,
         List<string> changedGoalLines,
-        bool blockAdmissionOnFailure)
+        bool blockAdmissionOnFailure, string? backstopRequestId = null)
     {
         try
         {
@@ -169,7 +175,7 @@ internal sealed partial class ConductorBatchLoop
                 activeAttempts,
                 activeAttemptIds,
                 activeCohorts,
-                liveGates);
+                liveGates, backstopRequestId);
             var tally = ActivationAdmissionPreparingAttemptCensus.Evaluate(activeAttempts, liveGates, DateTimeOffset.UtcNow);
             ActivationAdmissionAccumulator.Current.Value?.RecordCensus(census.OccupiedCount, tally);
             return census;
@@ -180,7 +186,7 @@ internal sealed partial class ConductorBatchLoop
             RecordParallelAcceptanceProgress(
                 $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(ex.Message)}",
                 changedGoalLines);
-            var lifecycleCensus = BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, []);
+            var lifecycleCensus = BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, [], backstopRequestId);
             return blockAdmissionOnFailure
                 ? lifecycleCensus with { CaptureFailure = ex }
                 : lifecycleCensus;
