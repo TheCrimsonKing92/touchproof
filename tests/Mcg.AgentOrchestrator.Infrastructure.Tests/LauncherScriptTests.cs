@@ -604,104 +604,26 @@ public sealed class LauncherScriptTests
             string.Join(Environment.NewLine, allow));
     }
 
-    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_uses_fresh_launcher")]
-    public void InvokeOrchestratorCommandDefaultPathUsesFreshLauncher()
+    [Xunit.Fact]
+    public void InvokeOrchestratorCommandWithoutAppDllFailsWithOneStderrLineNamingLauncher()
     {
         using var sandbox = CreateDefaultLauncherSandbox();
-
         var result = RunInvokeRepoScript(
             sandbox.RepositoryRoot,
             "scripts\\Invoke-OrchestratorCommand.ps1",
-            "goal",
-            "--pipeline",
-            "five-role",
-            "placeholder");
+            "--help");
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        var cacheRoot = Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "operator-run-cache");
-        var cacheArgument = cacheRoot.Contains(' ') ? $"\"{cacheRoot}\"" : cacheRoot;
-        Assert.Equal($"launcher --runtime-cache-root {cacheArgument} goal placeholder --pipeline five-role",
-            File.ReadAllText(sandbox.InvocationPath).Trim());
-    }
-
-    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_refreshes_git_head_marker_after_stale_rebuild")]
-    public void InvokeOrchestratorCommandDefaultPathRefreshesGitHeadMarkerAfterStaleRebuild()
-    {
-        if (!OperatingSystem.IsWindows())
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        var stderr = result.Stderr.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (stderr.EndsWith('\n'))
         {
-            return;
+            stderr = stderr[..^1];
         }
-
-        using var sandbox = CreateStaleMarkerLauncherSandbox();
-        var result = RunInvokeRepoScript(
-            sandbox.RepositoryRoot,
-            "scripts\\Invoke-OrchestratorCommand.ps1",
-            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
-            "help",
-            "operator-commands");
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Equal(sandbox.ExpectedHead, File.ReadAllText(sandbox.MarkerPath).Trim());
-        var dotnetLog = File.ReadAllText(sandbox.DotnetLogPath);
-        Assert.Contains("build ", dotnetLog);
-        Assert.Contains("--no-restore", dotnetLog, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_missing_freshness_checker_rebuilds_instead_of_running_stale_app")]
-    public void InvokeOrchestratorCommandMissingFreshnessCheckerRebuildsInsteadOfRunningStaleApp()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        using var sandbox = CreateStaleMarkerLauncherSandbox();
-        File.Delete(Path.Combine(sandbox.RepositoryRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"));
-        var result = RunInvokeRepoScript(
-            sandbox.RepositoryRoot,
-            "scripts\\Invoke-OrchestratorCommand.ps1",
-            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
-            "help",
-            "operator-commands");
-
-        Assert.Equal(0, result.ExitCode);
-        var dotnetLog = File.ReadAllText(sandbox.DotnetLogPath);
-        Assert.Contains("build ", dotnetLog);
-        Assert.Contains("--no-restore", dotnetLog, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_stale_app_without_assets_fails_without_restore")]
-    public void InvokeOrchestratorCommandStaleAppWithoutAssetsFailsWithoutRestore()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        using var sandbox = CreateStaleMarkerLauncherSandbox(includeNoRestoreAssets: false);
-        var result = RunInvokeRepoScript(
-            sandbox.RepositoryRoot,
-            "scripts\\Invoke-OrchestratorCommand.ps1",
-            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath },
-            "help",
-            "operator-commands");
-
-        Assert.Equal(1, result.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
-        var errorLines = result.Stderr.Split(
-            JsonLineSeparators,
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Assert.Single(errorLines);
-        Assert.Contains("no-restored build assets are unavailable", errorLines[0], StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            "Invoke-RepoScript.ps1 scripts\\Invoke-PackageBootstrap.ps1",
-            errorLines[0],
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("NU1900", errorLines[0], StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("NU1301", errorLines[0], StringComparison.OrdinalIgnoreCase);
-        Assert.False(File.Exists(sandbox.DotnetLogPath), "Missing assets must fail before invoking dotnet.");
+        var errorLine = Assert.Single(stderr.Split('\n'));
+        Assert.Contains("mcg-orchestrator.cmd", errorLine, StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.InvocationPath));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
     }
 
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_default_path_starts_fresh_launcher")]
@@ -1688,19 +1610,6 @@ public sealed class LauncherScriptTests
         {
             TryDeleteDirectory(sandbox);
         }
-    }
-
-    [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_defaults_to_launcher_refresh_path")]
-    public void InvokeOrchestratorCommandDefaultsToLauncherRefreshPath()
-    {
-        var repoRoot = FindLauncherSourceRoot();
-        var script = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Invoke-OrchestratorCommand.ps1"));
-
-        Assert.True(script.Contains("$launcher = Join-Path $repoRoot \"mcg-orchestrator.cmd\"", StringComparison.Ordinal), script);
-        Assert.True(script.Contains("if ([string]::IsNullOrWhiteSpace($AppDll))", StringComparison.Ordinal), script);
-        Assert.True(script.Contains("& $launcher --runtime-cache-root $cacheRoot @Arguments", StringComparison.Ordinal), script);
-        Assert.True(script.Contains("[System.IO.Path]::GetFullPath($AppDll)", StringComparison.Ordinal), script);
-        Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
     }
 
     [Xunit.Theory]
@@ -2829,86 +2738,6 @@ public sealed class LauncherScriptTests
         return new DefaultLauncherSandbox(repositoryRoot, invocationPath);
     }
 
-    private static StaleMarkerLauncherSandbox CreateStaleMarkerLauncherSandbox(bool includeNoRestoreAssets = true)
-    {
-        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"stale-marker-launcher-{Guid.NewGuid():N}");
-        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
-        var appSourcePath = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App");
-        var appOutputPath = Path.Combine(appSourcePath, "bin", "Debug", "net10.0");
-        var shimPath = Path.Combine(repositoryRoot, "shim");
-        Directory.CreateDirectory(scriptsPath);
-        Directory.CreateDirectory(appSourcePath);
-        Directory.CreateDirectory(appOutputPath);
-        Directory.CreateDirectory(shimPath);
-
-        var sourceRoot = FindLauncherSourceRoot();
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
-            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Invoke-OrchestratorCommand.ps1"),
-            Path.Combine(scriptsPath, "Invoke-OrchestratorCommand.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "resolve-run-dir.ps1"),
-            Path.Combine(scriptsPath, "resolve-run-dir.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
-            Path.Combine(scriptsPath, "Update-AppDllGitHeadMarker.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "scripts", "Test-OrchestratorArtifactFreshness.ps1"),
-            Path.Combine(scriptsPath, "Test-OrchestratorArtifactFreshness.ps1"));
-        File.Copy(
-            Path.Combine(sourceRoot, "mcg-orchestrator.cmd"),
-            Path.Combine(repositoryRoot, "mcg-orchestrator.cmd"));
-
-        File.WriteAllText(Path.Combine(appSourcePath, "Mcg.AgentOrchestrator.App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-        File.WriteAllText(Path.Combine(appSourcePath, "Program.cs"), "Console.WriteLine(\"test\");");
-        if (includeNoRestoreAssets)
-        {
-            foreach (var projectName in new[]
-                     {
-                         "Mcg.AgentOrchestrator.App",
-                         "Mcg.AgentOrchestrator.Core",
-                         "Mcg.AgentOrchestrator.Infrastructure",
-                         "Mcg.AgentOrchestrator.Infrastructure.Providers",
-                         "Mcg.AgentOrchestrator.Infrastructure.OperatorComms",
-                     })
-            {
-                var intermediatePath = Path.Combine(repositoryRoot, "src", projectName, "obj");
-                Directory.CreateDirectory(intermediatePath);
-                File.WriteAllText(Path.Combine(intermediatePath, "project.assets.json"), "{}");
-            }
-        }
-
-        var appDllPath = Path.Combine(appOutputPath, "Mcg.AgentOrchestrator.App.dll");
-        var markerPath = appDllPath + ".git-head";
-        File.WriteAllText(appDllPath, "stale app");
-        File.WriteAllText(Path.Combine(appOutputPath, "e_sqlite3.dll"), "native");
-        File.WriteAllText(markerPath, "stale-test-head");
-
-        RunGit(repositoryRoot, "init", "--initial-branch=main");
-        RunGit(repositoryRoot, "config", "user.email", "test@example.invalid");
-        RunGit(repositoryRoot, "config", "user.name", "Launcher Script Test");
-        RunGit(repositoryRoot, "add", ".");
-        RunGit(repositoryRoot, "commit", "-m", "base");
-        var expectedHead = RunGitForOutput(repositoryRoot, "rev-parse", "HEAD").Trim();
-
-        var dotnetLogPath = Path.Combine(repositoryRoot, "dotnet.log");
-        var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
-        File.WriteAllText(dotnetShimPath, $"""
-            @echo off
-            echo %*>>"{dotnetLogPath}"
-            if "%~1"=="build" (
-              echo rebuilt>"{appDllPath}"
-              echo native>"{Path.Combine(appOutputPath, "e_sqlite3.dll")}"
-              exit /b 0
-            )
-            exit /b 0
-            """.Replace("\n", "\r\n", StringComparison.Ordinal));
-
-        return new StaleMarkerLauncherSandbox(repositoryRoot, dotnetShimPath, dotnetLogPath, markerPath, expectedHead);
-    }
-
     private static StartJournalSandbox CreateStartJournalSandbox()
     {
         var repositoryRoot = Path.Combine(Path.GetTempPath(), $"start-journal-{Guid.NewGuid():N}");
@@ -3321,34 +3150,6 @@ public sealed class LauncherScriptTests
     {
         public string RepositoryRoot { get; } = repositoryRoot;
         public string InvocationPath { get; } = invocationPath;
-
-        public void Dispose()
-        {
-            try
-            {
-                Directory.Delete(RepositoryRoot, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
-
-    private sealed class StaleMarkerLauncherSandbox(
-        string repositoryRoot,
-        string dotnetShimPath,
-        string dotnetLogPath,
-        string markerPath,
-        string expectedHead) : IDisposable
-    {
-        public string RepositoryRoot { get; } = repositoryRoot;
-        public string DotnetShimPath { get; } = dotnetShimPath;
-        public string DotnetLogPath { get; } = dotnetLogPath;
-        public string MarkerPath { get; } = markerPath;
-        public string ExpectedHead { get; } = expectedHead;
 
         public void Dispose()
         {

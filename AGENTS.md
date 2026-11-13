@@ -44,7 +44,7 @@ All commands must minimize output by default.
 Codex harness command guidance:
 
 - For checked-in PowerShell scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts from ad-hoc shell one-liners.
-- For foreground orchestrator CLI commands, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>` over direct `dotnet` or launcher calls; keep free-form arguments shell-plain (avoid `;`, `|`, `&`) so PowerShell does not split the answer into extra command segments.
+- Run foreground orchestrator CLI commands through `.\mcg-orchestrator.cmd <orchestrator-args...>`; use `scripts\Invoke-OrchestratorCommand.ps1` only with an explicit `-AppDll`; keep free-form arguments shell-plain (avoid `;`, `|`, `&`) so PowerShell does not split the answer into extra command segments.
 - For operator monitoring, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; it combines active goals, conduct/dispatch processes, build locks, and selected statuses without ad-hoc CIM/SQLite/log snippets.
 - For direct SQLite utility access, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 <sqlite-tool-args...>` instead of `dotnet run --project ...`.
 - If direct `git` commands prompt, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 <git-args...>`; it runs git from the repository root through the same repo-bounded script prefix.

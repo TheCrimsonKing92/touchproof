@@ -204,11 +204,12 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
             foreach (var name in new[] { "Get-RepoProcessInfo.ps1", "Get-OrchestratorSnapshot.ps1" })
                 File.Copy(Path.Combine(FindLauncherSourceRoot(), "scripts", name), Script(name));
             WriteResolver(Runtime);
-            File.WriteAllText(Script("Invoke-OrchestratorCommand.ps1"), """
-                Set-Content -LiteralPath (Join-Path $PSScriptRoot '..\launcher.called') -Value called
-                Write-Output 'PROCESS_COUNT=0'
-                exit 0
-                """);
+            File.WriteAllText(Path.Combine(Root, "mcg-orchestrator.cmd"), """
+                @echo off
+                echo called>"%~dp0launcher.called"
+                echo PROCESS_COUNT=0
+                exit /b 0
+                """.Replace("\n", "\r\n", StringComparison.Ordinal));
             File.WriteAllText(Script("Invoke-OrchestratorSqliteTool.ps1"), "Write-Output 'fixture active goals'\r\nexit 0\r\n");
             // Use the same command-file boundary as the status-timeout fixture, without
             // compiling another executable at test runtime. -File treats the forwarded
