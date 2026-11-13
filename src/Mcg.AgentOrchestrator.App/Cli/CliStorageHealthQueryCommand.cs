@@ -18,9 +18,13 @@ internal static class CliStorageHealthQueryCommand
             return;
         }
         var report = Build(workspace.OrchestratorDirectory, OrchestratorArtifactRegistry.Entries);
+        var held = StorageHealthStatusView.Read(workspace.OrchestratorDirectory).HeldAcceptanceEvidence
+            .OrderBy(row => row.Action, StringComparer.Ordinal).ThenBy(row => row.Reason, StringComparer.Ordinal).ToArray();
         if (args.Contains("--json"))
         {
-            Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            var output = new { report.Classes, report.Unregistered, report.Totals,
+                held = held.Select(row => new { row.Action, row.Reason, count = row.DecisionCount, row.Bytes, row.Unmeasured }) };
+            Console.WriteLine(JsonSerializer.Serialize(output, new JsonSerializerOptions(JsonSerializerDefaults.Web)
             { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }));
             return;
         }
@@ -28,6 +32,9 @@ internal static class CliStorageHealthQueryCommand
             Console.WriteLine(FormattableString.Invariant($"class\t{Cell(row.Pattern)}\towner={Cell(row.Owner)}\twriter={row.Writer}\tretention={row.Retention}\tretention_age_days={row.RetentionAgeDays?.ToString(CultureInfo.InvariantCulture) ?? "-"}\tbytes={row.Bytes}\tfiles={row.Files}\tbudget_bytes={row.BudgetBytes}\tstatus={row.Status}"));
         foreach (var row in report.Unregistered)
             Console.WriteLine(FormattableString.Invariant($"unregistered\t{Cell(row.Name)}\tbytes={row.Bytes}\tfiles={row.Files}"));
+        foreach (var row in held)
+            Console.WriteLine(FormattableString.Invariant($"held\taction={Cell(row.Action)}\treason={Cell(row.Reason)}\tcount={row.DecisionCount}\tbytes={row.Bytes}") +
+                (row.Unmeasured > 0 ? FormattableString.Invariant($"\tunmeasured={row.Unmeasured}") : ""));
         var totals = report.Totals;
         Console.WriteLine(FormattableString.Invariant($"totals\tbytes={totals.Bytes}\tfiles={totals.Files}\tclasses={totals.Classes}\tover={totals.Over}\tunregistered={totals.Unregistered}\tunreadable={totals.Unreadable}\telapsed_ms={totals.ElapsedMs}"));
     }

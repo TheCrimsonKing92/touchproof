@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal sealed class StorageHealthStatusView(StorageHealthSnapshot? snapshot, DateTimeOffset now)
 {
+    internal IReadOnlyList<AcceptanceHeldEvidenceRow> HeldAcceptanceEvidence => snapshot?.HeldAcceptanceEvidence ?? [];
+
     private TimeSpan Age => snapshot is null || snapshot.MeasuredAtUtc > now
         ? TimeSpan.Zero : now - snapshot.MeasuredAtUtc;
 

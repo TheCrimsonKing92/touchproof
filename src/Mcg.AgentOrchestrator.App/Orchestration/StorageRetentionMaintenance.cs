@@ -281,7 +281,7 @@ internal static partial class StorageRetentionMaintenance
 
             if (!decisions.Any(decision => decision.Action == EvidenceRetentionAction.Failed))
                 (storageHealthSnapshotWriter ?? StorageHealthSnapshotWriter.Default)
-                    .Publish(orchestratorDirectory, now, decisions);
+                    .Publish(orchestratorDirectory, now, decisions, AcceptanceHeldEvidenceSummary.FromDecisions(decisions).Rows);
 
             return BuildResult(sweepId, decisions) with
             {
