@@ -208,6 +208,107 @@ public sealed class CliCriterionEvidenceNumberTests
         Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 acceptance acceptance:full-gate original-finding {Candidate}", hold.Reason, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RepeatGateHoldNamesStaleCandidateAndMapCommand(bool mapped)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Refresh operator evidence");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Observe behavior", ["Operator observes"],
+            VerificationClass.RealWorldDependent, [], []) { OperatorOwnedAcceptanceCriteria = ["Operator observes"] });
+        var obligation = mapped
+            ? kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Operator, "operator", Scope,
+                findingStableId: "operator finding", expectedCandidateSha: "old-candidate")
+            : Assert.Single(goal.CriterionEvidenceObligations);
+        obligation = kernel.RecordCriterionEvidence(goal.Id, obligation.Id, obligation.Owner,
+            "old-candidate", "receipt-old", Scope, true, "Previously observed");
+        var blockers = AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, Candidate);
+        Assert.Equal(obligation, Assert.Single(blockers));
+        var attempt = RepeatGateAttempt(goal);
+
+        var hold = AcceptanceCriterionEvidence.CreateRepeatGateHold(goal, Candidate, attempt, blockers);
+
+        Assert.StartsWith($"Repeat full acceptance deferred pending Operator PreLanding evidence: " +
+            $"{obligation.DisplayLabel}:Operator:Satisfied:next={Scope}. " +
+            "Next actor=Operator; action=criterion-evidence-record. Historical pass does not attest current main.",
+            hold.Reason, StringComparison.Ordinal);
+        Assert.Contains($"'{obligation.Id}' is bound to stale candidate old-candidate; gated candidate={Candidate}.",
+            hold.Reason, StringComparison.Ordinal);
+        var finding = mapped ? "\"operator finding\"" : obligation.Id;
+        Assert.Contains($"`criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 operator \"{Scope}\" {finding} {Candidate}`",
+            hold.Reason, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceCriterionEvidence.HoldIdentity(goal, Candidate), hold.StableIdentity);
+        Assert.Equal("criterion-evidence-admission", hold.Decision!.Stage);
+        Assert.Equal("Hold", hold.Decision.Action);
+        Assert.Equal(1, hold.Decision.Rung);
+        Assert.Equal("operator-prelanding-repeat-gate", hold.Decision.DiscriminatingEvidence);
+        Assert.Equal(hold.Reason, hold.Decision.Reason);
+        Assert.Equal(new PolicyDecisionFact[]
+        {
+            new("goalId", goal.Id.Value), new("candidateSha", Candidate), new("briefVersion", "1"),
+            new("attemptId", attempt.AttemptId), new("historicalMainSha", attempt.MainHeadSha!),
+            new("obligationIds", obligation.Id), new("nextActor", "Operator"),
+            new("nextAction", "criterion-evidence-record"), new("staleCandidateShas", $"{obligation.Id}=old-candidate")
+        }, hold.Decision.Facts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RepeatGateHoldNamesRecordCommandForCurrentBinding(bool unmapped)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Record current operator evidence");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Observe behavior", ["Operator observes"],
+            VerificationClass.RealWorldDependent, [], []) { OperatorOwnedAcceptanceCriteria = ["Operator observes"] });
+        var obligation = unmapped ? Assert.Single(goal.CriterionEvidenceObligations) :
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Operator, "operator", Scope,
+                expectedCandidateSha: Candidate.ToUpperInvariant());
+
+        var hold = AcceptanceCriterionEvidence.CreateRepeatGateHold(goal, Candidate, RepeatGateAttempt(goal),
+            AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, Candidate));
+
+        Assert.Contains($"`criterion-evidence-record --goal {goal.Id.Value} {obligation.Id} operator {Candidate} <receipt-id> \"{Scope}\" <passed|failed> <detail>`",
+            hold.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("criterion-evidence-map", hold.Reason, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, Assert.Single(hold.Decision!.Facts, fact => fact.Name == "staleCandidateShas").Value);
+    }
+
+    [Fact]
+    public void RepeatGateHoldKeepsEveryStaleBinding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Rebind all stale operator evidence");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Observe behavior", ["First observation", "Second observation"],
+            VerificationClass.RealWorldDependent, [], []));
+        for (var index = 0; index < 2; index++)
+        {
+            var obligation = kernel.MapCriterionEvidenceOwner(goal.Id, index, 1, CriterionEvidenceOwner.Operator,
+                "operator", Scope, expectedCandidateSha: $"old-candidate-{index}");
+            kernel.RecordCriterionEvidence(goal.Id, obligation.Id, obligation.Owner,
+                $"old-candidate-{index}", $"receipt-{index}", Scope, true, "Previously observed");
+        }
+
+        var hold = AcceptanceCriterionEvidence.CreateRepeatGateHold(goal, Candidate, RepeatGateAttempt(goal),
+            AcceptanceCriterionEvidence.OperatorPreLandingBlockers(goal, Candidate));
+
+        for (var index = 0; index < 2; index++)
+        {
+            Assert.Contains($"'criterion-v1-{index}' is bound to stale candidate old-candidate-{index}; gated candidate={Candidate}.",
+                hold.Reason, StringComparison.Ordinal);
+            Assert.Contains($"`criterion-evidence-map --goal {goal.Id.Value} --criterion {index + 1} --version 1 operator \"{Scope}\" criterion-v1-{index} {Candidate}`",
+                hold.Reason, StringComparison.Ordinal);
+        }
+        Assert.Equal("criterion-v1-0=old-candidate-0,criterion-v1-1=old-candidate-1",
+            Assert.Single(hold.Decision!.Facts, fact => fact.Name == "staleCandidateShas").Value);
+    }
+
+    private static ConductorParallelAcceptanceAttempt RepeatGateAttempt(Goal goal) => new(
+        "attempt", goal.Id.Value, "goal", 0, Candidate, "historical-main",
+        DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 1234, ConductorParallelAcceptanceAttemptOutcome.Passed,
+        "out", "err", "exit", "heartbeat", "result", "metadata");
+
     [Fact]
     public void RefusedCarryHoldNamesEveryStaleObligation()
     {

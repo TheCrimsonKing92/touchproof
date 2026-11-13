@@ -777,10 +777,14 @@ public sealed class Goal
             throw new InvalidOperationException("Post-landing evidence requires attributed activation and a subsequent matching observation of the original landed artifact.");
         if (existing.Phase != CriterionEvidencePhase.PostLanding && (observation is not null || actor is not null))
             throw new InvalidOperationException("Observation metadata cannot change an obligation's phase.");
+        var replacesStaleOperatorEvidence = passed && owner == CriterionEvidenceOwner.Operator &&
+            existing.Owner == CriterionEvidenceOwner.Operator && existing.Phase == CriterionEvidencePhase.PreLanding &&
+            existing.State == CriterionEvidenceState.Satisfied &&
+            !string.Equals(existing.CandidateSha, candidateSha?.Trim(), StringComparison.OrdinalIgnoreCase);
         if (owner is not (CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator) ||
             existing.Owner != owner ||
             (existing.Owner == CriterionEvidenceOwner.Acceptance && string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha)) ||
-            (!string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
+            (!replacesStaleOperatorEvidence && !string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
              !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) ||
             !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
             throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
@@ -795,7 +799,7 @@ public sealed class Goal
             if (recorded.HasSamePayload(incoming)) return existing;
             throw new InvalidOperationException($"Receipt '{receiptId}' already identifies different evidence for obligation '{obligationId}'.");
         }
-        if (existing.State == CriterionEvidenceState.Satisfied)
+        if (existing.State == CriterionEvidenceState.Satisfied && !replacesStaleOperatorEvidence)
         {
             throw new InvalidOperationException($"Criterion obligation '{obligationId}' is already satisfied by an incompatible receipt.");
         }
@@ -803,6 +807,7 @@ public sealed class Goal
         var updated = existing with
         {
             State = passed ? CriterionEvidenceState.Satisfied : CriterionEvidenceState.Failed,
+            ExpectedCandidateSha = replacesStaleOperatorEvidence ? candidateSha : existing.ExpectedCandidateSha,
             CandidateSha = candidateSha,
             ReceiptId = receiptId,
             Detail = detail,

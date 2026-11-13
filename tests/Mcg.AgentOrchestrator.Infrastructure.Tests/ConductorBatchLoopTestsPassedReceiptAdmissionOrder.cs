@@ -152,6 +152,8 @@ public sealed class ConductorBatchLoopTestsPassedReceiptAdmissionOrder : Conduct
         var first = scene.Goal.LandingBlocker!;
         Assert.Equal("criterion-evidence-admission/operator-prelanding-repeat-gate", first.Kind);
         Assert.Contains(failed.Id, first.Detail);
+        Assert.Contains(measuredCandidate, first.Detail);
+        Assert.Contains($"criterion-evidence-map --goal {scene.Goal.Id.Value}", first.Detail);
         Assert.Equal("Operator", first.NextActor);
         Assert.Equal("criterion-evidence-record", first.NextVerb);
         Assert.Equal(PassedGateHoldCategory.CriterionEvidenceObligation,

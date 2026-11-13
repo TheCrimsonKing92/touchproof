@@ -27,7 +27,8 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
         Coordinator = CreateCoordinator();
     }
 
-    internal SelectedExecutionBackstopCoordinator CreateCoordinator() => new(Store, this, Items, Home, () => Now, Lines.Enqueue);
+    internal SelectedExecutionBackstopCoordinator CreateCoordinator(Action<string>? progress = null) =>
+        new(Store, this, Items, Home, () => Now, line => { Lines.Enqueue(line); progress?.Invoke(line); });
     internal static AcceptanceSelectedExecutionRecord Applied => AcceptanceSelectedExecutionFixture.Observe(
         AcceptanceSelectedExecutionFixture.Session(AcceptanceSelectedExecutionMode.Enforce)).SelectedExecution!;
     internal Task Land(string goal = "goal-1", string commit = "main-1", AcceptanceSelectedExecutionRecord? record = null) =>
