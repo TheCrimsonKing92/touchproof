@@ -356,7 +356,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         Directory.CreateDirectory(workspace.LogDirectory);
         var releasePath = Path.Combine(root, "release-worker");
         var workerPath = Path.Combine(root, "fixture-worker.ps1");
-        await File.WriteAllTextAsync(Path.Combine(root, ".gitignore"), ".orchestrator/\nrelease-worker\n");
+        await File.WriteAllTextAsync(Path.Combine(root, ".gitignore"), ".orchestrator/\n.orchestrator-worktrees/\nrelease-worker\n");
         await File.WriteAllTextAsync(Path.Combine(root, "seed.txt"), "Owned local dispatch fixture.\n");
         await File.WriteAllTextAsync(workerPath, BuildWorkerScript());
         RunGit(root, "init", "--quiet", "--initial-branch=main");
@@ -382,6 +382,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Inspect the deterministic local fixture.", AgentRole.Reviewer);
         var goal = kernel.CreateGoal("Prove dispatch host caller lifetime handoff", [task]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "The deterministic local fixture completes.",
             ["The local worker returns a valid Reviewer result."],
@@ -395,7 +396,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             new TaskDispatchRecord(
                 profileName,
                 command,
-                root,
+                worktree,
                 DateTimeOffset.UtcNow,
                 ProviderName: "OpenAI",
                 ModelName: "local-fixture",

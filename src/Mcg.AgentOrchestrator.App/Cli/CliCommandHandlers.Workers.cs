@@ -50,7 +50,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             CliArgumentParser.RequirePartCount(parts, 4, "worker-dispatch <task-number> <worker-name> <command-template>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
-            var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
+            var workerExecutionDirectory = CliGoalWorkerDirectory.Resolve(context);
             if (workerTask.RequiredRole != AgentRole.Researcher || context.CurrentGoal.RefinedSpec is not null)
             {
                 GoalDispatchOperations.EnsureRefinedForSpecConsumer(
