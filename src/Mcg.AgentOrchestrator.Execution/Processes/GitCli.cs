@@ -378,7 +378,7 @@ internal static class GitCli
         {
             var text = $"git {subcommand} waiting: {observation.Describe()}; stallWindowMs=" +
                 (stallWindow?.TotalMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none");
-            try { (progressOutput ?? Console.Error.WriteLine)(text); }
+            try { (progressOutput ?? GitProgressSink.Report)(text); }
             catch (Exception) { /* Progress output must not change the command result. */ }
         }, sampled);
 
