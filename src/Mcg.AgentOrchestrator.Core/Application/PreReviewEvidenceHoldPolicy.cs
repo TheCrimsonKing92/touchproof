@@ -40,7 +40,7 @@ public sealed record PreReviewEvidenceHoldFacts(string GoalId)
             : throw new InvalidOperationException($"Missing pre-review evidence hold fact '{name}'.");
 
         var condition = Read("condition");
-        if (condition is not ("" or "writer-busy" or "attempt-running" or "did-not-run"))
+        if (condition is not ("" or "writer-busy" or "attempt-running" or "did-not-run" or "build-slots-busy"))
             throw new InvalidOperationException($"Invalid pre-review evidence hold condition '{condition}'.");
 
         return new PreReviewEvidenceHoldFacts(Read("goalId"))
@@ -79,6 +79,7 @@ public static class PreReviewEvidenceHoldPolicy
             "writer-busy" => new(PreReviewEvidenceHoldAction.Hold, 1, "artifact-writer-busy", facts.HoldReason, facts),
             "attempt-running" => new(PreReviewEvidenceHoldAction.Hold, 2, "attempt-running", facts.HoldReason, facts),
             "did-not-run" => new(PreReviewEvidenceHoldAction.Hold, 3, "attempt-did-not-run", facts.HoldReason, facts),
+            "build-slots-busy" => new(PreReviewEvidenceHoldAction.Hold, 4, "build-slots-busy", facts.HoldReason, facts),
             _ => throw new InvalidOperationException($"Invalid pre-review evidence hold condition '{facts.Condition}'.")
         };
     }

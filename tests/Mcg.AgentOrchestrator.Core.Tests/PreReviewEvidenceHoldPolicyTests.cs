@@ -6,6 +6,7 @@ public sealed class PreReviewEvidenceHoldPolicyTests
     [InlineData("writer-busy", 1, "artifact-writer-busy")]
     [InlineData("attempt-running", 2, "attempt-running")]
     [InlineData("did-not-run", 3, "attempt-did-not-run")]
+    [InlineData("build-slots-busy", 4, "build-slots-busy")]
     public void Evaluate_HoldCondition_PreservesReasonAndAttributesRung(
         string condition, int rung, string evidence)
     {
@@ -56,6 +57,7 @@ public sealed class PreReviewEvidenceHoldPolicyTests
     [InlineData("writer-busy")]
     [InlineData("attempt-running")]
     [InlineData("did-not-run")]
+    [InlineData("build-slots-busy")]
     public void RecordedFacts_EachCondition_ReplaysEqualDecision(string condition)
     {
         var facts = new PreReviewEvidenceHoldFacts("goal-123")
