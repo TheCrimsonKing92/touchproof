@@ -42,6 +42,8 @@ public static partial class ProviderLimitEvidenceParser
             !LooksLikeSourceLocationEcho(value) &&
             (value.StartsWith("Credit balance is too low", StringComparison.OrdinalIgnoreCase) ||
              value.StartsWith("Your credit balance is too low", StringComparison.OrdinalIgnoreCase) ||
+             value.StartsWith("You're out of usage credits", StringComparison.OrdinalIgnoreCase) ||
+             value.StartsWith("You\u2019re out of usage credits", StringComparison.OrdinalIgnoreCase) ||
              (value.StartsWith("API Error: 400", StringComparison.OrdinalIgnoreCase) &&
               value.Contains("credit balance is too low", StringComparison.OrdinalIgnoreCase)))))
         {
