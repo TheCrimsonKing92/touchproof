@@ -1,9 +1,14 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: parses manifest strings only.
+// Parallel-safe: parses manifest strings and reads the verified repository manifest without changing shared state.
 public sealed class AcceptanceSelectedExecutionModeSettingsTests
 {
+    [Fact]
+    public void Load_CheckedInManifest_UsesShadow() =>
+        Assert.Equal(AcceptanceSelectedExecutionMode.Shadow,
+            AcceptanceGateEngineSettings.Load(VerifiedRepositoryRoot.Find()).SelectedExecutionMode);
+
     [Theory]
     [InlineData("{}")]
     [InlineData("{\"engine\":{}}")]
