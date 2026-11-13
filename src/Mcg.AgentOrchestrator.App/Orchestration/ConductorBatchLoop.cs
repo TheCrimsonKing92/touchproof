@@ -756,7 +756,7 @@ internal sealed partial class ConductorBatchLoop
                 "persist-sweep-terminalizations",
                 nextTick,
                 () => PersistSweepTerminalizations(
-                    sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay)) ?? [];
+                    sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay, preSweepBaseline)) ?? [];
             foreach (var recovered in RecoverSweepLandingReceipts(sweepResult, sweepTerminalizedGoalIds))
                 HandleLandingRelaunch(nextTick, recovered.Receipt, recovered.ChangedFilesAvailable);
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
@@ -788,12 +788,12 @@ internal sealed partial class ConductorBatchLoop
             }
             RunJanitorialPhase("readmit-resolved-set-aside-goals", nextTick, () =>
             {
-                ReadmitResolvedSetAsideGoals(
+                var decisions = ReadmitResolvedSetAsideGoals(
                     kernel, driver, sweepResult, onlyGoalId, setAsideGoals, selfClearedSetAsideEntries,
                     excludedGoals, escalatedGoals, reapedGoals, goalProjectionCache, _utcNow(), readmittedRetryReservations);
                 ReadmitRecoveredSetAsideGoals(kernel, onlyGoalId, setAsideGoals, completedGoals,
                     escalatedGoals, dependencyEscalatedGoals, reapedGoals, advanceFaultRetries, goalProjectionCache);
-                return true;
+                return GoalPolicyDecisionCheckpoint.Persist(kernel, decisions.Select(decision => decision.GoalId).ToArray(), decisions, checkpointGoalTick, (outcomes, ids) => ApplyCheckpointOutcomes(outcomes, ids, checkpointHeldGoals, nextTick, "set-aside-readmission", preTickTimingLines), line => EmitProgress(line, preTickTimingLines));
             });
             RunJanitorialPhase("mark-completed-dependency-goals", nextTick, () =>
             {

@@ -53,7 +53,7 @@ internal sealed partial class ConductorBatchLoop
         }
     }
 
-    private static void ReadmitResolvedSetAsideGoals(
+    private static IReadOnlyList<ProgressEvent> ReadmitResolvedSetAsideGoals(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
         TerminalGoalSweepResult? sweepResult,
@@ -67,6 +67,7 @@ internal sealed partial class ConductorBatchLoop
         DateTimeOffset now,
         HashSet<string> readmittedRetryReservations)
     {
+        var decisions = new List<ProgressEvent>();
         foreach (var entry in setAsideGoals.Values.ToArray())
         {
             if (onlyGoalId is not null && entry.GoalId != onlyGoalId)
@@ -220,10 +221,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var readmission = SetAsideGoalReadmission.Evaluate(entry, goal, driver);
-            if (readmission is null)
-            {
-                continue;
-            }
+            if (readmission is null) continue;
 
             goalProjectionCache.Invalidate(goal.Id);
             if (readmission.AcknowledgedEntry is { } acknowledgedEntry)
@@ -234,7 +232,9 @@ internal sealed partial class ConductorBatchLoop
             escalatedGoals.Remove(entry.GoalId);
             reapedGoals.Remove(entry.GoalId);
             kernel.RecordGoalPolicyDecision(goal.Id, readmission.Message);
+            decisions.Add(goal.Timeline[^1]);
         }
+        return decisions;
     }
 
     private static void ReconcileUnscopedDispatchableGoals(

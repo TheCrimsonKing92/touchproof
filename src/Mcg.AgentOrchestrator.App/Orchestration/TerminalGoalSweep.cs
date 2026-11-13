@@ -60,6 +60,7 @@ internal sealed record TerminalGoalSweepResult(
 {
     // Supplied by the host after reload and before any sweep mutation, for this tick only.
     public IReadOnlyDictionary<GoalId, string>? ReloadBaseline { get; init; }
+    public IReadOnlyList<ProgressEvent> TerminalizationDecisions { get; init; } = [];
     public long GitIndexDurationMs { get; init; }
     public long EvidenceDurationMs { get; init; }
     public long EphemeralDurationMs { get; init; }
@@ -84,6 +85,7 @@ internal sealed record TerminalGoalSweepResult(
         ArgumentNullException.ThrowIfNull(prior);
         return this with
         {
+            TerminalizationDecisions = prior.TerminalizationDecisions.Concat(TerminalizationDecisions).Distinct().ToArray(),
             TerminalizedGoalCount = prior.TerminalizedGoalCount + TerminalizedGoalCount,
             TerminalizedGoalIds = prior.ExplicitlyTerminalizedGoalIds
                 .Concat(ExplicitlyTerminalizedGoalIds)
@@ -469,6 +471,7 @@ internal static partial class TerminalGoalSweep
         var goalDurations = new List<(GoalId GoalId, long ElapsedMs)>();
         var terminalGoalsSweptCount = 0;
         var terminalizedGoalIds = new List<GoalId>();
+        var terminalizationDecisions = new List<ProgressEvent>();
         var cacheHits = 0;
         var cacheMisses = 0;
         var terminalizedGoalCount = 0;
@@ -597,6 +600,7 @@ internal static partial class TerminalGoalSweep
                     orchestratorDirectory,
                     recoveredCriterionEvidence.AuditDetail);
                 resolvedAttentionItemCount += terminalization.ResolvedAttentionItemCount;
+                if (terminalization.Decision is { } decision) terminalizationDecisions.Add(decision);
                 terminalizedGoalCount++;
                 terminalizedGoalIds.Add(originalGoal.Id);
                 results.Add(new TerminalGoalSweepGoalResult(
@@ -630,6 +634,7 @@ internal static partial class TerminalGoalSweep
                     repairs,
                     orchestratorDirectory);
                 resolvedAttentionItemCount += terminalization.ResolvedAttentionItemCount;
+                if (terminalization.Decision is { } decision) terminalizationDecisions.Add(decision);
                 terminalizedGoalCount++;
                 terminalizedGoalIds.Add(originalGoal.Id);
                 results.Add(new TerminalGoalSweepGoalResult(
@@ -1020,6 +1025,7 @@ internal static partial class TerminalGoalSweep
             resolvedAttentionItemCount,
             TerminalizedGoalIds: terminalizedGoalIds)
         {
+            TerminalizationDecisions = terminalizationDecisions,
             GitIndexDurationMs = gitIndexTiming.ElapsedMilliseconds,
             EvidenceDurationMs = evidenceTiming.ElapsedMilliseconds,
             EphemeralDurationMs = ephemeralTiming.ElapsedMilliseconds,
@@ -1121,6 +1127,7 @@ internal static partial class TerminalGoalSweep
                 goal.Id),
             recoveringFromReceipt);
         kernel.CompleteGoalFromMergeEvidence(goal.Id, evidence.IntegrateSha, detail, recoveringFromReceipt);
+        var decision = recoveringFromReceipt ? null : goal.Timeline[^1];
         if (!recoveringFromReceipt || acceptanceRecoveryAudit is not null)
         {
             GoalOperationJournal.RecordTerminalDisposition(
@@ -1156,12 +1163,14 @@ internal static partial class TerminalGoalSweep
             "terminalized"));
         return new MergeEvidenceTerminalizationResult(
             resolvedAttention,
-            reconciliation);
+            reconciliation,
+            decision);
     }
 
     private sealed record MergeEvidenceTerminalizationResult(
         int ResolvedAttentionItemCount,
-        TerminalGoalSweepReconciliationReceipt Receipt);
+        TerminalGoalSweepReconciliationReceipt Receipt,
+        ProgressEvent? Decision);
 
     private static bool HasMergeEvidenceGoalLandedEvent(
         string orchestratorDirectory,
