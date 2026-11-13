@@ -57,7 +57,11 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             var applied = record?.Applied == true || record?.StructuralCoverageScoped == true;
             if (record is null)
                 progress($"SELECTED_EXECUTION_BACKSTOP result=landing-record-unreadable goal={goalId} commit={commit}");
-            var landing = new SelectedExecutionBackstopLanding(ordinal, goalId, commit, applied, record is null);
+            var landing = new SelectedExecutionBackstopLanding(ordinal, goalId, commit, applied, record is null)
+            {
+                SkippedClasses = applied ? (record!.Lanes ?? []).SelectMany(lane => lane.SkippedClasses ?? [])
+                    .Distinct(StringComparer.Ordinal).ToArray() : []
+            };
             await store.WriteAsync(record is null ? "landing-record-unreadable" : "landing", state with
             { LastLandingOrdinal = ordinal, Landings = state.RangeLandings.Append(landing).ToArray() }, clock(),
                 SelectedExecutionBackstopStore.LandingId(goalId, commit)).ConfigureAwait(false);
@@ -83,7 +87,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     state.RangeLandings.Select(landing => landing.GoalId).Distinct(StringComparer.Ordinal).ToArray(), clock());
                 state = state with { Request = request };
                 await store.WriteAsync("queued", state, clock()).ConfigureAwait(false);
-                Report("queued", request, detail: state.Uncovered.Any(landing => landing.RecordUnreadable) ? "record-unreadable" : null);
+                Report("queued", request, detail: state.Uncovered.Any(landing => landing.RecordUnreadable) ? "record-unreadable" : null,
+                    appliedLandings: state.Uncovered);
             }
             // A queued entrant keeps its place but covers the newest head when its turn arrives.
             if (state.Request is { Attempts: 0 } queued && mainHead() is { } newest &&
@@ -173,6 +178,15 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                         Landings = state.RangeLandings.Except(covered).ToArray() };
                     break;
                 case "red":
+                    var classification = SelectedExecutionBackstopMissClassifier.Classify(outcome.FailingTests, covered);
+                    if (!classification.IsMiss)
+                    {
+                        outcome = outcome with { Result = "infrastructure-failure", InfrastructureReason =
+                            "red-outside-skipped-classes: " + (outcome.FailingTests.Count == 0
+                                ? "no failing test identities were available"
+                                : "unmatched=" + string.Join("; ", classification.UnmatchedTests)) };
+                        break;
+                    }
                     var miss = new SelectedExecutionBackstopMissRecord(request.Id, request.FromCommit, request.ToCommit,
                         request.GoalIds, outcome.FailingTests, outcome.FailedChecks,
                         request.GoalIds.Count == 0 ? "no-selected-execution-landing-recorded-in-range" : null);
@@ -206,12 +220,17 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             state = state with { OpenMiss = null };
             await store.WriteAsync("miss-resolved", state, clock()).ConfigureAwait(false);
             AcceptanceSelectedExecutionSessionSuspension.Write(home, null, stateHome);
+            Report("miss-resolved", new(miss.Id, miss.CoveredFromCommit, miss.CoveredToCommit, 0, miss.GoalIds, clock()),
+                miss.FailingTests.Count, "miss=" + miss.Id);
         }
         return state;
     }
 
-    private void Report(string result, SelectedExecutionBackstopRequest request, int failingTests = 0, string? detail = null) =>
+    private void Report(string result, SelectedExecutionBackstopRequest request, int failingTests = 0, string? detail = null,
+        IReadOnlyList<SelectedExecutionBackstopLanding>? appliedLandings = null) =>
         progress($"SELECTED_EXECUTION_BACKSTOP result={result} from={request.FromCommit} to={request.ToCommit} goals=" +
             $"{(request.GoalIds.Count == 0 ? "none" : string.Join(',', request.GoalIds))} failingTests={failingTests}" +
+            (appliedLandings is null ? "" : " applied=" + string.Join(',', appliedLandings
+                .Where(landing => landing.Applied).Select(landing => landing.GoalId + "@" + landing.Commit))) +
             (detail is null ? "" : $" detail={detail.Replace('\n', ' ').Replace('\r', ' ')}"));
 }
