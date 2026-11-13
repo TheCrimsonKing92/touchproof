@@ -83,7 +83,7 @@ public sealed class SelectedExecutionBackstopFailureRerunTests
     [Theory]
     [InlineData("empty")]
     [InlineData("unqualified")]
-    [InlineData("over-limit")]
+    [InlineData("later-unqualified")]
     public void UnselectableFailuresDoNotRerun(string scenario)
     {
         var called = false;
@@ -92,12 +92,203 @@ public sealed class SelectedExecutionBackstopFailureRerunTests
         {
             "empty" => [],
             "unqualified" => ["unqualified"],
-            _ => Enumerable.Range(0, 11).Select(index => "Candidate.X.Method" + index).ToArray()
+            _ => Enumerable.Range(0, 10).Select(index => "Candidate.X.Method" + index)
+                .Append("unqualified").ToArray()
         };
         var outcome = rerun.Confirm(new("red", identities, ["lane"]));
         Assert.Equal("infrastructure-failure", outcome.Result);
         Assert.StartsWith("rerun-unavailable:", outcome.InfrastructureReason);
         Assert.False(called);
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(11)]
+    public void MethodLimitBoundary_RunsEveryConsecutiveBatch(int count)
+    {
+        var identities = Enumerable.Range(0, count).Select(index => "Candidate.X.Method" + index).ToArray();
+        var calls = new List<ConductorCohortFocusedSelection>();
+        var rerun = new SelectedExecutionBackstopFailureRerun(selection =>
+        {
+            calls.Add(selection);
+            return Executed([]) with { ExecutedCount = selection.Identities.Count };
+        });
+
+        var outcome = rerun.Confirm(new("red", identities, ["lane"]));
+
+        Assert.Equal(count == 10 ? 1 : 2, calls.Count);
+        Assert.Equal(identities.Take(10).Order(StringComparer.Ordinal), calls[0].Identities);
+        if (count == 11) Assert.Equal(new[] { identities[10] }, calls[1].Identities);
+        Assert.Equal("green", outcome.Result);
+        Assert.StartsWith("rerun-passed:", outcome.InfrastructureReason);
+    }
+
+    [Fact]
+    public void TwentyEightFailures_AllBatchesPass_CoversEachDistinctMethodOnce()
+    {
+        var identities = ManyFailures();
+        var expected = Enumerable.Range(0, 16).Select(index => "Candidate.X.Method" + index)
+            .Concat(Enumerable.Range(0, 6).Select(index => "Candidate.X.Case" + index)).ToArray();
+        var calls = new List<ConductorCohortFocusedSelection>();
+        var rerun = new SelectedExecutionBackstopFailureRerun(selection =>
+        {
+            calls.Add(selection);
+            return Executed([]) with { ExecutedCount = selection.Identities.Count };
+        });
+
+        var outcome = rerun.Confirm(new("red", identities, ["lane"]));
+
+        Assert.Equal(28, identities.Length);
+        Assert.Equal(12, identities.Count(identity => identity.Contains('(')));
+        Assert.Equal(new[] { 10, 10, 2 }, calls.Select(call => call.Identities.Count));
+        Assert.All(calls, call =>
+        {
+            Assert.InRange(call.Identities.Count, 1, AcceptanceFailureAttributionPlanner.MaxCandidateRerunIdentities);
+            Assert.All(call.Identities, identity => Assert.DoesNotContain("(", identity));
+            Assert.Equal(string.Join("; ", call.Identities.Select(identity => "FullyQualifiedName~" + identity)), call.Request);
+        });
+        var selected = calls.SelectMany(call => call.Identities).ToArray();
+        Assert.Equal(22, selected.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(expected.Order(StringComparer.Ordinal), selected.Order(StringComparer.Ordinal));
+        for (var index = 0; index < calls.Count; index++)
+            Assert.Equal(expected.Skip(index * 10).Take(10).Order(StringComparer.Ordinal), calls[index].Identities);
+        Assert.Equal("green", outcome.Result);
+        Assert.StartsWith("rerun-passed: originalCount=28;", outcome.InfrastructureReason);
+        Assert.Empty(outcome.FailingTests);
+        Assert.Empty(outcome.FailedChecks);
+    }
+
+    [Fact]
+    public void SecondBatchRepeatsTheoryRow_ConfirmsOnlyOriginalAndFinishesAllBatches()
+    {
+        const string confirmed = "Candidate.X.Case0(0)";
+        var calls = 0;
+        var rerun = new SelectedExecutionBackstopFailureRerun(selection =>
+        {
+            calls++;
+            if (calls != 2) return Executed([]);
+            Assert.Contains("Candidate.X.Case0", selection.Identities);
+            return Executed([confirmed, "Candidate.X.Case0(99)"]);
+        });
+
+        var outcome = rerun.Confirm(new("red", ManyFailures(), ["lane"]));
+
+        Assert.Equal(3, calls);
+        Assert.Equal("red", outcome.Result);
+        Assert.Equal(new[] { confirmed }, outcome.FailingTests);
+        Assert.Equal(new[] { "lane" }, outcome.FailedChecks);
+    }
+
+    [Theory]
+    [InlineData("rejected", false)]
+    [InlineData("apparatus", false)]
+    [InlineData("exception", false)]
+    [InlineData("apparatus", true)]
+    [InlineData("exception", true)]
+    public void SecondBatchInterrupted_StopsWithInfrastructure(string scenario, bool firstRed)
+    {
+        var identities = ManyFailures();
+        var calls = 0;
+        var rerun = new SelectedExecutionBackstopFailureRerun(_ =>
+        {
+            calls++;
+            if (calls == 1) return Executed(firstRed ? [identities[0]] : []);
+            return scenario switch
+            {
+                "rejected" => ConductorAcceptanceCohortFocusedAttribution.Unusable(ConductorCohortFocusedPassKind.SelectionRejected, "rejected"),
+                "apparatus" => ConductorAcceptanceCohortFocusedAttribution.Unusable(ConductorCohortFocusedPassKind.InfrastructureFailure, "apparatus"),
+                _ => throw new IOException("focused runner failed")
+            };
+        });
+
+        var outcome = rerun.Confirm(new("red", identities, ["lane"]));
+
+        Assert.Equal(2, calls);
+        Assert.Equal("infrastructure-failure", outcome.Result);
+        Assert.StartsWith(scenario == "exception" ? "rerun-failed: IOException: focused runner failed" : "rerun-not-executed:",
+            outcome.InfrastructureReason);
+        Assert.EndsWith(" (batch 2)", outcome.InfrastructureReason);
+        Assert.Empty(outcome.FailingTests);
+        Assert.Empty(outcome.FailedChecks);
+    }
+
+    [Fact]
+    public void SecondBatchCancellation_PropagatesAndStopsLaterBatches()
+    {
+        var calls = 0;
+        var cancellation = new TaskCanceledException("cancelled");
+        var rerun = new SelectedExecutionBackstopFailureRerun(_ =>
+        {
+            calls++;
+            if (calls == 2) throw cancellation;
+            return Executed([]);
+        });
+
+        var caught = Assert.Throws<TaskCanceledException>(() => rerun.Confirm(new("red", ManyFailures(), ["lane"])));
+
+        Assert.Same(cancellation, caught);
+        Assert.Equal(2, calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnexpectedFailure_RemainsInfrastructureEvenWithOriginalRepeat(bool repeat)
+    {
+        var identities = ManyFailures();
+        var calls = 0;
+        var rerun = new SelectedExecutionBackstopFailureRerun(_ =>
+        {
+            calls++;
+            return calls == 2
+                ? Executed(repeat ? [identities[0], "Candidate.X.Other"] : ["Candidate.X.Other"])
+                : Executed([]);
+        });
+
+        var outcome = rerun.Confirm(new("red", identities, ["lane"]));
+
+        Assert.Equal(3, calls);
+        Assert.Equal("infrastructure-failure", outcome.Result);
+        Assert.StartsWith("rerun-incomplete:", outcome.InfrastructureReason);
+        Assert.Empty(outcome.FailingTests);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ExecutedBatchWithoutPassedChecks_NeverReportsGreen(int incompleteBatch)
+    {
+        var calls = 0;
+        var rerun = new SelectedExecutionBackstopFailureRerun(_ =>
+        {
+            calls++;
+            return Executed([]) with { AllChecksPassed = calls != incompleteBatch };
+        });
+
+        var outcome = rerun.Confirm(new("red", ManyFailures(), ["lane"]));
+
+        Assert.Equal(3, calls);
+        Assert.Equal("infrastructure-failure", outcome.Result);
+        Assert.StartsWith("rerun-incomplete:", outcome.InfrastructureReason);
+    }
+
+    [Fact]
+    public void RepeatsAcrossBatches_PreserveOriginalIdentityOrder()
+    {
+        var identities = ManyFailures();
+        var calls = 0;
+        var rerun = new SelectedExecutionBackstopFailureRerun(_ =>
+        {
+            calls++;
+            return Executed([" " + identities[calls == 1 ? 16 : calls == 2 ? 0 : 27] + " "]);
+        });
+
+        var outcome = rerun.Confirm(new("red", identities, ["lane"]));
+
+        Assert.Equal(3, calls);
+        Assert.Equal("red", outcome.Result);
+        Assert.Equal(new[] { identities[0], identities[16], identities[27] }, outcome.FailingTests);
     }
 
     [Theory]
@@ -133,6 +324,9 @@ public sealed class SelectedExecutionBackstopFailureRerunTests
         var rerun = new SelectedExecutionBackstopFailureRerun(_ => throw new OperationCanceledException());
         Assert.Throws<OperationCanceledException>(() => SelectedExecutionBackstopGateRunner.Classify(Red("Candidate.X.First"), rerun));
     }
+
+    private static string[] ManyFailures() => Enumerable.Range(0, 16).Select(index => "Candidate.X.Method" + index)
+        .Concat(Enumerable.Range(0, 12).Select(index => $"Candidate.X.Case{index % 6}({index / 6})")).ToArray();
 
     private static AcceptanceVerificationResult Red(params string[] identities) =>
         new(false, false, 1, "failed", Checks: [new("lane", false, 1, "failed", FailingTestIdentities: identities)]);
