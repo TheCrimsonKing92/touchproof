@@ -51,7 +51,8 @@ internal sealed class BoardFillAssessmentTestFixture : IDisposable
     internal ConductorBoardFillHost Host(IBoardFillPremiseVerifier verifier,
         Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null) => _host = new(Store, (_, _) => Draft(),
         () => [Item], (_, _) => Ready, () => ConductorAutonomyPolicy.Permissive with { BoardFillMaxDraftsPerDay = 1 },
-        new(EventPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow, verifier, revise: revise);
+        new(EventPath, utcNow: () => Clock.UtcNow), items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal),
+        () => Clock.UtcNow, verifier, revise: revise);
 
     internal sealed class Verifier(Func<string, string, CancellationToken, Task<BoardFillPremiseVerification>> run) : IBoardFillPremiseVerifier
     {

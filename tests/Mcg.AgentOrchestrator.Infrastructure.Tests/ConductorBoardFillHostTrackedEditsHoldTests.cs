@@ -36,7 +36,8 @@ public sealed class ConductorBoardFillHostTrackedEditsHoldTests
                             evidenceReferences = new[] { "seed.txt:1" } }), ""));
                 }, repository), TextWriter.Null, TextWriter.Null, token, utcNow: () => clock.UtcNow),
             () => [item], (_, _) => BoardFillFailureKindSelectionTests.Ready,
-            () => ConductorAutonomyPolicy.Permissive, events, () => clock.UtcNow,
+            () => ConductorAutonomyPolicy.Permissive, events,
+            items => items.Select(candidate => candidate.Id).ToHashSet(StringComparer.Ordinal), () => clock.UtcNow,
             mainHead: () => head, trackedEdits: () => GitTrackedEditsProbe.Probe(repo.Root));
 
         var host = NewHost();

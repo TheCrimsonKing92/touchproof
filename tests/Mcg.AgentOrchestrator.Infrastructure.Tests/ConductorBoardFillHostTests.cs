@@ -93,7 +93,8 @@ public sealed class ConductorBoardFillHostTests
         using var h = new BoardFillTestHarness();
         var host = new ConductorBoardFillHost(h.Store, (_, _) => throw new Exception("draft must not run"),
             () => throw new Exception("snapshot must not run"), (_, _) => throw new Exception("readiness must not run"),
-            () => h.Policy with { BoardFillMode = ConductorBoardFillMode.Off }, new(h.EventsPath), () => h.Clock.UtcNow);
+            () => h.Policy with { BoardFillMode = ConductorBoardFillMode.Off }, new(h.EventsPath),
+            items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal), () => h.Clock.UtcNow);
         host.ServiceTick(h.Kernel);
         Assert.Null(host.CurrentRound);
         Assert.False(File.Exists(h.StorePath));

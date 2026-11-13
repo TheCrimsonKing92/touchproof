@@ -12,6 +12,7 @@ internal sealed partial class ConductorBoardFillHost
     internal readonly Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> _readiness;
     private readonly Func<ConductorAutonomyPolicy> _policy;
     private readonly ConductEventLogWriter _events;
+    private readonly BoardFillEpicMissingQuestion _epicMembership;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?> _mainHead;
     private readonly Func<string?> _staleMainHead;
@@ -37,14 +38,16 @@ internal sealed partial class ConductorBoardFillHost
         Func<string, CancellationToken, AuthorBriefDraftOutcome> draft,
         Func<IReadOnlyList<BacklogItem>> backlog,
         Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> readiness,
-        Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
+        Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events,
+        Func<IReadOnlyList<BacklogItem>, IReadOnlySet<string>> epicMembership, Func<DateTimeOffset>? utcNow = null,
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
         Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null,
         StalledEpicAttention? stalledEpics = null,
         Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null,
         Action<string, string>? appendBacklogNote = null,
-        Func<string, string, IReadOnlyList<string>?>? changedFiles = null)
+        Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
+        ICollaborationItemStore? epicAttention = null)
     {
         _store = store;
         _draft = draft;
@@ -52,6 +55,7 @@ internal sealed partial class ConductorBoardFillHost
         _readiness = readiness;
         _policy = policy;
         _events = events;
+        _epicMembership = new(epicMembership, events, epicAttention);
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _verifier = verifier;
         _revise = revise;
@@ -85,8 +89,12 @@ internal sealed partial class ConductorBoardFillHost
         }
         var held = Harvest(now);
         ReportFinished();
-        ServiceFiling();
-        if (held || _round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
+        var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
+        var epicMembers = _epicMembership.Read(items, now);
+        if (epicMembers is null) return;
+        ServiceFiling(items, epicMembers);
+        // Admission refreshes membership on the filing thread; wait for that observation before spending another draft.
+        if (held || _round is not null || _filing is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
             _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
         if (_heldMainHead is not null)
         {
@@ -101,14 +109,13 @@ internal sealed partial class ConductorBoardFillHost
         string? observedMain;
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
-        var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         items = ReleaseContradictionHolds(items, observedMain);
         var preferredOrder = ReadPreferredOrder(now);
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items, observedMain),
             ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll(), preferredOrder,
             // Evidence releases must first advance the durable item stamp; otherwise Begin
             // would capture the marker time and the new round would fail backlog-changed.
-            observedMain);
+            observedMain, epicMembers: epicMembers, epicMissing: missing => _epicMembership.Ask(missing, now));
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.

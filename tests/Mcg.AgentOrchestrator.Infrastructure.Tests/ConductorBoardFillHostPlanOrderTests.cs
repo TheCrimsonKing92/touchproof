@@ -16,6 +16,7 @@ public sealed class ConductorBoardFillHostPlanOrderTests
         var first = await fixture.Store.AddAsync("First slice");
         var second = await fixture.Store.AddAsync("Second slice");
         var epic = await new PortfolioStore(fixture.Workspace.PortfolioStorePath).AddEpicAsync("Plan");
+        await new PortfolioStore(fixture.Workspace.PortfolioStorePath).AssignBacklogItemToEpicAsync(outside.Id, epic.Id);
         var plans = new EpicPlanStore(fixture.Workspace.PortfolioStorePath);
         await plans.AddSliceAsync(epic.Id, first.Id);
         await plans.AddSliceAsync(epic.Id, second.Id);
@@ -55,8 +56,12 @@ public sealed class ConductorBoardFillHostPlanOrderTests
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         await fixture.Store.UpdateAsync(fixture.Item.Id, new(Priority: "high"));
-        await fixture.Store.AddAsync("Unplanned alternative");
-        File.WriteAllText(fixture.Workspace.PortfolioStorePath, "not a SQLite database");
+        var alternative = await fixture.Store.AddAsync("Unplanned alternative");
+        var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+        var epic = await portfolio.AddEpicAsync("Fallback work");
+        await portfolio.AssignBacklogItemToEpicAsync(fixture.Item.Id, epic.Id);
+        await portfolio.AssignBacklogItemToEpicAsync(alternative.Id, epic.Id);
+        BreakPlanRead(fixture.Workspace);
         var before = File.ReadAllBytes(fixture.Workspace.PortfolioStorePath);
         var items = BoardFillBacklogSnapshot.Read(fixture.Workspace.BacklogStorePath);
         var expected = BoardFillReadyItemSelector.Select(items, [], new HashSet<string>(), Ready)!.Id;
@@ -92,6 +97,9 @@ public sealed class ConductorBoardFillHostPlanOrderTests
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         await fixture.Store.UpdateAsync(fixture.Item.Id, new(Priority: "high"));
         var slice = await fixture.Store.AddAsync("Later plan slice");
+        var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+        var initialEpic = await portfolio.AddEpicAsync("Initial work");
+        await portfolio.AssignBacklogItemToEpicAsync(fixture.Item.Id, initialEpic.Id);
         var kernel = new AgentOrchestratorKernel();
         var drafted = new List<string>();
         var host = ConductorBoardFillHost.CreateDefault(fixture.Workspace, Policy,
@@ -162,12 +170,16 @@ public sealed class ConductorBoardFillHostPlanOrderTests
                 Assert.Equal(1, command.ExecuteNonQuery());
             }
         }
-        if (unreadablePlan) File.WriteAllText(fixture.Workspace.PortfolioStorePath, "not SQLite");
+        var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+        var epic = await portfolio.AddEpicAsync("Independent work");
+        await portfolio.AssignBacklogItemToEpicAsync(source.Id, epic.Id);
         if (shape == "malformed")
         {
             var dependent = await fixture.Store.AddAsync("Dependent with malformed prerequisite ownership");
+            await portfolio.AssignBacklogItemToEpicAsync(dependent.Id, epic.Id);
             await fixture.Store.AddDependencyAsync(dependent.Id, new(source.Id, BacklogDependencyTargetKind.Backlog));
         }
+        if (unreadablePlan) BreakPlanRead(fixture.Workspace);
         var facts = EpicPlanGoalClaimSnapshot.Read(fixture.Workspace.SqliteStatePath, kernel.Goals.ToArray()).Resolve(source);
         Assert.False(facts.AutomaticIntakeEligible);
         Assert.False(facts.ScopeComplete);
@@ -187,6 +199,18 @@ public sealed class ConductorBoardFillHostPlanOrderTests
             Assert.Empty(store.ReadAll());
             Assert.Empty(drafted);
             var independent = await fixture.Store.AddAsync("Independent ready work");
+            // Raw assignment preserves the deliberately broken plan table.
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                "Data Source=" + fixture.Workspace.PortfolioStorePath + ";Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "INSERT INTO backlog_epic_memberships(backlog_item_id, epic_id, created_at, created_by) VALUES($id, $epic, $at, 'test')";
+                command.Parameters.AddWithValue("$id", independent.Id);
+                command.Parameters.AddWithValue("$epic", epic.Id);
+                command.Parameters.AddWithValue("$at", BoardFillReadyItemSelectorTests.Now.ToString("O"));
+                command.ExecuteNonQuery();
+            }
             host.ServiceTick(kernel);
             Assert.Equal(independent.Id, Assert.Single(store.ReadAll()).BacklogItemId);
             await PanelTestHarness.Signal(host.CurrentRound!, "independent source draft finished");
@@ -201,6 +225,9 @@ public sealed class ConductorBoardFillHostPlanOrderTests
     {
         using var fixture = new CliAuthorDraftCommandTests.Fixture();
         var dependent = await fixture.Store.AddAsync("Dependent work");
+        var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
+        var epic = await portfolio.AddEpicAsync("Dependent work");
+        await portfolio.AssignBacklogItemToEpicAsync(dependent.Id, epic.Id);
         await fixture.Store.AddDependencyAsync(dependent.Id, new(fixture.Item.Id, BacklogDependencyTargetKind.Backlog));
         var kernel = new AgentOrchestratorKernel();
         var owner = kernel.CreateGoal("Delivered prerequisite");
@@ -252,6 +279,16 @@ public sealed class ConductorBoardFillHostPlanOrderTests
     }
     private static ConductorAutonomyPolicy Policy() => ConductorAutonomyPolicy.Permissive with
     { BoardFillMode = ConductorBoardFillMode.Shadow, BoardFillTargetActiveGoals = 10, BoardFillMaxDraftsPerDay = 10 };
+
+    private static void BreakPlanRead(OrchestratorWorkspace workspace)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            "Data Source=" + workspace.PortfolioStorePath + ";Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DROP TABLE epic_plan_items";
+        command.ExecuteNonQuery();
+    }
 
     private static BacklogReadiness Ready(BacklogItem item) =>
         BacklogDependencyReadiness.Evaluate(item, _ => null, _ => null, _ => new(null), _ => "Running");

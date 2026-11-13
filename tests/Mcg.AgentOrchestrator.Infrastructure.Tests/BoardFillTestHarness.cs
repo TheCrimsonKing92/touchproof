@@ -16,6 +16,8 @@ internal sealed class BoardFillTestHarness : IDisposable
     internal ConductorBoardFillHost Host { get; }
     internal ConductorAutonomyPolicy Policy { get; set; } = ConductorAutonomyPolicy.Permissive;
     internal IReadOnlyList<BacklogItem> Items { get; set; } = [BoardFillReadyItemSelectorTests.Item()];
+    internal Func<IReadOnlyList<BacklogItem>, IReadOnlySet<string>> EpicMembership { get; set; } =
+        items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
     internal TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _calls;
@@ -46,7 +48,8 @@ internal sealed class BoardFillTestHarness : IDisposable
             : outcome;
     }, () => Items,
         (_, _) => item => BacklogDependencyReadiness.Evaluate(item, _ => null, _ => null, _ => new(null), _ => "Running"),
-        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow, mainHead: mainHead ?? (() => MainHead));
+        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow), items => EpicMembership(items),
+        () => Clock.UtcNow, mainHead: mainHead ?? (() => MainHead));
 
     internal AuthorBriefDraftOutcome Draft() => new("draft", 0, new string('c', 40),
         Path.Combine(Root, "draft.md"), Path.Combine(Root, "receipt.json"),

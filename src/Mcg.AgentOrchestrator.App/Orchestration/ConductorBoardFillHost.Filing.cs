@@ -11,7 +11,7 @@ internal sealed partial class ConductorBoardFillHost
     private Task<BoardFillFilingAttempt>? _filing;
     internal Task? CurrentFiling => _filing;
 
-    private void ServiceFiling()
+    private void ServiceFiling(IReadOnlyList<BacklogItem> backlog, IReadOnlySet<string> epicMembers)
     {
         if (_filing is { IsCompleted: true })
         {
@@ -24,12 +24,18 @@ internal sealed partial class ConductorBoardFillHost
         var now = _utcNow();
         var admissionOpen = _kernel!.Goals.Count(goal => !goal.IsTerminal) < policy.BoardFillTargetActiveGoals &&
             _store.FiledOnUtcDay(now) < policy.BoardFillMaxDraftsPerDay;
-        var items = _backlog().ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var items = backlog.ToDictionary(item => item.Id, StringComparer.Ordinal);
         var candidate = _store.ReadAll().Where(round => round.Assessment?.Fileable == true && !round.StaleHead &&
             !(round.Filings ?? []).Any(attempt => attempt.Terminal) &&
             ((round.Filings ?? []).Any(attempt => attempt.Result is null) ||
                 (admissionOpen || (round.Filings ?? []).Count > 0) && RetryReady(round, now)) &&
             items.TryGetValue(round.BacklogItemId, out var item) && !BoardFillReadyItemSelector.IsOwnerGated(item))
+            .Where(round =>
+            {
+                if (epicMembers.Contains(round.BacklogItemId)) return true;
+                _epicMembership.Ask(items[round.BacklogItemId], now);
+                return false;
+            })
             .OrderByDescending(round => (round.Filings ?? []).Any(attempt => attempt.Result is null))
             .ThenByDescending(round => round.StartedAt).ThenBy(round => round.Id, StringComparer.Ordinal).FirstOrDefault();
         if (candidate is not null) _filing = Task.Run(() => AttemptFiling(candidate.Id, _shutdown.Token));
@@ -37,6 +43,7 @@ internal sealed partial class ConductorBoardFillHost
 
     // Refusals are retryable, but a persistent read failure must not append a row on every tick.
     private static bool RetryReady(BoardFillDraftRound draft, DateTimeOffset now) =>
+        (draft.Filings ?? []).LastOrDefault()?.Reason == "not-fileable:epic-missing" ||
         (draft.Filings ?? []).LastOrDefault()?.FinishedAt is not { } finished || now >= finished.AddMinutes(1);
 
     // Also used directly by deterministic tests. No live kernel crosses this boundary.

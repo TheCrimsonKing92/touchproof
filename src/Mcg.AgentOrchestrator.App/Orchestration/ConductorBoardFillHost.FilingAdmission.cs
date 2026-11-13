@@ -39,7 +39,8 @@ internal sealed partial class ConductorBoardFillHost
             if (draft.StaleHead) return Refuse("stale-head", true);
             if (draft.Outcome != "draft" || draft.Assessment?.Fileable != true)
                 return Refuse("not-fileable:" + string.Join(',', draft.Assessment?.FailingReasons ?? ["unassessed"]), true);
-            var item = _backlog().SingleOrDefault(row => row.Id == draft.BacklogItemId);
+            var items = _backlog();
+            var item = items.SingleOrDefault(row => row.Id == draft.BacklogItemId);
             if (item is null) return Refuse("not-fileable:backlog-missing", true);
             if (BoardFillReadyItemSelector.IsOwnerGated(item)) return Refuse("not-fileable:owner-gated", true);
             if (!created && (item.Status != BacklogItemStatus.Open || BoardFillReadyItemSelector.ChangeStamp(item) != draft.ChangeStamp))
@@ -58,6 +59,15 @@ internal sealed partial class ConductorBoardFillHost
                     revalidated = true;
                 }
                 if (board!.LinkedBacklogItemIds.Contains(draft.BacklogItemId)) return Refuse("backlog-linked", true);
+            }
+            phase = "epic-membership";
+            var members = _epicMembership.Read(items, _utcNow());
+            if (members is null) return Refuse("epic-membership-unavailable");
+            if (!members.Contains(item.Id))
+            {
+                _epicMembership.Ask(item, _utcNow());
+                // End this attempt, preserving the draft for the next successful membership observation.
+                return Refuse("not-fileable:epic-missing");
             }
             // Policy can change while the read seams run. Check again at the mutation boundary.
             token.ThrowIfCancellationRequested();

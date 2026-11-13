@@ -209,7 +209,8 @@ public sealed class BoardFillContradictionHoldTests
             Host = new(Fixture.Store, (_, _) => Fixture.Draft() with { MainHead = CurrentHead },
                 () => [Fixture.Item], (_, _) => BoardFillAssessmentTestFixture.Ready,
                 () => ConductorAutonomyPolicy.Permissive with { BoardFillMaxDraftsPerDay = maxDrafts },
-                new(Fixture.EventPath, utcNow: () => Fixture.Clock.UtcNow), () => Fixture.Clock.UtcNow,
+                new(Fixture.EventPath, utcNow: () => Fixture.Clock.UtcNow),
+                items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal), () => Fixture.Clock.UtcNow,
                 new BoardFillAssessmentTestFixture.Verifier((_, _, _) =>
                     Task.FromResult(Verification(++Verifications))), mainHead: () => CurrentHead,
                 revise: revise ? (request, _) =>

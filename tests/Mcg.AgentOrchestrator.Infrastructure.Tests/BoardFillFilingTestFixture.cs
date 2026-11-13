@@ -14,12 +14,14 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
     internal Action? BeforeHead { get; set; }
     internal Action? BeforeBoard { get; set; }
     internal IntakeFake Intake { get; } = new();
+    internal Func<IReadOnlyList<Mcg.AgentOrchestrator.Infrastructure.BacklogItem>, IReadOnlySet<string>> EpicMembership { get; set; } =
+        items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
     internal ConductorBoardFillHost Host { get; }
     internal BoardFillFilingTestFixture()
     {
         Host = new(Drafts.Store, (_, _) => throw new InvalidOperationException("No drafting expected."),
             () => [Drafts.Item], (_, _) => BoardFillAssessmentTestFixture.Ready, () => Policy,
-            new(Drafts.EventPath, utcNow: () => Drafts.Clock.UtcNow), () => Drafts.Clock.UtcNow,
+            new(Drafts.EventPath, utcNow: () => Drafts.Clock.UtcNow), items => EpicMembership(items), () => Drafts.Clock.UtcNow,
             filing: new(Intake, () => { BeforeBoard?.Invoke(); return Board; }, () => { BeforeHead?.Invoke(); return Head; },
                 (from, to) => ChangedPaths(from, to)));
     }
