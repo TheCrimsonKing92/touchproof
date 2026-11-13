@@ -63,16 +63,22 @@ internal static class AuthorBriefDraftService
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
             var initialPrompt = AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack);
+            IReadOnlyList<string> roundDependencyGoals = [];
+            IReadOnlyList<string> retainedDependencyGoals = [];
             var round = Dispatch(initialPrompt);
 
             WorkerProcessRunResult Dispatch(string prompt)
             {
-                return AuthorBriefDraftRound.DispatchAsync(prompt, workspace.ExecutionDirectory, (request, token) =>
+                var dispatched = AuthorBriefDraftRound.DispatchAsync(prompt, workspace.ExecutionDirectory, (request, token) =>
                 {
                     roundCount++;
                     processSeamEntered = true;
                     return seams.RunProcessAsync(request, token);
                 }, resolvedModel, cancellationToken).GetAwaiter().GetResult();
+                if (dispatched.ExitCode == 0 &&
+                    AuthorBriefDraftResultParser.Parse(dispatched.StandardOutput) is { Kind: "draft" } parsed)
+                    roundDependencyGoals = parsed.DependsOnGoals;
+                return dispatched;
             }
 
             void VerifyMainHead()
@@ -83,7 +89,9 @@ internal static class AuthorBriefDraftService
 
             AuthorBriefDraftEvaluation Evaluate(string markdown)
             {
-                var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack);
+                retainedDependencyGoals = roundDependencyGoals;
+                var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack,
+                    retainedDependencyGoals);
                 var findings = BriefLint.Lint(markdown, workspace.ExecutionDirectory);
                 return new(markdown, [.. draftChecks, .. findings
                     .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
@@ -150,7 +158,8 @@ internal static class AuthorBriefDraftService
                 output.WriteLine($"Failed {check.Name}: {check.Detail}");
             foreach (var finding in retained.Findings.Where(finding => finding.Severity == BriefLintSeverity.Advisory))
                 output.WriteLine($"BRIEF-LINT {finding.SeverityToken} {finding.Kind}: {LintDetail(finding)}");
-            output.WriteLine($"goal --brief-file \"{draftPath}\" --backlog-item {item.Id} --backlog-coverage {backlogCoverage}");
+            var dependencyArguments = string.Concat(retainedDependencyGoals.Select(goal => $" --depends-on {goal}"));
+            output.WriteLine($"goal --brief-file \"{draftPath}\" --backlog-item {item.Id} --backlog-coverage {backlogCoverage}{dependencyArguments}");
             return Outcome(checks.All(check => check.Passed) ? 0 : 1);
         }
         catch (Exception ex)

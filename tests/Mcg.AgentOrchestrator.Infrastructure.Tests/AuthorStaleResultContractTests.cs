@@ -99,6 +99,55 @@ public sealed class AuthorStaleResultContractTests
         Assert.Empty(result.EvidenceReferences);
         Assert.Null(result.StaleKind);
         Assert.Empty(result.ImplementingCommits);
+        Assert.Empty(result.DependsOnGoals);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[\"ABCdef\",\"0123456789ABCDEF0123456789abcdef\",\"ABCdef\"]")]
+    public void Draft_dependency_array_preserves_order_duplicates_and_casing(string goals)
+    {
+        var result = AuthorBriefDraftResultParser.Parse(
+            "{\"kind\":\"draft\",\"markdown\":\"# Draft\",\"dependsOnGoals\":" + goals + "}");
+
+        Assert.NotNull(result);
+        Assert.Equal(JsonSerializer.Deserialize<string[]>(goals), result.DependsOnGoals);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"abcdef\"")]
+    [InlineData("{}")]
+    [InlineData("42")]
+    [InlineData("true")]
+    [InlineData("[null]")]
+    [InlineData("[42]")]
+    [InlineData("[\"\"]")]
+    [InlineData("[\"abcde\"]")]
+    [InlineData("[\"0123456789ABCDEF0123456789abcdef0\"]")]
+    [InlineData("[\"abcdeg\"]")]
+    [InlineData("[\" abcdef\"]")]
+    [InlineData("[\"abcdef \"]")]
+    [InlineData("[\"abcdef\\n\"]")]
+    [InlineData("[\"abcdef\",false]")]
+    public void Draft_malformed_dependency_array_is_unparseable(string goals)
+    {
+        Assert.Null(AuthorBriefDraftResultParser.Parse(
+            "{\"kind\":\"draft\",\"markdown\":\"# Draft\",\"dependsOnGoals\":" + goals + "}"));
+    }
+
+    [Fact]
+    public void Stale_ignores_draft_only_dependency_field()
+    {
+        var result = AuthorBriefDraftResultParser.Parse(Stale(new Dictionary<string, object?>
+        {
+            ["staleKind"] = "refused",
+            ["dependsOnGoals"] = 42
+        }, null));
+
+        Assert.NotNull(result);
+        Assert.Equal("stale", result.Kind);
+        Assert.Empty(result.DependsOnGoals);
     }
 
     [Fact]
