@@ -4,6 +4,23 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 
 public sealed class ConductorBoardFillFilingTests
 {
+    [Theory]
+    [InlineData("Follow-up slices: remaining work", "slice")]
+    [InlineData("## Follow-up slices\nRemaining work", "slice")]
+    [InlineData("follow-up slices: remaining work", "full")]
+    [InlineData(" Follow-up slices: remaining work", "full")]
+    [InlineData("No remaining work", "full")]
+    public void Draft_marker_determines_filed_coverage(string suffix, string coverage)
+    {
+        using var h = new BoardFillFilingTestFixture();
+        File.AppendAllText(h.Drafts.DraftPath, "\n" + suffix);
+        var draft = h.Assessed();
+        Assert.Equal("filed", h.Host.AttemptFiling(draft.Id).Result);
+        var request = Assert.Single(h.Intake.Requests);
+        Assert.Equal(coverage, request.Coverage);
+        Assert.Equal(coverage, request.Arguments[6]);
+    }
+
     [Fact]
     public async Task Held_intake_does_not_block_ticks_and_only_one_filing_is_in_flight()
     {

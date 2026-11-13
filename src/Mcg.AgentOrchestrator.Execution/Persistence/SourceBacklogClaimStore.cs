@@ -50,19 +50,42 @@ public sealed class SourceBacklogClaimStore(string databasePath)
         AgentOrchestratorKernel kernel,
         string backlogItemId,
         string newOwnerGoalId,
-        SourceBacklogCoverage coverage)
+        SourceBacklogCoverage coverage,
+        bool allowTerminalSourceClaimTakeover = false)
     {
         SourceBacklogClaimSnapshot? result = null;
         WithWriteConnection(connection =>
         {
-            result = ReadClaim(connection, backlogItemId);
+            result = ReadClaim(connection, backlogItemId) ??
+                ResolveLegacyClaim(kernel, backlogItemId, materialize: true, connection);
             if (result is not null)
-                return;
-
-            var legacy = ResolveLegacyClaim(kernel, backlogItemId, materialize: true, connection);
-            if (legacy is not null)
             {
-                result = legacy;
+                // The caller supplies the kernel from the same state transaction as this write.
+                // Historical ownership alone is insufficient: its current owner must be terminal.
+                if (!allowTerminalSourceClaimTakeover || result.OwnerGoalId == newOwnerGoalId ||
+                    kernel.Goals.FirstOrDefault(goal => goal.Id.Value == result.OwnerGoalId) is not { IsTerminal: true })
+                    return;
+                using var update = connection.CreateCommand();
+                update.CommandText = """
+                    UPDATE source_backlog_claims
+                    SET owner_goal_id = $successor, coverage = $coverage,
+                        version = version + 1, updated_at = $updated_at
+                    WHERE backlog_item_id = $backlog_item_id
+                      AND owner_goal_id = $predecessor AND version = $version
+                    """;
+                update.Parameters.AddWithValue("$successor", newOwnerGoalId);
+                update.Parameters.AddWithValue("$coverage", coverage.ToString());
+                update.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                update.Parameters.AddWithValue("$backlog_item_id", backlogItemId);
+                update.Parameters.AddWithValue("$predecessor", result.OwnerGoalId);
+                update.Parameters.AddWithValue("$version", result.Version);
+                if (update.ExecuteNonQuery() != 1)
+                {
+                    var observed = ReadClaim(connection, backlogItemId);
+                    throw new SourceBacklogClaimConflictException(backlogItemId, result.OwnerGoalId,
+                        observed?.OwnerGoalId, observed?.Version);
+                }
+                result = ReadClaim(connection, backlogItemId)!;
                 return;
             }
 

@@ -7,7 +7,8 @@ internal static class LaneSlotTimingReader
 {
     internal const string VariableName = "MCG_TEST_SLOT_TIMING_FILE";
     internal sealed record LaneSlotTotals(double WaitMs, double HeldMs, int SlotCount, long? GitLaunches = null,
-        double? GitStartMs = null, double? GitWallMs = null);
+        double? GitStartMs = null, double? GitWallMs = null,
+        IReadOnlyDictionary<string, long>? GitCallSites = null);
     internal sealed record Reading(
         IReadOnlyDictionary<string, Dictionary<string, double>> WaitsByFile,
         LaneSlotTotals? Totals, string? UnavailableReason)
@@ -59,6 +60,7 @@ internal static class LaneSlotTimingReader
         double totalWait = 0, totalHeld = 0;
         long? gitLaunches = null;
         double? gitStartMs = null, gitWallMs = null;
+        Dictionary<string, long>? gitCallSites = null;
         foreach (var trxPath in trxPaths ?? [])
         {
             string path;
@@ -104,6 +106,17 @@ internal static class LaneSlotTimingReader
                     counts.Add(count);
                     if (!AccumulateOptional(row, "git_start_ms", ref gitStartMs)) invalidGitStart++;
                     if (!AccumulateOptional(row, "git_wall_ms", ref gitWallMs)) invalidGitWall++;
+                    if (row.TryGetProperty("git_callers", out var callers) && callers.ValueKind == JsonValueKind.Object)
+                    {
+                        gitCallSites ??= new(StringComparer.Ordinal);
+                        foreach (var caller in callers.EnumerateObject())
+                        {
+                            var site = GitLaunchWindowCensus.MethodName(caller.Name);
+                            if (caller.Value.ValueKind == JsonValueKind.Number && caller.Value.TryGetInt64(out var callerCount) && callerCount >= 0 &&
+                                callerCount <= long.MaxValue - gitCallSites.GetValueOrDefault(site))
+                                gitCallSites[site] = gitCallSites.GetValueOrDefault(site) + callerCount;
+                        }
+                    }
                     if (row.TryGetProperty("git_launches", out var launches))
                     {
                         if (launches.ValueKind == JsonValueKind.Number && launches.TryGetInt64(out var value)
@@ -126,7 +139,7 @@ internal static class LaneSlotTimingReader
         if (counts.Count > 1)
             diagnostics.Add($"slot-timing-inconsistent-counts:{string.Join(",", counts)}");
         return new(waitsByFile, counts.Count == 0 ? null : new(totalWait, totalHeld, counts.Max, gitLaunches,
-                gitStartMs, gitWallMs),
+                gitStartMs, gitWallMs, gitCallSites),
             diagnostics.Count == 0 ? null : string.Join("; ", diagnostics)) { HeldByFile = heldByFile };
     }
 

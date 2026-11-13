@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class ImpactReplayDeclaredGuardSelection
 {

@@ -32,6 +32,11 @@ internal sealed class AcceptanceGateEngineSettings
     public int PartitionVerdictFullRerunEveryN { get; init; } = DefaultPartitionVerdictFullRerunEveryN;
     // Off by default: 19 hits against 729 misses over 101 gates (10-18 to 10-25) did not repay about 60 s of identity hashing and 321 MiB of stores per gate.
     public bool BaseBuildCacheEnabled { get; init; }
+    [JsonPropertyName("selectedExecutionMode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public JsonElement SelectedExecutionModeValue { get; init; }
+    [JsonIgnore]
+    public AcceptanceSelectedExecutionMode SelectedExecutionMode { get; private set; }
     public long OutputCaptureLimitBytes { get; init; } = DefaultOutputCaptureLimitBytes;
 
     public static AcceptanceGateEngineSettings Load(string worktreePath, string? projectHomeDirectory = null)
@@ -115,6 +120,16 @@ internal sealed class AcceptanceGateEngineSettings
 
     private void Validate()
     {
+        if (SelectedExecutionModeValue.ValueKind != JsonValueKind.Undefined)
+        {
+            var value = SelectedExecutionModeValue.ValueKind == JsonValueKind.String
+                ? SelectedExecutionModeValue.GetString() : null;
+            var match = Enum.GetValues<AcceptanceSelectedExecutionMode>()
+                .Where(mode => mode.ToString().Equals(value, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (match.Length != 1)
+                throw new InvalidDataException("Acceptance manifest engine selectedExecutionMode must be Off, Shadow, or Enforce.");
+            SelectedExecutionMode = match[0];
+        }
         BalancedLanePool?.Validate(InfrastructureTestLanes);
         if (LaneTestSourceRoots is null)
         {

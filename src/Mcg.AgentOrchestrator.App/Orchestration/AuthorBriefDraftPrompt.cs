@@ -58,6 +58,7 @@ internal static class AuthorBriefDraftPrompt
         Say the same thing in other words, and describe a file in prose instead of citing its path when the path contains one of those words.
         Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.
         In the Measured premise section put only repository files in code spans; name runtime files and stores in plain text.
+        Write the Measured premise as a bullet list in which each bullet is one source claim, and put any runtime observation or stated unknown in prose before the list.
         {{stackCriteria.Introduction}}
         {{stackCriteria.Criterion}}{{(stackCriteria.WorkerNote is { } note ? Environment.NewLine + note : "")}}
         Keep What to build to at most four numbered items.

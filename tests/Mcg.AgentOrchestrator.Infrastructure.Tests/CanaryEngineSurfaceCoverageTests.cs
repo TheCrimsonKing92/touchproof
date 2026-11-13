@@ -55,6 +55,7 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Theory]
+    [InlineData("AcceptanceSelectedExecutionSession")]
     [InlineData("BuildReceiptLedger")]
     [InlineData("BuildReceiptSite")]
     [InlineData("FocusedEvidenceMethodResolver")]

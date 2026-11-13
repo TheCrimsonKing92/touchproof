@@ -34,7 +34,8 @@ internal sealed class PreTesterGuardSelections
         Action<string>? progress = null, AcceptanceGateEngineSettings? settings = null,
         IReadOnlyList<string>? priorSelections = null,
         Func<string, string, IReadOnlyList<string>?>? structuralPathReader = null,
-        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null)
+        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null,
+        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? reverseDependencyCostDecision = null)
     {
         var (changedFileGuards, provenance) = cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision);
         foreach (var selection in changedFileGuards.Selections)
@@ -57,7 +58,8 @@ internal sealed class PreTesterGuardSelections
         foreach (var reason in coupled.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
-        var reverse = PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress, reverseDependencySelector);
+        var reverse = PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress,
+            reverseDependencySelector, reverseDependencyCostDecision);
         foreach (var reason in reverse.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");

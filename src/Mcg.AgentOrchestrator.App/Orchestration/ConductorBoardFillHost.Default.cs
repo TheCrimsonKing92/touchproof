@@ -28,7 +28,8 @@ internal sealed partial class ConductorBoardFillHost
             }
             return item =>
             {
-                if (!claims.Resolve(item).AutomaticIntakeEligible)
+                var source = claims.Resolve(item);
+                if (!source.AutomaticIntakeEligible && !source.ReselectableAfterTerminalOwners)
                     return new(false, false, " [Blocked: source already claimed or unresolved]");
                 // A malformed prerequisite must block its dependent, not abort selection of independent work.
                 if (item.Dependencies.Any(dependency => dependency.TargetKind == BacklogDependencyTargetKind.Backlog &&

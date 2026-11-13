@@ -7,6 +7,8 @@ internal sealed record AcceptanceGateLanePlan(string SchemaVersion, string Attem
     IReadOnlyList<string> Scheduled, IReadOnlyList<AcceptanceGateLaneSkip> Skipped,
     AcceptanceBalancedLaneLayout? BalancedLayout = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public AcceptanceSelectedExecutionRecord? SelectedExecution { get; init; }
     public IReadOnlyDictionary<string, string> TestSettings { get; init; } = AcceptanceDeclaredTestSettings.Empty;
     public IReadOnlyList<AcceptanceHostTestSettings.Binding> LaneTestSettings { get; init; } = [];
     internal const string CurrentSchemaVersion = "gate-lane-plan.v1";

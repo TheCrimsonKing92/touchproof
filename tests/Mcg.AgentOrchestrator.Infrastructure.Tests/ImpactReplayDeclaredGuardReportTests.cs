@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 // Parallel-safe: reports and rendered output stay in memory.

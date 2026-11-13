@@ -127,8 +127,9 @@ public sealed class StalledEpicAttentionHostWiringTests
             Assert.Null(item.GoalId);
             Assert.StartsWith($"stalled-epic:{epic.Id}:", item.CorrelationKey);
             Assert.Contains($"1. {slice.Subject} — Open: remaining scope", item.Body);
-            Assert.Empty(drafted);
-            Assert.Null(host.CurrentRound);
+            Assert.NotNull(host.CurrentRound);
+            await PanelTestHarness.Signal(host.CurrentRound!, "reselected draft finished");
+            Assert.Equal(new[] { f.Item.Id }, drafted);
             Assert.Equal(portfolioBefore, File.ReadAllBytes(f.Workspace.PortfolioStorePath));
             Assert.Equal(stateBefore, File.ReadAllBytes(f.Workspace.SqliteStatePath));
         }

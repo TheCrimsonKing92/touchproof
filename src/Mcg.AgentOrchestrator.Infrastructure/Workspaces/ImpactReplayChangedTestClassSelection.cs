@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class ImpactReplayChangedTestClassSelection
 {

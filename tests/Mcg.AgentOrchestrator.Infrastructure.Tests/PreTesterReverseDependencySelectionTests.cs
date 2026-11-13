@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -13,6 +14,133 @@ public sealed class PreTesterReverseDependencySelectionTests
     private const string Consumer = "Infrastructure.Tests:ConsumerTests";
     private const string Declared = "Core.Tests:DeclaredCoreTests";
     private const string Failure = "ConsumerTests.Works";
+
+    [Fact]
+    public void SkipDecisionAddsNothingAndPrintsOneCostLine()
+    {
+        using var fixture = Repository();
+        fixture.Test("SecondConsumerTests", "AppContract");
+        var lines = new List<string>();
+        var calls = 0;
+        var skip = ReverseDependencyEvidenceCostRule.Evaluate(50, 100, 0);
+
+        var actual = PreTesterReverseDependencySelections.Select(fixture.Root, [AppSource], lines.Add,
+            costDecision: classes =>
+            {
+                calls++;
+                Assert.Equal(["ConsumerTests", "SecondConsumerTests"], classes);
+                return skip;
+            });
+
+        Assert.Equal(1, calls);
+        Assert.Empty(actual.Selections);
+        Assert.Empty(actual.Provenance);
+        Assert.Equal($"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost {skip.Line}",
+            Assert.Single(lines));
+    }
+
+    [Fact]
+    public void RunDecisionSelectsEveryClassWithoutCostLine()
+    {
+        using var fixture = Repository();
+        fixture.Test("SecondConsumerTests", "AppContract");
+        var lines = new List<string>();
+        var calls = 0;
+        var expected = RepositoryRecheckTestSelection.Read(fixture.Root, [AppSource]);
+        Assert.True(expected.Resolved, expected.Reason);
+        Assert.Equal(["ConsumerTests", "SecondConsumerTests"], expected.TestClasses);
+
+        var actual = PreTesterReverseDependencySelections.Select(fixture.Root, [AppSource], lines.Add,
+            costDecision: classes =>
+            {
+                calls++;
+                Assert.Equal(expected.TestClasses, classes);
+                return ReverseDependencyEvidenceCostRule.Evaluate(10, 100, 0.5);
+            });
+
+        Assert.Equal(1, calls);
+        Assert.Equal(expected.TestClasses, actual.Selections.Select(item => item.TestClass));
+        Assert.All(actual.Selections, item => Assert.Equal("Infrastructure.Tests", item.TestProject));
+        Assert.Equal(expected.TestClasses.Count, actual.Provenance.Count);
+        foreach (var name in expected.TestClasses)
+            Assert.Single(actual.Provenance, item => item.Class == name &&
+                item.Kind == "reverse-dependency" && item.Path == AppSource);
+        Assert.Empty(lines);
+    }
+
+    [Fact]
+    public void SkipDecisionKeepsEveryOtherSelectionSource()
+    {
+        using var fixture = Repository();
+        fixture.Test("DeveloperDeclaredTests");
+        fixture.Test("BriefNamedTests");
+        fixture.Test("OpenFindingTests");
+        fixture.Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChangedFileGuardTests.cs", $$"""
+            public class ChangedFileGuardTests { [Fact] public void Reads() {
+                File.ReadAllText("{{AppSource}}");
+            } }
+            """);
+        var lines = new List<string>();
+        var calls = 0;
+        var guards = PreTesterGuardSelections.Create(new(), fixture.Root, [AppSource], "fixture-main",
+            lines.Add, fixture.Settings, structuralPathReader: (_, _) => [],
+            reverseDependencyCostDecision: classes =>
+            {
+                calls++;
+                Assert.Equal(["ConsumerTests"], classes);
+                return ReverseDependencyEvidenceCostRule.Evaluate(50, 100, 0);
+            });
+        // The driver merges declared, brief-named and open-finding classes before Augment.
+        var declaration = new DeveloperDeferredTestSelection([
+            new("Infrastructure.Tests", "DeveloperDeclaredTests"),
+            new("Infrastructure.Tests", "BriefNamedTests"),
+            new("Infrastructure.Tests", "OpenFindingTests")], []);
+
+        var actual = guards.Augment(declaration, fixture.Settings, null, ConductorDriver.FormatFindingEvidenceSelection);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(["BriefNamedTests", "ChangedFileGuardTests", "DeveloperDeclaredTests", "OpenFindingTests"],
+            actual.Selections.Select(item => item.TestClass).Order());
+        Assert.DoesNotContain(guards.Selections, item => item.TestClass == "ConsumerTests");
+        Assert.Empty(guards.NotRun);
+        Assert.Empty(actual.NotRun);
+        Assert.Single(lines, line => line.Contains("kind=reverse-dependency-skipped-cost", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line ==
+            $"PRE_TESTER_GUARD_SELECTED class=ChangedFileGuardTests kind=read path={AppSource}");
+        Assert.DoesNotContain(lines, line => line.Contains("class=ConsumerTests", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("degraded", "class=none kind=reverse-dependency-degraded reason=fixture-unavailable")]
+    [InlineData("missing-path", "class=none kind=reverse-dependency-degraded reason=non-source-or-missing-path")]
+    [InlineData("unresolved", "class=AbsentTests kind=reverse-dependency-unresolved reason=class-match-not-unique")]
+    [InlineData("empty", null)]
+    public void DecisionIsNotAskedWhenSelectionIsDegradedUnresolvedOrEmpty(string condition, string? diagnostic)
+    {
+        using var fixture = Repository();
+        var lines = new List<string>();
+        var calls = 0;
+        if (condition == "missing-path") File.Delete(Path.Combine(fixture.Root, AppSource));
+        var result = condition switch
+        {
+            "degraded" => new RepositoryRecheckTestSelection(false, ["ConsumerTests"], "fixture-unavailable"),
+            "unresolved" => new RepositoryRecheckTestSelection(true, ["ConsumerTests", "AbsentTests"]),
+            _ => new RepositoryRecheckTestSelection(true, [])
+        };
+
+        var actual = PreTesterReverseDependencySelections.Select(fixture.Root, [AppSource], lines.Add,
+            (_, _) => result, _ =>
+            {
+                calls++;
+                throw new InvalidOperationException("Early return must not ask the cost rule.");
+            });
+
+        Assert.Equal(0, calls);
+        Assert.Empty(actual.Selections);
+        Assert.Empty(actual.Provenance);
+        if (diagnostic is null) Assert.Empty(lines);
+        else Assert.Equal($"PRE_TESTER_GUARD_SELECTED {diagnostic} path={AppSource}", Assert.Single(lines));
+    }
 
     [Theory]
     [InlineData(false)]
@@ -121,7 +249,8 @@ public sealed class PreTesterReverseDependencySelectionTests
         scenario.Repository.Test("CoupledOnlyTests", prefix: "[LiveTreeStructural]");
         // Structural coverage needs a topology trigger for the coupled-only negative control.
         var guards = PreTesterGuardSelections.Create(new(), scenario.Repository.Root, [AppSource], "fixture-main",
-            _ => { }, scenario.Repository.Settings, structuralPathReader: (_, _) => [AppSource]);
+            _ => { }, scenario.Repository.Settings, structuralPathReader: (_, _) => [AppSource],
+            reverseDependencyCostDecision: AlwaysRun);
         Assert.Contains(new FindingEvidenceSelection("Infrastructure.Tests", "CoupledOnlyTests"), guards.Selections);
         Assert.True(guards.EveryFailureIsInsideChanges([Failure], _ => throw new InvalidOperationException("Unexpected outside failure")));
         foreach (var classification in new[] { false, true })
@@ -216,7 +345,10 @@ public sealed class PreTesterReverseDependencySelectionTests
     private static PreTesterGuardSelections Select(Fixture fixture, IReadOnlyList<string> paths, Action<string> progress,
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reader = null) =>
         PreTesterGuardSelections.Create(new(), fixture.Root, paths, "fixture-main", progress, fixture.Settings,
-            structuralPathReader: (_, _) => [], reverseDependencySelector: reader);
+            structuralPathReader: (_, _) => [], reverseDependencySelector: reader, reverseDependencyCostDecision: AlwaysRun);
+
+    private static ReverseDependencyEvidenceCostRule.Decision AlwaysRun(IReadOnlyList<string> _) =>
+        ReverseDependencyEvidenceCostRule.Evaluate(10, 100, 0.5);
 
     private sealed class Scenario : IDisposable
     {
@@ -243,7 +375,40 @@ public sealed class PreTesterReverseDependencySelectionTests
             Kernel.RecordTaskVerification(Goal.Id, developer.Id, new("fixture", Root, 0, output, "", DateTimeOffset.UtcNow,
                 WorkerResultPresent: true, HasCommittedChanges: true));
             Repository = PreTesterReverseDependencySelectionTests.Repository(GoalWorktrees.WorktreePath(Root, Goal.Id));
-            Repository.Write("tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs", "public class DeclaredCoreTests {}");
+            Repository.Write("tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs",
+                "public class DeclaredCoreTests { [Fact] public void Works() {} }");
+            // Broad Infrastructure checks expand into configured lanes; without a lane,
+            // the cost reader sees no full-gate classes for this App-only change.
+            Repository.Write("config/acceptance-manifest.json", """
+                { "engine": { "infrastructureTestLanes": [
+                    { "name": "fixture", "filter": "FullyQualifiedName~Tests" }
+                  ] },
+                  "checks": [
+                  { "name": "infra", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj" },
+                  { "name": "core", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" }
+                ] }
+                """);
+            // A candidate-caused gate failure gives rate 1; reverse classes are a subset of the full gate.
+            var completed = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var metadata = new ConductorParallelAcceptanceAttempt("fixture-red", "goal", "goal", 0, null, null,
+                completed.AddMinutes(-1), completed, 0, ConductorParallelAcceptanceAttemptOutcome.Failed,
+                "", "", "", "", "", "", CompletedAt: completed, Kind: "gate");
+            var result = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
+                new(false, [new("tests", false, 1, null,
+                    FailingTestAttributions: [new(Failure, AcceptanceTestFailureOrigin.Introduced, "fixture")])]),
+                null, null, null, null);
+            var attempts = Path.Combine(HostLedgerStateDirectory.Resolve(Repository.Root), "acceptance-gate-attempts");
+            Directory.CreateDirectory(attempts);
+            var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            File.WriteAllText(Path.Combine(attempts, "fixture-red.attempt.json"), JsonSerializer.Serialize(metadata, json));
+            File.WriteAllText(Path.Combine(attempts, "fixture-red.result.json"), JsonSerializer.Serialize(result, json));
+            // These driver scenarios require Run from the real readers, so expose the input
+            // failure here before a missing reverse selection obscures its cause.
+            var inputs = ReverseDependencyEvidenceCostHistory.Read(Repository.Root,
+                HostLedgerStateDirectory.Resolve(Repository.Root), ["ConsumerTests"], [AppSource]);
+            var decision = ReverseDependencyEvidenceCostRule.Evaluate(
+                inputs.SelectionSeconds, inputs.FullGateSeconds, inputs.FailureRate);
+            Assert.True(decision.Run, $"{decision.Line} input_unavailable={inputs.UnavailableReason ?? "none"}");
         }
 
         internal PreTesterEvidenceEntry Latest() => Assert.IsType<PreTesterEvidenceEntry>(

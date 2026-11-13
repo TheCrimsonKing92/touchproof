@@ -56,8 +56,11 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal Action<string>? OnRemoteLaneFallbackWaitingForLocalSlotForTests { get; set; }
     internal Func<GoalAcceptanceVerifier.AcceptanceManifestCheck, string?>? ResolvePartitionVerdictClosureHashForTests { get; set; }
 
+    internal Func<string, IReadOnlyList<string>, AcceptanceSelectedExecutionInput>? ReadSelectedExecutionForTests { get; set; }
+
     internal GoalAcceptanceVerifierTestOverrides Snapshot() => new()
     {
+        ReadSelectedExecutionForTests = ReadSelectedExecutionForTests,
         CrosswalkExecutableForTests = CrosswalkExecutableForTests,
         HeartbeatInterval = HeartbeatInterval,
         ProgressInterval = ProgressInterval,

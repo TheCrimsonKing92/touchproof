@@ -16,7 +16,7 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     public void House_draft_without_planner_section_passes_all_eight_checks(string newline)
     {
         var checks = Run(HouseDraft.ReplaceLineEndings(newline));
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "modification-targets", "ratchet-rows" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "premise-bullets", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "modification-targets", "ratchet-rows" },
             checks.Select(check => check.Name).ToArray());
         Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
     }
@@ -99,7 +99,7 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     [Fact]
     public void Original_board_fill_sections_fail_all_three_house_checks()
     {
-        var markdown = "# Original board-fill draft\n## Measured premise\nObserved in `docs/role-capability-matrix.md:1`.\n" +
+        var markdown = "# Original board-fill draft\n## Measured premise\n- Observed in `docs/role-capability-matrix.md:1`.\n" +
             OriginalBoardFillSections + "\n## Scope\nFirst board-fill draft.";
         var checks = Run(markdown);
         foreach (var name in HouseChecks)

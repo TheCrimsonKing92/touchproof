@@ -20,7 +20,7 @@ internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : 
         var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
         var before = store.Get(request.RequestKey);
         Exception? failure = null;
-        try { Execute(request.Arguments); }
+        try { Execute(request.Arguments, allowTerminalSourceClaimTakeover: true); }
         catch (Exception exception) { failure = exception; }
         var receipt = store.Get(request.RequestKey);
         // Use the intake's own durable receipt, never Console.SetOut (which is process-wide).
@@ -61,19 +61,20 @@ internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : 
     internal BoardFillGoalBoard ReadBoard()
     {
         var goals = ReadGoals();
-        return new(goals.Count(goal => !goal.IsTerminal), goals.Where(goal => goal.SourceBacklogItemId is not null)
+        return new(goals.Count(goal => !goal.IsTerminal), goals.Where(goal => goal.SourceBacklogItemId is not null && !goal.IsTerminal)
             .Select(goal => goal.SourceBacklogItemId!).ToHashSet(StringComparer.Ordinal));
     }
 
     private IReadOnlyCollection<Goal> ReadGoals() => SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
         .LoadAsync().GetAwaiter().GetResult().Goals;
 
-    private void Execute(IReadOnlyList<string> args)
+    private void Execute(IReadOnlyList<string> args, bool allowTerminalSourceClaimTakeover = false)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
         Goal? currentGoal = null;
         _ = CliPersistentStateRunner.ExecuteCommand(args, new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
-            workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal);
+            workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
+            allowTerminalSourceClaimTakeover: allowTerminalSourceClaimTakeover);
     }
 }

@@ -8,6 +8,63 @@ using Terminal.Gui.Views;
 public sealed class OwnerConsoleBoardStatusColumnTests
 {
     [Theory]
+    [InlineData(60)]
+    [InlineData(120)]
+    public async Task LastEventLabelsNewestActivityAndKeepsTitleUsable(int width)
+    {
+        var clock = new OwnerConsoleTestClock();
+        var harness = new OwnerConsoleHarness(clock);
+        harness.AddGoal("11111111", new string('T', 200), AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = GoalStatus.Active,
+                Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "older policy", clock.Now.AddMinutes(-10)),
+                    new(goal.Id, null, ProgressKind.TaskFailed, "newer activity", clock.Now.AddMinutes(-3))]
+            }).ToArray()
+        });
+        var model = await Builder(harness, clock).BuildBoardAsync();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = View(app, harness, clock);
+        view.Render(model);
+        OwnerConsoleBoardRenderer.Render(view.BoardTable, view.BoardPane, model.Board, width, 0);
+
+        AssertColumns(view.BoardTable);
+        Assert.Equal(TimeSpan.FromMinutes(3), Assert.Single(model.Board).Age);
+        Assert.Equal("3m", view.BoardTable.Rows[0]["LAST EVENT"]);
+        Assert.True(view.BoardPane.Style.GetOrCreateColumnStyle(2).MaxWidth >= 16);
+        Assert.StartsWith(new string('T', 15), (string)view.BoardTable.Rows[0]["TITLE"]);
+        Assert.Equal(10, view.BoardPane.Style.GetOrCreateColumnStyle(5).MaxWidth);
+    }
+
+    [Fact]
+    public async Task EqualEventTimesKeepCaseInsensitiveGoalIdOrderWithinTimedRanks()
+    {
+        var clock = new OwnerConsoleTestClock();
+        var harness = new OwnerConsoleHarness(clock);
+        foreach (var id in new[] { "B2222222", "a1111111", "D4444444", "c3333333" })
+            harness.AddGoal(id, id, AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = goal.Id is "B2222222" or "a1111111" ? GoalStatus.Verified : GoalStatus.Failed,
+                Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "same event time", clock.Now.AddMinutes(-3))]
+            }).ToArray()
+        });
+        var model = await Builder(harness, clock).BuildBoardAsync();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = View(app, harness, clock);
+        view.Render(model);
+
+        Assert.Equal(["a1111111", "B2222222", "c3333333", "D4444444"], model.Board.Select(row => row.GoalId));
+        Assert.All(view.BoardTable.Rows.Cast<DataRow>(), row => Assert.Equal("3m", row["LAST EVENT"]));
+    }
+
+    [Theory]
     [InlineData(GoalStatus.Verified, "waiting for gate")]
     [InlineData(GoalStatus.Verifying, "in gate: ")]
     [InlineData(GoalStatus.Failed, "failed: ")]
@@ -117,8 +174,8 @@ public sealed class OwnerConsoleBoardStatusColumnTests
     }
 
     [Theory]
-    [InlineData("High", true, 68)]
-    [InlineData("Normal", false, 77)]
+    [InlineData("High", true, 61)]
+    [InlineData("Normal", false, 70)]
     public void Board_RemovedStateColumn_AllocatesFreedWidthToTitle(
         string priority, bool visible, int expectedTitleWidth)
     {
@@ -163,7 +220,7 @@ public sealed class OwnerConsoleBoardStatusColumnTests
     private static string Id(GoalStatus status) => ((int)status + 1).ToString("D8");
 
     private static void AssertColumns(DataTable table) => Assert.Equal(
-        new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" },
+        new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "LAST EVENT" },
         table.Columns.Cast<DataColumn>().Select(column => column.ColumnName));
 
     private static void AssertNoEnumCells(DataTable table)
