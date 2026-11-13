@@ -10,7 +10,12 @@ internal static class GoalTargetImpactPlanScope
         RepositoryChangeSummary changeSummary, string? worktreePath, WorkerTargetHome? targetHome)
     {
         if (string.IsNullOrWhiteSpace(worktreePath))
-            return RepositoryTestImpactPlanner.Plan(changeSummary);
+        {
+            var rootlessPlan = RepositoryTestImpactPlanner.Plan(changeSummary);
+            return targetHome is null || targetHome.IsOrchestratorHome || !rootlessPlan.RequiresBuild
+                ? rootlessPlan
+                : Scope(rootlessPlan, string.Empty, string.Empty);
+        }
 
         var plan = RepositoryTestImpactPlanner.Plan(changeSummary, worktreePath);
         return targetHome is null || targetHome.IsOrchestratorHome
