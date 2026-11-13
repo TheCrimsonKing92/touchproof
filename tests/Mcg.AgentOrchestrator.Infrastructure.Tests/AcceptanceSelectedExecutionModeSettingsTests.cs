@@ -6,7 +6,7 @@ public sealed class AcceptanceSelectedExecutionModeSettingsTests
 {
     [Fact]
     public void Load_CheckedInManifest_UsesShadow() =>
-        Assert.Equal(AcceptanceSelectedExecutionMode.Shadow,
+        Assert.Equal(AcceptanceSelectedExecutionMode.Enforce,
             AcceptanceGateEngineSettings.Load(VerifiedRepositoryRoot.Find()).SelectedExecutionMode);
 
     [Theory]
