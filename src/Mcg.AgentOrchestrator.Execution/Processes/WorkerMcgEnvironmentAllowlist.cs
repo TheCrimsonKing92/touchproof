@@ -5,13 +5,15 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class WorkerMcgEnvironmentAllowlist
 {
     public const string OrchestratorDotnetPathVariable = "MCG_ORCHESTRATOR_DOTNET_PATH";
+    public const string OrchestratorAppOutputVariable = "MCG_ORCHESTRATOR_APP_OUTPUT";
 
     public static IReadOnlySet<string> Names { get; } = new[]
     {
         DispatchProcessHost.StartGatePathVariable,
         WorkerSandboxOptions.DispatchWorkerVariable,
         DotnetBuildStorageLayout.IsolatedRootOverrideVariable,
-        OrchestratorDotnetPathVariable
+        OrchestratorDotnetPathVariable,
+        OrchestratorAppOutputVariable
     }.ToFrozenSet(StringComparer.Ordinal);
 
     public static void RemoveDisallowed(IDictionary<string, string?> environment)
