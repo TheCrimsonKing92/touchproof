@@ -21,7 +21,7 @@ internal static class WorkerBuildCapacityGate
         WorkerBuildCapacityVerdict.Hold;
 
     internal static WorkerBuildCapacitySnapshot ReadHostSnapshot(DotnetBuildStorageRoot storageRoot,
-        TimeProvider timeProvider, Func<string, bool> isExecutionLockHeld)
+        TimeProvider timeProvider, Func<string, bool> isExecutionLockHeld, string? claimantKey = null)
     {
         try
         {
@@ -38,7 +38,9 @@ internal static class WorkerBuildCapacityGate
             var total = DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
             var unheld = Enumerable.Range(0, total).Count(index => !isExecutionLockHeld(
                 DotnetBuildEnvironmentManager.BuildSlotExecutionLockPath(index, storageRoot)));
-            return new(unheld, total, tickets.Count, true);
+            // A retained claimant waits only for tickets ahead of its existing queue position.
+            var waiting = claimantKey is null ? tickets.Count : tickets.TakeWhile(ticket => ticket.Key != claimantKey).Count();
+            return new(unheld, total, waiting, true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

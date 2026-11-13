@@ -425,6 +425,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus> _classifyHolder;
     private readonly SettledAttemptCensusMemo _settledCensusMemo = new();
     private readonly Action<string>? _attemptMetadataReadObserver;
+    private readonly Func<GoalId, WorkerBuildCapacitySnapshot>? _readPreReviewEvidenceCapacity;
     private long _settledCensusSkipCount;
     internal long SettledCensusSkipCount => Interlocked.Read(ref _settledCensusSkipCount);
 
@@ -462,7 +463,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         SpawnProcessIdentity? generationIdentity = null,
         Func<int, bool>? isHolderProcessAbsent = null,
         Func<DateTimeOffset?>? hostBootTime = null,
-        Action<string>? attemptMetadataReadObserver = null)
+        Action<string>? attemptMetadataReadObserver = null,
+        Func<GoalId, WorkerBuildCapacitySnapshot>? readPreReviewEvidenceCapacity = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -473,6 +475,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         _rootDirectory = rootDirectory;
         _attemptMetadataReadObserver = attemptMetadataReadObserver;
+        _readPreReviewEvidenceCapacity = readPreReviewEvidenceCapacity;
         _executionDirectory = executionDirectory;
         _stateDirectory = stateDirectory;
         _projectName = projectName;
@@ -1276,6 +1279,14 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt? reservedAttempt = null,
         PreReviewEvidenceRelaunchProvenance? relaunchProvenance = null)
     {
+        if (dispatchKind == PreReviewEvidenceDispatchKind && reservedAttempt is null &&
+            _readPreReviewEvidenceCapacity is not null)
+        {
+            var snapshot = _readPreReviewEvidenceCapacity(candidate.Goal.Id);
+            if (!PreReviewEvidenceLaunchCapacity.MayStart(snapshot))
+                throw new PreReviewEvidenceBuildSlotsBusyException(candidate.Goal.Id, snapshot);
+        }
+
         var attempt = reservedAttempt ?? CreateAttempt(
             candidate,
             policy,

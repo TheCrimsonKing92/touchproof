@@ -189,15 +189,15 @@ internal sealed partial class ConductorDriver
                 context.FocusedRequest,
                 _runFocusedEvidence);
         }
-        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        catch (Exception ex) when (ex is AcceptanceArtifactWriterLeaseBusyException or PreReviewEvidenceBuildSlotsBusyException)
         {
             result = MakeResult(
                 goal.Id.Value,
                 goalPrefix,
                 policy,
                 PreReviewEvidenceHold(
-                    fromState, goal.Id.Value, "writer-busy", "", "",
-                    $"Background pre-review evidence artifact writer is busy; retry on next conduct tick. {ex.Message}"));
+                    fromState, goal.Id.Value, ex is PreReviewEvidenceBuildSlotsBusyException ? "build-slots-busy" : "writer-busy", "", "",
+                    FocusedEvidenceLaunchRefusal.Describe(ex, "pre-review evidence")));
             return true;
         }
         if (attemptDecision.Kind is

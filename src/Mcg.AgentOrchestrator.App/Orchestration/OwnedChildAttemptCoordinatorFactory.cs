@@ -39,5 +39,6 @@ internal static class OwnedChildAttemptCoordinatorFactory
             buildStorageRoot: buildStorageRoot,
             stateDirectory: workspace.OrchestratorDirectory,
             projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace),
-            hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime);
+            hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime,
+            readPreReviewEvidenceCapacity: PreReviewEvidenceLaunchCapacity.CreateHostReader(buildStorageRoot));
 }
