@@ -180,7 +180,6 @@ public sealed class LauncherScriptTests
             Directory.CreateDirectory(nativePath);
             File.WriteAllText(Path.Combine(nativePath, "e_sqlite3.dll"), "native");
 
-            File.WriteAllText(Path.Combine(shimPath, "git.cmd"), "@echo off\r\nexit /b 1\r\n");
             var systemPath = Environment.GetFolderPath(Environment.SpecialFolder.System);
             var windowsPowerShellPath = Path.Combine(systemPath, "WindowsPowerShell", "v1.0");
             var controlledPath = string.Join(';', shimPath, systemPath, windowsPowerShellPath);
