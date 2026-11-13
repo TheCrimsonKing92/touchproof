@@ -12,7 +12,7 @@ public sealed class WorkerStructuralPreflightPhaseMeasurementTests(ITestOutputHe
         var root = VerifiedRepositoryRoot.Find();
         var revision = Git(root, "rev-parse", "HEAD").Trim();
         var dirty = Git(root, "status", "--porcelain", "--untracked-files=normal", "--", "src", "tests", "config");
-        var cache = new AcceptanceTestClassSourceCache();
+        var cache = new AcceptanceTestClassSourceCache(storeDirectory: null);
         using var scope = AcceptanceTestClassSourceCache.Use(cache);
         var timings = new DeveloperCompletionStructuralPhaseTimings();
         Assert.Equal(0, cache.ParsedFileCount);
