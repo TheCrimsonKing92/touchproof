@@ -216,14 +216,17 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             }
             else
             {
-                await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Goal decision", "Goal body");
-                await store.RaiseAsync(CollaborationItemType.Decision, null, "Cross decision", "Cross body");
-                expected = "\r\nAttention queue: 2 open reach-up item(s)\r\n";
-                foreach (var item in await store.GetAttentionQueueAsync())
+                var goalItem = await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Goal decision", "Goal body");
+                var crossGoalItem = await store.RaiseAsync(CollaborationItemType.Decision, null, "Cross decision", "Cross body");
+                expected = "";
+                foreach (var item in new[] { crossGoalItem, goalItem })
+                {
+                    expected += "\r\nAttention queue: 1 open reach-up item(s)\r\n";
                     expected += $"  [Decision] {item.Id[..8]} status=Raised goal={(item.GoalId is null ? "cross-goal" : "abc10000")}\r\n" +
                         $"    dismiss: attention dismiss --item {item.Id}\r\n" +
                         $"    subject: {item.Subject}\r\n    body: {item.Body}\r\n    raised: {item.RaisedAt:u}\r\n";
-                expected += "\r\n";
+                    expected += "\r\n";
+                }
             }
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();

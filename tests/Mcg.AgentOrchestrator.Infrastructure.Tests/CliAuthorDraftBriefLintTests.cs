@@ -21,8 +21,8 @@ public sealed class CliAuthorDraftBriefLintTests
         Assert.Equal(markdown, File.ReadAllText(draft));
         using var receipt = fixture.Receipt();
         var checks = receipt.RootElement.GetProperty("checks").EnumerateArray().ToArray();
-        Assert.Equal(15, checks.Length);
-        Assert.All(checks.Take(13), check => Assert.True(check.GetProperty("passed").GetBoolean()));
+        Assert.Equal(16, checks.Length);
+        Assert.All(checks.Take(15), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         var failed = Assert.Single(checks.Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal($"brief-lint:{kind}", failed.GetProperty("name").GetString());
         Assert.Equal(detail, failed.GetProperty("detail").GetString());
@@ -72,7 +72,7 @@ public sealed class CliAuthorDraftBriefLintTests
         Assert.Equal(GoalCommand(fixture, draft), LastOutputLine(fixture));
         using var receipt = fixture.Receipt();
         var checks = receipt.RootElement.GetProperty("checks").EnumerateArray().ToArray();
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "premise-bullets", "provided-by-goals", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "modification-targets", "ratchet-rows" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "premise-bullets", "provided-by-goals", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "prose-obligations", "modification-targets", "ratchet-rows" },
             checks.Select(check => check.GetProperty("name").GetString()).ToArray());
         Assert.All(checks, check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());

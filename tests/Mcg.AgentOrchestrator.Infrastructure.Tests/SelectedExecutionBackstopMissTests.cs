@@ -6,6 +6,25 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SelectedExecutionBackstopMissTests
 {
     [Fact]
+    public async Task MissRaisedReportsFullStoredItemIdOnceAcrossTicks()
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Candidate.X.First"], ["lane"]));
+        await fixture.Land();
+        await fixture.Finish();
+
+        var item = Assert.Single(await fixture.Items.ListAsync());
+        Assert.Null(item.GoalId);
+        var raised = Assert.Single(fixture.Lines.Where(line => line.Contains("result=miss-raised ", StringComparison.Ordinal)));
+        Assert.EndsWith(" detail=item=" + item.Id, raised, StringComparison.Ordinal);
+
+        await fixture.Service();
+
+        Assert.Equal(item.Id, Assert.Single(await fixture.Items.ListAsync()).Id);
+        Assert.Equal(raised, Assert.Single(fixture.Lines.Where(line => line.Contains("result=miss-raised ", StringComparison.Ordinal))));
+    }
+
+    [Fact]
     public async Task MatchingRedCarriesFullRangeRaisesOneItemAndEmitsOneRedLine()
     {
         using var fixture = new SelectedExecutionBackstopFixture();

@@ -69,6 +69,17 @@ internal static partial class CliCommandHandlers
             .ToList();
     }
 
+    private static (IReadOnlyList<CollaborationItem> Remaining, bool PrintedCrossGoal) PrintCrossGoalAttentionItems(
+        AgentOrchestratorKernel kernel, CollaborationItemStore store)
+    {
+        var queue = CollaborationItemsForAttention(store.GetAttentionQueueAsync().GetAwaiter().GetResult(),
+            kernel, null, includeHistory: false);
+        var crossGoalItems = queue.Where(item => item.GoalId is null).ToList();
+        if (crossGoalItems.Count == 0) return (queue, false);
+        CollaborationItemsTextView.PrintAttentionQueue(crossGoalItems);
+        return (queue.Where(item => item.GoalId is not null).ToList(), true);
+    }
+
     private static int ResolveParkedAttentionItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
     {
         var resolved = 0;
@@ -368,6 +379,8 @@ internal static partial class CliCommandHandlers
 
                     if (goalPrefix is null)
                     {
+                        (IReadOnlyList<CollaborationItem> remainingShowQueue, bool printedShowCrossGoal) = includeHistory
+                            ? ([], false) : PrintCrossGoalAttentionItems(context.Kernel, store);
                         AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals);
                         var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                         environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
@@ -389,11 +402,10 @@ internal static partial class CliCommandHandlers
                             return changed;
                         }
 
-                        var globalItems = includeHistory
-                            ? store.ListAsync().GetAwaiter().GetResult()
-                            : store.GetAttentionQueueAsync().GetAwaiter().GetResult();
-                        var globalQueue = CollaborationItemsForAttention(globalItems, context.Kernel, null, includeHistory);
-                        if (environmentHeld && globalQueue.Count == 0) return changed;
+                        var globalQueue = includeHistory
+                            ? CollaborationItemsForAttention(store.ListAsync().GetAwaiter().GetResult(), context.Kernel, null, true)
+                            : remainingShowQueue;
+                        if ((environmentHeld || printedShowCrossGoal) && globalQueue.Count == 0) return changed;
                         var allClarifications = AllClarifications(store);
                         CollaborationItemsTextView.Print(
                             globalQueue,
@@ -482,6 +494,7 @@ internal static partial class CliCommandHandlers
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
                 var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
+                var (queue, printedCrossGoal) = PrintCrossGoalAttentionItems(context.Kernel, store);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
                 EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                 PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
@@ -495,12 +508,7 @@ internal static partial class CliCommandHandlers
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
                 }
 
-                var queue = CollaborationItemsForAttention(
-                    store.GetAttentionQueueAsync().GetAwaiter().GetResult(),
-                    context.Kernel,
-                    null,
-                    includeHistory: false);
-                CollaborationItemsTextView.PrintAttentionQueue(queue);
+                if (!printedCrossGoal || queue.Count > 0) CollaborationItemsTextView.PrintAttentionQueue(queue);
                 return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
             }
 

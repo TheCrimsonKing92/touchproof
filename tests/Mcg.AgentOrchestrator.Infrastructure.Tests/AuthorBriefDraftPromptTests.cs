@@ -38,7 +38,7 @@ public sealed class AuthorBriefDraftPromptTests
         var prompt = request.StandardInput!;
         var lines = prompt.ReplaceLineEndings("\n").Split('\n');
         const string numbering = "Number acceptance criteria `1.`, `2.` and so on, with no bulleted criteria and no nested bullets.";
-        const string postLandingRule = "A step that happens after the goal lands belongs in prose outside the numbered criteria, never as a numbered criterion.";
+        const string postLandingRule = "A step that happens after the goal lands is never a numbered criterion and is left out of the draft.";
         var numberingIndex = Array.IndexOf(lines, numbering);
         Assert.True(numberingIndex >= 0, "The criterion-numbering guidance must be present.");
         Assert.Equal(1, lines.Count(line => line == postLandingRule));
