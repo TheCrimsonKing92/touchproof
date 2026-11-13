@@ -12,6 +12,7 @@ public sealed class PipeDrainSaturationProbeChildTests
     internal const string WarmGrowthCappedBelowTargetMode = "warm-growth-capped-below-target";
     internal const string PoolDependentReaderMode = "pool-dependent-reader";
     internal const string SaturationNeverReachedMode = "saturation-never-reached";
+    internal const string HeldWorkerReleasedAfterBarrierSampleMode = "held-worker-released-after-barrier-sample";
 
     [Xunit.Fact]
     public void RunProbeWhenExplicitlyLaunched()
@@ -59,7 +60,16 @@ public sealed class PipeDrainSaturationProbeChildTests
         WarmPoolHistoryEvidence? warmEvidence = null;
         var poolDependentReadCompletedAfterObservation = false;
         var poolWorkItemExecutedDuringObservation = false;
-        var readerMode = mode is WarmedDedicatedReaderMode or WarmedWithHeldPoolWorkMode ? DedicatedReaderMode : mode;
+        var dedicatedReaderCompleted = false;
+        var heldWorkerQueued = false;
+        var heldWorkerWasHeldAtBarrierSample = false;
+        var heldWorkerReleasedAfterBarrierSample = false;
+        var availableWorkersAfterHeldRelease = -1;
+        using var heldWorkerStarted = new ManualResetEventSlim(false);
+        using var heldWorkerRelease = new ManualResetEventSlim(false);
+        using var heldWorkerCompleted = new ManualResetEventSlim(false);
+        var readerMode = mode is WarmedDedicatedReaderMode or WarmedWithHeldPoolWorkMode
+            or HeldWorkerReleasedAfterBarrierSampleMode ? DedicatedReaderMode : mode;
 
         try
         {
@@ -89,6 +99,28 @@ public sealed class PipeDrainSaturationProbeChildTests
                 }
             }
 
+            if (mode == HeldWorkerReleasedAfterBarrierSampleMode)
+            {
+                ThreadPool.UnsafeQueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        heldWorkerStarted.Set();
+                        heldWorkerRelease.Wait();
+                    }
+                    finally
+                    {
+                        heldWorkerCompleted.Set();
+                    }
+                }, null);
+                heldWorkerQueued = true;
+                if (!heldWorkerStarted.Wait(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout))
+                {
+                    failureKind = "held-worker-not-started";
+                    throw new TimeoutException("failureKind=held-worker-not-started");
+                }
+            }
+
             BoundedThreadPoolSaturationApparatus.RunWithBoundedSaturatedThreadPool(currentEvidence =>
             {
                 evidence = currentEvidence;
@@ -111,6 +143,7 @@ public sealed class PipeDrainSaturationProbeChildTests
                     }
 
                     Xunit.Assert.Equal(expected, drain.Text);
+                    dedicatedReaderCompleted = true;
                     poolDependentReadCompletedAfterObservation = poolDependentRead.Wait(TimeSpan.FromSeconds(2));
                     poolWorkItemExecutedDuringObservation = poolWorkItemExecuted.Task.IsCompleted;
                     if (poolWorkItemExecutedDuringObservation)
@@ -152,8 +185,42 @@ public sealed class PipeDrainSaturationProbeChildTests
                 failureKind = "unknown-mode";
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported saturation probe mode.");
             },
-            afterBarrierCountSampled: mode == SaturationNeverReachedMode ? _ =>
+            afterBarrierCountSampled: mode is SaturationNeverReachedMode or HeldWorkerReleasedAfterBarrierSampleMode ? barrierCount =>
             {
+                if (mode == HeldWorkerReleasedAfterBarrierSampleMode)
+                {
+                    heldWorkerWasHeldAtBarrierSample = heldWorkerStarted.IsSet
+                        && !heldWorkerRelease.IsSet && !heldWorkerCompleted.IsSet;
+                    Xunit.Assert.True(heldWorkerWasHeldAtBarrierSample,
+                        "The pre-existing worker must remain held until barrierCount is sampled.");
+                    heldWorkerRelease.Set();
+                    heldWorkerReleasedAfterBarrierSample = true;
+                    if (!heldWorkerCompleted.Wait(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout))
+                    {
+                        failureKind = "held-worker-release-not-completed";
+                        throw new TimeoutException("failureKind=held-worker-release-not-completed");
+                    }
+
+                    // The completion signal precedes the callback's return to the pool. Observe the
+                    // freed capacity before the apparatus queues blockers sized from the earlier sample.
+                    var releaseWait = System.Diagnostics.Stopwatch.StartNew();
+                    while (true)
+                    {
+                        ThreadPool.GetAvailableThreads(out availableWorkersAfterHeldRelease, out _);
+                        if (availableWorkersAfterHeldRelease > barrierCount)
+                            break;
+                        if (releaseWait.Elapsed >= BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout)
+                        {
+                            failureKind = "held-worker-capacity-not-observed";
+                            throw new TimeoutException(
+                                $"failureKind=held-worker-capacity-not-observed barrierCount={barrierCount} " +
+                                $"availableWorkersAfterHeldRelease={availableWorkersAfterHeldRelease}");
+                        }
+                        Thread.Yield();
+                    }
+                    return;
+                }
+
                 // More permitted workers than queued blockers makes zero availability impossible.
                 ThreadPool.GetMaxThreads(out var workerLimit, out var ioLimit);
                 if (!ThreadPool.SetMaxThreads(checked(workerLimit * 4), ioLimit))
@@ -175,6 +242,16 @@ public sealed class PipeDrainSaturationProbeChildTests
         }
         finally
         {
+            if (heldWorkerQueued)
+            {
+                heldWorkerRelease.Set();
+                if (!heldWorkerCompleted.Wait(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout))
+                {
+                    failureKind ??= "held-worker-cleanup-timeout";
+                    failure ??= new TimeoutException("failureKind=held-worker-cleanup-timeout");
+                }
+            }
+
             if (poolDependentRead is not null)
             {
                 poolDependentRead.GetAwaiter().GetResult();
@@ -203,7 +280,11 @@ public sealed class PipeDrainSaturationProbeChildTests
                 evidence?.EntrySignalsReceived ?? -1,
                 evidence?.ThreadCountAfterBarrier ?? -1,
                 evidence?.PendingWorkItemCountAfterBarrier ?? -1,
-                evidence?.AvailabilitySamples ?? 0);
+                evidence?.AvailabilitySamples ?? 0,
+                heldWorkerWasHeldAtBarrierSample,
+                heldWorkerReleasedAfterBarrierSample,
+                availableWorkersAfterHeldRelease,
+                dedicatedReaderCompleted);
             File.WriteAllText(receiptPath, JsonSerializer.Serialize(receipt));
         }
 
@@ -269,4 +350,8 @@ internal sealed record PipeDrainSaturationProbeReceipt(
     int EntrySignalsReceived,
     int ThreadCountAfterBarrier,
     long PendingWorkItemCountAfterBarrier,
-    long AvailabilitySamples);
+    long AvailabilitySamples,
+    bool HeldWorkerWasHeldAtBarrierSample,
+    bool HeldWorkerReleasedAfterBarrierSample,
+    int AvailableWorkersAfterHeldRelease,
+    bool DedicatedReaderCompleted);
