@@ -34,17 +34,29 @@ public sealed class OwnedAttemptExitWaitTests
     }
 
     [Fact]
-    public void ContinuousProgress_StillFailsAtWholeTestFailsafe()
+    public void ContinuousProgress_WaitsBeyondFormerTotalBoundUntilExit()
     {
         var clock = new Clock();
+        OwnedAttemptExitWait.WaitForExit(
+            42, () => clock.Elapsed >= TimeSpan.FromSeconds(900),
+            () => Fixture with { TrailLength = (long)clock.Elapsed.TotalSeconds },
+            () => clock.Elapsed, clock.Sleep);
+
+        Assert.Equal(TimeSpan.FromSeconds(900), clock.Elapsed);
+    }
+
+    [Fact]
+    public void ProgressBeyondFormerTotalBoundThenFreeze_FailsOneWindowAfterLastChange()
+    {
+        var clock = new Clock();
+        var lastChange = TimeSpan.FromSeconds(360);
         var error = Assert.ThrowsAny<XunitException>(() => OwnedAttemptExitWait.WaitForExit(
             42, () => false,
-            () => Fixture with { TrailLength = (long)clock.Elapsed.TotalSeconds },
+            () => Fixture with { TrailLength = (long)Math.Min(clock.Elapsed.TotalSeconds, lastChange.TotalSeconds) },
             () => clock.Elapsed, clock.Sleep));
 
-        Assert.Equal(TimeSpan.FromMilliseconds(TestHangGuard.WholeTestMilliseconds), clock.Elapsed);
-        Assert.StartsWith("External acceptance PID 42 did not exit within the 300 s whole-test failsafe", error.Message);
-        Assert.DoesNotContain("made no progress", error.Message);
+        Assert.Equal(lastChange + TestHangGuard.HangSafetyBound, clock.Elapsed);
+        Assert.StartsWith("External acceptance PID 42 made no progress for 120 s", error.Message);
         Assert.Contains("lastPhase=owner-persisted", error.Message);
         foreach (var text in new[] { Trail, "HB-FIXTURE", "OUT-FIXTURE", "ERR-FIXTURE" })
             Assert.Contains(text, error.Message);
@@ -104,14 +116,14 @@ public sealed class OwnedAttemptExitWaitTests
     }
 
     [Fact]
-    public void ExitAtFailsafe_ReturnsBeforeTimeoutDecision()
+    public void ExitAtNoProgressBoundary_ReturnsBeforeStallDecision()
     {
         var clock = new Clock();
-        var failsafe = TimeSpan.FromMilliseconds(TestHangGuard.WholeTestMilliseconds);
-        OwnedAttemptExitWait.WaitForExit(42, () => clock.Elapsed >= failsafe,
-            () => Fixture with { TrailLength = clock.Sleeps }, () => clock.Elapsed, clock.Sleep);
+        var window = TestHangGuard.HangSafetyBound;
+        OwnedAttemptExitWait.WaitForExit(42, () => clock.Elapsed >= window,
+            () => Fixture, () => clock.Elapsed, clock.Sleep);
 
-        Assert.Equal(failsafe, clock.Elapsed);
+        Assert.Equal(window, clock.Elapsed);
     }
 
     private sealed class Clock

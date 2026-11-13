@@ -13,6 +13,7 @@
     <Compile Include="..\AcceptanceLaneWaitTestClock.cs" Link="AcceptanceLaneWaitTestClock.cs" />
     <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <Compile Include="..\CliChildProcessRunner.cs" Link="CliChildProcessRunner.cs" />
+    <Compile Include="..\ChildProgressWatch.cs" Link="ChildProgressWatch.cs" />
     <Compile Include="..\FixtureProbeLocator.cs" Link="FixtureProbeLocator.cs" />
     <Compile Include="..\TestBuildOutputLocator.cs" Link="TestBuildOutputLocator.cs" />
     <Compile Include="..\FailureClusterFixtureData.cs" Link="FailureClusterFixtureData.cs" />

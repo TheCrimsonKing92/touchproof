@@ -516,13 +516,11 @@ public sealed class LaneTimingMeasurementScriptTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {executable}.");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        ScriptFixtureProcessRunner.AssertExited(process, $"{executable} did not exit within the 30-second failsafe.");
+        var output = ScriptFixtureProcessRunner.AssertExited(process, $"{executable} made no progress for its 30-second window.");
         return new ProcessResult(
             process.ExitCode,
-            stdout.GetAwaiter().GetResult(),
-            stderr.GetAwaiter().GetResult());
+            output.Stdout,
+            output.Stderr);
     }
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);

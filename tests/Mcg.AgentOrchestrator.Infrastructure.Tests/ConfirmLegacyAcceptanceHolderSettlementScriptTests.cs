@@ -149,10 +149,8 @@ public sealed class ConfirmLegacyAcceptanceHolderSettlementScriptTests : IDispos
         startInfo.Environment["TMP"] = Path.GetTempPath();
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to launch settlement script fixture.");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        ScriptFixtureProcessRunner.AssertExited(process, "Settlement script did not exit within its hang failsafe.");
-        return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
+        var output = ScriptFixtureProcessRunner.AssertExited(process, "Settlement script made no progress for its hang window.");
+        return (process.ExitCode, output.Stdout + output.Stderr);
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
