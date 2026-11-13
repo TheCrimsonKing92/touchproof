@@ -48,9 +48,10 @@ internal sealed class BoardFillAssessmentTestFixture : IDisposable
         return Store.ReadAll().Single(row => row.Id == round.Id);
     }
 
-    internal ConductorBoardFillHost Host(IBoardFillPremiseVerifier verifier) => _host = new(Store, (_, _) => Draft(),
+    internal ConductorBoardFillHost Host(IBoardFillPremiseVerifier verifier,
+        Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null) => _host = new(Store, (_, _) => Draft(),
         () => [Item], (_, _) => Ready, () => ConductorAutonomyPolicy.Permissive with { BoardFillMaxDraftsPerDay = 1 },
-        new(EventPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow, verifier);
+        new(EventPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow, verifier, revise: revise);
 
     internal sealed class Verifier(Func<string, string, CancellationToken, Task<BoardFillPremiseVerification>> run) : IBoardFillPremiseVerifier
     {

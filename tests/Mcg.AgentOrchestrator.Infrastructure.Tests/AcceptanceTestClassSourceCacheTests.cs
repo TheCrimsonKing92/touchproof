@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
@@ -6,6 +7,167 @@ public sealed class AcceptanceTestClassSourceCacheTests
 {
     private const string TestProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/";
     private const string SupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/";
+
+    [Fact]
+    public void SharedStore_SecondInstance_ParsesNothingAndMatches()
+    {
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        var directory = tree.PathOf("store");
+        var first = new AcceptanceTestClassSourceCache(directory);
+        var expected = Scan(tree, first);
+        Assert.Equal(paths.Length, first.ParsedFileCount);
+        Assert.Equal(paths.Length, Directory.GetFiles(directory, "*.json", SearchOption.AllDirectories).Length);
+
+        var second = new AcceptanceTestClassSourceCache(directory);
+        var actual = Scan(tree, second);
+
+        Assert.NotEmpty(actual);
+        Assert.Equal(expected, actual);
+        Assert.Equal(0, second.ParsedFileCount);
+        Assert.All(paths, path => Assert.Equal(0, second.ParseCountForTests(tree.Root, path)));
+    }
+
+    [Fact]
+    public void OwnerState_DefaultInstances_ReusePersistedExtracts()
+    {
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        tree.Write(".orchestrator/owner-marker", "fixture owner state");
+        var first = new AcceptanceTestClassSourceCache();
+        var expected = Scan(tree, first);
+        Assert.Equal(paths.Length, first.ParsedFileCount);
+        Assert.Equal(paths.Length, Directory.GetFiles(tree.PathOf(Path.Combine(".orchestrator",
+            AcceptanceTestClassSourceExtractStore.DirectoryName)), "*.json", SearchOption.AllDirectories).Length);
+        var next = new AcceptanceTestClassSourceCache();
+
+        Assert.Equal(expected, Scan(tree, next));
+        Assert.Equal(0, next.ParsedFileCount);
+    }
+
+    [Fact]
+    public void SharedStore_EditedFile_NextInstanceParsesExactlyOne()
+    {
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        var directory = tree.PathOf("store");
+        Scan(tree, new AcceptanceTestClassSourceCache(directory));
+        var changed = tree.Write(SupportProject + "Names.cs", Names("Beta"));
+        var next = new AcceptanceTestClassSourceCache(directory);
+
+        var actual = Scan(tree, next);
+
+        Assert.Equal(1, next.ParsedFileCount);
+        Assert.Equal(1, next.ParseCountForTests(tree.Root, changed));
+        Assert.All(paths.Except([changed]), path => Assert.Equal(0, next.ParseCountForTests(tree.Root, path)));
+        Assert.Equal("Beta", Assert.Single(actual, item => item.FullName == "DerivedTests").Collection);
+        Assert.Equal(Scan(tree, new AcceptanceTestClassSourceCache(null)), actual);
+    }
+
+    [Theory]
+    [InlineData("truncated")]
+    [InlineData("non-json")]
+    [InlineData("version")]
+    [InlineData("ancestry")]
+    public void SharedStore_InvalidEntry_NextInstanceParsesAndRepairs(string defect)
+    {
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        var directory = tree.PathOf("store");
+        var expected = Scan(tree, new AcceptanceTestClassSourceCache(null));
+        Assert.Equal(expected, Scan(tree, new AcceptanceTestClassSourceCache(directory)));
+        var store = new AcceptanceTestClassSourceExtractStore(directory);
+        var hash = AcceptanceTestClassSourceExtractStore.HashText(File.ReadAllText(paths[0]));
+        var path = store.EntryPath(hash);
+        Assert.True(File.Exists(path));
+        var json = File.ReadAllText(path);
+        var entry = JsonNode.Parse(json)!;
+        entry["ExtractorVersion"] = AcceptanceTestClassSourceExtractStore.ExtractorVersion + 1;
+        if (defect == "ancestry")
+        {
+            entry["ExtractorVersion"] = AcceptanceTestClassSourceExtractStore.ExtractorVersion;
+            entry["Extract"]!["Ancestry"] = null;
+        }
+        File.WriteAllText(path, defect switch
+        {
+            "truncated" => json[..(json.Length / 2)],
+            "non-json" => "not JSON",
+            _ => entry.ToJsonString()
+        });
+        Assert.False(store.TryRead(hash, out _));
+        var next = new AcceptanceTestClassSourceCache(directory);
+
+        var actual = Scan(tree, next);
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(1, next.ParsedFileCount);
+        Assert.Equal(1, next.ParseCountForTests(tree.Root, paths[0]));
+        Assert.True(store.TryRead(hash, out _));
+        var repaired = new AcceptanceTestClassSourceCache(directory);
+        Assert.Equal(expected, Scan(tree, repaired));
+        Assert.Equal(0, repaired.ParsedFileCount);
+    }
+
+    [Theory]
+    [InlineData("Literal")]
+    [InlineData("NameOf")]
+    [InlineData("Member")]
+    [InlineData("Identifier")]
+    public void SharedStore_NullCollectionValue_NextInstanceParsesAndRepairs(string kindName)
+    {
+        var kind = Enum.Parse<AcceptanceTestClassSourceScanner.CollectionExpressionKind>(kindName);
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        var directory = tree.PathOf("store");
+        var expected = Scan(tree, new AcceptanceTestClassSourceCache(null));
+        Assert.Equal(expected, Scan(tree, new AcceptanceTestClassSourceCache(directory)));
+        var store = new AcceptanceTestClassSourceExtractStore(directory);
+        var hash = AcceptanceTestClassSourceExtractStore.HashText(File.ReadAllText(paths[1]));
+        Assert.True(store.TryRead(hash, out _));
+        var path = store.EntryPath(hash);
+        var entry = JsonNode.Parse(File.ReadAllText(path))!;
+        var collection = entry["Extract"]!["Classes"]![0]!["Collection"]!;
+        collection["Kind"] = (int)kind;
+        collection["Value"] = null;
+        File.WriteAllText(path, entry.ToJsonString());
+        var next = new AcceptanceTestClassSourceCache(directory);
+
+        Assert.Equal(expected, Scan(tree, next));
+        Assert.Equal(1, next.ParsedFileCount);
+        Assert.Equal(1, next.ParseCountForTests(tree.Root, paths[1]));
+        Assert.True(store.TryRead(hash, out var repaired));
+        var repairedCollection = Assert.Single(repaired.Classes).Collection;
+        Assert.Equal(AcceptanceTestClassSourceScanner.CollectionExpressionKind.Member, repairedCollection.Kind);
+        Assert.Equal("Names.Lane", repairedCollection.Value);
+        var warm = new AcceptanceTestClassSourceCache(directory);
+        Assert.Equal(expected, Scan(tree, warm));
+        Assert.Equal(0, warm.ParsedFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SharedStore_BlockedDirectory_MatchesStorelessScan(bool blockVersion)
+    {
+        using var tree = new TestTree();
+        var paths = tree.WriteSources();
+        var expected = Scan(tree, new AcceptanceTestClassSourceCache(null));
+        var blocked = blockVersion ? Path.Combine("store",
+            AcceptanceTestClassSourceExtractStore.ExtractorVersion.ToString()) : "store";
+        var blockedPath = tree.Write(blocked, "directory is blocked");
+        var cache = new AcceptanceTestClassSourceCache(tree.PathOf("store"));
+
+        Assert.Equal(expected, Scan(tree, cache));
+        Assert.Equal(paths.Length, cache.ParsedFileCount);
+        Assert.Equal("directory is blocked", File.ReadAllText(blockedPath));
+    }
+
+    private static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(
+        TestTree tree, AcceptanceTestClassSourceCache cache)
+    {
+        using var scope = AcceptanceTestClassSourceCache.Use(cache);
+        return AcceptanceTestClassSourceScanner.Scan(tree.Root);
+    }
 
     [Fact]
     public void UnchangedTree_SecondScan_ParsesNothingAndMatches()
