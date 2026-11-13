@@ -213,8 +213,12 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         AcceptanceSelectedExecutionSessionSuspension.Write(home, new(miss.Id, stateHome), stateHome);
         var existing = (await items.ListAsync().ConfigureAwait(false)).SingleOrDefault(item => item.CorrelationKey == miss.CorrelationKey);
         if (existing is null)
-            await items.RaiseAsync(CollaborationItemType.Verify, null, "Selected execution backstop found a miss",
+        {
+            var item = await items.RaiseAsync(CollaborationItemType.Verify, null, "Selected execution backstop found a miss",
                 JsonSerializer.Serialize(miss), miss.CorrelationKey).ConfigureAwait(false);
+            Report("miss-raised", new(miss.Id, miss.CoveredFromCommit, miss.CoveredToCommit, 0, miss.GoalIds, clock()),
+                miss.FailingTests.Count, "item=" + item.Id);
+        }
         else if (CollaborationItemLifecycle.IsTerminal(existing.Status))
         {
             state = state with { OpenMiss = null };

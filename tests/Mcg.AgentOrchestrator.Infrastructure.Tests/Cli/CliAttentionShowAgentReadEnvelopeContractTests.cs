@@ -191,9 +191,16 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             // Decisions reads persisted state; this fixture has only in-memory goals.
             Assert.False(File.Exists(seed.Workspace.SqliteStatePath));
             var decisions = "Decisions (0):\r\n  none\r\nHidden decisions: 1 (goal-missing=1)\r\n\r\n";
+            var crossGoal = Assert.Single(await seed.Store.GetAttentionQueueAsync(), item => item.GoalId is null);
+            var crossGoalQueue = "\r\nAttention queue: 1 open reach-up item(s)\r\n" +
+                $"  [Decision] {crossGoal.Id[..8]} status=Raised goal=cross-goal\r\n" +
+                $"    dismiss: attention dismiss --item {crossGoal.Id}\r\n" +
+                "    subject: Cross-goal decision\r\n" +
+                "    body: Cross-goal body\r\n" +
+                $"    raised: {crossGoal.RaisedAt:u}\r\n\r\n";
             foreach (var (args, expected) in new[]
             {
-                (new[] { "attention", "show" }, decisions + waits),
+                (new[] { "attention", "show" }, crossGoalQueue + decisions + waits),
                 (new[] { "attention", "show", "abc10000" }, scoped)
             })
             {
