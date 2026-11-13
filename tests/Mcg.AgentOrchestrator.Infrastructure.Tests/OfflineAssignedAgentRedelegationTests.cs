@@ -73,18 +73,81 @@ public sealed class OfflineAssignedAgentRedelegationTests
     }
 
     [Xunit.Fact]
-    public void MissingPinnedAgentIsReassignedInsteadOfHeld()
+    public void MissingPinnedAgentIsHeldInsteadOfReassigned()
     {
         var (kernel, goal, primary, alternate) = Create();
         var task = goal.Tasks.Single();
         kernel.ReassignTaskAgent(goal.Id, task.Id, primary);
 
-        var result = OfflineAssignedAgentRedelegation.Apply(kernel, goal, [alternate], [task.Id]);
+        AssertMissingAgentHold(kernel, goal, primary, [alternate]);
+    }
 
-        Assert.Equal(alternate.Id, task.AssignedAgentId);
-        Assert.Empty(result.ExcludedTaskIds);
-        Assert.Empty(result.Blocked);
-        Assert.Contains("from_status=absent", goal.Timeline.Last().Message, StringComparison.Ordinal);
+    [Xunit.Theory]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, false)]
+    public void MissingAgentHoldsRegardlessOfPinOrReplacement(bool pinned, bool replacementAvailable)
+    {
+        var (kernel, goal, primary, alternate) = Create();
+        var task = goal.Tasks.Single();
+        if (pinned)
+            kernel.ReassignTaskAgent(goal.Id, task.Id, primary);
+        Assert.Equal(pinned, OfflineAssignedAgentRedelegation.IsOperatorPin(goal, task.Id));
+
+        AssertMissingAgentHold(kernel, goal, primary,
+            [alternate with { Status = replacementAvailable ? AgentStatus.Available : AgentStatus.Offline }]);
+    }
+
+    private static void AssertMissingAgentHold(AgentOrchestratorKernel kernel, Goal goal,
+        AgentDefinition primary, IReadOnlyList<AgentDefinition> agents)
+    {
+        var task = goal.Tasks.Single();
+        var before = goal.Timeline.ToArray();
+        var revision = task.ConductorRoutingRevision;
+        var dispatcherError = Assert.Throws<KeyNotFoundException>(() =>
+            WorkerProfileDispatcher.ResolveSubscriptionProfile(task, agents, WorkerProfileCatalog.Default()));
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var result = OfflineAssignedAgentRedelegation.Apply(kernel, goal, agents, [task.Id, task.Id]);
+
+            Assert.Equal(primary.Id, task.AssignedAgentId);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(revision, task.ConductorRoutingRevision);
+            Assert.Equal(before, goal.Timeline);
+            Assert.Equal(task.Id, Assert.Single(result.ExcludedTaskIds));
+            var diagnostic = Assert.Single(result.Blocked);
+            Assert.Equal("assigned-agent-not-found", diagnostic.Reason);
+            Assert.Equal(task.Id.Value, diagnostic.TaskId);
+            Assert.Equal("unknown", diagnostic.Provider);
+            var detail = Assert.Single(diagnostic.Details!);
+            Assert.Equal(dispatcherError.Message, detail);
+            Assert.Contains(primary.Id.Value, detail, StringComparison.Ordinal);
+            Assert.Contains(task.Id.Value, detail, StringComparison.Ordinal);
+            Assert.Contains(nameof(AgentRole.Tester), detail, StringComparison.Ordinal);
+            Assert.Contains("reassign-agent", detail, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public void PinnedUnavailableAgentWithAlternateHoldsWithoutReassignment()
+    {
+        var (kernel, goal, primary, alternate) = Create();
+        var task = goal.Tasks.Single();
+        kernel.ReassignTaskAgent(goal.Id, task.Id, primary);
+        var before = goal.Timeline.ToArray();
+        var revision = task.ConductorRoutingRevision;
+
+        var result = OfflineAssignedAgentRedelegation.Apply(kernel, goal,
+            [primary with { Status = AgentStatus.Offline }, alternate], [task.Id]);
+
+        Assert.Equal(primary.Id, task.AssignedAgentId);
+        Assert.Equal(revision, task.ConductorRoutingRevision);
+        Assert.Equal(before, goal.Timeline);
+        Assert.Equal(task.Id, Assert.Single(result.ExcludedTaskIds));
+        var diagnostic = Assert.Single(result.Blocked);
+        Assert.Equal("assigned-agent-unavailable-pinned", diagnostic.Reason);
+        Assert.Equal("agent=xai-tester status=Offline", Assert.Single(diagnostic.Details!));
     }
 
     [Xunit.Fact]

@@ -44,24 +44,39 @@ public sealed class OfflineAssignedAgentDispatchScenarioTests
     }
 
     [Xunit.Fact]
-    public void MissingTesterSkipsTheFirstOfflineAgentInsteadOfUsingStaleRepair()
+    public void MissingTesterHoldsInsteadOfRedelegatingOrUsingStaleRepair()
     {
         using var fixture = new Fixture();
         fixture.Agents = [Scenario.Agent("offline-tester", "xAI", "grok-cli", "grok-4.6")
             with { Status = AgentStatus.Offline }, fixture.Alternate];
+        var revision = fixture.Current.Tasks.Single().ConductorRoutingRevision;
 
         var result = fixture.Tick();
 
-        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         var task = fixture.Current.Tasks.Single();
-        var evt = Assert.Single(fixture.Current.Timeline,
+        Assert.DoesNotContain(fixture.Current.Timeline,
             evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRedelegated);
-        Assert.Contains("from_status=absent", evt.Message, StringComparison.Ordinal);
-        Assert.Contains("to=openai-tester", evt.Message, StringComparison.Ordinal);
-        Assert.Equal(fixture.Alternate.Id, task.AssignedAgentId);
-        Assert.Equal(fixture.Alternate.Id.Value, task.LastDispatch!.AssignedAgentId);
-        Assert.Equal("codex-cli", task.LastDispatch.WorkerName);
-        Assert.Single(fixture.RequestedStarts);
+        Assert.Equal(fixture.Primary.Id, task.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(revision, task.ConductorRoutingRevision);
+        Assert.Null(task.LastDispatch);
+        Assert.Empty(fixture.RequestedStarts);
+        Assert.Empty(fixture.RequestedCommands);
+        Assert.Empty(fixture.Escalations);
+        Assert.NotNull(fixture.StartResult);
+        Assert.Empty(fixture.StartResult.Dispatches);
+        Assert.Empty(fixture.StartResult.Processes.Tasks);
+        var diagnostic = Assert.Single(fixture.StartResult.BlockedDiagnostics,
+            diagnostic => diagnostic.Reason == "assigned-agent-not-found");
+        Assert.Equal(task.Id.Value, diagnostic.TaskId);
+        var detail = Assert.Single(diagnostic.Details!);
+        Assert.Contains(fixture.Primary.Id.Value, detail, StringComparison.Ordinal);
+        Assert.Contains(task.Id.Value, detail, StringComparison.Ordinal);
+        Assert.Contains(nameof(AgentRole.Tester), detail, StringComparison.Ordinal);
+        Assert.Contains("reassign-agent", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Current.Timeline,
+            evt => evt.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
         Assert.DoesNotContain(fixture.Current.Timeline, evt => evt.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase));
     }
 
