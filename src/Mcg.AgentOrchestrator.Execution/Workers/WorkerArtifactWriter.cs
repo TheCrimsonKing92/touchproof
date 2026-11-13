@@ -204,6 +204,7 @@ internal sealed partial class WorkerArtifactWriter
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory, storeReferences));
         WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings, storeReferences, repositoryDiffs);
         SnapshotCurrentPackage(contextDirectory, task.Id, guidanceFiles);
+        RolePackageRetention.Retain(orchestratorStoreRoot, goal.Id, task.Id, Path.Combine(contextDirectory, "packages", task.Id.Value), clock ?? new SystemClock());
 
         WriteAcceptanceCriteriaIfNonEmpty(goal.Objective, workingDirectory);
 

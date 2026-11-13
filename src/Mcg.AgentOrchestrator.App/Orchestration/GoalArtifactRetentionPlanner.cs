@@ -163,7 +163,7 @@ internal static class GoalArtifactRetentionPlanner
                 : RetentionDecision.Keep,
             path,
             Directory.Exists(path),
-            "Context packages are audit evidence and should outlive workspace cleanup.",
+            $"The in-worktree context package is removed with the workspace; surviving task copies are under {RolePackageRetention.DirectoryName}/<goal-id>/<task-id> in the orchestrator directory.",
             null);
     }
 
