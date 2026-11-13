@@ -271,6 +271,8 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
             kernel.ActivateGoal(goal.Id, [agent]);
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single();
+            // Profile preparation records the working directory used by a later worker start.
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
             var gitStatusBefore = ReadGit(root, ["status", "--short"]);
 
             var dispatch = new GoalDispatchOperations().ProfileDispatchTask(
@@ -280,13 +282,14 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
                 task,
                 new WorkerProfile("echo", "echo {promptPath}"));
 
-            var contextDirectory = Path.Combine(root, ".orchestrator-context", goal.Id.Value);
+            var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
             var evidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-goal-evidence.md"));
             Assert.Contains("root_exit_code=0", evidence, StringComparison.Ordinal);
             Assert.Contains("prior-goal-evidence.md", File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), StringComparison.Ordinal);
             Assert.Contains("prior-goal-evidence.md", File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")), StringComparison.Ordinal);
             Assert.True(File.Exists(Path.Combine(contextDirectory, "packages", task.Id.Value, "prior-goal-evidence.md")));
             Assert.NotNull(task.LastDispatch);
+            Assert.Equal(worktree, task.LastDispatch.WorkingDirectory);
             Assert.Null(task.LastProcess);
             Assert.True(File.Exists(dispatch.PromptPath));
             Assert.Equal(stateVersionBefore, await SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(workspace.SqliteStatePath, PriorGoalId));
