@@ -11,7 +11,7 @@ internal static class OwnerConsoleFullScreenComposer
     internal static DataTable CreateBoardTable()
     {
         var table = new DataTable();
-        foreach (var name in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" }) table.Columns.Add(name);
+        foreach (var name in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "LAST EVENT" }) table.Columns.Add(name);
         return table;
     }
 
@@ -51,6 +51,7 @@ internal static class OwnerConsoleFullScreenComposer
         epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
         epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
+        AttachBoardOrderKey(view, hints);
         var epicView = new OwnerConsoleEpicDialog(controller, view.Invoke, token);
         List<IOwnerConsoleSettingsTab> settingsTabs = [];
         if (controller.Sound is { } sound) settingsTabs.Add(new OwnerConsoleAlertsSettingsTab(sound));
@@ -62,6 +63,28 @@ internal static class OwnerConsoleFullScreenComposer
             settingsTabs.Add(new OwnerConsoleProjectsSettingsTab(registry, boardSource.HandleScope));
         var settingsView = new OwnerConsoleSettingsView(settingsTabs);
         return (noticeStrip, noticeExpiry, operation, layout, renderCoordinator, previewPane, trace, selection, paneRenderer, epicView, settingsView);
+    }
+
+    private static void AttachBoardOrderKey(OwnerConsoleFullScreenView view, Label hints)
+    {
+        var decorating = false;
+        var baseHint = hints.Text;
+        void Decorate()
+        {
+            if (decorating || view.FocusedPane != OwnerConsolePane.Board || view.EditingCommand ||
+                view.CommandLine.HasFocus || hints.Viewport.Width <= 0) return;
+            decorating = true;
+            try { hints.Text = OwnerConsoleBoardOrderKey.Fit(hints.Viewport.Width) + "  " + baseHint; }
+            finally { decorating = false; }
+        }
+        hints.TextChanged += (_, _) =>
+        {
+            if (decorating) return;
+            baseHint = hints.Text;
+            Decorate();
+        };
+        // Assigning unchanged base text raises no TextChanged event, including the first layout.
+        hints.ViewportChanged += (_, _) => Decorate();
     }
 
     // Wiring invokes view callbacks immediately, so Build's results must already be stored on the view.

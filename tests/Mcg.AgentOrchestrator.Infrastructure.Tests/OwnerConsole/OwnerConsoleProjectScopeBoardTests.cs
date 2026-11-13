@@ -12,7 +12,7 @@ using Terminal.Gui.Views;
 public sealed class OwnerConsoleProjectScopeBoardTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private static readonly string[] LegacyColumns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE"];
+    private static readonly string[] LegacyColumns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "LAST EVENT"];
 
     [Fact]
     public async Task UnscopedLaunch_ThreeWorkspaces_MergesRankedRowsAndShowsProject()
