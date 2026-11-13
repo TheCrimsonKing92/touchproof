@@ -49,7 +49,17 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($env:MCG_PHASE_TRACE)) {
             Write-Output 'MCG_PHASE=rebuild-and-run-cli'
         }
-        $output = @(& (Join-Path $repoRoot 'scripts\Invoke-OrchestratorCommand.ps1') repo-process-info --locks)
+        $launcher = Join-Path $repoRoot 'mcg-orchestrator.cmd'
+        if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+            throw "Orchestrator launcher not found: $launcher"
+        }
+        Push-Location -LiteralPath $repoRoot
+        try {
+            $output = @(& $launcher repo-process-info --locks)
+        }
+        finally {
+            Pop-Location
+        }
     }
     $exitCode = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
     if ($exitCode -ne 0) {

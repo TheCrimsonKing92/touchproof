@@ -421,7 +421,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
     {
         var scriptText = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", helperScript));
         var phaseIndex = scriptText.IndexOf("MCG_PHASE=rebuild-and-run-cli", StringComparison.Ordinal);
-        var fallbackIndex = scriptText.IndexOf("Invoke-OrchestratorCommand.ps1", StringComparison.Ordinal);
+        var fallbackIndex = scriptText.IndexOf("mcg-orchestrator.cmd", StringComparison.Ordinal);
 
         Assert.True(phaseIndex >= 0, $"{helperScript} does not report its rebuild phase.");
         Assert.True(

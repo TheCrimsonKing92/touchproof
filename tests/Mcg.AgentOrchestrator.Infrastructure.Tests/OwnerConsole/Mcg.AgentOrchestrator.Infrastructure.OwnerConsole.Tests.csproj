@@ -25,6 +25,7 @@
     <Compile Include="..\OwnerConsoleTestClock.cs" Link="OwnerConsoleTestClock.cs" />
     <Compile Include="..\OwnerConsoleControllerFactory.cs" Link="OwnerConsoleControllerFactory.cs" />
     <Compile Include="..\TestHangGuard.cs" Link="TestHangGuard.cs" />
+    <Compile Include="..\InProcessProgressWatch.cs" Link="InProcessProgressWatch.cs" />
     <Compile Include="..\ManualStewardTimeProvider.cs" Link="ManualStewardTimeProvider.cs" />
     <Compile Include="..\VerifiedRepositoryRoot.cs" Link="VerifiedRepositoryRoot.cs" />
     <Compile Include="..\SourceSnapshot\RepositorySourceSnapshotCache.cs" Link="SourceSnapshot\RepositorySourceSnapshotCache.cs" />

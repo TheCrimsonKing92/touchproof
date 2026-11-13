@@ -13,7 +13,8 @@ internal sealed class SelectedExecutionBackstopGateRunner(ConductorDriver driver
         var workspace = driver._cohortWorkspace ?? throw new InvalidOperationException("Backstop workspace is unavailable.");
         var verifier = driver._cohortAcceptanceVerifier ?? throw new InvalidOperationException("Backstop verifier is unavailable.");
         var root = AcceptanceOwnerResultsRoot.ResolveOwnerResultsRootForCandidate(workspace.ExecutionDirectory);
-        var checkout = Path.Combine(root, ".orchestrator-worktrees", "backstop-" + request.Id);
+        // Short like train checkouts: a 41-character name pushed nested test worktrees past git's path limit.
+        var checkout = Path.Combine(root, ".orchestrator-worktrees", "b-" + request.Id[..Math.Min(12, request.Id.Length)]);
         cancellationToken.ThrowIfCancellationRequested();
         // A restarted request reuses its identity but never trusts a previous checkout's contents.
         if (Directory.Exists(checkout))
@@ -28,14 +29,18 @@ internal sealed class SelectedExecutionBackstopGateRunner(ConductorDriver driver
                 return SelectedExecutionBackstopOutcome.Infrastructure($"checkout-add-exit-{added.ExitCode}");
             if (GoalWorktrees.ResolveRequiredRef(checkout, "HEAD") != request.ToCommit)
                 return SelectedExecutionBackstopOutcome.Infrastructure("checkout-revision-mismatch");
-            using var lease = driver.CohortPartitionStableSlotLeaseSource is { } source
+            AcceptanceVerificationResult result;
+            using (var lease = driver.CohortPartitionStableSlotLeaseSource is { } source
                 ? source("selected-execution-backstop:" + request.Id, cancellationToken)
-                : driver.ParallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease("selected-execution-backstop:" + request.Id, cancellationToken);
-            var result = AcceptanceExecutionRunner.RunAttempt(verifier, checkout, null, changedFiles: null,
-                lease.Environment.BuildPermitIndex, lease, cancellationToken,
-                new AcceptanceRunExecutionOptions(GateRunIdentity: request.Id, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull,
-                    IntegrationBranch: workspace.IntegrationBranch));
-            return Classify(result);
+                : driver.ParallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease("selected-execution-backstop:" + request.Id, cancellationToken))
+            {
+                result = AcceptanceExecutionRunner.RunAttempt(verifier, checkout, null, changedFiles: null,
+                    lease.Environment.BuildPermitIndex, lease, cancellationToken,
+                    CreateExecutionOptions(new ConductEventLogWriter(workspace.ConductEventsLogPath), request,
+                        workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch));
+            }
+            return Classify(result, SelectedExecutionBackstopFailureRerun.Create(
+                driver, verifier, workspace, checkout, request, cancellationToken));
         }
         finally
         {
@@ -57,6 +62,16 @@ internal sealed class SelectedExecutionBackstopGateRunner(ConductorDriver driver
             catch (IOException) { }
         }
     }
+
+    internal static AcceptanceRunExecutionOptions CreateExecutionOptions(ConductEventLogWriter writer,
+        SelectedExecutionBackstopRequest request, string? projectHomeDirectory, string integrationBranch) => new(
+            RemoteLaneEventSink: detail => ConductorDriver.AppendRemoteLaneEvent(writer, null, detail),
+            GateRunIdentity: request.Id, CohortRemoteLanes: true,
+            ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch);
+
+    // A red returned to the coordinator carries only failures confirmed before checkout cleanup.
+    internal static SelectedExecutionBackstopOutcome Classify(AcceptanceVerificationResult result,
+        SelectedExecutionBackstopFailureRerun rerun) => rerun.Confirm(Classify(result));
 
     internal static SelectedExecutionBackstopOutcome Classify(AcceptanceVerificationResult result)
     {

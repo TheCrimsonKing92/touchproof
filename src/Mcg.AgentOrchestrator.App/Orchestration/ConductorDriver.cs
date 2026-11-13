@@ -1373,11 +1373,11 @@ internal sealed partial class ConductorDriver
                 SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths, requestContext?.Mutation, requestContext?.RepositoryTarget),
                 requestContext);
         }
-        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        catch (Exception ex) when (ex is AcceptanceArtifactWriterLeaseBusyException or PreReviewEvidenceBuildSlotsBusyException)
         {
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
-                $"Background {source} focused-evidence artifact writer is busy; retry on next conduct tick. {ex.Message}");
+                FocusedEvidenceLaunchRefusal.Describe(ex, $"{source} focused-evidence"));
             return false;
         }
         evidenceAttempt = attemptDecision.Attempt;

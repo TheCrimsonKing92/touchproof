@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class ReverseDependencyTestImpactReader
 {
+    // Home planner routing guards this path; foreign selected execution fails closed on absence via Read and AcceptanceSelectedExecutionPlan.Create.
     private const string InfrastructureTestProject =
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const int MaximumDependencyHops = 2;
@@ -316,6 +317,7 @@ internal static class ReverseDependencyTestImpactReader
     internal static bool IsDeliberatelyPartialRepositoryRoot(string repositoryRoot) =>
         !Directory.Exists(Path.Combine(repositoryRoot, ".git")) &&
         !File.Exists(Path.Combine(repositoryRoot, ".git")) &&
+        // Presence signal for declaration-reader selection only; Read fails closed when the dependent project is absent.
         !File.Exists(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln")) &&
         !File.Exists(Path.Combine(
             repositoryRoot,

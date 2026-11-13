@@ -96,8 +96,8 @@ public sealed class PreTesterTestSourceGuardClassesTests(ITestOutputHelper outpu
         Assert.Equal(guardNames.Length + SharedNames.Length, selected.Count);
         try
         {
-            // Limit pre-Tester guard cost; raised on 2026-11-07 when real source guards reached the old cap.
-            Assert.InRange(selected.Count, 1, 50);
+            // Budget includes the required NonHomeShardGraphGuardTests; every guard remains selected.
+            Assert.InRange(selected.Count, 1, 51);
         }
         catch
         {

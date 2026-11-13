@@ -72,7 +72,7 @@ internal static class SourceSizeRatchet
             // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
             // Goal 0bc1199a: one line binds build receipt recording; logic lives in BuildReceiptSite.
             // Goal e7e044fe: four net lines bind the attempt session and lane transform; selection logic is extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3941),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3940),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -626,7 +626,8 @@ internal static class SourceSizeRatchet
             // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
             // Goal c1182160: one defensive guard protects direct callers of the acceptance merge core from repository-set landing.
             // Goal 98758ac2: one composition-root census lifetime line; measured 11012 lines in the same 30 partials.
-            new SourceClassCeiling("CliCommandHandlers", 11012, 30),
+            // Goal 88d3f039 adds one post-commit call; citation parsing and output belong to GoalCitedDefectAdvisory.
+            new SourceClassCeiling("CliCommandHandlers", 11013, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -652,7 +653,7 @@ internal static class SourceSizeRatchet
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
             // Goal 0bc1199a: one added receipt-site binding line across the existing partials.
             // Goal e7e044fe: four net integration lines, no additional partial type.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6625, 17),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6624, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

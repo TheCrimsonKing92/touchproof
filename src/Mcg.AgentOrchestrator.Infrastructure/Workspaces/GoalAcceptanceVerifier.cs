@@ -3827,9 +3827,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 throw new MissingAcceptanceManifestException(
                     AcceptanceManifestLocator.SearchedLocations(worktreePath, projectHomeDirectory));
 
-            return JsonSerializer.Deserialize<AcceptanceManifest>(
-                File.ReadAllText(path),
-                JsonOptions) ?? new AcceptanceManifest();
+            return AcceptanceManifestOmittedChecks.Scope(JsonSerializer.Deserialize<AcceptanceManifest>(
+                File.ReadAllText(path), JsonOptions) ?? new AcceptanceManifest(), projectHomeDirectory);
         }
 
     }

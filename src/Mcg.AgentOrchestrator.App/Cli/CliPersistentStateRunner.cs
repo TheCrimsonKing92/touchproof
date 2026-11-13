@@ -2123,20 +2123,20 @@ internal static partial class CliPersistentStateRunner
         ValidateGoalRefinementArguments(args);
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
             throw new InvalidOperationException("Goal refinement requires durable outbox support.");
-
-        var result = GoalRefinementWorkCoordinator.ProcessAsync(
-                outboxRepository,
-                workspace,
-                providers,
-                workerProfiles,
-                new GoalId(args[1]),
-                rawOutputStamp: args.Count == 3 ? args[2] : null)
-            .GetAwaiter()
-            .GetResult();
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-        currentGoal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value.Equals(args[1], StringComparison.Ordinal));
-        GoalRefinementWorkOutcomeReporter.Report(result, workspace, outboxRepository);
-        return false;
+        var stamp = args.Count == 3 ? args[2] : null;
+        var custody = GoalRefinementExecutorCustodyReceipt.BeginChild(workspace.LogDirectory, new GoalId(args[1]), stamp, workspace.SqliteStatePath);
+        try
+        {
+            var result = GoalRefinementWorkCoordinator.ProcessAsync(outboxRepository, workspace, providers,
+                workerProfiles, new GoalId(args[1]), rawOutputStamp: stamp).GetAwaiter().GetResult();
+            custody.RecordClaim(result.Claimed);
+            var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+            currentGoal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value.Equals(args[1], StringComparison.Ordinal));
+            GoalRefinementWorkOutcomeReporter.Report(result, workspace, outboxRepository);
+            return false;
+        }
+        catch (Exception ex) { custody.RecordException(ex, ex is CliExitException); throw; }
+        finally { custody.RecordExit(); }
     }
 
     private static string ResolveGoalIntakeFailureCode(Exception exception)

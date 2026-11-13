@@ -22,6 +22,7 @@ public static class CandidateTreeProbe
 
         var candidateTree = new FileSystemTree(repositoryRoot);
         // Retained project directories also keep damaged built-in trees on the fail-safe assumption.
+        // Non-home gates use these paths only as absence signals; AcceptanceProjectTopologySource bounds probes to declarations.
         return HasTopLevelSolution(repositoryRoot) ||
             (RepositoryTestImpactPlanner.BuiltInTestProjectPaths.All(path =>
                 !candidateTree.Exists(path) && !candidateTree.Exists(Path.GetDirectoryName(path)!)) &&

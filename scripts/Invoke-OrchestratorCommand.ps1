@@ -1,17 +1,16 @@
 <#
 .SYNOPSIS
-  Run the repository's built orchestrator CLI from a stable, repo-bounded script prefix.
+  Run an explicit prebuilt orchestrator DLL through a repo-bounded script prefix.
 
 .DESCRIPTION
-  Use this through scripts\Invoke-RepoScript.ps1 when Codex needs to run foreground
-  orchestrator commands without ad-hoc dotnet invocations or repeated permission
-  prompts. Arguments are forwarded exactly as PowerShell receives them.
+  Select the prebuilt runtime with -AppDll. Arguments are forwarded exactly as
+  PowerShell receives them.
 
 .EXAMPLE
-  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 status ddae01e6
+  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 -AppDll .\runtime\Mcg.AgentOrchestrator.App.dll status ddae01e6
 
 .EXAMPLE
-  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 attention answer ddae01e6 099efaf9 Model fit evidence is a concise per-role note.
+  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 -AppDll .\runtime\Mcg.AgentOrchestrator.App.dll --help
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -52,88 +51,8 @@ if ($hasBinding) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($AppDll)) {
-    $launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
-    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-        throw "Orchestrator launcher not found: $launcher"
-    }
-
-    # Resolve existing ancestors through filesystem handles before appending the
-    # cold-cache suffix. GetFullPath alone cannot detect an escaping junction.
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
-        -not ('ForegroundRuntimeCachePathAuthority' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Win32.SafeHandles;
-public static class ForegroundRuntimeCachePathAuthority {
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFile(string path, uint access, uint share,
-        IntPtr security, uint creation, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle,
-        StringBuilder path, uint size, uint flags);
-    public static string Resolve(string path) {
-        using (var handle = CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
-            if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
-            var buffer = new StringBuilder(32768);
-            uint length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
-            if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (length >= buffer.Capacity) throw new InvalidOperationException("Canonical path is too long.");
-            var result = buffer.ToString();
-            if (result.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
-                return @"\\" + result.Substring(8);
-            return result.StartsWith(@"\\?\", StringComparison.Ordinal) ? result.Substring(4) : result;
-        }
-    }
-}
-'@
-    }
-
-    function Resolve-CacheDirectoryPath {
-        param([string]$Path)
-        $fullPath = [System.IO.Path]::GetFullPath($Path)
-        try {
-            $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop
-        }
-        catch [System.Management.Automation.ItemNotFoundException] {
-            $parent = Split-Path -Parent $fullPath
-            if ([string]::IsNullOrEmpty($parent) -or $parent -eq $fullPath) { throw }
-            return Join-Path (Resolve-CacheDirectoryPath $parent) (Split-Path -Leaf $fullPath)
-        }
-        if (-not $item.PSIsContainer) { throw "Cache ancestor is not a directory: $fullPath" }
-        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-            return [ForegroundRuntimeCachePathAuthority]::Resolve($fullPath)
-        }
-        $target = $item.ResolveLinkTarget($true)
-        if ($null -ne $target) { return $target.FullName }
-        $parent = Split-Path -Parent $fullPath
-        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $fullPath) { return $fullPath }
-        return Join-Path (Resolve-CacheDirectoryPath $parent) $item.Name
-    }
-
-    $cacheRoot = Join-Path $repoRoot '.orchestrator/operator-run-cache'
-    try {
-        $canonicalRepository = Resolve-CacheDirectoryPath $repoRoot
-        $canonicalCache = Resolve-CacheDirectoryPath $cacheRoot
-        $repositoryPrefix = $canonicalRepository.TrimEnd(
-            [System.IO.Path]::DirectorySeparatorChar,
-            [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-        if (-not $canonicalCache.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Canonical cache path escapes repository '$canonicalRepository': $canonicalCache"
-        }
-    }
-    catch {
-        throw "Cannot use foreground runtime cache '$cacheRoot'. $($_.Exception.Message)"
-    }
-
-    & $launcher --runtime-cache-root $cacheRoot @Arguments
-    if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-
-    return
+    [Console]::Error.WriteLine('Use mcg-orchestrator.cmd for foreground orchestrator commands; Invoke-OrchestratorCommand.ps1 requires an explicit -AppDll.')
+    exit 1
 }
 
 $resolvedAppDll = [System.IO.Path]::GetFullPath($AppDll)

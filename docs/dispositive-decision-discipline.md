@@ -44,6 +44,15 @@ Never resolve it by guessing at the consumer.
 - **Unknown and unavailable are outcomes, not defaults.** Missing, unreadable, invalid, and valid artifacts
   remain distinct until the decision is recorded; none may be silently mapped to clean, absent, failed, or
   any other specific verdict.
+- **What was persisted and whether it can be read now are different facts.** A failed read says the state is
+  unreadable at this moment. It says nothing about the state. A transient read failure must not overwrite a
+  persisted value with `Unavailable`, or with anything else.
+- **Reporting the unfavorable state is also a guess.** Failing closed by recording "failed", "unhealthy" or
+  "blocked" when the state is unknown erases what is known, exactly as recording the favorable state would.
+  Refuse the transition and record that the state was unknown.
+- **A retry cannot turn exhaustion into success.** Running out of attempts is its own outcome. No path that
+  retries may end in the passing result because the retries ran out, and the same holds for any transition
+  that cannot be undone.
 - **Typed evidence outranks display text.** A classifier receipt or typed status is consulted before any
   last-resort substring heuristic. Heuristics require positive and negative controls so quoted diagnostics,
   test names, and assertion text cannot manufacture the disposition.

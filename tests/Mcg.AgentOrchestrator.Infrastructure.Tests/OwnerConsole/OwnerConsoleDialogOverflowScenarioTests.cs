@@ -4,7 +4,7 @@ using System.Drawing;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
-using EpicFixture = OwnerConsoleEpicViewTests.Fixture;
+using EpicFixture = OwnerConsoleEpicViewFixture;
 
 public sealed class OwnerConsoleDialogOverflowScenarioTests
 {
