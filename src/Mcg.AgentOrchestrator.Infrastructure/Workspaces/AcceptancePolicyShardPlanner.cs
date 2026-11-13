@@ -48,10 +48,11 @@ internal static partial class AcceptancePolicyShardPlanner
         IEnumerable<string> targetedProjects, PolicyShardPlan policyShardPlan)
     {
         var targeted = targetedProjects.Where(project => !string.IsNullOrWhiteSpace(project)).ToArray();
-        var ordered = OrderProjectTopology(ProjectTopology);
+        var topology = policyShardPlan.Topology.Graph;
+        var ordered = OrderProjectTopology(topology);
         return ordered.Where(project => !policyShardPlan.IsAbsentProject(project) &&
-            (ProjectTopology[project].CacheEligibility == BaseCacheEligibility.Always ||
-             ProjectTopology[project].CacheEligibility == BaseCacheEligibility.WhenTargeted &&
+            (topology[project].CacheEligibility == BaseCacheEligibility.Always ||
+             topology[project].CacheEligibility == BaseCacheEligibility.WhenTargeted &&
              targeted.Any(target => ProjectMatches(target, project))))
             .ToArray();
     }
@@ -196,7 +197,8 @@ internal static partial class AcceptancePolicyShardPlanner
 
     private static PolicyShardPlan BuildPresentPolicyShardPlan(
         IReadOnlyList<string>? changedFiles,
-        AcceptanceShardPolicySwitches? switches)
+        AcceptanceShardPolicySwitches? switches,
+        AcceptanceProjectTopologySource topology)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return PolicyShardPlan.NotApplicable("no changed files");
@@ -212,14 +214,14 @@ internal static partial class AcceptancePolicyShardPlanner
 
         var summary = RepositoryChangeClassifier.Classify(normalizedFiles);
         var changedProjects = normalizedFiles
-            .Select(TryMapPathToProject)
+            .Select(topology.MapPath)
             .OfType<string>()
-            .Concat(normalizedFiles.SelectMany(AcceptancePolicyShardPlannerLinkedSources.Consumers))
+            .Concat(normalizedFiles.SelectMany(topology.LinkedConsumers))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var closure = BuildProjectDependencyClosure(changedProjects);
-        var evidence = BuildPolicyShardEvidence(changedProjects, closure);
-        var fullShardReason = FullShardReason(normalizedFiles, summary, changedProjects, switches);
+        var closure = BuildProjectDependencyClosure(changedProjects, topology.Graph);
+        var evidence = BuildPolicyShardEvidence(changedProjects, closure, topology);
+        var fullShardReason = FullShardReason(normalizedFiles, summary, changedProjects, switches, topology: topology);
         return fullShardReason is not null
             ? PolicyShardPlan.Full($"{fullShardReason}; {evidence}", closure)
             : PolicyShardPlan.Scoped(evidence, closure);
@@ -230,7 +232,8 @@ internal static partial class AcceptancePolicyShardPlanner
         RepositoryChangeSummary summary,
         IReadOnlyList<string> changedProjects,
         AcceptanceShardPolicySwitches? switches,
-        bool pathClausesOnly = false)
+        bool pathClausesOnly = false,
+        AcceptanceProjectTopologySource? topology = null)
     {
         if (!pathClausesOnly && FullShardOverrideEnabled(switches))
             return "MCG_ACCEPTANCE_FULL_SHARDS=1";
@@ -257,6 +260,10 @@ internal static partial class AcceptancePolicyShardPlanner
 
         }
 
+        if (!pathClausesOnly && topology is { IsHome: false } && changedFiles.Any(path =>
+                RepositoryChangeClassifier.Classify([path]).HasBehaviorChanges && topology.MapPath(path) is null))
+            return "changed behavior file did not map to a manifest-declared project; selecting full manifest checks";
+
         if (!pathClausesOnly && !summary.IsDocsOnly && summary.HasBehaviorChanges && changedProjects.Count == 0)
             return "changed files did not map to a known project";
 
@@ -266,14 +273,15 @@ internal static partial class AcceptancePolicyShardPlanner
     private static bool FullShardOverrideEnabled(AcceptanceShardPolicySwitches? switches) =>
         AcceptanceShardPolicySwitches.ResolveFullShards(switches);
 
-    private static HashSet<string> BuildProjectDependencyClosure(IReadOnlyList<string> changedProjects)
+    private static HashSet<string> BuildProjectDependencyClosure(IReadOnlyList<string> changedProjects,
+        IReadOnlyDictionary<string, ProjectTopologyEntry> topology)
     {
         var closure = new HashSet<string>(changedProjects, StringComparer.OrdinalIgnoreCase);
         var pending = new Queue<string>(changedProjects);
         while (pending.Count > 0)
         {
             var project = pending.Dequeue();
-            if (!ProjectTopology.TryGetValue(project, out var entry))
+            if (!topology.TryGetValue(project, out var entry))
                 continue;
 
             foreach (var referencingProject in entry.ReferencingProjects)
@@ -288,18 +296,20 @@ internal static partial class AcceptancePolicyShardPlanner
 
     internal static string BuildPolicyShardEvidence(
         IReadOnlyList<string> changedProjects,
-        IReadOnlySet<string> closure)
+        IReadOnlySet<string> closure,
+        AcceptanceProjectTopologySource? topology = null)
     {
+        string Label(string project) => topology is { IsHome: false } ? project : ProjectLabel(project);
         var changed = changedProjects.Count == 0
             ? "(none)"
-            : string.Join(", ", changedProjects.Select(ProjectLabel));
+            : string.Join(", ", changedProjects.Select(Label));
         var affected = closure.Count == 0
             ? "(none)"
-            : string.Join(", ", closure.OrderBy(ProjectLabel, StringComparer.OrdinalIgnoreCase).Select(ProjectLabel));
+            : string.Join(", ", closure.OrderBy(Label, StringComparer.OrdinalIgnoreCase).Select(Label));
         return $"changed projects: {changed}; dependency closure: {affected}";
     }
 
-    private static string? TryMapPathToProject(string? path)
+    internal static string? TryMapPathToProject(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -379,13 +389,13 @@ internal static partial class AcceptancePolicyShardPlanner
     internal static bool IsSkippedPolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
         (check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
          policyShardPlan.IsAbsentProject(check.Project)) ||
-        (policyShardPlan.Applies &&
+        (policyShardPlan.Topology.IsHome && policyShardPlan.Applies &&
         !policyShardPlan.ForceFull &&
         IsFullPolicyShardCheck(check) &&
         !policyShardPlan.IncludesProject(check.Project));
 
     internal static bool IsRunnablePolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
-        policyShardPlan.Applies &&
+        policyShardPlan.Topology.IsHome && policyShardPlan.Applies &&
         !policyShardPlan.ForceFull &&
         IsPolicyShardProjectCheck(check) &&
         policyShardPlan.IncludesProject(check.Project);
@@ -427,7 +437,7 @@ internal static partial class AcceptancePolicyShardPlanner
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         PolicyShardPlan policyShardPlan)
     {
-        if (!policyShardPlan.Applies || policyShardPlan.ForceFull)
+        if (!policyShardPlan.Topology.IsHome || !policyShardPlan.Applies || policyShardPlan.ForceFull)
             return;
 
         foreach (var shard in manifestChecks.Where(IsFullPolicyShardCheck))
@@ -492,6 +502,7 @@ internal sealed record PolicyShardPlan(
     string Evidence,
     IReadOnlySet<string> DependencyClosure)
 {
+    internal AcceptanceProjectTopologySource Topology { get; init; } = AcceptanceProjectTopologySource.Home;
     public IReadOnlySet<string> AbsentProjects { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     public bool IsAbsentProject(string? project) =>
