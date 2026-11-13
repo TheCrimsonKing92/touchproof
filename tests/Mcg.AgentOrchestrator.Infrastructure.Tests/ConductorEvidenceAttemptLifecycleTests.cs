@@ -1192,6 +1192,266 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     }
 
     [Fact]
+    public void AttemptsHigh_SingleRunningAttemptRaisesNoWarning()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        var attempt = fixture.StartNext();
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, attempt.Outcome);
+        Assert.Single(fixture.Events("EVIDENCE_START"));
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+    }
+
+    [Fact]
+    public void AttemptsHigh_SupersededAttemptsUpToThresholdRaiseExactlyOneWarningListingCauses()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        fixture.StartNext();
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+        fixture.StartNext(TimeSpan.FromMinutes(2));
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+        fixture.StartNext(TimeSpan.FromMinutes(3));
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+        var fourth = fixture.StartNext(TimeSpan.FromMinutes(5));
+
+        Assert.Equal(4, fixture.Events("EVIDENCE_START").Count);
+        var ends = fixture.Events("EVIDENCE_END");
+        Assert.Equal(3, ends.Count);
+        Assert.All(ends, end => Assert.Equal("superseded", end.GetProperty("outcome").GetString()));
+        var causes = ends.Select(end => end.GetProperty("cause").GetString()).ToArray();
+        Assert.Equal(new[] { "candidate_changed", "focused_request_changed", "candidate_changed" }, causes);
+        var warning = Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+        Assert.Equal($"evidence:{fourth.GoalId}:attempts-high", warning.GetProperty("event_id").GetString());
+        Assert.Equal(fourth.GoalId, warning.GetProperty("goalId").GetString());
+        Assert.Equal(
+            $"goal={fourth.GoalId} attempts=4 threshold=4 unreadable=0 total_elapsed=10m0s causes={string.Join(',', causes)}",
+            warning.GetProperty("detail").GetString());
+        var events = ReadEvents(fixture.LogPath);
+        var fourthStart = events.FindIndex(item => item.GetProperty("eventKind").GetString() == "EVIDENCE_START" &&
+            item.GetProperty("attempt").GetString() == fourth.AttemptId);
+        Assert.True(fourthStart >= 0);
+        Assert.Equal("EVIDENCE_ATTEMPTS_HIGH", events[fourthStart + 1].GetProperty("eventKind").GetString());
+    }
+
+    [Fact]
+    public void AttemptsHigh_FurtherAttemptAndRepeatedStartKeepWarningCountAtOne()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        for (var i = 0; i < 4; i++)
+            fixture.StartNext(TimeSpan.FromMinutes(1));
+        var original = Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetRawText();
+
+        var fifth = fixture.StartNext(TimeSpan.FromMinutes(1));
+        Assert.Equal(5, fixture.Events("EVIDENCE_START").Count);
+        Assert.Equal(original, Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetRawText());
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, fifth, fixture.Clock.GetUtcNow());
+        Assert.Equal(original, Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetRawText());
+
+        // A fresh writer/reader after restart derives the same identities from disk.
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(new ConductEventLogWriter(fixture.LogPath), fifth,
+            fixture.Clock.GetUtcNow());
+        Assert.Equal(original, Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetRawText());
+    }
+
+    [Fact]
+    public void AttemptsHigh_GateAttemptsInGoalDirectoryAreNotCounted()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        for (var i = 0; i < 4; i++)
+        {
+            var gate = fixture.Coordinator.CreateAttemptForTests(
+                ConductorParallelAcceptanceCandidate.Create(fixture.Goal, 0, [], "gate", "main"));
+            fixture.Write(gate with
+            {
+                Kind = i == 0 ? "" : ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
+                Outcome = ConductorParallelAcceptanceAttemptOutcome.Reconciled,
+                ReconciledAt = fixture.Clock.GetUtcNow(),
+                SupersessionCause = ConductorEvidenceSupersessionCause.OperatorRegate
+            });
+            fixture.Clock.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        for (var i = 0; i < 3; i++)
+        {
+            fixture.StartNext(TimeSpan.FromMinutes(1));
+            Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+        }
+        var fourth = fixture.StartNext(TimeSpan.FromMinutes(1));
+        Assert.Equal(8, fourth.Ordinal);
+        Assert.Equal(4, fixture.Events("EVIDENCE_START").Count);
+        var detail = Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetProperty("detail").GetString();
+        Assert.Equal($"goal={fourth.GoalId} attempts=4 threshold=4 unreadable=0 total_elapsed=3m0s " +
+            "causes=candidate_changed,focused_request_changed,candidate_changed", detail);
+    }
+
+    [Fact]
+    public void AttemptsHigh_MalformedMetadataIsReportedUnreadableAndNeverCounted()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        var first = fixture.StartNext();
+        fixture.StartNext(TimeSpan.FromMinutes(1));
+        var third = fixture.StartNext(TimeSpan.FromMinutes(1));
+        var malformedPath = Path.Combine(Path.GetDirectoryName(first.MetadataPath)!, "broken.attempt.json");
+        File.WriteAllText(malformedPath, "{ malformed");
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, third, fixture.Clock.GetUtcNow());
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+
+        // Prepare the fourth persisted start directly so malformed metadata cannot
+        // influence the coordinator's independent latest-attempt selection.
+        var fourth = third with
+        {
+            AttemptId = "fourth",
+            Ordinal = 4,
+            MetadataPath = Path.Combine(Path.GetDirectoryName(first.MetadataPath)!, "fourth.attempt.json")
+        };
+        fixture.Write(fourth);
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, fourth, fixture.Clock.GetUtcNow());
+        var detail = Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetProperty("detail").GetString();
+        Assert.Equal($"goal={fourth.GoalId} attempts=4 threshold=4 unreadable=1 total_elapsed=2m0s " +
+            "causes=candidate_changed,focused_request_changed The true attempt count may be higher.", detail);
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, fourth, fixture.Clock.GetUtcNow());
+        Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+    }
+
+    [Fact]
+    public void HeldReason_AboveAttemptThresholdKeepsExactFormat()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        ConductorParallelAcceptanceAttempt attempt = null!;
+        for (var i = 0; i < 5; i++)
+            attempt = fixture.StartNext(TimeSpan.FromMinutes(1));
+        Assert.Equal(5, fixture.Events("EVIDENCE_START").Count);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(9) + TimeSpan.FromSeconds(41));
+
+        Assert.Equal($"PRE_REVIEW_FOCUSED_EVIDENCE_RUNNING: attempt 5, 9m41s elapsed (attempt={attempt.AttemptId})",
+            fixture.Coordinator.DescribeFocusedEvidenceHold(attempt));
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("null")]
+    [InlineData("blank-id")]
+    [InlineData("wrong-goal")]
+    [InlineData("unknown-kind")]
+    [InlineData("locked")]
+    public void AttemptsHigh_UnclassifiableFileReportsUnreadable(string corruption)
+    {
+        using var fixture = new AttemptPileUpFixture();
+        var current = fixture.StartNext();
+        var path = Path.Combine(Path.GetDirectoryName(current.MetadataPath)!, "damaged.attempt.json");
+        var damaged = corruption switch
+        {
+            "blank-id" => current with { AttemptId = "" },
+            "wrong-goal" => current with { GoalId = "another-goal" },
+            "unknown-kind" => current with { Kind = "unknown-kind" },
+            _ => current
+        };
+        File.WriteAllText(path, corruption switch
+        {
+            "malformed" => "{ broken",
+            "null" => "null",
+            _ => JsonSerializer.Serialize(damaged, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        });
+        using var locked = corruption == "locked"
+            ? new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)
+            : null;
+
+        var summary = PreReviewEvidenceAttemptPileUp.Summarize(
+            Path.GetDirectoryName(current.MetadataPath)!, current, fixture.Clock.GetUtcNow());
+        Assert.Equal(1, summary.AttemptCount);
+        Assert.Equal(1, summary.UnreadableCount);
+        Assert.Empty(summary.PriorSupersessionCauses);
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, current, fixture.Clock.GetUtcNow());
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+    }
+
+    [Fact]
+    public void AttemptsHigh_SummaryDeduplicatesAndSumsPersistedDurations()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        var current = fixture.StartNext();
+        var directory = Path.GetDirectoryName(current.MetadataPath)!;
+        fixture.Clock.Advance(TimeSpan.FromHours(1));
+        var observedAt = fixture.Clock.GetUtcNow();
+        fixture.Write(current with { MetadataPath = Path.Combine(directory, "duplicate.attempt.json") });
+        fixture.Write(current with
+        {
+            AttemptId = "passed", MetadataPath = Path.Combine(directory, "passed.attempt.json"), Ordinal = 4,
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.Passed,
+            CompletedAt = current.StartedAt + TimeSpan.FromMinutes(2),
+            SupersessionCause = ConductorEvidenceSupersessionCause.RetryInvalidated
+        });
+        fixture.Write(current with
+        {
+            AttemptId = "failed", MetadataPath = Path.Combine(directory, "failed.ATTEMPT.JSON"), Ordinal = 2,
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.Failed,
+            ReconciledAt = current.StartedAt + TimeSpan.FromMinutes(3)
+        });
+        fixture.Write(current with
+        {
+            AttemptId = "superseded", MetadataPath = Path.Combine(directory, "superseded.attempt.json"), Ordinal = 3,
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
+            LastHeartbeatAt = current.StartedAt + TimeSpan.FromMinutes(4)
+        });
+        fixture.Write(current with
+        {
+            AttemptId = "negative", MetadataPath = Path.Combine(directory, "negative.attempt.json"), Ordinal = 5,
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.Cancelled,
+            CompletedAt = current.StartedAt - TimeSpan.FromMinutes(1)
+        });
+        File.WriteAllText(Path.Combine(directory, "ignored.attempt.json.tmp"), "{ broken");
+
+        var summary = PreReviewEvidenceAttemptPileUp.Summarize(directory, current, observedAt);
+        Assert.Equal(5, summary.AttemptCount);
+        Assert.Equal(0, summary.UnreadableCount);
+        Assert.Equal(TimeSpan.FromMinutes(69), summary.TotalElapsed);
+        Assert.Equal(new[] { "unknown", "retry_invalidated" }, summary.PriorSupersessionCauses);
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, current, observedAt);
+        Assert.Equal($"goal={current.GoalId} attempts=5 threshold=4 unreadable=0 " +
+            "total_elapsed=1h9m0s causes=unknown,retry_invalidated",
+            Assert.Single(fixture.Events("EVIDENCE_ATTEMPTS_HIGH")).GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public void AttemptsHigh_UnreadableCurrentFileIsExcludedFromReadableCount()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        ConductorParallelAcceptanceAttempt current = null!;
+        for (var i = 0; i < 3; i++)
+            current = fixture.StartNext(TimeSpan.FromMinutes(1));
+        File.WriteAllText(current.MetadataPath, "{ broken");
+
+        var summary = PreReviewEvidenceAttemptPileUp.Summarize(
+            Path.GetDirectoryName(current.MetadataPath)!, current, fixture.Clock.GetUtcNow());
+        Assert.Equal(2, summary.AttemptCount);
+        Assert.Equal(1, summary.UnreadableCount);
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(fixture.Writer, current, fixture.Clock.GetUtcNow());
+        Assert.Empty(fixture.Events("EVIDENCE_ATTEMPTS_HIGH"));
+    }
+
+    [Fact]
+    public void AttemptsHigh_WriterFailureDoesNotEscapeOrChangeRunningAttempt()
+    {
+        using var fixture = new AttemptPileUpFixture();
+        ConductorParallelAcceptanceAttempt current = null!;
+        for (var i = 0; i < 4; i++)
+            current = fixture.StartNext(TimeSpan.FromMinutes(1));
+        var metadataBefore = File.ReadAllText(current.MetadataPath);
+        var appendAttempted = false;
+        var failingWriter = new ConductEventLogWriter(Path.Combine(Path.GetDirectoryName(fixture.LogPath)!, "failed.log"),
+            beforeRequiredEventDrain: () =>
+            {
+                appendAttempted = true;
+                throw new InvalidOperationException("Advisory writer failure");
+            });
+
+        PreReviewEvidenceAttemptPileUp.WarnIfHigh(failingWriter, current, fixture.Clock.GetUtcNow());
+        Assert.True(appendAttempted);
+        Assert.Equal(metadataBefore, File.ReadAllText(current.MetadataPath));
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, current.Outcome);
+    }
+
+    [Fact]
     public void HeldReason_RefreshesElapsedWithoutChangingHoldIdentity()
     {
         var root = CreateTempDirectory();
@@ -1483,6 +1743,70 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var path = Path.Combine(Path.GetTempPath(), "mcg-evidence-lifecycle-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    // Parallel-safe: unique filesystem root, manual clock, and no real child processes.
+    private sealed class AttemptPileUpFixture : IDisposable
+    {
+        private readonly string _root = CreateTempDirectory();
+        private readonly ConductorParallelAcceptanceAttemptCoordinator _completionCoordinator;
+        private ConductorParallelAcceptanceAttempt? _current;
+        private ConductorParallelAcceptanceCandidate? _candidate;
+        private int _starts;
+
+        internal AttemptPileUpFixture()
+        {
+            Goal = new AgentOrchestratorKernel().CreateGoal("Report accumulated focused evidence attempts");
+            LogPath = Path.Combine(_root, "conduct-events.log");
+            Writer = new ConductEventLogWriter(LogPath, utcNow: Clock.GetUtcNow);
+            var attemptRoot = Path.Combine(_root, "attempts");
+            Coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7112),
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: Writer,
+                timeProvider: Clock);
+            // Publish results without a terminal event, then let replacement record
+            // the superseded end before the next start, as in the replacement fixture.
+            _completionCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot, TrunkBranchName.Default,
+                isProcessAlive: _ => false,
+                acquireStableSlotLease: (_, _) => null,
+                timeProvider: Clock);
+        }
+
+        internal Goal Goal { get; }
+        internal string LogPath { get; }
+        internal ConductEventLogWriter Writer { get; }
+        internal ConductorParallelAcceptanceAttemptCoordinator Coordinator { get; }
+        internal ManualTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero));
+
+        internal ConductorParallelAcceptanceAttempt StartNext(TimeSpan elapsed = default)
+        {
+            Clock.Advance(elapsed);
+            if (_current is not null)
+            {
+                _completionCoordinator.RunAttemptForTests(_current, _candidate!, ConductorAutonomyPolicy.Permissive,
+                    (candidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(candidate,
+                        PassingEvidence(candidate.Goal, _current.FocusedEvidenceRequest!, null, CancellationToken.None)));
+            }
+            _starts++;
+            _candidate = ConductorParallelAcceptanceCandidate.Create(Goal, 0, [], $"branch-{_starts / 2 + 1}", "main");
+            var decision = Coordinator.EvaluateFocusedEvidence(_candidate, ConductorAutonomyPolicy.Permissive,
+                $"run focused tests {(_starts + 1) / 2}", PassingEvidence);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
+            _current = decision.Attempt;
+            return _current;
+        }
+
+        internal List<JsonElement> Events(string kind) => ReadEvents(LogPath)
+            .Where(item => item.GetProperty("eventKind").GetString() == kind).ToList();
+
+        internal void Write(ConductorParallelAcceptanceAttempt attempt) => File.WriteAllText(attempt.MetadataPath,
+            JsonSerializer.Serialize(attempt, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
     }
 
     private sealed class AttemptLogWriterFixture : IDisposable

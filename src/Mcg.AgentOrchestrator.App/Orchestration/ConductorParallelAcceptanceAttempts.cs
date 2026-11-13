@@ -1309,6 +1309,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     _timeProvider, candidate.Goal.Id, Environment.ProcessId);
             }
             EmitEvidenceStart(attempt);
+            PreReviewEvidenceAttemptPileUp.WarnIfHigh(_conductEventLogWriter, attempt, _utcNow());
             if (attempt.RelaunchProvenance is { } provenance)
                 _conductEventLogWriter?.AppendRequired(PreReviewEvidenceRelaunchProvenance.EventKind,
                     attempt.GoalId, provenance.EventDetail(attempt), attempt.StartedAt,
