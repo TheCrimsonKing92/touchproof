@@ -90,7 +90,7 @@ internal static class AcceptanceTestClassSourceScanner
             return [];
         }
 
-        var extracts = AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files, ExtractFile);
+        var extracts = AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files);
         return ScanExtracts(extracts);
     }
 
@@ -127,9 +127,7 @@ internal static class AcceptanceTestClassSourceScanner
             .ToArray();
     }
 
-    private static FileExtract ExtractFile(string path) => ExtractText(File.ReadAllText(path));
-
-    private static FileExtract ExtractText(string text)
+    internal static FileExtract ExtractText(string text)
     {
         var root = CSharpSyntaxTree.ParseText(text).GetRoot();
         var constants = root.DescendantNodes().OfType<FieldDeclarationSyntax>()
