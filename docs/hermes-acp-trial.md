@@ -55,7 +55,7 @@ These files prove which bytes were retained for diagnosis after teardown. They d
 The operator-owned non-model control is `config/trials/evidence-retention-control.json`. From the repository root, run:
 
 ```powershell
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 trial-compare --spec config/trials/evidence-retention-control.json --receipts <isolated-receipts-directory> --timeout-seconds 120
+.\mcg-orchestrator.cmd trial-compare --spec config/trials/evidence-retention-control.json --receipts <isolated-receipts-directory> --timeout-seconds 120
 ```
 
 After both owned jobs exit, verify each arm's `stdout.diagnostic.log`, `stderr.diagnostic.log`, `teardown-receipt.json`, and `result.json`; compare the retained hashes and fixed arm-specific text; and confirm the teardown receipt's `rootPath` no longer exists. This is a contained child round trip only: it makes no model, authentication, network, or tool call and does not authorize or modify the Hermes configuration. If the host cannot create the contained child, record the control as platform-limited rather than treating a fake-host test as the round trip.
