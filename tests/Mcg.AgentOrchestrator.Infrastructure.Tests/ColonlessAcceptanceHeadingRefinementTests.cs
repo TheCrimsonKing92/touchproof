@@ -139,14 +139,23 @@ public sealed class ColonlessAcceptanceHeadingRefinementTests
         await scenario.RefineAsync();
         Assert.Equal(Criteria, scenario.Goal.RefinedSpec!.AcceptanceCriteria);
 
+        // Retain the later duty and its declaration while replacing the gate criterion.
         scenario.Kernel.ReviseGoalBrief(scenario.Goal.Id,
-            $"Revise the preview.\nAcceptance criteria\n1. {WorkerCriterion}\n2. {GateCriterion}\n" +
+            $"Revise the preview.\nAcceptance criteria\n1. {OperatorCriterion}\n2. {WorkerCriterion}\n" +
             "Operating instructions\n- Keep the parent open.");
 
         Assert.Equal(2, scenario.Goal.AuthoritativeBrief.Version);
-        Assert.Equal([WorkerCriterion, GateCriterion], scenario.Goal.RefinedSpec!.AcceptanceCriteria);
-        Assert.Equal([GateCriterion], scenario.Goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
-        Assert.Empty(scenario.Goal.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Assert.Equal([OperatorCriterion, WorkerCriterion], scenario.Goal.RefinedSpec!.AcceptanceCriteria);
+        Assert.Empty(scenario.Goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        Assert.Equal([OperatorCriterion], scenario.Goal.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        var duty = Assert.Single(scenario.Goal.CriterionEvidenceObligations,
+            item => item.CriterionVersion == scenario.Goal.AuthoritativeRefinedSpecVersion!.Version);
+        Assert.Equal(0, duty.CriterionIndex);
+        Assert.Equal(OperatorCriterion, duty.Criterion);
+        Assert.Equal(CriterionEvidenceOwner.Operator, duty.Owner);
+        Assert.Equal(CriterionEvidencePhase.PostLanding, duty.Phase);
+        Assert.Equal(CriterionEvidenceState.Pending, duty.State);
+        Assert.True(duty.IsValidatedPostLanding);
     }
 
     [Theory(DisplayName = "Colonless removal declarations remain outside ordinary criteria")]
