@@ -21,7 +21,8 @@ internal static class CliConductorCommand
         OrchestratorHome? home = null,
         Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null,
         Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null,
-        IProcessJobProbe? jobProbe = null, Action<ConductorStatusSnapshot>? observeStatus = null)
+        IProcessJobProbe? jobProbe = null, Action<ConductorStatusSnapshot>? observeStatus = null,
+        ConductorGitResolution? gitResolution = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -76,7 +77,8 @@ internal static class CliConductorCommand
                     return Start(workspace, owner, args.Count == 3, launcher ?? (OperatingSystem.IsWindows()
                              ? new HandleListConductorProcessLauncher() : new SystemConductorProcessLauncher()),
                          output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup, invocationBinding,
-                         jobProbe ?? (launcher is null ? ProcessJobTrapProbe.Native : ProcessJobTrapProbe.UnknownProbe));
+                         jobProbe ?? (launcher is null ? ProcessJobTrapProbe.Native : ProcessJobTrapProbe.UnknownProbe),
+                         gitResolution ?? (launcher is null ? ConductorGitResolution.Current : ConductorGitResolution.NotChecked));
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
@@ -206,12 +208,17 @@ internal static class CliConductorCommand
     private static int Start(OrchestratorWorkspace workspace, int? owner, bool clearStop,
         IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home,
         Func<string, IReadOnlyList<StoreSetupResult>> storeSetup, WorkspaceInvocationBinding? invocationBinding,
-        IProcessJobProbe jobProbe)
+        IProcessJobProbe jobProbe, ConductorGitResolution gitResolution)
     {
         var job = jobProbe.Read();
         if (ProcessJobTrapProbe.Traps(job))
         {
             error.WriteLine($"Refused: this shell's job ends its processes when it closes and does not allow breakaway (jobFlags={ProcessJobTrapProbe.FormatFlags(job.LimitFlags!.Value)}); start the conductor from a terminal outside that job.");
+            return 1;
+        }
+        if (gitResolution.RefusesStart)
+        {
+            error.WriteLine($"Refused: git resolves to the raw MinGW binary '{gitResolution.ResolvedPath}'; expected '{gitResolution.ExpectedCmdPath}'. Start the conductor from a shell whose PATH resolves git under cmd.");
             return 1;
         }
         if (owner is not null)
