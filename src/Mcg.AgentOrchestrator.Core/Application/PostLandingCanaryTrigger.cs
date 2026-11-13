@@ -145,6 +145,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionInput",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionMode",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSession",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSessionSuspension",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSourceMutation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStartupContractValidator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",

@@ -76,6 +76,25 @@ public class CanaryEngineSurfaceCoverageTests
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
     }
 
+    [Fact]
+    public void Suspension_collaborator_registration_preserves_existing_trigger_coverage()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSessionSuspension";
+        var path = prefix + ".cs";
+        var surface = Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName);
+
+        Assert.Single(surface.PathPrefixes.Where(candidate => candidate == prefix));
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        // The existing session prefix already covers this helper; explicit membership keeps
+        // the direct-dependency census complete without broadening the canary trigger.
+        Assert.True(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes
+            .Where(candidate => candidate != prefix))(path));
+    }
+
     [Theory]
     [InlineData("AcceptanceBalancedLaneExpander")]
     [InlineData("AcceptanceBalancedLanePacker")]
