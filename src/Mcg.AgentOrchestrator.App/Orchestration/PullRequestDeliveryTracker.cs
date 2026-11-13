@@ -231,7 +231,8 @@ internal sealed class PullRequestDeliveryTracker
         GoalOperationJournal.Completed(root, goal, "conductor:land", message);
         _refreshJournal?.Invoke(goal.Id);
         _events?.AppendGoalLanded(goal.Id, branch, GoalWorktreeLayout.BranchName(goal.Id));
-        _landingSink?.Invoke(new(goal.Id.Value, changes.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries), merge));
+        _landingSink?.Invoke(new(goal.Id.Value, changes.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries), merge,
+            delivery.GateAttemptId, PreviousMainSha: parent.Output.Trim()));
         OperatorInbox.ClearOwnershipHoldsAfterLanding(_workspace, goal, $"land {goal.Id.Value[..8]}");
         if (goal.SourceBacklogItemId is not null)
             GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, _workspace.BacklogStorePath,

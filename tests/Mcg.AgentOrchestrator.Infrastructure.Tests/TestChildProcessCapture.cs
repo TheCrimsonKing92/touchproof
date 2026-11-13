@@ -1,16 +1,20 @@
 using System.Diagnostics;
+using System.Globalization;
 
 internal sealed class TestChildProcessCapture : IDisposable
 {
     private const int DefaultRetentionBytes = 4 * 1024 * 1024;
+    internal static readonly TimeSpan CleanupMargin = TimeSpan.FromSeconds(5);
     private readonly Process _process;
+    private readonly int _pid;
     private readonly ProcessStartInfo _startInfo;
     private readonly Func<Task, TimeSpan, bool> _wait;
     private readonly Action<Process> _stopTree;
     private readonly int _retentionBytes;
     private readonly TestChildProcessCaptureDiagnostics _diagnostics;
     private readonly Controls? _controls;
-    private readonly Stopwatch _elapsed = Stopwatch.StartNew();
+    private readonly Stopwatch _elapsed;
+    private Stopwatch? _cleanup;
     private readonly Task _exit;
     private readonly Task<StreamCapture> _stdout;
     private readonly Task<StreamCapture> _stderr;
@@ -31,6 +35,7 @@ internal sealed class TestChildProcessCapture : IDisposable
     private TestChildProcessCapture(
         ProcessStartInfo startInfo,
         Process process,
+        Stopwatch elapsed,
         Func<Task, TimeSpan, bool> wait,
         Action<Process> stopTree,
         int retentionBytes,
@@ -38,6 +43,8 @@ internal sealed class TestChildProcessCapture : IDisposable
     {
         _startInfo = startInfo;
         _process = process;
+        _pid = process.Id;
+        _elapsed = elapsed;
         _wait = wait;
         _stopTree = stopTree;
         _retentionBytes = retentionBytes;
@@ -85,11 +92,12 @@ internal sealed class TestChildProcessCapture : IDisposable
         if (retentionBytes < 1)
             throw new ArgumentOutOfRangeException(nameof(retentionBytes));
 
+        var elapsed = Stopwatch.StartNew();
         var process = (start ?? Process.Start)(startInfo)
             ?? throw new InvalidOperationException($"Failed to start child {Describe(startInfo)}.");
         try
         {
-            return new TestChildProcessCapture(startInfo, process,
+            return new TestChildProcessCapture(startInfo, process, elapsed,
                 wait ?? ((task, bound) => task.Wait(bound)),
                 stopTree ?? (child => child.Kill(entireProcessTree: true)), retentionBytes, controls);
         }
@@ -175,20 +183,39 @@ internal sealed class TestChildProcessCapture : IDisposable
 
     private void Fail(string stream, TimeSpan bound)
     {
+        var elapsedSeconds = _elapsed.Elapsed.TotalSeconds.ToString("0.000", CultureInfo.InvariantCulture);
         var snapshot = _diagnostics.ReadFrozen();
         StopOwnedTree();
         Assert.Fail($"Child {Describe(_startInfo)} exceeded {bound.TotalSeconds:g} s while capturing {stream}; " +
             $"stdout={snapshot.StdoutBytes} bytes; stderr={snapshot.StderrBytes} bytes; " +
-            $"retention limit={_retentionBytes} bytes.\n{snapshot.Stdout}\n{snapshot.Stderr}");
+            $"retention limit={_retentionBytes} bytes. pid={_pid}; elapsed={elapsedSeconds} s.\n" +
+            $"{snapshot.Stdout}\n{snapshot.Stderr}");
     }
 
     private void StopOwnedTree()
     {
         _diagnostics.Freeze();
+        BeginCleanup();
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
             return;
-        try { _stopTree(_process); }
-        catch (InvalidOperationException) { } // The child may have exited just before the stop.
+        // Tree termination itself may block. It shares the exit/drain budget;
+        // an unfinished stop must not hold up the diagnostic failure.
+        var stop = Task.Factory.StartNew(() =>
+        {
+            try { _stopTree(_process); }
+            catch (InvalidOperationException) { } // The child may have exited just before the stop.
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        if (Task.WhenAny(stop).Wait(CleanupRemaining()))
+            stop.GetAwaiter().GetResult();
+    }
+
+    private void BeginCleanup() =>
+        Interlocked.CompareExchange(ref _cleanup, Stopwatch.StartNew(), null);
+
+    private TimeSpan CleanupRemaining()
+    {
+        var remaining = CleanupMargin - _cleanup!.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private TimeSpan Remaining(TimeSpan bound) =>
@@ -203,16 +230,24 @@ internal sealed class TestChildProcessCapture : IDisposable
 
     private static string Describe(ProcessStartInfo startInfo) =>
         $"'{startInfo.FileName}' " +
-        (startInfo.ArgumentList.Count > 0 ? string.Join(" ", startInfo.ArgumentList) : startInfo.Arguments);
+        (startInfo.ArgumentList.Count > 0
+            ? string.Join(" ", startInfo.ArgumentList.Select(QuoteArgument))
+            : startInfo.Arguments);
+
+    private static string QuoteArgument(string argument) =>
+        argument.Length == 0 || argument.Any(char.IsWhiteSpace) || argument.Contains('"')
+            ? "\"" + argument.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
+            : argument;
 
     public void Dispose()
     {
         if (_disposed)
             return;
         _disposed = true;
+        BeginCleanup();
         if (!_process.HasExited)
             StopOwnedTree();
-        try { Task.WhenAll(_exit, _stdout, _stderr).Wait(TimeSpan.FromSeconds(5)); }
+        try { Task.WhenAll(_exit, _stdout, _stderr).Wait(CleanupRemaining()); }
         catch (AggregateException) { } // Preserve the failure that caused disposal.
         _process.Dispose();
     }

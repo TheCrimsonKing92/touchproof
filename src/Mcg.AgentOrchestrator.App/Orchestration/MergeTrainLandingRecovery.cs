@@ -89,7 +89,8 @@ internal static class MergeTrainLandingRecovery
                         recovery.CommitRevision,
                         changedFiles);
                     recordRecoveredLanding(
-                        new ConductorLandingReceipt(goal.Id.Value, changedFiles, recovery.CommitRevision),
+                        new ConductorLandingReceipt(goal.Id.Value, changedFiles, recovery.CommitRevision,
+                            GateLanePlanPath: recovery.Receipt.GateLanePlanPath, PreviousMainSha: recovery.Receipt.Identity.ObservedMainRevision),
                         recovery.Receipt.Identity.Value,
                         recovery.Receipt.ReceiptId);
                     afterSuccessfulLanding(goal, landingResult);

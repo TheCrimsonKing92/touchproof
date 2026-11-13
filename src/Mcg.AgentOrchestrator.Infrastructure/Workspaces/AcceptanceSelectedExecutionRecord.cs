@@ -11,7 +11,10 @@ internal sealed record AcceptanceSelectedExecutionRecord(
     IReadOnlyList<AcceptanceSelectedExecutionLane> Lanes,
     int? ExecutedClassCount, int? SkippedClassCount,
     int? ProposedExecutedClassCount, int? ProposedSkippedClassCount,
-    double SelectionMilliseconds, bool StructuralCoverageScoped)
+    double SelectionMilliseconds, bool StructuralCoverageScoped,
+    bool Applied = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SuspensionReason = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? BackstopMissId = null)
 {
     internal static AcceptanceSelectedExecutionRecord Disabled { get; } =
         new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], null, null, null, null, 0, false);

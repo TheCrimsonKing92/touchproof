@@ -25,7 +25,7 @@ internal static class WorktreeEditPreservation
             var reference = GitCli.Run(workingDirectory, "stash", "list", "-1", "--format=%H");
             var stashRef = reference.Succeeded && !string.IsNullOrWhiteSpace(reference.Output)
                 ? reference.Output.Trim()
-                : "stash-created-ref-unavailable";
+                : $"stash-created-ref-unavailable:exit={reference.ExitCode}:error={Bound(reference.Error)}:output={Bound(reference.Output)}";
             return $"preserved={stashRef}";
         }
         catch (Exception ex)

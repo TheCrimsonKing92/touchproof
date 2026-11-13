@@ -2,9 +2,18 @@ internal static class BoundedThreadPoolSaturationApparatus
 {
     internal static readonly TimeSpan PhaseWaitTimeout = TimeSpan.FromSeconds(30);
 
-    internal static void RunWithBoundedSaturatedThreadPool(Action<BoundedSaturationEvidence> body)
+    internal static void RunWithBoundedSaturatedThreadPool(
+        Action<BoundedSaturationEvidence> body,
+        Action<int>? afterBarrierCountSampled = null,
+        TimeSpan? saturationWaitTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(body);
+        var waitTimeout = saturationWaitTimeout ?? PhaseWaitTimeout;
+        if (waitTimeout <= TimeSpan.Zero || waitTimeout > PhaseWaitTimeout)
+        {
+            throw new ArgumentOutOfRangeException(nameof(saturationWaitTimeout));
+        }
+
         if (Thread.CurrentThread.IsThreadPoolThread)
         {
             throw new InvalidOperationException("failureKind=apparatus-on-pool-thread");
@@ -18,7 +27,7 @@ internal static class BoundedThreadPoolSaturationApparatus
         var maxSet = false;
         using var release = new ManualResetEventSlim(false);
         using var entered = new CountdownEvent(1);
-        using var completed = new CountdownEvent(1);
+        using var completed = new CountdownEvent(0);
 
         try
         {
@@ -35,6 +44,7 @@ internal static class BoundedThreadPoolSaturationApparatus
             }
 
             ThreadPool.GetAvailableThreads(out var barrierCount, out _);
+            afterBarrierCountSampled?.Invoke(barrierCount);
             entered.Reset(barrierCount);
             completed.Reset(barrierCount + workerBound);
 
@@ -55,19 +65,38 @@ internal static class BoundedThreadPoolSaturationApparatus
                     $"threadCount={ThreadPool.ThreadCount} pendingWorkItems={ThreadPool.PendingWorkItemCount}");
             }
 
-            ThreadPool.GetAvailableThreads(out var remainingWorkers, out _);
-            if (remainingWorkers != 0)
+            var saturationWaitStarted = System.Diagnostics.Stopwatch.StartNew();
+            long availabilitySamples = 0;
+            int remainingWorkers;
+            while (true)
             {
-                throw new InvalidOperationException(
-                    $"failureKind=not-saturated remainingWorkers={remainingWorkers} workerBound={workerBound}");
+                ThreadPool.GetAvailableThreads(out remainingWorkers, out _);
+                availabilitySamples++;
+                if (remainingWorkers == 0 || saturationWaitStarted.Elapsed >= waitTimeout)
+                {
+                    break;
+                }
+
+                Thread.Yield();
             }
 
-            body(new BoundedSaturationEvidence(
+            // These are adjacent observations, not an atomic runtime snapshot. Keep the availability
+            // sample that determined the outcome rather than re-reading it for the evidence.
+            var evidence = new BoundedSaturationEvidence(
                 workerBound,
                 barrierCount,
                 threadCountBefore,
                 ThreadPool.ThreadCount,
-                remainingWorkers));
+                remainingWorkers,
+                barrierCount - entered.CurrentCount,
+                ThreadPool.PendingWorkItemCount,
+                availabilitySamples);
+            if (remainingWorkers != 0)
+            {
+                throw new BoundedSaturationNotReachedException(evidence);
+            }
+
+            body(evidence);
         }
         finally
         {
@@ -245,4 +274,17 @@ internal sealed record BoundedSaturationEvidence(
     int BarrierCount,
     int ThreadCountBefore,
     int ThreadCountAfterBarrier,
-    int AvailableWorkersAfterBarrier);
+    int AvailableWorkersAfterBarrier,
+    int EntrySignalsReceived,
+    long PendingWorkItemCountAfterBarrier,
+    long AvailabilitySamples);
+
+internal sealed class BoundedSaturationNotReachedException(BoundedSaturationEvidence evidence)
+    : InvalidOperationException(
+        $"failureKind=not-saturated remainingWorkers={evidence.AvailableWorkersAfterBarrier} " +
+        $"workerBound={evidence.WorkerBound} barrierCount={evidence.BarrierCount} " +
+        $"entrySignals={evidence.EntrySignalsReceived} threadCount={evidence.ThreadCountAfterBarrier} " +
+        $"pendingWorkItems={evidence.PendingWorkItemCountAfterBarrier} availabilitySamples={evidence.AvailabilitySamples}")
+{
+    internal BoundedSaturationEvidence Evidence { get; } = evidence;
+}

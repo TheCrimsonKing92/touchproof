@@ -240,7 +240,7 @@ internal sealed partial class ConductorDriver
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
                 landResult.ChangedFiles ?? landingFileScopes.Value,
-                landResult.MergeCommitSha));
+                landResult.MergeCommitSha, acceptance.AttemptId, PreviousMainSha: acceptance.MainHeadSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.

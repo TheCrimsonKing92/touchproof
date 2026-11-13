@@ -21,6 +21,9 @@ public sealed record AcceptanceVerificationResult(
     public string? AttemptId { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GateLanePlanPath { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SoloAcceptanceFailureReceipt? SoloFailureReceipt { get; init; }
 
     // Producer ownership survives attribution returning without a captured receipt.

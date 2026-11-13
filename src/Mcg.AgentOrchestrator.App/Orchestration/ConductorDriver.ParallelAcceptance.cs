@@ -210,20 +210,13 @@ internal sealed partial class ConductorDriver
                         workspace,
                         changedFiles,
                         Console.WriteLine);
-                    var landingResult = new LandingResult(
-                        goal.Id.Value,
-                        goal.Id.Value[..8],
-                        new LandingDecision.Promote(),
-                        $"cohort/{recovery.Receipt.Identity.Value}",
-                        MainAdvanced: true,
+                    var landingResult = CohortLandingResults.Create(
+                        goal.Id.Value, recovery.Receipt.Identity.Value,
                         "Recovered exact tested cohort landing after main advanced.",
                         recovery.CombinedCommitRevision,
                         changedFiles);
                     _pendingRecoveredLandingReceipts.Add((
-                        new ConductorLandingReceipt(
-                            goal.Id.Value,
-                            changedFiles,
-                            recovery.CombinedCommitRevision),
+                        CohortLandingResults.Notification(landingResult, recovery.Receipt),
                         recovery.Receipt.Identity.Value,
                         recovery.Receipt.ReceiptId));
                     _afterSuccessfulLanding(goal, landingResult);

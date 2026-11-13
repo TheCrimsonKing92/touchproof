@@ -21,6 +21,7 @@ public sealed class PipeDrainThreadPoolSaturationTests
         Assert.False(
             result.Receipt.PoolWorkItemExecutedDuringObservation,
             "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
+        AssertSaturationDiagnostics(result.Receipt);
     }
 
     [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved_after_prior_pool_growth")]
@@ -52,6 +53,7 @@ public sealed class PipeDrainThreadPoolSaturationTests
         Assert.False(
             result.Receipt.PoolWorkItemExecutedDuringObservation,
             "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
+        AssertSaturationDiagnostics(result.Receipt);
     }
 
     [Xunit.Fact(DisplayName = "PipeDrain_saturation_probe_fails_when_dedicated_reader_is_replaced_by_pool_dependent_reading")]
@@ -70,6 +72,7 @@ public sealed class PipeDrainThreadPoolSaturationTests
             result.Receipt.PoolWorkItemExecutedDuringObservation,
             "Direct pool-work-item control unexpectedly ran during the substitution observation window.");
         Assert.Equal("dedicated-reader-substitution-starved", result.Receipt.FailureKind);
+        AssertSaturationDiagnostics(result.Receipt);
     }
 
     [Xunit.Fact]
@@ -99,6 +102,60 @@ public sealed class PipeDrainThreadPoolSaturationTests
         Assert.False(
             result.Receipt.PoolWorkItemExecutedDuringObservation,
             "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
+        AssertSaturationDiagnostics(result.Receipt);
+    }
+
+    [Xunit.Fact]
+    public void HeldWorkerReleasedAfterSample_StillSaturatesAndDrains()
+    {
+        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.HeldWorkerReleasedAfterBarrierSampleMode);
+
+        Assert.True(result.ExitCode == 0, result.DescribeFailure());
+        Assert.Equal("passed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.HeldWorkerReleasedAfterBarrierSampleMode, result.Receipt.Mode);
+        Assert.True(result.Receipt.HeldWorkerWasHeldAtBarrierSample, result.DescribeFailure());
+        Assert.True(result.Receipt.HeldWorkerReleasedAfterBarrierSample, result.DescribeFailure());
+        Assert.True(result.Receipt.AvailableWorkersAfterHeldRelease > result.Receipt.BarrierCount,
+            result.DescribeFailure());
+        Assert.True(result.Receipt.BarrierCount < result.Receipt.WorkerBound, result.DescribeFailure());
+        Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
+        Assert.True(result.Receipt.DedicatedReaderCompleted, result.DescribeFailure());
+        Assert.False(result.Receipt.PoolDependentReadCompletedAfterObservation, result.DescribeFailure());
+        Assert.False(result.Receipt.PoolWorkItemExecutedDuringObservation, result.DescribeFailure());
+        AssertSaturationDiagnostics(result.Receipt);
+    }
+
+    [Xunit.Fact]
+    public void SaturationNeverReached_FailsWithTerminalDiagnostics()
+    {
+        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.SaturationNeverReachedMode);
+
+        Assert.True(result.ExitCode != 0, result.DescribeFailure());
+        Assert.Equal("failed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.SaturationNeverReachedMode, result.Receipt.Mode);
+        Assert.Equal("apparatus-or-probe-failure", result.Receipt.FailureKind);
+        Assert.Contains("failureKind=not-saturated", result.Stdout);
+        Assert.True(result.Receipt.AvailableWorkersAfterBarrier > 0, result.DescribeFailure());
+        Assert.True(result.Receipt.AvailabilitySamples >= 1, result.DescribeFailure());
+        AssertSaturationDiagnostics(result.Receipt);
+        Assert.Contains($"remainingWorkers={result.Receipt.AvailableWorkersAfterBarrier}", result.Stdout);
+        Assert.Contains($"workerBound={result.Receipt.WorkerBound}", result.Stdout);
+        Assert.Contains($"barrierCount={result.Receipt.BarrierCount}", result.Stdout);
+        Assert.Contains($"entrySignals={result.Receipt.EntrySignalsReceived}", result.Stdout);
+        Assert.Contains($"threadCount={result.Receipt.ThreadCountAfterBarrier}", result.Stdout);
+        Assert.Contains($"pendingWorkItems={result.Receipt.PendingWorkItemCountAfterBarrier}", result.Stdout);
+        Assert.Contains($"availabilitySamples={result.Receipt.AvailabilitySamples}", result.Stdout);
+        Assert.Contains(JsonSerializer.Serialize(result.Receipt), result.DescribeFailure());
+    }
+
+    private static void AssertSaturationDiagnostics(PipeDrainSaturationProbeReceipt receipt)
+    {
+        Assert.True(receipt.WorkerBound > 0);
+        Assert.InRange(receipt.BarrierCount, 0, receipt.WorkerBound);
+        Assert.Equal(receipt.BarrierCount, receipt.EntrySignalsReceived);
+        Assert.True(receipt.ThreadCountAfterBarrier > 0);
+        Assert.True(receipt.PendingWorkItemCountAfterBarrier >= 0);
+        Assert.True(receipt.AvailabilitySamples >= 1);
     }
 
     [Xunit.Fact]
@@ -212,7 +269,8 @@ public sealed class PipeDrainThreadPoolSaturationTests
         internal string DescribeFailure() =>
             $"Pipe-drain saturation probe exited {ExitCode}." +
             $"{Environment.NewLine}stdout:{Environment.NewLine}{Stdout}" +
-            $"{Environment.NewLine}stderr:{Environment.NewLine}{Stderr}";
+            $"{Environment.NewLine}stderr:{Environment.NewLine}{Stderr}" +
+            $"{Environment.NewLine}receipt:{Environment.NewLine}{JsonSerializer.Serialize(Receipt)}";
     }
 
     internal static void RunWithSaturatedThreadPool(Action action)

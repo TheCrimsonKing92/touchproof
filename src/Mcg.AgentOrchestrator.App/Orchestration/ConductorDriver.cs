@@ -108,7 +108,8 @@ internal sealed partial class ConductorDriver
     internal readonly AgentOrchestratorKernel? _cohortKernel;
     internal readonly OrchestratorWorkspace? _cohortWorkspace;
     private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
-    private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
+    internal readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
+    internal Func<string?>? BackstopReservationId { get; set; }
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
     private readonly MergeTrainAcceptanceStore? _mergeTrainAcceptanceStore;
@@ -1637,4 +1638,4 @@ internal sealed record LandingEscalationRecheckResult(
 internal sealed record ConductorLandingReceipt(
     string GoalId,
     IReadOnlyList<string> ChangedFiles,
-    string? LandingSha = null);
+    string? LandingSha = null, string? GateAttemptId = null, string? GateLanePlanPath = null, string? PreviousMainSha = null);

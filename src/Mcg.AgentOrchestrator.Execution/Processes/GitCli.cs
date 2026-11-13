@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -6,6 +7,7 @@ internal static class GitCli
 {
     internal static Action<string>? LaunchObserver;
     internal static Func<string, Action<GitProcessTiming>?>? CompletionObserver;
+    private static readonly DurationHistory Durations = new();
 
     internal readonly record struct GitProcessTiming(string Subcommand, double StartMs, double WallMs, double? CpuMs);
 
@@ -20,6 +22,7 @@ internal static class GitCli
         private Action<GitProcessTiming>? sink;
         private double startMs;
         private int completed;
+        internal TimeSpan? WallDuration { get; private set; }
 
         private ProcessCompletion(Func<string, Action<GitProcessTiming>?> observer, string subcommand,
             TimeProvider clock)
@@ -70,6 +73,7 @@ internal static class GitCli
             try
             {
                 var wallMs = clock.GetElapsedTime(beforeStart, clock.GetTimestamp()).TotalMilliseconds;
+                WallDuration = TimeSpan.FromMilliseconds(wallMs);
                 double? cpuMs = null;
                 try
                 {
@@ -155,13 +159,14 @@ internal static class GitCli
         string? Error);
 
     public static GitResult Run(string workingDirectory, params string[] args) =>
-        Run(workingDirectory, DefaultTimeoutMilliseconds, args);
+        RunExecutableCore("git", workingDirectory, null, null, args,
+            Volatile.Read(ref CompletionObserver), TimeProvider.System);
 
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
     internal static GitResult RunForRepository(string workingDirectory, params string[] args) =>
-        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args,
+        RunExecutableCore("git", workingDirectory, null, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System,
             isolateRepository: true);
 
@@ -169,7 +174,7 @@ internal static class GitCli
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
         params string[] args) =>
-        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args,
+        RunExecutableCore("git", workingDirectory, null, null, args,
             Volatile.Read(ref CompletionObserver), TimeProvider.System, environment);
 
     public static GitResult RunWithStandardInput(
@@ -203,7 +208,7 @@ internal static class GitCli
     private static GitResult RunExecutableCore(
         string executable,
         string workingDirectory,
-        int timeoutMilliseconds,
+        int? timeoutMilliseconds,
         string? standardInput,
         string[] args,
         Func<string, Action<GitProcessTiming>?>? completionObserver,
@@ -211,7 +216,9 @@ internal static class GitCli
         IReadOnlyDictionary<string, string>? environment = null,
         bool isolateRepository = false,
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
-        Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null)
+        Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null,
+        DurationHistory? durationHistory = null, Action<GitProgressWatch.Observation>? sampled = null,
+        Action<ProcessStartInfo>? configureStart = null)
     {
         var processStarted = false;
         try
@@ -241,17 +248,23 @@ internal static class GitCli
                     startInfo.Environment[key] = value;
             }
 
+            configureStart?.Invoke(startInfo);
             // Read-only commands (status/diff/log) skip the index.lock, so recovery inspection can
             // never take or block on it; write commands take their required locks regardless.
             var useConsolePolicy = ApplyLaunchSettings(startInfo, readCommand: true);
 
+            var history = durationHistory ?? Durations;
+            var subcommand = SubcommandKey(args);
+            var stallWindow = timeoutMilliseconds is null ? history.Window(subcommand) : null;
+            using var job = timeoutMilliseconds is null ? CreateAccountingJob() : null;
+            var beforeStart = timeoutMilliseconds is null ? clock.GetTimestamp() : (long?)null;
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
             HandleListLaunchedProcess? launchedProcess;
             using (LaunchLockTelemetry.Attribution.IsActive ? LaunchLockSiteCapture.BeginGit(args) : null)
                 launchedProcess = useConsolePolicy
                     ? HandleListProcessLauncher.StartSuppressed(startInfo,
-                        entry: LaunchLockEntryPoint.GitCli, errorModeAccess: errorModeAccess)
-                    : HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.GitCli, errorModeAccess);
+                        entry: LaunchLockEntryPoint.GitCli, errorModeAccess: errorModeAccess, job: job)
+                    : HandleListProcessLauncher.Start(startInfo, LaunchLockEntryPoint.GitCli, errorModeAccess, job);
             using var process = launchedProcess;
             if (process is null)
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
@@ -266,8 +279,10 @@ internal static class GitCli
             // "git exits 0 with no output" flake family (proven by GitCliThreadPoolSaturationTests).
             // Dedicated threads also keep WaitForExit's timeout real: a synchronous ReadToEnd on this
             // thread would block on an inherited pipe after git exits.
-            var outputDrain = PipeDrain.Start(process.StandardOutput, "git-stdout-drain");
-            var errorDrain = PipeDrain.Start(process.StandardError, "git-stderr-drain");
+            var outputDrain = PipeDrain.Start(process.StandardOutput.BaseStream,
+                process.StandardOutput.CurrentEncoding, "git-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError.BaseStream,
+                process.StandardError.CurrentEncoding, "git-stderr-drain");
             startedObserver?.Invoke(process);
 
             // Write while both output pipes drain: git may emit diagnostics before consuming stdin.
@@ -277,28 +292,48 @@ internal static class GitCli
                 process.StandardInput.Close();
             });
 
-            bool inputCompleted;
-            try { inputCompleted = inputWrite?.Wait(timeoutMilliseconds) ?? true; }
-            catch (AggregateException ex)
+            if (timeoutMilliseconds is { } timeout)
             {
-                TryKillTree(process);
-                completion?.CompleteIfExited(process);
-                return new GitResult(1, outputDrain.Text, ex.GetBaseException().Message);
-            }
-            if (!inputCompleted)
-            {
-                TryKillTree(process);
-                completion?.CompleteIfExited(process);
-                return new GitResult(-1, outputDrain.Text, "git stdin write timed out");
-            }
+                bool inputCompleted;
+                try { inputCompleted = inputWrite?.Wait(timeout) ?? true; }
+                catch (AggregateException ex)
+                {
+                    TryKillTree(process);
+                    completion?.CompleteIfExited(process);
+                    return new GitResult(1, outputDrain.Text, ex.GetBaseException().Message);
+                }
+                if (!inputCompleted)
+                {
+                    TryKillTree(process);
+                    completion?.CompleteIfExited(process);
+                    return new GitResult(-1, outputDrain.Text, "git stdin write timed out");
+                }
 
-            if (!process.WaitForExit(timeoutMilliseconds))
+                if (!process.WaitForExit(timeout))
+                {
+                    TryKillTree(process);
+                    completion?.CompleteIfExited(process);
+                    return new GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
+                }
+            }
+            else
             {
-                TryKillTree(process);
-                completion?.CompleteIfExited(process);
-                return new GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
+                var watched = WaitForProgress(new ProgressChild(process, job, outputDrain, errorDrain),
+                    subcommand, stallWindow, clock, sampled: sampled);
+                if (watched.Stalled)
+                {
+                    completion?.CompleteIfExited(process);
+                    return StallResult(subcommand, watched, outputDrain.Text, errorDrain.Text);
+                }
+                // Monitoring never waits for stdin delivery. Observe a completed write's fault,
+                // but an inherited input handle cannot hold this thread after the child's exit.
+                if (inputWrite?.IsFaulted == true)
+                    return new GitResult(1, outputDrain.Text, inputWrite.Exception.GetBaseException().Message);
             }
             completion?.Complete(process);
+            var wallDuration = beforeStart is { } start
+                ? clock.GetElapsedTime(start, clock.GetTimestamp()) : completion?.WallDuration;
+            if (wallDuration is { } duration) history.Record(subcommand, duration);
 
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.
@@ -326,6 +361,126 @@ internal static class GitCli
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
             return new GitResult(1, string.Empty, ex.Message, ProcessStarted: processStarted);
+        }
+    }
+
+    // Instance-scoped history and observations let real-process tests exercise the default branch
+    // without installing ambient observers or depending on another test's completion history.
+    internal static GitResult RunProgressExecutable(string executable, string workingDirectory,
+        string[] args, DurationHistory history, Action<GitProgressWatch.Observation>? sampled = null,
+        Action<HandleListLaunchedProcess>? started = null,
+        Action<ProcessStartInfo>? configureStart = null) =>
+        RunExecutableCore(executable, workingDirectory, null, null, args, null, TimeProvider.System,
+            startedObserver: started, durationHistory: history, sampled: sampled, configureStart: configureStart);
+
+    internal static GitProgressWatch.Result WaitForProgress(GitProgressWatch.IChild child,
+        string subcommand, TimeSpan? stallWindow, TimeProvider clock,
+        Action<string>? progressOutput = null, Action<GitProgressWatch.Observation>? sampled = null) =>
+        GitProgressWatch.Wait(child, stallWindow, clock, observation =>
+        {
+            var text = $"git {subcommand} waiting: {observation.Describe()}; stallWindowMs=" +
+                (stallWindow?.TotalMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none");
+            try { (progressOutput ?? Console.Error.WriteLine)(text); }
+            catch (Exception) { /* Progress output must not change the command result. */ }
+        }, sampled);
+
+    internal static GitResult StallResult(string subcommand, GitProgressWatch.Result watched,
+        string output, string error) => new(-1, output, PipeDrain.AppendDiagnostic(error,
+            FormattableString.Invariant($"git {subcommand} stalled: {watched.Last.Describe()}; stallWindowMs={watched.StallWindow?.TotalMilliseconds}")));
+
+    internal sealed class DurationHistory
+    {
+        private readonly Dictionary<string, TimeSpan> longest = new(StringComparer.Ordinal);
+        private TimeSpan? longestAny;
+
+        internal void Record(string subcommand, TimeSpan wallDuration)
+        {
+            if (wallDuration < TimeSpan.Zero) return;
+            lock (longest)
+            {
+                if (!longest.TryGetValue(subcommand, out var previous) || wallDuration > previous)
+                    longest[subcommand] = wallDuration;
+                if (longestAny is null || wallDuration > longestAny) longestAny = wallDuration;
+            }
+        }
+
+        internal TimeSpan? Window(string subcommand)
+        {
+            lock (longest) return longest.TryGetValue(subcommand, out var value) ? value : longestAny;
+        }
+    }
+
+    internal static string SubcommandKey(IReadOnlyList<string> args)
+    {
+        var index = 0;
+        while (index < args.Count)
+        {
+            var argument = args[index];
+            if (argument == "--") { index++; break; }
+            if (!argument.StartsWith('-')) break;
+            index++;
+            if (argument is "-c" or "-C" or "--git-dir" or "--work-tree" or "--namespace" or "--config-env" or "--super-prefix")
+                index++;
+        }
+        if (index >= args.Count) return string.Empty;
+        var command = args[index++];
+        // These commands have an operation in addition to their operand values.
+        var operations = command switch
+        {
+            "worktree" => "add list lock move prune remove repair unlock",
+            "remote" => "add rename remove set-head set-branches get-url set-url show prune update",
+            "submodule" => "add status init deinit update set-branch set-url summary foreach sync absorbgitdirs",
+            "stash" => "list show drop pop apply branch push save clear create store",
+            "bisect" => "start bad good new old terms skip reset visualize replay log run",
+            "notes" => "list add copy append edit show merge remove prune get-ref",
+            "reflog" => "show list expire delete exists",
+            "sparse-checkout" => "list init set add reapply disable check-rules",
+            "maintenance" => "run start stop register unregister",
+            "multi-pack-index" => "write verify expire repack",
+            "commit-graph" => "write verify",
+            _ => string.Empty
+        };
+        if (operations.Length > 0)
+        {
+            while (index < args.Count && args[index].StartsWith('-'))
+            {
+                var option = args[index++];
+                if (command == "notes" && option == "--ref") index++;
+            }
+            if (index < args.Count && operations.Split(' ').Contains(args[index], StringComparer.Ordinal))
+                return command + " " + args[index];
+        }
+        return command;
+    }
+
+    private static SafeFileHandle? CreateAccountingJob()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        SafeFileHandle? job = null;
+        try
+        {
+            job = OwnedProcessGroup.WindowsJob.CreateKillOnCloseJob(allowBreakaway: false);
+            // This job observes CPU only. Successful git helpers retain their existing lifetime.
+            if (OwnedProcessGroup.WindowsJob.TryDisableKillOnClose(job)) return job;
+        }
+        catch (System.ComponentModel.Win32Exception) { /* Missing telemetry is unknown, never idle. */ }
+        job?.Dispose();
+        return null;
+    }
+
+    private sealed class ProgressChild(HandleListLaunchedProcess process, SafeFileHandle? job,
+        PipeDrain stdout, PipeDrain stderr) : GitProgressWatch.IChild
+    {
+        public bool HasExited => process.HasExited;
+        public bool WaitForExit(TimeSpan interval) => process.WaitForExit(interval);
+        public long StdoutBytes => stdout.ReceivedByteCount;
+        public long StderrBytes => stderr.ReceivedByteCount;
+        public TimeSpan? ProcessorTime => job is not null && OwnedProcessGroup.TryReadAccounting(job, out var accounting)
+            ? TimeSpan.FromMilliseconds(accounting.CpuMilliseconds) : null;
+        public void KillTree()
+        {
+            if (job is not null && OwnedProcessGroup.WindowsJob.TryTerminate(job)) return;
+            TryKillTree(process);
         }
     }
 

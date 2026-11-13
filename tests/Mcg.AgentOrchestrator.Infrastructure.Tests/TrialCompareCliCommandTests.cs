@@ -506,6 +506,7 @@ public sealed class TrialCompareCliCommandTests
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
         startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
             Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
@@ -517,17 +518,8 @@ public sealed class TrialCompareCliCommandTests
             startInfo.ArgumentList.Add(arg);
         }
 
-        using var process = System.Diagnostics.Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start app CLI.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30000))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("App CLI did not exit within 30 seconds.");
-        }
-
-        return (process.ExitCode, standardOutput.GetAwaiter().GetResult(), standardError.GetAwaiter().GetResult());
+        var result = TestChildProcessCapture.Run(startInfo, hangBound: TimeSpan.FromSeconds(30));
+        return (result.ExitCode, result.Stdout, result.Stderr);
     }
 
     private static TrialComparisonResult HermesComparison(string root, bool terminalCompleted = true)

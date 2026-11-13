@@ -67,14 +67,14 @@ internal static class HandleListProcessLauncher
 
     internal static HandleListLaunchedProcess StartSuppressed(ProcessStartInfo info, bool requestOwnConsole = false,
         LaunchLockEntryPoint entry = LaunchLockEntryPoint.Start,
-        ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null)
+        ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null, SafeFileHandle? job = null)
     {
-        if (!OperatingSystem.IsWindows()) return Start(info, entry, errorModeAccess);
+        if (!OperatingSystem.IsWindows()) return Start(info, entry, errorModeAccess, job);
         var original = info.CreateNoWindow;
         try
         {
             info.CreateNoWindow = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole).ChildCreateNoWindow;
-            return Start(info, entry, errorModeAccess);
+            return Start(info, entry, errorModeAccess, job);
         }
         finally { info.CreateNoWindow = original; }
     }

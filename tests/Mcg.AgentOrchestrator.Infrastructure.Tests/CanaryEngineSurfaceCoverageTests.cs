@@ -55,6 +55,17 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Theory]
+    [InlineData("AcceptanceSelectedExecutionInput")]
+    [InlineData("AcceptanceSelectedExecutionMode")]
+    public void Selection_input_and_mode_preserve_existing_canary_non_triggers(string helper)
+    {
+        var result = PostLandingCanaryTrigger.Evaluate([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper + ".cs"]);
+        Assert.False(result.ShouldRun);
+        Assert.Empty(result.TriggeringPaths);
+    }
+
+    [Theory]
     [InlineData("AcceptanceSelectedExecutionSession")]
     [InlineData("BuildReceiptLedger")]
     [InlineData("BuildReceiptSite")]
@@ -72,6 +83,25 @@ public class CanaryEngineSurfaceCoverageTests
             surface => surface.Name == CollaboratorSurfaceName).PathPrefixes);
         Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
         Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
+    [Fact]
+    public void Suspension_collaborator_uses_existing_session_trigger_coverage()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSessionSuspension";
+        var path = prefix + ".cs";
+        var surface = Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
+            surface => surface.Name == CollaboratorSurfaceName);
+
+        Assert.DoesNotContain(prefix, surface.PathPrefixes);
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        // The session owns suspension loading, so this indirect helper needs no separate
+        // direct-collaborator entry. The existing session prefix still covers its source.
+        Assert.True(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes
+            .Where(candidate => candidate != prefix))(path));
     }
 
     [Theory]
