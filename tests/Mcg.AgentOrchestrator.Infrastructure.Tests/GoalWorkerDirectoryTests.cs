@@ -189,6 +189,11 @@ public sealed class GoalWorkerDirectoryTests : GoalWorktreeRecoveryTestBase
 
     private static OrchestratorWorkspace PrepareStartWorkspace(MissingFixture f)
     {
+        // The injected install root must supply the Developer's required skill so
+        // preflight reaches the disabled process-start boundary after recovery.
+        var skillDirectory = Path.Combine(f.Repo, ".agents", "skills", "verification-before-completion");
+        Directory.CreateDirectory(skillDirectory);
+        File.WriteAllText(Path.Combine(skillDirectory, "SKILL.md"), "# Verify fixture changes");
         var workspace = OrchestratorWorkspace.ForDirectory(f.Repo, f.Repo) with { IntegrationBranch = f.MainBranch };
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         return workspace;
