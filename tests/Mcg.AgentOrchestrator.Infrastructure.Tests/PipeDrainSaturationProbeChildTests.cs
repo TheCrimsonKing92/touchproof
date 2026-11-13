@@ -11,6 +11,7 @@ public sealed class PipeDrainSaturationProbeChildTests
     internal const string WarmedWithHeldPoolWorkMode = "warmed-with-held-pool-work";
     internal const string WarmGrowthCappedBelowTargetMode = "warm-growth-capped-below-target";
     internal const string PoolDependentReaderMode = "pool-dependent-reader";
+    internal const string SaturationNeverReachedMode = "saturation-never-reached";
 
     [Xunit.Fact]
     public void RunProbeWhenExplicitlyLaunched()
@@ -150,11 +151,26 @@ public sealed class PipeDrainSaturationProbeChildTests
 
                 failureKind = "unknown-mode";
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported saturation probe mode.");
-            });
+            },
+            afterBarrierCountSampled: mode == SaturationNeverReachedMode ? _ =>
+            {
+                // More permitted workers than queued blockers makes zero availability impossible.
+                ThreadPool.GetMaxThreads(out var workerLimit, out var ioLimit);
+                if (!ThreadPool.SetMaxThreads(checked(workerLimit * 4), ioLimit))
+                {
+                    failureKind = "never-saturated-set-max-failed";
+                    throw new InvalidOperationException("failureKind=never-saturated-set-max-failed");
+                }
+            } : null,
+            saturationWaitTimeout: mode == SaturationNeverReachedMode ? TimeSpan.FromSeconds(2) : null);
         }
         catch (Exception exception)
         {
             failure = exception;
+            if (exception is BoundedSaturationNotReachedException notSaturated)
+            {
+                evidence ??= notSaturated.Evidence;
+            }
             failureKind ??= "apparatus-or-probe-failure";
         }
         finally
@@ -183,7 +199,11 @@ public sealed class PipeDrainSaturationProbeChildTests
                 poolDependentReadCompletedAfterObservation,
                 poolWorkItemExecutedDuringObservation,
                 failure is null ? "passed" : "failed",
-                failureKind);
+                failureKind,
+                evidence?.EntrySignalsReceived ?? -1,
+                evidence?.ThreadCountAfterBarrier ?? -1,
+                evidence?.PendingWorkItemCountAfterBarrier ?? -1,
+                evidence?.AvailabilitySamples ?? 0);
             File.WriteAllText(receiptPath, JsonSerializer.Serialize(receipt));
         }
 
@@ -245,4 +265,8 @@ internal sealed record PipeDrainSaturationProbeReceipt(
     bool PoolDependentReadCompletedAfterObservation,
     bool PoolWorkItemExecutedDuringObservation,
     string Outcome,
-    string? FailureKind);
+    string? FailureKind,
+    int EntrySignalsReceived,
+    int ThreadCountAfterBarrier,
+    long PendingWorkItemCountAfterBarrier,
+    long AvailabilitySamples);
