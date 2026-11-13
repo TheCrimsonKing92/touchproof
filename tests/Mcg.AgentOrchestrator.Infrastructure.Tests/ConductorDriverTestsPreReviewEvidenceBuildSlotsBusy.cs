@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
 // Parallel safe: in-memory goal, private files, injected liveness, capacity and process launcher.
-public sealed class PreReviewEvidenceDriverBuildSlotsBusyTests
+public sealed class ConductorDriverTestsPreReviewEvidenceBuildSlotsBusy
 {
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
