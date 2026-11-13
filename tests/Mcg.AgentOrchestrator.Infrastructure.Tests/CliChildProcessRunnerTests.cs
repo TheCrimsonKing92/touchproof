@@ -107,9 +107,15 @@ public sealed class CliChildProcessRunnerTests
         var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var bound = TimeSpan.FromMilliseconds(200);
         const string operation = "never-completing control";
+        var now = TimeSpan.Zero;
 
         var error = await Assert.ThrowsAsync<TestHangGuardExpiredException>(() =>
-            TestHangGuard.CompletesWithinAsync(never.Task, bound, operation));
+            TestHangGuard.CompletesWithinAsync(never.Task, bound, operation, () => now,
+                () => new InProcessProgressWatch.Sample(TimeSpan.FromSeconds(2), 12), step =>
+                {
+                    now += bound;
+                    Assert.True(step());
+                }));
 
         Assert.IsNotAssignableFrom<TimeoutException>(error);
         Assert.Contains("hang-safety bound", error.Message, StringComparison.Ordinal);

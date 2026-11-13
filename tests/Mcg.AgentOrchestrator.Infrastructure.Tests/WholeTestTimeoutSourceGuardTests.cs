@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
@@ -61,6 +62,115 @@ public sealed class WholeTestTimeoutSourceGuardTests
     public void WholeTestFailsafeKeepsHungTestNamesBelowLaneStallLimit()
     {
         Assert.True(TestHangGuard.WholeTestMilliseconds < AcceptanceLaneStallPolicy.StallLimitSeconds * 1_000);
+    }
+
+    [Fact]
+    public void HangGuardDoesNotUseFixedDurationTaskWaits()
+    {
+        var path = Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests", "TestHangGuard.cs");
+        Assert.True(File.Exists(path), $"Hang guard source missing: {path}");
+        var source = File.ReadAllText(path);
+        var methods = CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes()
+            .OfType<MethodDeclarationSyntax>().ToArray();
+        Assert.Contains(methods, method => method.Identifier.ValueText == "CompletesWithinAsync");
+        Assert.Contains(methods, method => method.Identifier.ValueText == "WaitAsync" && method.TypeParameterList is null);
+        Assert.Contains(methods, method => method.Identifier.ValueText == "WaitAsync" && method.TypeParameterList is not null);
+        Assert.Empty(FindFixedDurationTaskWaits(source));
+    }
+
+    [Theory]
+    [InlineData("task.WaitAsync(Bound)")]
+    [InlineData("task.WaitAsync(TestHangGuard.Bound)")]
+    [InlineData("task.WaitAsync(TimeSpan.FromSeconds(30))")]
+    [InlineData("task.WaitAsync(new TimeSpan(0, 0, 30))")]
+    [InlineData("task.WaitAsync(new(0, 0, 30))")]
+    [InlineData("task.WaitAsync(HangSafetyBound, token)")]
+    [InlineData("task.WaitAsync(timeout: alias)")]
+    [InlineData("task.Wait(30_000)")]
+    [InlineData("task.Wait(WholeTestMilliseconds)")]
+    [InlineData("task.Wait((int)Bound.TotalMilliseconds)")]
+    [InlineData("task.WaitAsync(window)")]
+    [InlineData("task.WaitAsync(TimeSpan.FromSeconds(30), TimeProvider.System, token)")]
+    public void TaskWaitDetectorRejectsFixedDurationsAndAliases(string call)
+    {
+        var source = """
+            class TestHangGuard
+            {
+                static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+                static readonly TimeSpan HangSafetyBound = TimeSpan.FromSeconds(120);
+                const int WholeTestMilliseconds = 300_000;
+                void M(Task task, TimeSpan window, CancellationToken token)
+                {
+                    var duration = Bound;
+                    var alias = duration;
+            """ + call + "; } }";
+        Assert.Equal(call, Assert.Single(FindFixedDurationTaskWaits(source)));
+    }
+
+    [Theory]
+    [InlineData("task.WaitAsync(token)")]
+    [InlineData("task.WaitAsync(CancellationToken.None)")]
+    [InlineData("task.Wait()")]
+    [InlineData("Task.WhenAny(task, other)")]
+    [InlineData("Task.Delay(TimeSpan.FromSeconds(1))")]
+    [InlineData("Thread.Sleep(TimeSpan.FromSeconds(1))")]
+    [InlineData("Monitor.Wait(sync, TimeSpan.FromSeconds(1))")]
+    [InlineData("TestHangGuard.WaitAsync(task, eventName)")]
+    [InlineData("var text = \"task.WaitAsync(Bound)\"")]
+    [InlineData("// task.WaitAsync(Bound)\n task.WaitAsync(token)")]
+    public void TaskWaitDetectorAllowsUntimedWaitsAndSampling(string body)
+    {
+        Assert.Empty(FindFixedDurationTaskWaits("class C { void M(Task task, CancellationToken token) { " + body + "; } }"));
+    }
+
+    [Fact]
+    public void TaskWaitDetectorRejectsBothFormerHangGuardWaits()
+    {
+        const string formerSource = """
+            internal static class TestHangGuard
+            {
+                internal static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+                internal static readonly TimeSpan HangSafetyBound = TimeSpan.FromSeconds(120);
+                // Whole-test hang failsafe below the 600 s lane stall limit; never a speed check.
+                internal const int WholeTestMilliseconds = 300_000;
+
+                internal static async Task CompletesWithinAsync(Task task, TimeSpan bound, string operation)
+                {
+                    using var expiryCancellation = new CancellationTokenSource();
+                    var expiry = Task.Delay(bound, expiryCancellation.Token);
+                    // Wait for a terminal state without observing the task's own fault.
+                    if (await Task.WhenAny(task, expiry) == expiry)
+                    {
+                        throw new TestHangGuardExpiredException(
+                            $"Test hang-safety bound of {bound} expired: {operation} did not reach a terminal state.");
+                    }
+
+                    expiryCancellation.Cancel();
+                }
+
+                internal static async Task WaitAsync(Task task, string eventName)
+                {
+                    try { await task.WaitAsync(Bound); }
+                    catch (TimeoutException ex)
+                    {
+                        throw new TimeoutException($"Hang guard: {eventName} did not complete within {Bound}.", ex);
+                    }
+                }
+
+                internal static async Task<T> WaitAsync<T>(Task<T> task, string eventName)
+                {
+                    try { return await task.WaitAsync(Bound); }
+                    catch (TimeoutException ex)
+                    {
+                        throw new TimeoutException($"Hang guard: {eventName} did not complete within {Bound}.", ex);
+                    }
+                }
+            }
+
+            internal sealed class TestHangGuardExpiredException(string message) : Exception(message);
+            """;
+        Assert.Equal(new[] { "task.WaitAsync(Bound)", "task.WaitAsync(Bound)" }, FindFixedDurationTaskWaits(formerSource));
     }
 
     [Fact]
@@ -145,6 +255,93 @@ public sealed class WholeTestTimeoutSourceGuardTests
             }
         }
         return lines;
+    }
+
+    internal static IReadOnlyList<string> FindFixedDurationTaskWaits(string source)
+    {
+        // The helper source relies on implicit BCL usings in its project. Supply them
+        // here so receiver types distinguish task waits from monitor sampling waits.
+        var tree = CSharpSyntaxTree.ParseText("using System; using System.Threading; using System.Threading.Tasks;\n" + source);
+        var model = CSharpCompilation.Create("HangGuardSource", [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]).GetSemanticModel(tree);
+        var root = tree.GetRoot();
+        return root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(call => call.Expression is MemberAccessExpressionSyntax access &&
+                access.Name.Identifier.ValueText is "WaitAsync" or "Wait" &&
+                IsTask(model.GetTypeInfo(access.Expression).Type) &&
+                call.ArgumentList.Arguments.Any(argument => IsDuration(argument.Expression, [])))
+            .Select(call => call.ToString()).ToArray();
+
+        static bool IsTask(ITypeSymbol? type)
+        {
+            for (var current = type; current is not null; current = current.BaseType)
+                if (current.Name == "Task" && current.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+                    return true;
+            return false;
+        }
+
+        bool IsDuration(ExpressionSyntax expression, HashSet<string> resolving)
+        {
+            switch (expression)
+            {
+                case LiteralExpressionSyntax literal:
+                    return literal.IsKind(SyntaxKind.NumericLiteralExpression);
+                case ParenthesizedExpressionSyntax parentheses:
+                    return IsDuration(parentheses.Expression, resolving);
+                case CastExpressionSyntax cast:
+                    return IsDuration(cast.Expression, resolving);
+                case PrefixUnaryExpressionSyntax unary:
+                    return IsDuration(unary.Operand, resolving);
+                case BinaryExpressionSyntax binary:
+                    return IsDuration(binary.Left, new(resolving)) || IsDuration(binary.Right, new(resolving));
+                case ObjectCreationExpressionSyntax creation:
+                    return IsDurationType(creation.Type.ToString());
+                case ImplicitObjectCreationExpressionSyntax:
+                    return true; // The timeout argument supplies the TimeSpan target type.
+                case InvocationExpressionSyntax invocation:
+                    return invocation.Expression is MemberAccessExpressionSyntax factory &&
+                        IsDurationType(factory.Expression.ToString());
+                case MemberAccessExpressionSyntax member when IsDurationType(member.Expression.ToString()):
+                    return true;
+                case MemberAccessExpressionSyntax member when member.Name.Identifier.ValueText is "TotalMilliseconds" or "Ticks":
+                    return IsDuration(member.Expression, resolving);
+                case MemberAccessExpressionSyntax member:
+                    return Resolve(member.Name.Identifier.ValueText, expression, resolving);
+                case IdentifierNameSyntax identifier:
+                    return Resolve(identifier.Identifier.ValueText, expression, resolving);
+                default:
+                    return false;
+            }
+        }
+
+        bool Resolve(string name, ExpressionSyntax use, HashSet<string> resolving)
+        {
+            if (!resolving.Add(name)) return false;
+            // Search the nearest lexical scope first so a token parameter cannot inherit
+            // an unrelated method's duration alias. Initializers may themselves be aliases.
+            foreach (var scope in use.Ancestors().Where(node =>
+                node is BlockSyntax or MethodDeclarationSyntax or TypeDeclarationSyntax))
+            {
+                var variable = scope.DescendantNodes().OfType<VariableDeclaratorSyntax>()
+                    .FirstOrDefault(node => node.Identifier.ValueText == name &&
+                        node.Ancestors().FirstOrDefault(ancestor => ancestor is BlockSyntax or TypeDeclarationSyntax) == scope);
+                if (variable is not null)
+                {
+                    var type = (variable.Parent as VariableDeclarationSyntax)?.Type.ToString();
+                    return IsDurationType(type) || variable.Initializer is not null &&
+                        IsDuration(variable.Initializer.Value, resolving);
+                }
+                if (scope is MethodDeclarationSyntax method)
+                {
+                    var parameter = method.ParameterList.Parameters.FirstOrDefault(node => node.Identifier.ValueText == name);
+                    if (parameter is not null) return IsDurationType(parameter.Type?.ToString());
+                }
+            }
+            return false;
+        }
+
+        static bool IsDurationType(string? type) => type is
+            "TimeSpan" or "System.TimeSpan" or "global::System.TimeSpan" or "int" or "System.Int32";
     }
 
     internal static string? FindMethodBody(string source, string methodName)

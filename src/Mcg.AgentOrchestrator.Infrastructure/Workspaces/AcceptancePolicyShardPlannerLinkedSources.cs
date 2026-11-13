@@ -31,6 +31,7 @@ internal static class AcceptancePolicyShardPlannerLinkedSources
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OwnerConsoleTestClock.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OwnerConsoleControllerFactory.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TestHangGuard.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InProcessProgressWatch.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ManualStewardTimeProvider.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSnapshot/RepositorySourceSnapshotCache.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
             ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SourceSnapshot/RepositorySourceSnapshot.cs"] = [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject],
