@@ -7,7 +7,10 @@ internal static class GitCli
 {
     internal static Action<string>? LaunchObserver;
     internal static Func<string, Action<GitProcessTiming>?>? CompletionObserver;
-    private static readonly DurationHistory Durations = new();
+    private static GitIdleGapHistory idleGaps = new();
+
+    internal static void BindIdleGapHistory(string stateDirectory) =>
+        Volatile.Write(ref idleGaps, new GitIdleGapHistory(Path.Combine(stateDirectory, GitIdleGapHistory.FileName)));
 
     internal readonly record struct GitProcessTiming(string Subcommand, double StartMs, double WallMs, double? CpuMs);
 
@@ -22,7 +25,6 @@ internal static class GitCli
         private Action<GitProcessTiming>? sink;
         private double startMs;
         private int completed;
-        internal TimeSpan? WallDuration { get; private set; }
 
         private ProcessCompletion(Func<string, Action<GitProcessTiming>?> observer, string subcommand,
             TimeProvider clock)
@@ -73,7 +75,6 @@ internal static class GitCli
             try
             {
                 var wallMs = clock.GetElapsedTime(beforeStart, clock.GetTimestamp()).TotalMilliseconds;
-                WallDuration = TimeSpan.FromMilliseconds(wallMs);
                 double? cpuMs = null;
                 try
                 {
@@ -217,7 +218,7 @@ internal static class GitCli
         bool isolateRepository = false,
         ProcessTreeGuiSuppression.ErrorModeAccess? errorModeAccess = null,
         Action? lockContended = null, Action<HandleListLaunchedProcess>? startedObserver = null,
-        DurationHistory? durationHistory = null, Action<GitProgressWatch.Observation>? sampled = null,
+        GitIdleGapHistory? idleGapHistory = null, Action<GitProgressWatch.Observation>? sampled = null,
         Action<ProcessStartInfo>? configureStart = null)
     {
         var processStarted = false;
@@ -253,12 +254,10 @@ internal static class GitCli
             // never take or block on it; write commands take their required locks regardless.
             var useConsolePolicy = ApplyLaunchSettings(startInfo, readCommand: true);
 
-            var history = durationHistory ?? Durations;
+            var history = idleGapHistory ?? Volatile.Read(ref idleGaps);
             var subcommand = SubcommandKey(args);
-            // The ambient history holds wall durations of fast earlier runs; an I/O wait longer than those is not a hang.
-            var stallWindow = timeoutMilliseconds is not null ? null : history.Window(subcommand) is { } window && durationHistory is null && window < TimeSpan.FromSeconds(60) ? TimeSpan.FromSeconds(60) : history.Window(subcommand);
+            var stallWindow = timeoutMilliseconds is not null ? null : history.Window(subcommand);
             using var job = timeoutMilliseconds is null ? CreateAccountingJob() : null;
-            var beforeStart = timeoutMilliseconds is null ? clock.GetTimestamp() : (long?)null;
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
             HandleListLaunchedProcess? launchedProcess;
             using (LaunchLockTelemetry.Attribution.IsActive ? LaunchLockSiteCapture.BeginGit(args) : null)
@@ -326,15 +325,13 @@ internal static class GitCli
                     completion?.CompleteIfExited(process);
                     return StallResult(subcommand, watched, outputDrain.Text, errorDrain.Text);
                 }
+                history.Record(subcommand, watched.LongestIdle);
                 // Monitoring never waits for stdin delivery. Observe a completed write's fault,
                 // but an inherited input handle cannot hold this thread after the child's exit.
                 if (inputWrite?.IsFaulted == true)
                     return new GitResult(1, outputDrain.Text, inputWrite.Exception.GetBaseException().Message);
             }
             completion?.Complete(process);
-            var wallDuration = beforeStart is { } start
-                ? clock.GetElapsedTime(start, clock.GetTimestamp()) : completion?.WallDuration;
-            if (wallDuration is { } duration) history.Record(subcommand, duration);
 
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.
@@ -368,11 +365,11 @@ internal static class GitCli
     // Instance-scoped history and observations let real-process tests exercise the default branch
     // without installing ambient observers or depending on another test's completion history.
     internal static GitResult RunProgressExecutable(string executable, string workingDirectory,
-        string[] args, DurationHistory history, Action<GitProgressWatch.Observation>? sampled = null,
+        string[] args, GitIdleGapHistory history, Action<GitProgressWatch.Observation>? sampled = null,
         Action<HandleListLaunchedProcess>? started = null,
         Action<ProcessStartInfo>? configureStart = null) =>
         RunExecutableCore(executable, workingDirectory, null, null, args, null, TimeProvider.System,
-            startedObserver: started, durationHistory: history, sampled: sampled, configureStart: configureStart);
+            startedObserver: started, idleGapHistory: history, sampled: sampled, configureStart: configureStart);
 
     internal static GitProgressWatch.Result WaitForProgress(GitProgressWatch.IChild child,
         string subcommand, TimeSpan? stallWindow, TimeProvider clock,
@@ -388,28 +385,6 @@ internal static class GitCli
     internal static GitResult StallResult(string subcommand, GitProgressWatch.Result watched,
         string output, string error) => new(-1, output, PipeDrain.AppendDiagnostic(error,
             FormattableString.Invariant($"git {subcommand} stalled: {watched.Last.Describe()}; stallWindowMs={watched.StallWindow?.TotalMilliseconds}")));
-
-    internal sealed class DurationHistory
-    {
-        private readonly Dictionary<string, TimeSpan> longest = new(StringComparer.Ordinal);
-        private TimeSpan? longestAny;
-
-        internal void Record(string subcommand, TimeSpan wallDuration)
-        {
-            if (wallDuration < TimeSpan.Zero) return;
-            lock (longest)
-            {
-                if (!longest.TryGetValue(subcommand, out var previous) || wallDuration > previous)
-                    longest[subcommand] = wallDuration;
-                if (longestAny is null || wallDuration > longestAny) longestAny = wallDuration;
-            }
-        }
-
-        internal TimeSpan? Window(string subcommand)
-        {
-            lock (longest) return longest.TryGetValue(subcommand, out var value) ? value : longestAny;
-        }
-    }
 
     internal static string SubcommandKey(IReadOnlyList<string> args)
     {

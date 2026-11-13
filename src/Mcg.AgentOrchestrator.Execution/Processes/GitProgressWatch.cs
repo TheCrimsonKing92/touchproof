@@ -23,7 +23,8 @@ internal static class GitProgressWatch
             $"processorTimeMs={ProcessorTime?.TotalMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}; stdoutBytes={StdoutBytes}; stderrBytes={StderrBytes}; samples={Samples}; onTimeSamples={Samples - StarvedSamples}; starvedSamples={StarvedSamples}; eligibleIdleMs={EligibleIdle.TotalMilliseconds}");
     }
 
-    internal readonly record struct Result(bool Stalled, Observation Last, TimeSpan? StallWindow);
+    internal readonly record struct Result(bool Stalled, Observation Last, TimeSpan? StallWindow,
+        TimeSpan LongestIdle);
 
     internal static Result Wait(IChild child, TimeSpan? stallWindow, TimeProvider clock,
         Action<Observation>? reportIdle = null, Action<Observation>? sampled = null)
@@ -35,6 +36,7 @@ internal static class GitProgressWatch
         var observation = new Observation(previousCpu, previousOut, previousErr, 0, 0, TimeSpan.Zero);
         var unreportedIdle = TimeSpan.Zero;
         var reportAfter = SamplingInterval;
+        var longestIdle = TimeSpan.Zero;
 
         while (!child.WaitForExit(SamplingInterval))
         {
@@ -50,6 +52,7 @@ internal static class GitProgressWatch
             var knownCpu = cpu.HasValue && previousCpu.HasValue && cpu >= previousCpu;
             var idle = progress ? TimeSpan.Zero : observation.EligibleIdle;
             if (!progress && !starved && knownCpu) idle += interval;
+            if (idle > longestIdle) longestIdle = idle;
             observation = new(cpu, stdout, stderr, observation.Samples + 1,
                 observation.StarvedSamples + (starved ? 1 : 0), idle);
             previousCpu = cpu;
@@ -76,11 +79,11 @@ internal static class GitProgressWatch
             if (stallWindow is { } window && !progress && !starved && knownCpu && idle > window)
             {
                 // An exit observed at the decision boundary takes precedence over idle evidence.
-                if (child.HasExited) return new(false, observation, stallWindow);
+                if (child.HasExited) return new(false, observation, stallWindow, longestIdle);
                 child.KillTree();
-                return new(true, observation, stallWindow);
+                return new(true, observation, stallWindow, longestIdle);
             }
         }
-        return new(false, observation, stallWindow);
+        return new(false, observation, stallWindow, longestIdle);
     }
 }

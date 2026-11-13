@@ -237,6 +237,7 @@ try
     CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);
     GateHeartbeatOwner.Bind(workspace.OrchestratorDirectory);
     HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
+    GitCli.BindIdleGapHistory(HostLedgerStateDirectory.Resolve(workspace.ExecutionDirectory));
 }
 catch (Exception ex)
 {

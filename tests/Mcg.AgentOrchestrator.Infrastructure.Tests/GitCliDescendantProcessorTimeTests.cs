@@ -27,7 +27,7 @@ public sealed class GitCliDescendantProcessorTimeTests
             // observation, so no wall-clock pacing decides whether the assertion succeeds.
             var result = GitCli.RunProgressExecutable("git", root,
                 ["-c", "alias.cpu-probe=!echo child-ready; while test ! -f release; do :; done", "cpu-probe"],
-                new GitCli.DurationHistory(), observation =>
+                new GitIdleGapHistory(), observation =>
                 {
                     Assert.NotNull(launched);
                     Assert.NotNull(observation.ProcessorTime);
@@ -64,25 +64,23 @@ public sealed class GitCliDescendantProcessorTimeTests
     }
 
     [Fact]
-    public void DefaultPath_NaturalExits_PreserveOutputAndPopulateHistory()
+    public void DefaultPath_NaturalExits_PreserveOutput()
     {
         var root = Directory.CreateTempSubdirectory("git-progress-exit-").FullName;
         try
         {
-            var history = new GitCli.DurationHistory();
+            var history = new GitIdleGapHistory();
             var success = GitCli.RunProgressExecutable("git", root, ["--version"], history,
                 configureStart: start => PinEnvironment(start, root));
             Assert.True(success.Succeeded, success.Error);
             Assert.StartsWith("git version ", success.Output);
             Assert.Equal(string.Empty, success.Error);
-            Assert.NotNull(history.Window(string.Empty));
 
             var failure = GitCli.RunProgressExecutable("git", root, ["mcg-no-such-progress-command"], history,
                 configureStart: start => PinEnvironment(start, root));
             Assert.NotEqual(0, failure.ExitCode);
             Assert.NotEqual(-1, failure.ExitCode);
             Assert.Contains("mcg-no-such-progress-command", failure.Error);
-            Assert.NotNull(history.Window("mcg-no-such-progress-command"));
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
