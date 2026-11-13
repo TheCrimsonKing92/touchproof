@@ -13,6 +13,7 @@ public sealed class MergeTrainDropBacktestTests
         {
             "receipts: total=25 training=4 evaluation=21",
             "decision points: training=1 evaluation=10; evaluation excluded: pairs=0 recent=0 no-culprit=0 ambiguous=0",
+            "replay: replayability=11/11 rate=1.000 diff-cases=7",
             "chosen feature: diff-size training hits=1/1",
             "drop-newest: hits=3/10 gate-minutes per landing=62.7",
             "risk-ordered: hits=10/10 gate-minutes per landing=16.0",
@@ -103,6 +104,50 @@ public sealed class MergeTrainDropBacktestTests
         Assert.Equal("verdict: inconclusive", MergeTrainDropBacktest.Run(Fixture.Confirmed(), 100)[^1]);
         var noPasses = Fixture.Confirmed().Where(receipt => receipt.Outcome != MergeTrainGateOutcome.Passed).ToArray();
         Assert.Equal("verdict: inconclusive", MergeTrainDropBacktest.Run(noPasses, 1)[^1]);
+    }
+
+    [Fact]
+    public void Replay_ConfirmedAndExcludedCases_ReportsRateAndModeledOutcomes()
+    {
+        var excluded = Fixture.Confirmed();
+        var trailing = excluded[^1];
+        excluded.RemoveAt(excluded.Count - 1);
+        var allPass = new[] { Fixture.Member(200), Fixture.Member(201), Fixture.Member(202) };
+        var unclear = new[] { Fixture.Member(203), Fixture.Member(204), Fixture.Member(205) };
+        Fixture.Add(excluded, MergeTrainGateOutcome.Failed, 20, allPass);
+        Fixture.Add(excluded, MergeTrainGateOutcome.Passed, 12, allPass);
+        Fixture.Add(excluded, MergeTrainGateOutcome.Failed, 20, unclear);
+        Fixture.Add(excluded, MergeTrainGateOutcome.Passed, 12, [unclear[2], Fixture.Member(206)]);
+        Fixture.Add(excluded, MergeTrainGateOutcome.Failed, 20, [Fixture.Member(207), Fixture.Member(208)]);
+        excluded.Add(trailing);
+
+        foreach (var receipts in new[] { Fixture.Confirmed(), excluded })
+        {
+            var report = MergeTrainDropBacktest.Run(receipts, 4);
+            var result = MergeTrainDropBacktest.Replay(receipts, 4);
+            var counts = System.Text.RegularExpressions.Regex.Match(report[1], @"training=(\d+) evaluation=(\d+)");
+            Assert.True(counts.Success);
+            var usable = int.Parse(counts.Groups[1].Value) + int.Parse(counts.Groups[2].Value);
+            var failed = receipts.Count(receipt => receipt.Outcome == MergeTrainGateOutcome.Failed);
+            Assert.Equal(11, usable);
+            Assert.Equal(ReferenceEquals(receipts, excluded) ? 14 : 11, failed);
+            Assert.Equal($"replay: replayability={usable}/{failed} rate={((double)usable / failed).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)} diff-cases=7", report[2]);
+            Assert.Equal(failed, result.Cases.Count);
+            Assert.Equal((double)usable / failed, result.ReplayabilityRate);
+            Assert.Equal(7, result.DecisionDiff.Count);
+            Assert.Equal(3.0, result.ModeledOutcomes["drop-newest.hits"]);
+            Assert.Equal(10.0, result.ModeledOutcomes["risk-ordered.hits"]);
+            Assert.Equal(6.0, result.ModeledOutcomes["drop-newest.landings"]);
+            Assert.Equal(20.0, result.ModeledOutcomes["risk-ordered.landings"]);
+            Assert.Equal(376.0, result.ModeledOutcomes["drop-newest.gate-minutes"]);
+            Assert.Equal(320.0, result.ModeledOutcomes["risk-ordered.gate-minutes"]);
+            Assert.Equal(1.0, result.ModeledOutcomes["training.decision-points"]);
+            Assert.Equal(10.0, result.ModeledOutcomes["evaluation.decision-points"]);
+            Assert.All(result.Cases.Where(item => item.RecordedAt <= receipts[3].CompletedAt),
+                item => Assert.Null(item.CandidateDecision));
+            Assert.Equal(ReferenceEquals(receipts, excluded) ? new[] { "no-culprit", "ambiguous", "pair" } : [],
+                result.Cases.Where(item => !item.Replayable).Select(item => item.NotReplayableReason));
+        }
     }
 
     internal static class Fixture
