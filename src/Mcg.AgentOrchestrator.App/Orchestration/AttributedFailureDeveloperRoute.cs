@@ -40,11 +40,12 @@ internal static class AttributedFailureDeveloperRoute
                 reproduction.Groups["detail"].Value);
 
         var train = Regex.Match(detail,
-            @"\Amerge train RED attributed \((?<source>ownership|reach|path|recorded)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\z");
+            @"\Amerge train RED attributed \((?<source>ownership|reach|path|recorded)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)(?:\r?\n(?<detail>gate_failure [^\r\n]*(?:\r?\ngate_failure [^\r\n]*)*))?\z");
         return train.Success
             ? new("train-" + train.Groups["source"].Value, train.Groups["receipt"].Value, summary.BranchHeadSha,
                 train.Groups["tests"].Value.Split(',').Select(test => test.Trim())
-                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                train.Groups["detail"].Success ? train.Groups["detail"].Value : null)
             : null;
     }
 

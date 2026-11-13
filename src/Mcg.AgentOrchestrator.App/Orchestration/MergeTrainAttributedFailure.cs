@@ -31,6 +31,11 @@ internal static class MergeTrainAttributedFailure
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (classes is null) return;
         var reason = $"merge train RED attributed ({source}) receipt {receipt.ReceiptId}: {string.Join(", ", classes)}";
+        if (reproducedFailures is null)
+        {
+            var details = AttributedFailureResultDetail.Lines(receipt.GateTestResultPaths);
+            if (details.Count > 0) reason += Environment.NewLine + string.Join(Environment.NewLine, details);
+        }
         if (reproducedFailures is not null)
             reason = $"merge train RED attributed ({source}) receipt {receipt.ReceiptId}: " +
                 string.Join(", ", reproducedFailures.Select(failure => failure.TestName).Distinct(StringComparer.Ordinal)) +
