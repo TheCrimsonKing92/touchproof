@@ -69,9 +69,10 @@ internal sealed partial class GoalDispatchOperations
         goal = kernel.GetGoal(goal.Id);
         EnsureDeveloperTestLaneReadiness(goal, workspace, safeBatch.TaskIds);
         var home = _resolveHome(workspace);
+        var workerExecutionDirectory = GoalWorkerDirectory.Resolve(workspace, goal.Id);
         Func<Goal, TaskSpec, IEnumerable<Goal>, WorkerSubscriptionPreflightResult> preflight = (viewGoal, viewTask, holdScope) =>
             WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
-                workspace.ResolveExecutionDirectory(goal.Id), utcNow(),
+                workerExecutionDirectory, utcNow(),
                 allowGitReference: (sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled,
                 commandExists: commandExists, claudeAuthProbe: claudeAuthProbe, sandboxOptions: sandboxOptions,
                 providerHoldScope: holdScope,
@@ -94,7 +95,7 @@ internal sealed partial class GoalDispatchOperations
             agents,
             profiles,
             workspace.PromptDirectory,
-            workspace.ResolveExecutionDirectory(goal.Id),
+            workerExecutionDirectory,
             utcNow(),
             safeBatch.TaskIds,
             commandExists: commandExists,
