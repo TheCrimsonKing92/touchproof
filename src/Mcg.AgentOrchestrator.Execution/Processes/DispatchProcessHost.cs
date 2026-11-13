@@ -1495,8 +1495,9 @@ public static void DropToLow() {
     }
 
     internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks,
-        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null) =>
-        RunCore(parameters, hooks, startJobQos: startJobQos);
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null,
+        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null) =>
+        RunCore(parameters, hooks, buildService, startJobQos: startJobQos);
 
     internal static OwnedProcessGroup.SuspendedRedirectedProcessStart StartPreparedCodexWorker(
         ProcessStartInfo startInfo,
@@ -2022,6 +2023,10 @@ public static void DropToLow() {
             heartbeatHooks?.BeforeTaskIntentAdmission?.Invoke(startInfo);
             WorkerMcgEnvironmentAllowlist.RemoveDisallowed(startInfo.Environment);
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+            if (parameters.WorkerBuildHost is not null)
+                startInfo.Environment[WorkerMcgEnvironmentAllowlist.OrchestratorAppOutputVariable] = AppContext.BaseDirectory;
+            else
+                startInfo.Environment.Remove(WorkerMcgEnvironmentAllowlist.OrchestratorAppOutputVariable);
             Process StartPreparedWorker()
             {
                 if (codexScratch is null)

@@ -37,7 +37,7 @@ try {
         $homeOutput = Join-Path ([System.IO.Path]::GetFullPath($env:MCG_ORCHESTRATOR_HOME.Trim())) 'src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0'
         $appDll = Join-Path $homeOutput 'Mcg.AgentOrchestrator.App.dll'
     }
-    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) { throw 'App assembly missing' }
+    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) { [Console]::Error.WriteLine('worker_build_client_missing app="' + $appDll + '"'); exit 1 }
     $arguments = @($appDll, 'worker-build-request') + @($Projects) + @('--configuration', $Configuration, '--request-key', $RequestKey, '--busy-timeout-seconds', $BusyTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture))
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = 'dotnet'
