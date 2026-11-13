@@ -255,7 +255,8 @@ internal static class GitCli
 
             var history = durationHistory ?? Durations;
             var subcommand = SubcommandKey(args);
-            var stallWindow = timeoutMilliseconds is null ? history.Window(subcommand) : null;
+            // The ambient history holds wall durations of fast earlier runs; an I/O wait longer than those is not a hang.
+            var stallWindow = timeoutMilliseconds is not null ? null : history.Window(subcommand) is { } window && durationHistory is null && window < TimeSpan.FromSeconds(60) ? TimeSpan.FromSeconds(60) : history.Window(subcommand);
             using var job = timeoutMilliseconds is null ? CreateAccountingJob() : null;
             var beforeStart = timeoutMilliseconds is null ? clock.GetTimestamp() : (long?)null;
             var completion = ProcessCompletion.Begin(completionObserver, args.Length > 0 ? args[0] : string.Empty, clock);
