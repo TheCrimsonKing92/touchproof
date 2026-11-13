@@ -7,7 +7,7 @@ using static ConductorDriverTests;
 // Parallel safe: in-memory goal, private files, injected liveness, capacity and process launcher.
 public sealed class PreReviewEvidenceDriverBuildSlotsBusyTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void BusyCapacity_HoldsWithoutAttemptOrStateChange_ThenNextTickStarts()
     {
