@@ -28,6 +28,7 @@ internal static class DotnetBaseBuildCacheProjectKeys
                 if (dependencyKey is null) return null;
                 references.Add([reference, dependencyKey]);
             }
+            // No Mcg project identity here; the empty non-home topology prevents a base-build cache plan in AcceptanceDotnetBuildPhase.
             string Normalize(string value) => project.StartsWith("src/", StringComparison.OrdinalIgnoreCase)
                 ? NormalizeRoot(value, root) : value;
             object[] parts = ["project-key-v1", project, invocation.Select(Normalize).ToArray(),

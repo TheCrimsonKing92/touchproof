@@ -126,6 +126,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneWaitObservation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaunchLockSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestLocator",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestOmittedChecks",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestPartitionEquivalence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceMtpFailureOutput",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceNormalizedTestResultEvidence",

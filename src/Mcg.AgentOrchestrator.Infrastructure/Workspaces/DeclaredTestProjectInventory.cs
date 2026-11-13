@@ -13,6 +13,7 @@ internal static class DeclaredTestProjectInventory
     private const string DeclaredProjectRoot = "tests/";
     private const string DeclaredProjectSuffix = ".Tests.csproj";
 
+    // Help text only: TryResolve accepts identities from DeclaredProjects, including on non-home gates.
     internal const string LegacyAliasProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
         "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
