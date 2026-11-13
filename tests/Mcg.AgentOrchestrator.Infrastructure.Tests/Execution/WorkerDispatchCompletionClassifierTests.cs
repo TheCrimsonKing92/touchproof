@@ -3,6 +3,32 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerDispatchCompletionClassifierTests
 {
+    [Xunit.Fact]
+    public void ClaudeCli_UsageCreditsRefusal_ReturnsBudgetExhausted()
+    {
+        const string output = "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
+        var catalog = WorkerProviderCatalog.Default();
+        var resolverCalls = 0;
+        var classifier = CreateClassifier(resolveWorkerProvider: dispatch =>
+        {
+            resolverCalls++;
+            var provider = catalog.ResolveProfile(dispatch.WorkerName);
+            Xunit.Assert.Equal(ProviderKind.AnthropicClaudeCli, provider.Identity.Kind);
+            Xunit.Assert.Equal(ProviderFailureKind.Unknown,
+                provider.ParseOutcome(new WorkerProviderOutcome(1, output, string.Empty)));
+            return provider;
+        });
+        var dispatch = new TaskDispatchRecord(
+            "claude-cli", "claude-cli", "worktree",
+            DateTimeOffset.Parse("2026-11-12T21:15:00Z"),
+            ProviderName: "Anthropic", WorkerProviderKind: ProviderKind.AnthropicClaudeCli);
+
+        var failure = classifier.ParseProviderFailureKind(dispatch, 1, output, string.Empty);
+
+        Xunit.Assert.Equal(1, resolverCalls);
+        Xunit.Assert.Equal(ProviderFailureKind.BudgetExhausted, failure);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Credit balance is too low", ProviderFailureKind.BudgetExhausted)]
     [Xunit.InlineData("Some other failure", ProviderFailureKind.Unknown)]

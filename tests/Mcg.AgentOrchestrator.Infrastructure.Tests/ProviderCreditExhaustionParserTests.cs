@@ -9,6 +9,8 @@ public sealed class ProviderCreditExhaustionParserTests
     [Xunit.InlineData("API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API.\"}}")]
     [Xunit.InlineData("cReDiT bAlAnCe Is ToO lOw")]
     [Xunit.InlineData("api error: 400 YOUR CREDIT BALANCE IS TOO LOW")]
+    [Xunit.InlineData("You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [Xunit.InlineData("You\u2019re out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
     public void FailedCreditRefusal_ReturnsExactLine(string output)
     {
         var matched = ProviderLimitEvidenceParser.TryGetCliCreditExhaustionLine(1, [output], out var line);
@@ -30,6 +32,14 @@ public sealed class ProviderCreditExhaustionParserTests
     [Xunit.InlineData(1, "API Error: 401 Unauthorized")]
     [Xunit.InlineData(1, "API Error: 401 Your credit balance is too low")]
     [Xunit.InlineData(1, "API Error: 400 invalid request")]
+    [Xunit.InlineData(0, "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [Xunit.InlineData(0, "You\u2019re out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [Xunit.InlineData(1, "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.\nI implemented the change.")]
+    [Xunit.InlineData(1, "You\u2019re out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.\nI implemented the change.")]
+    [Xunit.InlineData(1, "  You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [Xunit.InlineData(1, "  You\u2019re out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [Xunit.InlineData(1, "You're out of usage credits.cs:12: echoed source")]
+    [Xunit.InlineData(1, "You\u2019re out of usage credits.cs:12: echoed source")]
     [Xunit.InlineData(1, "")]
     [Xunit.InlineData(1, " \n\t")]
     public void SuccessfulOrMixedOutput_RejectsCreditEvidence(int exitCode, string output)
