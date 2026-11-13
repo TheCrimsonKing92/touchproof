@@ -95,9 +95,9 @@ public sealed partial class CohortAcceptanceStore
                     cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
                     outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
                     infrastructure_reason_code, infrastructure_detail,
-                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json)
+                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json, gate_attempt_id, gate_lane_plan_path)
                 VALUES ($cohort, $receipt, $main, $tree, $manifest, $outcome, $attribution, $valid, $completed, $elapsed, $failed,
-                    $infrastructureReason, $infrastructureDetail, $exitCode, $testResultPaths, $evidenceArtifacts);
+                    $infrastructureReason, $infrastructureDetail, $exitCode, $testResultPaths, $evidenceArtifacts, $gateAttempt, $gateLanePlan);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
@@ -123,6 +123,8 @@ public sealed partial class CohortAcceptanceStore
             command.Parameters.AddWithValue(
                 "$evidenceArtifacts",
                 JsonSerializer.Serialize(receipt.GateEvidenceArtifacts));
+            command.Parameters.AddWithValue("$gateAttempt", (object?)receipt.GateAttemptId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$gateLanePlan", (object?)receipt.GateLanePlanPath ?? DBNull.Value);
             command.ExecuteNonQuery();
         }
 
@@ -1070,7 +1072,7 @@ public sealed partial class CohortAcceptanceStore
                    attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
                    infrastructure_reason_code, infrastructure_detail,
                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json,
-                   attributed_members_json, unrelated_failures_json, attribution_source
+                   attributed_members_json, unrelated_failures_json, attribution_source, gate_attempt_id, gate_lane_plan_path
             FROM cohort_receipts WHERE cohort_id=$cohort;
             """;
         command.Parameters.AddWithValue("$cohort", cohortId);
@@ -1105,6 +1107,8 @@ public sealed partial class CohortAcceptanceStore
         var attributedMembers = JsonSerializer.Deserialize<AcceptanceCohortAttributedMember[]>(reader.GetString(15)) ?? [];
         var unrelatedFailures = JsonSerializer.Deserialize<AcceptanceCohortUnrelatedFailure[]>(reader.GetString(16)) ?? [];
         var attributionSource = reader.IsDBNull(17) ? null : reader.GetString(17);
+        var gateAttemptId = reader.IsDBNull(18) ? null : reader.GetString(18);
+        var gateLanePlanPath = reader.IsDBNull(19) ? null : reader.GetString(19);
         reader.Close();
 
         using var membersCommand = connection.CreateCommand();
@@ -1190,6 +1194,8 @@ public sealed partial class CohortAcceptanceStore
         {
             GateEvidenceArtifacts = gateEvidenceArtifacts,
             GateChecks = declaredChecks,
+            GateAttemptId = gateAttemptId,
+            GateLanePlanPath = gateLanePlanPath,
             DeclaredEvidenceValidated = CohortTestResultEvidence.Assess(declaredChecks) is { Coherent: true, Passed: true },
             Invalidation = invalidation,
             AttributedMembers = attributedMembers,

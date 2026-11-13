@@ -50,11 +50,13 @@ internal sealed record AcceptanceSelectedExecutionSessionSuspension(string MissI
     {
         var path = MarkerPath(home, stateDirectory);
         if (value is null) { File.Delete(path); return; }
+        var content = JsonSerializer.Serialize(value);
+        if (File.Exists(path) && File.ReadAllText(path) == content) return;
         Directory.CreateDirectory(home);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(value));
+            File.WriteAllText(temporary, content);
             File.Move(temporary, path, overwrite: true);
         }
         finally { File.Delete(temporary); }

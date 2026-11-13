@@ -223,7 +223,8 @@ internal sealed partial class ConductorDriver
                         new ConductorLandingReceipt(
                             goal.Id.Value,
                             changedFiles,
-                            recovery.CombinedCommitRevision),
+                            recovery.CombinedCommitRevision, recovery.Receipt.GateAttemptId, recovery.Receipt.GateLanePlanPath,
+                            recovery.Receipt.Identity.ObservedMainRevision),
                         recovery.Receipt.Identity.Value,
                         recovery.Receipt.ReceiptId));
                     _afterSuccessfulLanding(goal, landingResult);

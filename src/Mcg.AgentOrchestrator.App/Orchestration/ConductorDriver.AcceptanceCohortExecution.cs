@@ -320,7 +320,8 @@ internal sealed partial class ConductorDriver
                 SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                     goal.Id.Value,
                     landingResult.ChangedFiles ?? [],
-                    landingResult.MergeCommitSha));
+                    landingResult.MergeCommitSha, receipt.GateAttemptId, receipt.GateLanePlanPath,
+                    identity.ObservedMainRevision));
                 _afterSuccessfulLanding(goal, landingResult);
             }
             _cohortAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
@@ -455,7 +456,11 @@ internal sealed partial class ConductorDriver
                 ValidForLanding: classification.Outcome == AcceptanceCohortGateOutcome.Passed,
                 InfrastructureReasonCode: classification.InfrastructureReasonCode,
                 InfrastructureDetail: classification.InfrastructureDetail)
-                { GateChecks = classifiedVerification.Checks.Select(check => check.BindToCohort(identity)).ToArray() });
+                {
+                    GateChecks = classifiedVerification.Checks.Select(check => check.BindToCohort(identity)).ToArray(),
+                    GateAttemptId = verification.AttemptId,
+                    GateLanePlanPath = verification.GateLanePlanPath
+                });
         }
         catch (Exception ex) when (!gateExecutionComplete && ex is (
             AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or

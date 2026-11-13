@@ -895,7 +895,11 @@ internal sealed partial class ConductorBatchLoop
             if (eligible.Length == 0 && !hasParkedAcceptanceToReconcile)
             {
                 admissionHold.Acknowledge();
-                _selectedExecutionBackstop?.ServiceIdle(_workspace!, driver, kernel, policy.AcceptanceWidth, SuppressNewAcceptanceAdmission(), nextTick);
+                RunJanitorialPhase("selected-execution-backstop-idle", nextTick, () =>
+                {
+                    _selectedExecutionBackstop?.ServiceIdle(_workspace!, driver, kernel, policy.AcceptanceWidth, SuppressNewAcceptanceAdmission(), nextTick);
+                    return true;
+                });
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
                 {
                     totalTicks++;
@@ -2246,7 +2250,9 @@ internal sealed partial class ConductorBatchLoop
         var (priorityOccupantsBefore, priorityResultsBefore, priorityBaseOrder) = ConductorTickStepLedger.Measure("priority-order", () =>
             (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
              state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
-        state.AcceptanceCensus = _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()) ?? state.AcceptanceCensus;
+        state.AcceptanceCensus = RunJanitorialPhase("selected-execution-backstop-admission", tick, () =>
+            _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()))
+            ?? _selectedExecutionBackstop?.Reserve(state.AcceptanceCensus) ?? state.AcceptanceCensus;
         if (!suppressNewAcceptanceAdmission())
             ConductorTickStepLedger.Measure("merge-train", () => AdmitMergeTrain(state, driver, policy, tick, changedGoalLines));
         ConductorTickStepLedger.Measure("pair-cohort", () => AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
@@ -2259,7 +2265,11 @@ internal sealed partial class ConductorBatchLoop
             ConductorTickStepLedger.Measure("solo-admission", () => AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
                 suppressNewAcceptanceAdmission));
         ConductorTickStepLedger.Measure("priority-guard", () => _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add));
-        _selectedExecutionBackstop?.ObserveServedAsync(priorityBaseOrder.Where(goal => !priorityOccupantsBefore.Contains(goal.Id.Value) && (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Contains(goal.Id.Value) || state.Results.TryGetValue(goal.Id.Value, out var outcome) && outcome.SlotIndex is not null && !priorityResultsBefore.Contains(goal.Id.Value)))).GetAwaiter().GetResult();
+        RunJanitorialPhase("selected-execution-backstop-served", tick, () =>
+        {
+            _selectedExecutionBackstop?.ObserveServedAsync(priorityBaseOrder.Where(goal => !priorityOccupantsBefore.Contains(goal.Id.Value) && (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Contains(goal.Id.Value) || state.Results.TryGetValue(goal.Id.Value, out var outcome) && outcome.SlotIndex is not null && !priorityResultsBefore.Contains(goal.Id.Value)))).GetAwaiter().GetResult();
+            return true;
+        });
         ConductorTickStepLedger.Measure("deferral-summary", () => SummarizeAcceptanceDeferrals(state, tick, changedGoalLines));
 
         return state.Results;

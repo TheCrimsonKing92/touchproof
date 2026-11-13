@@ -7,6 +7,26 @@ using static AcceptanceSelectedExecutionFixture;
 public sealed class AcceptanceSelectedExecutionSuspensionTests
 {
     [Fact]
+    public async Task UnchangedOpenMissMarkerIsNotReplacedWhileAGateReadsIt()
+    {
+        using var fixture = new SelectedExecutionBackstopFixture();
+        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Tests.Missed"], ["lane"]));
+        await fixture.Land();
+        await fixture.Finish();
+        var miss = (await fixture.Store.ReadAsync())!.OpenMiss!;
+        var path = AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home);
+        // Windows denies replacement while this reader is open. The service must leave
+        // identical content untouched, rather than retrying an unnecessary marker write.
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            await fixture.Service(capacity: false);
+            Assert.Equal(miss.Id, (await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home))!.MissId);
+        }
+        AcceptanceSelectedExecutionSessionSuspension.Write(fixture.Home, new("replacement"));
+        Assert.Equal("replacement", (await AcceptanceSelectedExecutionSessionSuspension.ReadAsync("unused", fixture.Home))!.MissId);
+    }
+
+    [Fact]
     public async Task OpenMissSuspendsEnforceAndResolutionRestoresSameSelectionImmediately()
     {
         using var fixture = new SelectedExecutionBackstopFixture();

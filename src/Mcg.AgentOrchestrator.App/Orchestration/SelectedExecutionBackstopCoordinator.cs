@@ -40,8 +40,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         }
         var record = path is null ? null : new OwnerConsoleGateLanePlanReader().Read(path,
             landing.GateAttemptId ?? Path.GetFileName(path)[..^AcceptanceGateLanePlan.ArtifactSuffix.Length])?.SelectedExecution;
-        // Missing evidence is visible and conservatively requires a full gate; it never
-        // masquerades as an applied selection. The durable landing records that distinction.
+        // Missing evidence is reported separately; only the gate's record can establish
+        // that a landing applied selection and needs a backstop.
         NoteLandingAsync(landing.GoalId, landing.LandingSha ?? throw new InvalidDataException("Backstop landing has no commit."),
             record, landing.PreviousMainSha ?? GoalWorktrees.ResolveRequiredRef(worktree, landing.LandingSha + "^")).GetAwaiter().GetResult();
     }
@@ -55,8 +55,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             if (await store.HasLandingAsync(goalId, commit).ConfigureAwait(false)) return;
             var ordinal = state.LastLandingOrdinal + 1;
             var applied = record?.Applied == true || record?.StructuralCoverageScoped == true;
-            // Legacy or absent records have no proof of full execution. Keep them pending
-            // separately from the positive Applied field used for normal landing intake.
+            if (record is null)
+                progress($"SELECTED_EXECUTION_BACKSTOP result=landing-record-unreadable goal={goalId} commit={commit}");
             var landing = new SelectedExecutionBackstopLanding(ordinal, goalId, commit, applied, record is null);
             await store.WriteAsync(record is null ? "landing-record-unreadable" : "landing", state with
             { LastLandingOrdinal = ordinal, Landings = state.RangeLandings.Append(landing).ToArray() }, clock(),
@@ -76,7 +76,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             _admissionOrder = waiting.ToDictionary(goal => goal.Id.Value,
                 goal => (GoalSchedulingOrder.AcceptanceWaitingAt(goal), GoalEffectivePriorityIndex.EffectiveLevel(goal)), StringComparer.Ordinal);
             if (state.OpenMiss is not null || RunningCount != 0) return;
-            if (state.Request is null && state.Uncovered.Any(landing => landing.Applied || landing.RecordUnreadable))
+            if (state.Request is null && state.Uncovered.Count > 0)
             {
                 var request = new SelectedExecutionBackstopRequest(Guid.NewGuid().ToString("N"),
                     state.CoveredCommit ?? state.RangeStartCommit, mainHead(), state.LastLandingOrdinal,

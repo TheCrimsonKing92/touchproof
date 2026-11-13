@@ -57,6 +57,15 @@ public class CanaryEngineSurfaceCoverageTests
     [Theory]
     [InlineData("AcceptanceSelectedExecutionInput")]
     [InlineData("AcceptanceSelectedExecutionMode")]
+    public void Selection_input_and_mode_preserve_existing_canary_non_triggers(string helper)
+    {
+        var result = PostLandingCanaryTrigger.Evaluate([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/" + helper + ".cs"]);
+        Assert.False(result.ShouldRun);
+        Assert.Empty(result.TriggeringPaths);
+    }
+
+    [Theory]
     [InlineData("AcceptanceSelectedExecutionSession")]
     [InlineData("BuildReceiptLedger")]
     [InlineData("BuildReceiptSite")]

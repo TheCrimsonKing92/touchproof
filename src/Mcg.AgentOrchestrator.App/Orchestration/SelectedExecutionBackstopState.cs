@@ -6,5 +6,5 @@ internal sealed record SelectedExecutionBackstopState(string RangeStartCommit, s
 {
     internal IReadOnlyList<SelectedExecutionBackstopLanding> RangeLandings => Landings ?? [];
     internal IReadOnlyList<SelectedExecutionBackstopLanding> Uncovered => RangeLandings
-        .Where(landing => landing.Applied || landing.RecordUnreadable).ToArray();
+        .Where(landing => landing.Applied).ToArray();
 }

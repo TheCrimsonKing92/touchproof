@@ -16,6 +16,28 @@ public sealed class ConductorBatchLoopTestsJanitorial : ConductorBatchLoopTests
     {
     }
 
+    [Fact]
+    public void BackstopIdleFaultIsReportedAndRetriedOnNextTick()
+    {
+        var attempts = 0;
+        var idlePasses = 0;
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            new ConductorBatchLoop(janitorialPhaseProbe: phase =>
+            {
+                if (phase != "selected-execution-backstop-idle") return;
+                if (++attempts == 1) throw new IOException("injected backstop service failure");
+            }, writeJitter: () => 0).Run(
+                new AgentOrchestratorKernel(), MakeDriver(), ConductorAutonomyPolicy.Conservative,
+                NoStopPath(), maxIterations: 2, watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => ++idlePasses == 2, keepAliveWhenIdle: true));
+
+        Assert.Equal(2, attempts);
+        Assert.Contains("LOOP_JANITORIAL_FAILED", output);
+        Assert.Contains("LOOP_JANITORIAL_RECOVERED", output);
+        Assert.Contains("phase=selected-execution-backstop-idle", output);
+        Assert.DoesNotContain("reason=unintended-exit", output);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_retries_contended_janitorial_lock_without_reexecuting_sweep")]
     public void BatchLoopRetriesContendedJanitorialLockWithoutReexecutingSweep()
     {

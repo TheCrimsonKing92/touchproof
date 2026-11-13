@@ -220,7 +220,13 @@ internal sealed partial class ConductorDriver
             () => RunInlineLandingSourceSizePreflight(goal) ?? _runAcceptanceVerification(goal, null, null, CancellationToken.None, SoloLandingGateExecutionOptions.Create(goal)),
             () => _land(goal, policy), () => HomeLandingAdmissibility.Evaluate(_cohortKernel ?? _conductorTickKernel, goal, _cohortWorkspace),
             () => LandingMutationBlocker?.Invoke() is { Length: > 0 } blocked ? blocked : InFlightTrainLandingHold.Describe(goal.Id, GetActiveAcceptanceCohortCapacity()), () => _clearAcceptanceFailure(goal),
-            home => { SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, home.ChangedFiles ?? [], home.MergeCommitSha)); _afterSuccessfulLanding(goal, home); });
+            home =>
+            {
+                var acceptance = RepositoryAcceptanceGate?.ReadHomeVerification(goal.Id);
+                SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, home.ChangedFiles ?? [], home.MergeCommitSha,
+                    acceptance?.AttemptId, PreviousMainSha: acceptance?.MainHeadSha));
+                _afterSuccessfulLanding(goal, home);
+            });
         if (result.Hold is { } held) return MakeResult(goal.Id.Value, prefix, policy, held);
         if (result.Failure is { } failure)
         {

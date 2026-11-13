@@ -171,6 +171,8 @@ public static class CohortAcceptanceStoreSetup
         EnsureColumn(connection, "cohort_receipts", "infrastructure_detail", "TEXT NULL");
         EnsureColumn(connection, "cohort_receipts", "gate_test_result_paths_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "gate_evidence_artifacts_json", "TEXT NOT NULL DEFAULT '[]'");
+        EnsureColumn(connection, "cohort_receipts", "gate_attempt_id", "TEXT NULL");
+        EnsureColumn(connection, "cohort_receipts", "gate_lane_plan_path", "TEXT NULL");
         EnsureColumn(connection, "cohort_receipts", "attributed_members_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "unrelated_failures_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "attribution_source", "TEXT NULL");

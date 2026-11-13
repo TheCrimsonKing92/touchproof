@@ -298,6 +298,9 @@ public sealed partial record AcceptanceCohortReceipt(
 
     public IReadOnlyList<AcceptanceCohortEvidenceArtifact> GateEvidenceArtifacts { get; init; } = [];
 
+    public string? GateAttemptId { get; init; }
+    public string? GateLanePlanPath { get; init; }
+
     public AcceptanceCohortInvalidation? Invalidation { get; init; }
 
     public IReadOnlyList<string> TestProjectKeys => Identity.Members

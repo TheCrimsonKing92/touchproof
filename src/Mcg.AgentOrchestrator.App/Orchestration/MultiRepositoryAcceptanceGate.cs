@@ -9,6 +9,21 @@ internal sealed class MultiRepositoryAcceptanceGate(
 {
     internal MultiRepositoryAcceptanceReceiptStore Store { get; } = new(workspace.OrchestratorDirectory);
 
+    internal AcceptanceVerificationSummary? ReadHomeVerification(GoalId goalId)
+    {
+        var outcome = Store.TryRead(goalId)?.Outcomes.SingleOrDefault(outcome => outcome.Key == "default");
+        if (outcome is null) return null;
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<AcceptanceVerificationSummary>(File.ReadAllText(outcome.EvidenceReference));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            // The landing sink reports missing gate identity; it cannot infer selected execution.
+            return null;
+        }
+    }
+
     internal MultiRepositoryAcceptanceResult Run(Goal goal, GoalLifecycleState state,
         Func<AcceptanceVerificationSummary> runHome, CancellationToken cancellationToken = default)
     {
