@@ -123,6 +123,7 @@ public sealed record MergeTrainReceipt(
     public IReadOnlyList<AcceptanceCohortEvidenceArtifact> GateEvidenceArtifacts { get; init; } = [];
     public MergeTrainRecheckProvenance? Recheck { get; init; }
     public string? GateAttemptId { get; init; }
+    public string? GateLanePlanPath { get; init; }
     // Null distinguishes legacy receipts from a gate that recorded check coverage.
     public IReadOnlyList<MergeTrainFailedCheckEvidence>? FailedCheckEvidence { get; init; }
 

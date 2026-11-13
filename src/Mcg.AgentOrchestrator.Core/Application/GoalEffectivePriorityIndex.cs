@@ -13,8 +13,10 @@ public static class GoalEffectivePriorityIndex
         ? GoalPriorities.ParseOrDefault(state.EffectiveLevel) : goal.Priority;
 
     public static GoalPriority EffectiveLevel(Goal goal, bool dispatch = false) =>
-        (dispatch ? goal.PriorityScheduling?.DispatchOvertakes : goal.PriorityScheduling?.GateOvertakes) >= 3
-            ? GoalPriority.Critical : StoredLevel(goal);
+        EffectiveLevel(StoredLevel(goal), (dispatch ? goal.PriorityScheduling?.DispatchOvertakes : goal.PriorityScheduling?.GateOvertakes) ?? 0);
+
+    public static GoalPriority EffectiveLevel(GoalPriority storedLevel, int overtakes) =>
+        overtakes >= 3 ? GoalPriority.Critical : storedLevel;
 
     public static void SetOwnPriority(IEnumerable<Goal> goals, Goal goal, GoalPriority level)
     {

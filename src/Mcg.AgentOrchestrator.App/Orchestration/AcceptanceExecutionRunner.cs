@@ -31,7 +31,10 @@ internal static class AcceptanceExecutionRunner
                 stableSlotIndex,
                 stableSlotLease,
                 executionOwner).GetAwaiter().GetResult()) with
-        { AttemptId = (executionOwner as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId };
+        {
+            AttemptId = (executionOwner as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId,
+            GateLanePlanPath = ((IAcceptanceRunExecutionContext)executionOwner).ResultsPrefix + AcceptanceGateLanePlan.ArtifactSuffix
+        };
     }
 
     internal static FocusedEvidenceRunResult RunFocusedVerification(

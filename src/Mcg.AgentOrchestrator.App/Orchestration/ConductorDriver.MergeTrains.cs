@@ -316,7 +316,8 @@ internal sealed partial class ConductorDriver
                         landing.Message,
                         landing.CommitRevision,
                         changedFiles);
-                    SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landing.CommitRevision));
+                    SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landing.CommitRevision,
+                        GateLanePlanPath: receipt.GateLanePlanPath, PreviousMainSha: identity.ObservedMainRevision));
                     _afterSuccessfulLanding(goal, result);
                 }
                 _mergeTrainAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);

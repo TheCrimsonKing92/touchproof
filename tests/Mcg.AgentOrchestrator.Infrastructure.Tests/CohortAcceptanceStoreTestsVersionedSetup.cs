@@ -152,7 +152,7 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
     }
 
     [Theory]
-    [InlineData(2)]
+    [InlineData(3)]
     [InlineData(99)]
     public void Setup_PartiallyRecorded_PreservesExistingVersionAndRecordsMissingNames(int version)
     {
@@ -251,7 +251,12 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
     private static void SeedRows(SqliteConnection connection, string cohortId, bool partitionColumns = true)
     {
         Execute(connection, """
-            INSERT INTO cohort_receipts VALUES(
+            INSERT INTO cohort_receipts(
+                cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
+                outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
+                infrastructure_reason_code, infrastructure_detail, gate_exit_code, gate_test_result_paths_json,
+                gate_evidence_artifacts_json, attributed_members_json, unrelated_failures_json, attribution_source,
+                cohort_failing_tests_json, attribution_reason_detail) VALUES(
                 $id, 'receipt-original', $main, $tree, 'manifest-original', 'Passed', 'NotApplicable', 1,
                 '2026-10-11T12:00:00+00:00', 123, '["original-check"]', NULL, 'original detail λ', 0,
                 '["gate.trx"]', '[]', '[]', '[]', 'original-source', '["Original.Test"]', 'original-reason');
@@ -310,17 +315,59 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
         }
         CohortAcceptanceStoreSetup.Setup(Db);
         using var restored = Open();
-        Assert.Equal(2, StoreSchemaVersions.Read(restored, "cohort-acceptance"));
+        Assert.Equal(3, StoreSchemaVersions.Read(restored, "cohort-acceptance"));
         Assert.Equal(2L, Scalar(restored, "SELECT count(*) FROM cohort_members WHERE brief_version IS NULL"));
         AssertVersions(restored, 1);
         var receipt = new CohortAcceptanceStore(Db).TryReadReceipt(Identity.Value)!;
         Assert.All(receipt.Identity.Members, member => Assert.Null(member.BriefVersion));
     }
+
+    [Fact]
+    public void Setup_VersionTwo_AddsNullableGateIdentityAndPreservesReceipts()
+    {
+        CreateLegacy();
+        using (var connection = Open(SqliteOpenMode.ReadWrite))
+        {
+            SeedRows(connection, Identity.Value);
+            InsertMember(connection, Identity.Value, 1);
+        }
+        CohortAcceptanceStoreSetup.Setup(Db);
+        using (var connection = Open(SqliteOpenMode.ReadWrite))
+        {
+            Execute(connection, "ALTER TABLE cohort_receipts DROP COLUMN gate_attempt_id; ALTER TABLE cohort_receipts DROP COLUMN gate_lane_plan_path; UPDATE store_schema_versions SET version=2 WHERE store_name='cohort-acceptance';");
+        }
+
+        CohortAcceptanceStoreSetup.Setup(Db);
+
+        using var restored = Open();
+        Assert.Equal(3, StoreSchemaVersions.Read(restored, "cohort-acceptance"));
+        Assert.Equal(1L, Scalar(restored, "SELECT count(*) FROM cohort_receipts WHERE gate_attempt_id IS NULL AND gate_lane_plan_path IS NULL"));
+        var receipt = new CohortAcceptanceStore(Db).TryReadReceipt(Identity.Value)!;
+        Assert.Equal("receipt-original", receipt.ReceiptId);
+        Assert.Null(receipt.GateAttemptId);
+        Assert.Null(receipt.GateLanePlanPath);
+    }
+
+    [Fact]
+    public void GateIdentitySurvivesStoreReconstruction()
+    {
+        var lanePlan = Path.Combine(root, "shared-attempt.lane-plan.json");
+        var store = new CohortAcceptanceStore(Db);
+        store.SaveGateReceipt(new AcceptanceCohortReceipt("receipt", Identity, AcceptanceCohortGateOutcome.Failed,
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z"), 0, ["lane"], 1, [])
+            { GateAttemptId = "shared-attempt", GateLanePlanPath = lanePlan });
+
+        var recovered = Assert.IsType<AcceptanceCohortReceipt>(new CohortAcceptanceStore(Db).TryReadReceipt(Identity.Value));
+        Assert.Equal("shared-attempt", recovered.GateAttemptId);
+        Assert.Equal(lanePlan, recovered.GateLanePlanPath);
+        Assert.Equal(Identity, recovered.Identity);
+    }
+
     private static void AssertVersions(SqliteConnection connection, int expected)
     {
         Assert.Equal(StoreNames.Order(StringComparer.Ordinal), ReadStrings(connection,
             "SELECT store_name FROM store_schema_versions ORDER BY store_name"));
-        Assert.All(StoreNames, name => Assert.Equal(expected == 1 && name == "cohort-acceptance" ? 2 : expected, StoreSchemaVersions.Read(connection, name)));
+        Assert.All(StoreNames, name => Assert.Equal(expected == 1 && name == "cohort-acceptance" ? 3 : expected, StoreSchemaVersions.Read(connection, name)));
     }
 
     private SqliteConnection Open(SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
@@ -365,7 +412,8 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
 
     private static string Rows(SqliteConnection connection, string table, string filter = "")
     {
-        var columns = ReadStrings(connection, $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid").Where(column => column != "brief_version").ToArray();
+        var columns = ReadStrings(connection, $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid")
+            .Where(column => column is not ("brief_version" or "gate_attempt_id" or "gate_lane_plan_path")).ToArray();
         var expressions = columns.Select(column => $"typeof([{column}]) || ':' || hex([{column}])");
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {string.Join(",", expressions)} FROM [{table}] {filter}";

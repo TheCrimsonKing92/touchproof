@@ -61,6 +61,7 @@ internal static class MergeTrainGateReceiptExecution
             ValidForLanding: outcome == MergeTrainGateOutcome.Passed)
         {
             GateAttemptId = attemptId,
+            GateLanePlanPath = ((AcceptanceAttemptExecutionOwner)executionOwner).Identity.ResultsPrefix + AcceptanceGateLanePlan.ArtifactSuffix,
             FailedCheckEvidence = failedChecks.Select(check => ReadFailedCheckEvidence(check, receiptPaths)).ToArray()
         });
     }
