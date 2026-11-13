@@ -61,7 +61,7 @@ public sealed class OwnerConsoleProgramHealthNoticeTests
     public void ProgramHealthEntersRecentEventsWithoutAnActivitySentence()
     {
         var item = Alert();
-        Assert.True(OwnerActivityNarrator.Maps(item));
+        Assert.True(OwnerActivityEventMap.Maps(item));
         Assert.True(OwnerConsoleStartupActivity.IsOperatorEvent(item));
         Assert.Empty(OwnerActivityNarrator.Narrate([item], _ => "goal title"));
     }

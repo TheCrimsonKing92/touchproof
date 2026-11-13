@@ -23,7 +23,7 @@ public sealed class OwnerProviderHoldActivityTests
         string reason, string next, string act)
     {
         var evt = Event(kind);
-        Assert.True(OwnerActivityNarrator.Maps(evt));
+        Assert.True(OwnerActivityEventMap.Maps(evt));
         var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
         Assert.Equal(sentence, row.Phrase);
         Assert.Equal(reason, row.Why);
@@ -41,7 +41,7 @@ public sealed class OwnerProviderHoldActivityTests
         var row = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
         Assert.Equal("Provider paused: claude (.claude-2) has no usage balance left", row.Phrase);
         Assert.Equal(binding, OwnerProviderHoldNarration.Binding(evt));
-        Assert.StartsWith($"{At.ToLocalTime():HH:mm:ss} {Goal[..8]} ", OwnerActivityNarrator.Line(row));
+        Assert.StartsWith($"{At.ToLocalTime():HH:mm:ss} {Goal[..8]} ", OwnerActivityLinePresentation.Line(row));
     }
 
     [Fact]

@@ -13,8 +13,8 @@ public sealed class OwnerExperimentReadingActivityTests
         Assert.Equal(32, ExperimentId.Length);
         var stopRule = ReadingDue("stop-rule", "10");
         var guardrail = ReadingDue("guardrail", "unavailable");
-        Assert.True(OwnerActivityNarrator.Maps(stopRule));
-        Assert.True(OwnerActivityNarrator.Maps(guardrail));
+        Assert.True(OwnerActivityEventMap.Maps(stopRule));
+        Assert.True(OwnerActivityEventMap.Maps(guardrail));
         var stopItem = Assert.Single(OwnerActivityNarrator.Narrate([stopRule], _ => ""));
         var guardrailItem = Assert.Single(OwnerActivityNarrator.Narrate([guardrail], _ => ""));
 
@@ -64,7 +64,7 @@ public sealed class OwnerExperimentReadingActivityTests
         var readingRow = Assert.Single(model.Activity, item => item.Kind == "experiment-reading-due");
         Assert.Equal("", readingRow.GoalPrefix);
         Assert.Equal($"Experiment {ExperimentPrefix} reading due: stop rule reached", readingRow.Phrase);
-        Assert.EndsWith(readingRow.Phrase, OwnerActivityNarrator.Line(readingRow));
+        Assert.EndsWith(readingRow.Phrase, OwnerActivityLinePresentation.Line(readingRow));
         Assert.Equal("11111111", Assert.Single(model.Activity, item => item.Kind == "goal-stalled").GoalPrefix);
         Assert.True(OwnerConsoleStartupActivity.IsOperatorEvent(readingDue));
         Assert.False(OwnerConsoleStartupActivity.IsOperatorEvent(new(now, "goal-lifecycle", goal.Id.Value, "TaskCreated")));
@@ -76,7 +76,7 @@ public sealed class OwnerExperimentReadingActivityTests
     public void MissingOrEmptyExperimentProducesNoActivity(string detail)
     {
         var input = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "experiment-reading-due", null, detail);
-        Assert.True(OwnerActivityNarrator.Maps(input));
+        Assert.True(OwnerActivityEventMap.Maps(input));
         Assert.Empty(OwnerActivityNarrator.Narrate([input], _ => ""));
     }
 

@@ -100,7 +100,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
             eventType = "FindingEvidenceRequestRecorded", role = "Developer",
             message = "finding-evidence disposition=evidence-only-round-accepted; finding_id=finding1" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
-        Assert.False(OwnerActivityNarrator.Maps(item!));
+        Assert.False(OwnerActivityEventMap.Maps(item!));
         Assert.Null(OwnerLifecycleStageNarration.DetailPhrase(item!, "Console stages"));
     }
 

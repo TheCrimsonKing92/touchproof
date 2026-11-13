@@ -7,7 +7,7 @@ internal static class OwnerConsoleStartupActivity
 {
     // Raw events include context that folds into one sentence (train members, retry, resolution).
     internal const int MaxRawEvents = OwnerConsoleViewModelBuilder.MaxActivityItems * 10;
-    internal static bool IsOperatorEvent(OwnerConductEvent item) => OwnerActivityNarrator.Maps(item);
+    internal static bool IsOperatorEvent(OwnerConductEvent item) => OwnerActivityEventMap.Maps(item);
     internal static IReadOnlyList<OwnerConductEvent> ReadRecent(string path, CancellationToken token = default) =>
         ReadHistory(path, null, TimeProvider.System, token).Recent.TakeLast(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
 

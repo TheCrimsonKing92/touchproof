@@ -40,7 +40,7 @@ internal sealed class OwnerConsoleActivityPane
             ? ["ACTIVITY unavailable: " + error] : Rows.Select(row => row.Text);
         Lines = pane.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
             showContent && row < Rows.Count && Rows[row].ItemIndex is { } itemIndex
-                ? OwnerActivityNarrator.LineSpans(items[itemIndex]) : OwnerConsoleLineSpans.None, width)).ToArray();
+                ? OwnerActivityLinePresentation.LineSpans(items[itemIndex]) : OwnerConsoleLineSpans.None, width)).ToArray();
         if (!Source.Apply(List, Lines) && !refilter && !follow) return;
         var placement = showContent ? _follow.Place(Keys, selected, top, List.Viewport.Height) : ((int?)0, 0);
         List.SelectedItem = placement.Item1;

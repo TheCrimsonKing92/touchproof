@@ -138,7 +138,7 @@ internal static class OwnerActivityDetailPresentation
         }
         if (item.Phrase.Length == 0 || item.Phrase.Contains('=') || item.Phrase.Contains('\n'))
             return "An Activity event was recorded.";
-        var summary = OwnerActivityNarrator.Line(item);
+        var summary = OwnerActivityLinePresentation.Line(item);
         return item.GoalTitle.Length > 0 && !summary.Contains(item.GoalTitle, StringComparison.Ordinal)
             ? summary + " (" + item.GoalTitle + ")" : summary;
     }

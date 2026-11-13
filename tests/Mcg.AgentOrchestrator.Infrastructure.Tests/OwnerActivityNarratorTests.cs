@@ -50,7 +50,7 @@ public sealed class OwnerActivityNarratorTests
     public void EveryMappedKindKeepsInternalTermsOutOfSentencesAndExplanations(string kind, string detail)
     {
         var input = new OwnerConductEvent(DateTimeOffset.UnixEpoch, kind, "11111111", detail);
-        Assert.True(OwnerActivityNarrator.Maps(input));
+        Assert.True(OwnerActivityEventMap.Maps(input));
         var lines = OwnerActivityNarrator.Narrate([input], id => id == "22222222" ? "Export" : "Search");
         foreach (var line in lines)
             foreach (var forbidden in new[] { "none", "child result", "handoff", "cohort", "receipt", "canary", "tick", "eventKind" })

@@ -4,6 +4,10 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerExperimentReadingNarration
 {
+    internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        Func<string?, string> name) => TryNarrate(ordered[index], out var sentence, out var why, out var next, out var act)
+            ? OwnerActivityNarrator.Item(ordered[index], name(ordered[index].GoalId), ordered, sentence, why, next, act) : null;
+
     internal static bool TryNarrate(OwnerConductEvent evt, out string sentence, out string reason,
         out string nextStep, out string ownerAction)
     {

@@ -1,12 +1,19 @@
 using System.Text.RegularExpressions;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Pure stage sentences and their shared detail phrases.
 internal sealed class OwnerLifecycleStageNarration
 {
+    internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        string name, Func<string?, string> fullName, string? finding) =>
+        TryNarrate(ordered, index, name, finding, out var stage)
+            ? Item(ordered[index], fullName(ordered[index].GoalId), ordered,
+                stage.Sentence, stage.Why, stage.Next, stage.Act, stage.Spans) : null;
+
     internal static bool TryNarrate(IReadOnlyList<OwnerConductEvent> ordered, int index, string name,
         string? finding, out OwnerAcceptanceNarration.Narrated narrated)
     {
