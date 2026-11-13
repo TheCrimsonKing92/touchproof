@@ -13,6 +13,10 @@ internal sealed class PipeDrain
     private readonly Thread _thread;
     private volatile bool _completed;
     private volatile string? _failure;
+    private long _receivedByteCount;
+
+    // Populated by the byte-stream overload, before decoding (including preambles/partial chars).
+    internal long ReceivedByteCount => Interlocked.Read(ref _receivedByteCount);
 
     private PipeDrain(TextReader reader, string name)
     {
@@ -28,6 +32,40 @@ internal sealed class PipeDrain
         var drain = new PipeDrain(reader, name);
         drain._thread.Start();
         return drain;
+    }
+
+    // The caller supplies an unread stream and retains ownership, as with the TextReader overload.
+    internal static PipeDrain Start(Stream stream, Encoding encoding, string name)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(encoding);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        PipeDrain? drain = null;
+        var counted = new ReceivedStream(stream, count => Interlocked.Add(ref drain!._receivedByteCount, count));
+        var reader = new StreamReader(counted, encoding, detectEncodingFromByteOrderMarks: true,
+            bufferSize: 4096, leaveOpen: true);
+        drain = new PipeDrain(reader, name);
+        drain._thread.Start();
+        return drain;
+    }
+
+    private sealed class ReceivedStream(Stream source, Action<int> received) : Stream
+    {
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = source.Read(buffer, offset, count);
+            received(read);
+            return read;
+        }
+        public override bool CanRead => source.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     internal string Text

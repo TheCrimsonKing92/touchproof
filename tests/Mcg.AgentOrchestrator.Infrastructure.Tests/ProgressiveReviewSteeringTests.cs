@@ -1300,7 +1300,9 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.True(retained.LastProcess!.IsRunning);
         Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
         Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
-        Assert.Matches("preservation=preserved=[0-9a-f]{40}", receipt.CancelConfirmation);
+        Assert.True(
+            Regex.IsMatch(receipt.CancelConfirmation, "preservation=preserved=[0-9a-f]{40}"),
+            receipt.CancelConfirmation);
         Assert.Contains("hold=retained-live-process", receipt.CancelConfirmation, StringComparison.Ordinal);
     }
 
