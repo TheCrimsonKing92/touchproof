@@ -27,25 +27,39 @@ internal sealed class SelectedExecutionBackstopFailureRerun(
         // Select methods to execute, but retain full row identities when confirming failures.
         var selectors = outcome.FailingTests.Select(AcceptanceTrxTestIdentityResolver.NormalizeSelector)
             .Distinct(StringComparer.Ordinal).ToArray();
-        var selection = ConductorAcceptanceCohortFocusedAttribution.TrySelect(selectors, []);
-        if (selection is null)
+        // Validate every batch before running any, so an unselectable later batch runs nothing.
+        var selections = selectors.Chunk(AcceptanceFailureAttributionPlanner.MaxCandidateRerunIdentities)
+            .Select(batch => ConductorAcceptanceCohortFocusedAttribution.TrySelect(batch, [])).ToArray();
+        if (selections.Length == 0 || selections.Any(selection => selection is null))
             return SelectedExecutionBackstopOutcome.Infrastructure("rerun-unavailable: failing tests could not be selected");
 
-        ConductorCohortFocusedPassResult pass;
-        try { pass = runFocused(selection); }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        var repeated = new HashSet<string>(StringComparer.Ordinal);
+        var allPassed = true;
+        for (var index = 0; index < selections.Length; index++)
         {
-            return SelectedExecutionBackstopOutcome.Infrastructure($"rerun-failed: {ex.GetType().Name}: {ex.Message}");
-        }
-        if (pass.Kind != ConductorCohortFocusedPassKind.Executed)
-            return SelectedExecutionBackstopOutcome.Infrastructure($"rerun-not-executed: {pass.Kind}: {pass.Detail}");
+            ConductorCohortFocusedPassResult pass;
+            try { pass = runFocused(selections[index]!); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return SelectedExecutionBackstopOutcome.Infrastructure(
+                    $"rerun-failed: {ex.GetType().Name}: {ex.Message} (batch {index + 1})");
+            }
+            if (pass.Kind != ConductorCohortFocusedPassKind.Executed)
+                return SelectedExecutionBackstopOutcome.Infrastructure(
+                    $"rerun-not-executed: {pass.Kind}: {pass.Detail} (batch {index + 1})");
 
-        var repeated = pass.FailingIdentities.Select(identity => identity.Trim()).ToHashSet(StringComparer.Ordinal);
+            repeated.UnionWith(pass.FailingIdentities.Select(identity => identity.Trim()));
+            allPassed &= pass.AllChecksPassed;
+        }
+
+        var originalMethods = selectors.ToHashSet(StringComparer.Ordinal);
+        var hasUnexpectedFailures = repeated.Any(identity =>
+            !originalMethods.Contains(AcceptanceTrxTestIdentityResolver.NormalizeSelector(identity)));
         var confirmed = outcome.FailingTests.Where(identity => repeated.Contains(identity.Trim())).ToArray();
-        if (confirmed.Length > 0) return outcome with { FailingTests = confirmed };
+        if (!hasUnexpectedFailures && confirmed.Length > 0) return outcome with { FailingTests = confirmed };
         // A first-run failure that passes when run again is a flake, not a miss, so the range is covered.
         // A re-run that was incomplete or failed something else proves nothing and stays pending.
-        return pass.AllChecksPassed && repeated.Count == 0
+        return allPassed && repeated.Count == 0
             ? new("green", [], [], $"rerun-passed: originalCount={outcome.FailingTests.Count}; flaky={string.Join(',', outcome.FailingTests.Take(5))}")
             : SelectedExecutionBackstopOutcome.Infrastructure($"rerun-incomplete: no original failures confirmed; originalCount={outcome.FailingTests.Count}");
     }
