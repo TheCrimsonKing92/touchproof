@@ -165,7 +165,7 @@ internal sealed partial class ConductorDriver
                 !MechanicalReviewerRetryMessagePrefixes.Any(prefix =>
                     evt.Message.StartsWith(prefix, StringComparison.Ordinal))));
 
-    private static IReadOnlyList<string> ExtractFailingTestIdentities(
+    internal static IReadOnlyList<string> ExtractFailingTestIdentities(
         IEnumerable<AcceptanceCheckResult> checks) =>
         checks
             .SelectMany(check => check.FailingTestIdentities ?? [])

@@ -173,6 +173,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? EffectiveManifestIdentity { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AcceptanceDeveloperRoundLink? DeveloperRoundLink { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PreReviewEvidenceRelaunchProvenance? RelaunchProvenance { get; init; }
     // Invalidating landing authority does not turn a successful gate into a failed attempt.
     public DateTimeOffset? RegateRequestedAt { get; init; }
     public string? ReplayResultFingerprint { get; init; }
@@ -752,6 +754,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
         }
 
+        PreReviewEvidenceRelaunchProvenance? relaunchProvenance = null;
         if (current is not null && IsReconciled(current))
         {
             if (TryHoldRefusedCarryRelaunch(
@@ -769,7 +772,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     dispatchKind,
                     focusedEvidenceRequest,
                     requestContext,
-                    stableSlotExhaustionPolicy);
+                    stableSlotExhaustionPolicy,
+                    BuildRelaunchProvenance(current, candidate, dispatchKind, focusedEvidenceRequest,
+                        requestContext, PreReviewEvidenceRelaunchTrigger.RegateSupersession));
                 CompleteSupersession(current, successor);
                 return Launch(
                     candidate,
@@ -787,6 +792,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 return reused;
             }
 
+            relaunchProvenance = BuildRelaunchProvenance(current, candidate, dispatchKind, focusedEvidenceRequest,
+                requestContext, IsTerminalWithoutRunOutcome(current.Outcome)
+                    ? PreReviewEvidenceRelaunchTrigger.DidNotRunRetry
+                    : PreReviewEvidenceRelaunchTrigger.ReconciledFallthrough);
             current = null;
         }
 
@@ -857,7 +866,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             dispatchKind,
             focusedEvidenceRequest,
             requestContext,
-            stableSlotExhaustionPolicy);
+            stableSlotExhaustionPolicy,
+            relaunchProvenance: relaunchProvenance);
     }
 
     private static bool MatchesCandidate(
@@ -893,6 +903,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     {
         var cause = SupersessionCauseFor(
             attempt, candidate, dispatchKind, focusedEvidenceRequest, requestContext);
+        var provenance = BuildRelaunchProvenance(attempt, candidate, dispatchKind, focusedEvidenceRequest,
+            requestContext, IsTerminalWithoutRunOutcome(attempt.Outcome)
+                ? PreReviewEvidenceRelaunchTrigger.TerminalWithoutRunReplaced
+                : PreReviewEvidenceRelaunchTrigger.StaleReplaced);
         MarkStale(attempt, cause);
         if (!string.Equals(dispatchKind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
         {
@@ -912,7 +926,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             dispatchKind,
             focusedEvidenceRequest,
             requestContext,
-            stableSlotExhaustionPolicy);
+            stableSlotExhaustionPolicy,
+            provenance);
         CompleteSupersession(attempt, successor);
         return Launch(
             candidate,
@@ -923,6 +938,46 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             requestContext,
             stableSlotExhaustionPolicy,
             successor);
+    }
+
+    private static bool SameFocusedEvidenceRequest(
+        ConductorParallelAcceptanceAttempt attempt,
+        string? focusedEvidenceRequest,
+        ConductorFocusedEvidenceRequestContext? requestContext) =>
+        string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) &&
+        attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
+        FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
+        FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
+        string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal);
+
+    private PreReviewEvidenceRelaunchProvenance? BuildRelaunchProvenance(
+        ConductorParallelAcceptanceAttempt prior,
+        ConductorParallelAcceptanceCandidate candidate,
+        string dispatchKind,
+        string? focusedEvidenceRequest,
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        PreReviewEvidenceRelaunchTrigger trigger)
+    {
+        if (!string.Equals(dispatchKind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
+            return null;
+
+        FocusedEvidenceRunResult? evidence = null;
+        try
+        {
+            var artifact = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                ReadAllTextSharedWithRetry(prior.ResultPath), JsonOptions);
+            evidence = artifact is { Kind: "focused-evidence" } ? artifact.FocusedEvidence : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            // Provenance must not turn an unreadable predecessor artifact into a launch failure.
+        }
+
+        return new PreReviewEvidenceRelaunchProvenance(prior.AttemptId, prior.Outcome, prior.BranchHeadSha,
+            !string.IsNullOrWhiteSpace(prior.BranchHeadSha) && !string.IsNullOrWhiteSpace(candidate.BranchHeadSha) &&
+                string.Equals(prior.BranchHeadSha, candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase),
+            SameFocusedEvidenceRequest(prior, focusedEvidenceRequest, requestContext), trigger,
+            PreReviewEvidenceRelaunchProvenance.Classify(prior, evidence, IsTerminalWithoutRunOutcome(prior.Outcome)));
     }
 
     private static ConductorEvidenceSupersessionCause SupersessionCauseFor(
@@ -937,11 +992,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorEvidenceSupersessionCause.CandidateChanged;
         }
 
-        if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) ||
-            attempt.FocusedEvidenceNegativeControl != requestContext?.NegativeControl ||
-            !FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) ||
-            !FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) ||
-            !string.Equals(attempt.FocusedEvidenceRepository, requestContext?.RepositoryTarget?.Key, StringComparison.Ordinal))
+        if (!SameFocusedEvidenceRequest(attempt, focusedEvidenceRequest, requestContext))
         {
             return ConductorEvidenceSupersessionCause.FocusedRequestChanged;
         }
@@ -1222,7 +1273,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         string? focusedEvidenceRequest,
         ConductorFocusedEvidenceRequestContext? requestContext,
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy,
-        ConductorParallelAcceptanceAttempt? reservedAttempt = null)
+        ConductorParallelAcceptanceAttempt? reservedAttempt = null,
+        PreReviewEvidenceRelaunchProvenance? relaunchProvenance = null)
     {
         var attempt = reservedAttempt ?? CreateAttempt(
             candidate,
@@ -1230,7 +1282,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             dispatchKind,
             focusedEvidenceRequest,
             requestContext,
-            stableSlotExhaustionPolicy);
+            stableSlotExhaustionPolicy,
+            relaunchProvenance);
         try
         {
             Persist(attempt);
@@ -1245,6 +1298,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     _timeProvider, candidate.Goal.Id, Environment.ProcessId);
             }
             EmitEvidenceStart(attempt);
+            if (attempt.RelaunchProvenance is { } provenance)
+                _conductEventLogWriter?.AppendRequired(PreReviewEvidenceRelaunchProvenance.EventKind,
+                    attempt.GoalId, provenance.EventDetail(attempt), attempt.StartedAt,
+                    $"evidence:{attempt.AttemptId}:relaunch-provenance");
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
 
@@ -2249,7 +2306,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         string dispatchKind,
         string? focusedEvidenceRequest,
         ConductorFocusedEvidenceRequestContext? requestContext,
-        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
+        AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy,
+        PreReviewEvidenceRelaunchProvenance? relaunchProvenance = null)
     {
         var startedAt = _utcNow();
         var rawId = $"{candidate.GoalPrefix}-{candidate.SlotIndex}-{startedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
@@ -2311,6 +2369,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ConductorGenerationId: _conductorGenerationId)
         {
             BriefVersion = candidate.Goal.AuthoritativeBrief.Version,
+            RelaunchProvenance = relaunchProvenance,
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,

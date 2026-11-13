@@ -340,6 +340,6 @@ internal sealed partial class ConductorDriver
         return $" Acceptance output tail: {tail}";
     }
 
-    private static bool IsBlockingTimeoutCheck(string checkName) =>
+    internal static bool IsBlockingTimeoutCheck(string checkName) =>
         checkName.StartsWith("acceptance-check-timeout:", StringComparison.OrdinalIgnoreCase);
 }
