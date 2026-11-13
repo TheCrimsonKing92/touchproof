@@ -1,5 +1,22 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Git launch measurements
+
+`gate-stats git [--last <n>] [--top <k>]` reads the last measured gates (default 10)
+and up to 100 recent tick events from current and rotated conduct logs. It prints launch
+counts, summed git wall milliseconds, uncapped and capped elapsed-time shares, and top
+calling methods. Gate time is summed measured lane elapsed time; its git coverage is
+slot-held test-host launches, including fixtures. Tick windows include only their flow's
+launches and completions received before the window closes; persistent processes may
+remain untimed. Summed parallel git durations can exceed elapsed time.
+
+The final line is `verdict=step-2` when aggregate git time exceeds 5 percent of measured
+gate time or 20 percent of tick time, otherwise `verdict=close`. Fewer than the requested
+number of measured gates, or no usable ticks when gate share is below the threshold,
+produces `verdict=insufficient-data`. Old rows without attempt identity or git data do not
+count as measured gates. Run ten real gates after landing before using the verdict to
+decide whether to replace the dominant git read paths.
+
 ## Integration scope authorization
 
 `integration-scope <goal-prefix> <round-id> <full-original-sha> <full-main-sha> <approve|original-only|revoke> --text-file <reason-path> --idempotency-key <key> [--path <exact-file> ...] [--approval <intent-id>] [--json]`

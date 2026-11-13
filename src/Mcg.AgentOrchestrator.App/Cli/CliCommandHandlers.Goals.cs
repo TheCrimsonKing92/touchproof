@@ -1658,6 +1658,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             : Path.GetFileName(conductorOutputLogPath) + ".crash.log");
                 try
                 {
+                    using var gitCensus = GitLaunchWindowCensus.Install();
                     var loopSummary = new ConductorBatchLoop(
                         loadTrxCoherenceVerdicts: directory => { TrxCoherenceVerdictStore.Load(directory); TrxCoherenceVerdictStore.EnableAppend(directory); loopSetup.Dispose(); },
                         measuredSweepWithCheckpointHolds: reconcileSweep,
@@ -1704,7 +1705,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy,
                             () => terminalSweepCache.ObservedMainSha))
                         .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace, loopPolicy.Features.Author))
-                        .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
+                        .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).WithGitCensus(gitCensus).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                         persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,

@@ -17,7 +17,8 @@ internal static class PreTesterReverseDependencySelections
 
     internal static (IReadOnlyList<FindingEvidenceSelection> Selections, IReadOnlyList<Provenance> Provenance) Select(
         string worktreePath, IReadOnlyList<string> changedPaths, Action<string>? progress = null,
-        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? selector = null)
+        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? selector = null,
+        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? costDecision = null)
     {
         var paths = ShippingSourcePaths(changedPaths);
         if (paths.Length == 0) return ([], []);
@@ -64,13 +65,32 @@ internal static class PreTesterReverseDependencySelections
                 return ([], []);
             }
         }
-        var selections = result.TestClasses.Distinct(StringComparer.Ordinal)
+        var classes = result.TestClasses.Distinct(StringComparer.Ordinal).ToArray();
+        var decision = (costDecision ?? ReadCostDecision)(classes);
+        if (!decision.Run)
+        {
+            (progress ?? Console.WriteLine)(
+                $"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-skipped-cost {decision.Line}");
+            return ([], []);
+        }
+        var selections = classes
             .Select(name => new FindingEvidenceSelection(GoalAcceptanceVerifier.ProjectLabel(Project), name)).ToArray();
         return (selections, selections.SelectMany(selection => paths.Select(path =>
             new Provenance(selection.TestClass, "reverse-dependency", path))).ToArray());
 
         void Degraded(string reason) => (progress ?? Console.WriteLine)(
             $"PRE_TESTER_GUARD_SELECTED class=none kind=reverse-dependency-degraded reason={reason} path={paths[0]}");
+
+        ReverseDependencyEvidenceCostRule.Decision ReadCostDecision(IReadOnlyList<string> selectedClasses)
+        {
+            var inputs = ReverseDependencyEvidenceCostHistory.Read(worktreePath,
+                HostLedgerStateDirectory.Resolve(worktreePath), selectedClasses, changedPaths);
+            var evaluated = ReverseDependencyEvidenceCostRule.Evaluate(
+                inputs.SelectionSeconds, inputs.FullGateSeconds, inputs.FailureRate);
+            return inputs.UnavailableReason is { } reason
+                ? evaluated with { Line = $"{evaluated.Line} input_unavailable={reason.Replace('\r', ' ').Replace('\n', ' ')}" }
+                : evaluated;
+        }
     }
 
     internal static IEnumerable<FindingEvidenceSelection> RecordedSelections(IReadOnlyList<string> selections)

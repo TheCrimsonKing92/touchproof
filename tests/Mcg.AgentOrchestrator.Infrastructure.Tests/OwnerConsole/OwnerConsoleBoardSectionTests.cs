@@ -18,7 +18,7 @@ using Terminal.Gui.Views;
 public sealed class OwnerConsoleBoardSectionTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private static readonly string[] Columns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE"];
+    private static readonly string[] Columns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "LAST EVENT"];
 
     [Fact]
     public async Task Scene_DisposeAfterRefresh_ReleasesObservedProjectStores()
@@ -209,7 +209,7 @@ public sealed class OwnerConsoleBoardSectionTests
             scene.View.BoardTable.Rows[0].ItemArray.Cast<string>());
         Assert.Equal(new[] { "33333333", "", "alpha goal", "Normal", "in progress: Developer", "1m" },
             scene.View.BoardTable.Rows[1].ItemArray.Cast<string>());
-        Assert.Equal(new[] { 8, 4, 10, 8, 31, 3 }, Enumerable.Range(0, Columns.Length)
+        Assert.Equal(new[] { 8, 4, 10, 8, 31, 10 }, Enumerable.Range(0, Columns.Length)
             .Select(column => board.Style.GetOrCreateColumnStyle(column).MaxWidth));
         Assert.Equal(new[] { true, true, true, false, true, true }, Enumerable.Range(0, Columns.Length)
             .Select(column => board.Style.GetOrCreateColumnStyle(column).Visible));
@@ -512,7 +512,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.True(row.IsDiagnostic);
         Assert.Equal("beta", scene.View.SelectedProject);
         Assert.Null(scene.View.SelectedGoalId);
-        Assert.Equal("unknown", scene.View.BoardTable.Rows[0]["AGE"]);
+        Assert.Equal("unknown", scene.View.BoardTable.Rows[0]["LAST EVENT"]);
         await scene.View.HandleKeyAsync(Key.Enter);
         Assert.Contains(row.Title, scene.View.NoticeText);
     }

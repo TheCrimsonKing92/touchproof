@@ -621,7 +621,8 @@ internal static class SourceSizeRatchet
             // feature behavior remains in the typed consumers, leaving only startup wiring here (+6 lines).
             // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
             // Goal c1182160: one defensive guard protects direct callers of the acceptance merge core from repository-set landing.
-            new SourceClassCeiling("CliCommandHandlers", 11011, 30),
+            // Goal 98758ac2: one composition-root census lifetime line; measured 11012 lines in the same 30 partials.
+            new SourceClassCeiling("CliCommandHandlers", 11012, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -721,7 +722,8 @@ internal static class SourceSizeRatchet
             // the added comment explains why the tracker still needs the hold record.
             // Goal bc361051: seven wiring lines preserve typed progress facts; no new partial or headroom.
             // Follower removal integrated with main: measured 8792 lines in 53 partial files.
-            new SourceClassCeiling("ConductorBatchLoop", 7738, 50),
+            // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
+            new SourceClassCeiling("ConductorBatchLoop", 7765, 50),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

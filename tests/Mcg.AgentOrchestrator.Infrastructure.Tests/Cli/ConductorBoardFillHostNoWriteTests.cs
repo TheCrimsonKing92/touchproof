@@ -34,7 +34,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
                 # Read-only draft
                 ## Measured premise
                 Main HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-                The receipt seam exists at `docs/role-capability-matrix.md:1`.
+                - The receipt seam exists at `docs/role-capability-matrix.md:1`.
                 ## What to build
                 Draft the receipt.
                 ## Acceptance criteria

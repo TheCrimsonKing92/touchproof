@@ -109,7 +109,7 @@ internal sealed partial class ConductorBatchLoop
             "SWEEP_GOAL_ROOT_RECLAIM_FAILED" => "sweep-goal-root-reclaim-failed", "SWEEP_UNSTORED_BUILD_ROOT_RETENTION" => "sweep-unstored-build-root-retention",
             "SET_ASIDE_SELF_CLEARED" => "set-aside-self-cleared",
             "BLOCKED_RECHECK_HEARTBEAT" => "blocked-recheck-heartbeat",
-            "TICK_WRITE_BUSY" => "lock-blocker",
+            "TICK_WRITE_BUSY" => "lock-blocker", "TICK_GIT_CENSUS" => "tick-git-census",
             "TICK_WRITE_DEGRADED" => "lock-blocker",
             "GLANCE" => "progressive-review-glance",
             "WATCH_TRANSITION" => "watch-transition",
