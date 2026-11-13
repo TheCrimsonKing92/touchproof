@@ -16,6 +16,13 @@ internal sealed record EpicPlanSourceFacts(BacklogItemStatus SourceStatus, strin
     internal bool AutomaticIntakeEligible => SourceStatus == BacklogItemStatus.Open &&
         Resolution == EpicPlanOwnershipResolution.Unclaimed;
 
+    internal bool ReselectableAfterTerminalOwners => SourceStatus == BacklogItemStatus.Open &&
+        Resolution is EpicPlanOwnershipResolution.Persisted or EpicPlanOwnershipResolution.Legacy &&
+        Owner is not null && IsTerminal(Owner.Status) && LinkedGoals.All(goal => IsTerminal(goal.Status));
+
+    private static bool IsTerminal(string status) => Enum.TryParse<GoalStatus>(status, out var parsed) &&
+        parsed is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded;
+
     internal string Render()
     {
         var ownership = OwnerGoalId is null ? "none" : $"{Short(OwnerGoalId)} {Owner?.Status ?? "Missing"}";

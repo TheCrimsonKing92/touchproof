@@ -184,19 +184,18 @@ internal static class ImpactReplay
             }
             sink.Phase(ImpactReplayPhase.ImpactAnalysis);
             cancellationToken.ThrowIfCancellationRequested();
-            var attemptFloor = lanes.Where(lane => configuration.Floor is null ? IsDefaultFloor(lane.Name) : configuration.Floor.Contains(lane.Name, StringComparer.Ordinal))
+            var attemptFloor = lanes.Where(lane => configuration.Floor is null ? AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name) : configuration.Floor.Contains(lane.Name, StringComparer.Ordinal))
                 .Select(lane => lane.Name).Order(StringComparer.Ordinal).ToArray();
             context.FloorLanes = attemptFloor;
             var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var changedTests = changedSources.Where(routing.IsTestSource).ToArray();
             var productionSources = changedSources.Except(changedTests, StringComparer.OrdinalIgnoreCase).ToArray();
-            var selection = productionSources.Length == 0 && changedTests.Length > 0
-                ? ReverseDependencyTestSelection.Resolved([])
-                : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true);
-            var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
-            selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards,
-                out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories);
+            var impact = AcceptanceImpactSelectionReader.Read(checkout, changedFiles, routing, testSources,
+                classes, guards, testProjectDirectories, bypassCache: true);
+            var selection = impact.Selection;
+            var augmented = impact.ChangedTests;
+            var declaredGuards = impact.DeclaredGuards;
             var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
             var selectedFullNames = new HashSet<string>(StringComparer.Ordinal);
             var observedPool = ImpactReplayBalancedPool.Read(evidence.BalancedLaneOutcomes, classes, selectedFullNames, false);
@@ -282,9 +281,5 @@ internal static class ImpactReplay
                 Gained: augmented.Gained, GuardClasses: guards?.Classes.ToArray());
         }
 
-        private static bool IsDefaultFloor(string name) =>
-            name.StartsWith("Process spawning", StringComparison.Ordinal) ||
-            name.StartsWith("Isolated process spawning", StringComparison.Ordinal) ||
-            name is "Chaos gate" or "Remainder merge train and ratchet";
     }
 }

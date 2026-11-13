@@ -1,9 +1,92 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.ReadModels;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ConductorBoardFillHostTests
 {
+    [Theory]
+    [InlineData("persisted", GoalStatus.Completed, true)]
+    [InlineData("persisted", GoalStatus.Cancelled, true)]
+    [InlineData("legacy", GoalStatus.Completed, true)]
+    [InlineData("persisted", GoalStatus.Draft, false)]
+    [InlineData("mixed", GoalStatus.Completed, false)]
+    [InlineData("ambiguous", GoalStatus.Completed, false)]
+    [InlineData("missing", GoalStatus.Completed, false)]
+    [InlineData("malformed", GoalStatus.Completed, false)]
+    [InlineData("unreadable", GoalStatus.Completed, false)]
+    public async Task Default_readiness_requires_resolved_terminal_ownership(string shape,
+        GoalStatus status, bool eligible)
+    {
+        // Parallel-safe: private workspace and real SQLite stores; no worker process.
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var kernel = new AgentOrchestratorKernel();
+        var owner = kernel.CreateGoal("Earlier owner");
+        kernel.SetGoalSourceBacklogItemLink(owner.Id, fixture.Item.Id, SourceBacklogCoverage.Slice);
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        { Goals = snapshot.Goals.Select(goal => goal with { Status = status }).ToArray() });
+        if (shape is "mixed" or "ambiguous")
+        {
+            var sibling = kernel.CreateGoal("Sibling");
+            kernel.SetGoalSourceBacklogItemLink(sibling.Id, fixture.Item.Id, SourceBacklogCoverage.Slice);
+            if (shape == "ambiguous") kernel.CancelGoal(sibling.Id, "Terminal sibling fixture");
+        }
+        _ = StateDbMigrations.EnsureUpToDate(fixture.Workspace.SqliteStatePath);
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        if (shape is not ("legacy" or "ambiguous"))
+        {
+            // Seed the authoritative claim directly so mixed history remains unambiguous.
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                "Data Source=" + fixture.Workspace.SqliteStatePath + ";Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO source_backlog_claims
+                    (backlog_item_id, owner_goal_id, coverage, version, updated_at)
+                VALUES ($source, $owner, $coverage, 1, $updated)
+                """;
+            command.Parameters.AddWithValue("$source", fixture.Item.Id);
+            command.Parameters.AddWithValue("$owner", shape == "missing" ? "missing-owner" : owner.Id.Value);
+            command.Parameters.AddWithValue("$coverage", shape == "malformed" ? "garbage" : "Slice");
+            command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        if (shape == "unreadable") File.WriteAllText(fixture.Workspace.SqliteStatePath, "not SQLite");
+        var host = ConductorBoardFillHost.CreateDefault(fixture.Workspace,
+            () => ConductorAutonomyPolicy.Permissive);
+        try
+        {
+            var items = BoardFillBacklogSnapshot.Read(fixture.Workspace.BacklogStorePath);
+            Assert.Equal(eligible, host._readiness(kernel, items)(Assert.Single(items)).Eligible);
+            if (shape != "unreadable")
+                Assert.False(EpicPlanGoalClaimSnapshot.Read(fixture.Workspace.SqliteStatePath,
+                    kernel.Goals.ToArray()).Resolve(fixture.Item).AutomaticIntakeEligible);
+        }
+        finally { host.Stop(); }
+    }
+
+    [Fact]
+    public void Reselection_terminality_matches_goal_for_every_status()
+    {
+        foreach (var status in Enum.GetValues<GoalStatus>())
+        {
+            var kernel = new AgentOrchestratorKernel();
+            kernel.CreateGoal("Status fixture");
+            var snapshot = kernel.ExportSnapshot();
+            var goal = Assert.Single(AgentOrchestratorKernel.FromSnapshot(snapshot with
+            { Goals = snapshot.Goals.Select(row => row with { Status = status }).ToArray() }).Goals);
+            var owner = new EpicPlanLinkedGoal(goal.Id.Value, status.ToString(), "Slice");
+            var facts = new EpicPlanSourceFacts(BacklogItemStatus.Open, owner.Id, SourceBacklogCoverage.Slice,
+                EpicPlanOwnershipResolution.Persisted, owner, [owner], []);
+            Assert.Equal(goal.IsTerminal, facts.ReselectableAfterTerminalOwners);
+            Assert.False((facts with { Owner = owner with { Status = "unknown" } }).ReselectableAfterTerminalOwners);
+            Assert.False((facts with { SourceStatus = BacklogItemStatus.Done }).ReselectableAfterTerminalOwners);
+        }
+    }
+
     [Fact]
     public void Off_is_a_noop_without_store_snapshot_or_model_access()
     {

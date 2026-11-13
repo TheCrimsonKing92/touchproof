@@ -1,4 +1,4 @@
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Candidate-local dependency evidence, distinct from snapshot call-graph readers.
 internal sealed record ImpactReplayDeclaredGuard(

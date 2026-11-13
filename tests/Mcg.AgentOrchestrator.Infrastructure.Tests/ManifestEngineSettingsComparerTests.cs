@@ -72,6 +72,29 @@ public sealed class ManifestEngineSettingsComparerTests
             (fact.Fact.Contains("MAXCONCURRENTSHARDS") || fact.Fact == "engine.timeouts"));
     }
 
+    // Parallel-safe: compares manifest strings only.
+    [Theory]
+    [InlineData("Off")]
+    [InlineData("Shadow")]
+    [InlineData("Enforce")]
+    public void Compare_SelectedExecutionMode_ConsumesJsonNameAndPreservesIgnoredKeys(string mode)
+    {
+        var manifest = JsonSerializer.Serialize(new { engine = new
+        {
+            selectedExecutionMode = mode,
+            selectedExecutionModeValue = "not a manifest key",
+            declaredDotnetTestChecks = Array.Empty<object>()
+        } });
+
+        var facts = ManifestEngineSettingsComparer.Compare(manifest);
+
+        Assert.DoesNotContain(facts, fact => fact.Fact == "engine.selectedExecutionMode" &&
+            fact.Kind == ManifestFactResultKind.NotConsumed);
+        AssertFact(facts, "engine.selectedExecutionModeValue", ManifestFactResultKind.NotConsumed,
+            "not a manifest key", "none");
+        AssertFact(facts, "engine.declaredDotnetTestChecks", ManifestFactResultKind.NotConsumed, "[]", "none");
+    }
+
     [Fact]
     public void Compare_DeclaredCheckValuesAndGlobs_ReportsDifferences()
     {

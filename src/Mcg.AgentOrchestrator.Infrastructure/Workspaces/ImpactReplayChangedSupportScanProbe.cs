@@ -1,4 +1,4 @@
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Per-invocation observations; production scans do not allocate a probe.
 internal sealed class ImpactReplayChangedSupportScanProbe

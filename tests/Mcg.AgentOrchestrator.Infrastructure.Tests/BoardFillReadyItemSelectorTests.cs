@@ -19,19 +19,27 @@ public sealed class BoardFillReadyItemSelectorTests
         Assert.Equal(eligible, Select([item]) is not null);
     }
 
-    [Fact]
-    public void Linked_goal_blocks_automatic_intake_including_terminal_owners()
+    [Theory]
+    [InlineData(GoalStatus.Completed)]
+    [InlineData(GoalStatus.Cancelled)]
+    [InlineData(GoalStatus.Failed)]
+    [InlineData(GoalStatus.Superseded)]
+    public void Terminal_links_allow_selection_but_live_links_block(GoalStatus status)
     {
         var item = Item();
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Already linked");
-        kernel.SetGoalSourceBacklogItemLink(goal.Id, item.Id, SourceBacklogCoverage.Full);
+        kernel.SetGoalSourceBacklogItemLink(goal.Id, item.Id, SourceBacklogCoverage.Slice);
         Assert.Null(Select([item], kernel.Goals.ToArray()));
-        kernel.CancelGoal(goal.Id, "Terminal fixture");
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        { Goals = snapshot.Goals.Select(row => row with { Status = status }).ToArray() });
+        Assert.Same(item, Select([item], kernel.Goals.ToArray()));
+        Assert.Null(Select([item with { Tags = "owner-gated" }], kernel.Goals.ToArray()));
+        Assert.Null(Select([item with { Tags = "author-refused" }], kernel.Goals.ToArray()));
+        var live = kernel.CreateGoal("Live sibling");
+        kernel.SetGoalSourceBacklogItemLink(live.Id, item.Id, SourceBacklogCoverage.Slice);
         Assert.Null(Select([item], kernel.Goals.ToArray()));
-        var independent = Item('b');
-        Assert.Same(independent, BoardFillReadyItemSelector.Select([item, independent], kernel.Goals.ToArray(),
-            None, Ready, preferredOrder: [item.Id, independent.Id]));
     }
 
     [Theory]

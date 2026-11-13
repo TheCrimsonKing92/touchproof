@@ -50,9 +50,13 @@ public static class ManifestEngineSettingsComparer
         {
             foreach (var property in engine.EnumerateObject())
             {
-                var member = typeof(AcceptanceGateEngineSettings).GetProperty(property.Name,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                if (member is null || member.GetCustomAttribute<JsonIgnoreAttribute>() is not null)
+                var consumed = typeof(AcceptanceGateEngineSettings)
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Any(member =>
+                        member.GetCustomAttribute<JsonIgnoreAttribute>()?.Condition != JsonIgnoreCondition.Always &&
+                        (member.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? member.Name)
+                            .Equals(property.Name, StringComparison.OrdinalIgnoreCase));
+                if (!consumed)
                     facts.Add(new($"engine.{property.Name}", ManifestFactResultKind.NotConsumed,
                         property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString()! : property.Value.GetRawText(),
                         "none", "The gate ignores this declared engine key."));

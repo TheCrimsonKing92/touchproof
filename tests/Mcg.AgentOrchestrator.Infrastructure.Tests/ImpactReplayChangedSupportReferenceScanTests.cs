@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;

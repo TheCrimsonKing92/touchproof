@@ -41,6 +41,7 @@ public sealed class BoardFillCliGoalIntakeTests : CliCommandTestBase
             Assert.Equal(SourceBacklogCoverage.Full, goal.SourceBacklogCoverage);
             Assert.Equal(goal.Id.Value, new GoalIntakeRequestStore(workspace.SqliteStatePath).Get(request.RequestKey)!.GoalId);
             Assert.Contains("\"kind\":\"goal-intake-receipt\"", filed.Stdout);
+            Assert.Contains(item.Id, adapter.ReadBoard().LinkedBacklogItemIds);
             var dependency = kernel.CreateGoal("Dependency fixture");
             await repository.SaveAsync(kernel);
             var applied = adapter.Depend(goal.Id.Value, dependency.Id.Value, CancellationToken.None);
@@ -48,11 +49,11 @@ public sealed class BoardFillCliGoalIntakeTests : CliCommandTestBase
             Assert.Equal(0, applied.ExitCode);
             var stored = (await repository.LoadAsync()).Goals.Single(row => row.Id == goal.Id);
             Assert.Equal(dependency.Id, Assert.Single(stored.DependsOn));
-            // Terminal links still prevent a new filing of the same backlog item.
+            // Only live links prevent a new filing of the same backlog item.
             var latest = await repository.LoadAsync();
             latest.CancelGoal(goal.Id, "Fixture terminal link");
             await repository.SaveAsync(latest);
-            Assert.Contains(item.Id, adapter.ReadBoard().LinkedBacklogItemIds);
+            Assert.DoesNotContain(item.Id, adapter.ReadBoard().LinkedBacklogItemIds);
             Assert.Equal(1, adapter.ReadBoard().NonTerminalCount);
             File.WriteAllText(path, BoardFillAssessmentTestFixture.Brief + "\nChanged objective.");
             var conflict = adapter.File(request, CancellationToken.None);
