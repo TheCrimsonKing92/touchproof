@@ -1797,7 +1797,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
         var policyShardPlan = BuildPolicyShardPlan(changedFiles, null,
-            CandidateTreeProbe.ForRepositoryRoot(worktreePath), manifest.Checks.Select(check => check.Project).OfType<string>());
+            CandidateTreeProbe.ForRepositoryRoot(worktreePath), AcceptanceProjectTopologySource.Create(projectHomeDirectory, manifest.Checks.Select(check => check.Project).OfType<string>()), manifest.Checks.Select(check => check.Project).OfType<string>());
         if (dotnetShardDisposition == DotnetShardDisposition.RunDotnetShards &&
             !policyShardPlan.ForceFull &&
             manifest.Checks.Any(check =>
