@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class SelectedExecutionBackstopFailureRerunTests
 {
     [Fact]
-    public async Task AllOriginalFailuresPassKeepsSameRequestWithoutMissOrSuspension()
+    public async Task AllOriginalFailuresPassCoversTheRangeWithoutMissOrSuspension()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
         var calls = 0;
@@ -28,17 +28,16 @@ public sealed class SelectedExecutionBackstopFailureRerunTests
         Assert.Null(state.OpenMiss);
         Assert.Empty(await fixture.Items.ListAsync());
         Assert.False(File.Exists(AcceptanceSelectedExecutionSessionSuspension.MarkerPath(fixture.Home)));
-        var pending = Assert.IsType<SelectedExecutionBackstopRequest>(state.Request);
-        Assert.Equal(queued with { Attempts = 1 }, pending with { GoalIds = queued.GoalIds });
-        Assert.Equal(queued.GoalIds, pending.GoalIds);
-        Assert.Single(fixture.Lines.Where(line => line.Contains("result=infrastructure-failure ")));
+        // Flakes that pass when run again cover the range: the request is finished, not repeated.
+        Assert.Null(state.Request);
+        Assert.Equal(queued.ToCommit, state.CoveredCommit);
+        var green = Assert.Single(fixture.Lines.Where(line => line.Contains("result=green ")));
+        Assert.Contains("rerun-passed: originalCount=2; flaky=Candidate.X.First,Candidate.X.Second", green);
+        Assert.DoesNotContain(fixture.Lines, line => line.Contains("result=infrastructure-failure "));
         Assert.DoesNotContain(await fixture.Events.ReadByTypeSinceAsync(SelectedExecutionBackstopStore.EventType),
             evt => evt.Operation == "red");
         Assert.Equal(1, calls);
-
-        await fixture.Finish();
-        Assert.Equal(new[] { queued.Id, queued.Id }, fixture.Calls.Select(call => call.Id));
-        Assert.Equal(2, calls);
+        Assert.Equal(new[] { queued.Id }, fixture.Calls.Select(call => call.Id));
     }
 
     [Fact]

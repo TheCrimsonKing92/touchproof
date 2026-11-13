@@ -42,8 +42,11 @@ internal sealed class SelectedExecutionBackstopFailureRerun(
 
         var repeated = pass.FailingIdentities.Select(identity => identity.Trim()).ToHashSet(StringComparer.Ordinal);
         var confirmed = outcome.FailingTests.Where(identity => repeated.Contains(identity.Trim())).ToArray();
-        return confirmed.Length == 0
-            ? SelectedExecutionBackstopOutcome.Infrastructure($"rerun-passed: no original failures confirmed; originalCount={outcome.FailingTests.Count}")
-            : outcome with { FailingTests = confirmed };
+        if (confirmed.Length > 0) return outcome with { FailingTests = confirmed };
+        // A first-run failure that passes when run again is a flake, not a miss, so the range is covered.
+        // A re-run that was incomplete or failed something else proves nothing and stays pending.
+        return pass.AllChecksPassed && repeated.Count == 0
+            ? new("green", [], [], $"rerun-passed: originalCount={outcome.FailingTests.Count}; flaky={string.Join(',', outcome.FailingTests.Take(5))}")
+            : SelectedExecutionBackstopOutcome.Infrastructure($"rerun-incomplete: no original failures confirmed; originalCount={outcome.FailingTests.Count}");
     }
 }
