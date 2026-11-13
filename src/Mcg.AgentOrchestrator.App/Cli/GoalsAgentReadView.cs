@@ -5,6 +5,21 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class GoalsAgentReadView
 {
+    internal static string Serialize(IReadOnlyList<GoalSummary> goals, EpicMembershipIndex.Lookup epics,
+        TimeProvider? time = null) =>
+        AgentReadEnvelope.Serialize(AgentReadEnvelope.GoalsSchema, AgentReadEnvelope.GoalsSchemaVersion,
+            new
+            {
+                goals = goals.Select(goal => new
+                {
+                    id = goal.Id,
+                    status = goal.Status,
+                    condition = string.IsNullOrWhiteSpace(goal.Condition) ? null : goal.Condition,
+                    objective = goal.Objective,
+                    epicId = epics.FindGoal(goal.Id)?.EpicId
+                }).ToArray()
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
+
     internal static string Serialize(IReadOnlyList<GoalSummary> goals, TimeProvider? time = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.GoalsSchema, AgentReadEnvelope.GoalsSchemaVersion,
             new

@@ -27,7 +27,7 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
         foreach (var row in rows)
         {
             Assert.Equal(new[] { "id", "status", "goalId", "ownerAmbiguous", "eligible", "title",
-                    "createdAt", "updatedAt", "priority", "tags", "supersededBy" },
+                    "createdAt", "updatedAt", "priority", "tags", "supersededBy", "epicId" },
                 row.EnumerateObject().Select(property => property.Name));
             Assert.False(row.GetProperty("ownerAmbiguous").GetBoolean());
             Assert.Equal(JsonValueKind.Null, row.GetProperty("priority").ValueKind);
@@ -105,9 +105,9 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
             var lines = output[..^Environment.NewLine.Length].Split(Environment.NewLine);
             Assert.Equal(3, lines.Length);
             Assert.StartsWith(HumanPrefix(seed.Prerequisite), lines[0]);
-            Assert.EndsWith($" {seed.Prerequisite.Id} | status=claimed | goal={CliBacklogReadOnlyRouteTests.LinkedGoalId} | title=Quartz query prerequisite", lines[0]);
+            Assert.EndsWith($" {seed.Prerequisite.Id} | status=claimed | goal={CliBacklogReadOnlyRouteTests.LinkedGoalId} | epic=none | title=Quartz query prerequisite", lines[0]);
             Assert.StartsWith(HumanPrefix(seed.Dependent), lines[1]);
-            Assert.EndsWith($" {seed.Dependent.Id} | status=open | goal=- | title=Quartz query dependent", lines[1]);
+            Assert.EndsWith($" {seed.Dependent.Id} | status=open | goal=- | epic=none | title=Quartz query dependent", lines[1]);
             Assert.Equal("Backlog list: 2 item(s) from backlog store", lines[2]);
         }
     }

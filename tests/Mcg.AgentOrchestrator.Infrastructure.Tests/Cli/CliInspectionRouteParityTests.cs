@@ -28,7 +28,17 @@ public sealed class CliInspectionRouteParityTests : CliTaskQueryTestSupport
                 var expected = Execute(args, workspace, skipReadOnlyRoute: true);
                 var actual = Execute(args, workspace, skipReadOnlyRoute: false);
                 Xunit.Assert.NotEmpty(expected);
-                Xunit.Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(actual));
+                // Inspection goals add membership; the legacy writer format is preserved.
+                var comparable = actual;
+                if (args[0] == "goals")
+                {
+                    var goalLines = actual.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                        .Where(line => !line.StartsWith("WARNING:", StringComparison.Ordinal)).ToArray();
+                    Xunit.Assert.NotEmpty(goalLines);
+                    Xunit.Assert.All(goalLines, line => Xunit.Assert.Contains(": epic=none ", line));
+                    comparable = actual.Replace(": epic=none ", ": ", StringComparison.Ordinal);
+                }
+                Xunit.Assert.Equal(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(comparable));
                 if (args[0] == "goals")
                 {
                     if (includeCleanupDebt)

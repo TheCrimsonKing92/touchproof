@@ -50,8 +50,8 @@ public sealed class CliAgentReadHumanOutputTests : CliTaskQueryTestSupport
             var output = Run(["goals"], OrchestratorWorkspace.ForDirectory(root), kernel);
             Assert.Equal(string.Join(Environment.NewLine, new[]
             {
-                "abc20000 Draft: Second inspection goal",
-                "abc10000 Draft: First inspection goal"
+                "abc20000 Draft: epic=none Second inspection goal",
+                "abc10000 Draft: epic=none First inspection goal"
             }) + Environment.NewLine, output);
             Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
         }

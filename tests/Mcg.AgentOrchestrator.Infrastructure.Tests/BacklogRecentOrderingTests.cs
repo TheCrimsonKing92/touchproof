@@ -119,7 +119,7 @@ public sealed class BacklogRecentOrderingTests
         foreach (var row in rows)
         {
             Assert.Equal(new[] { "id", "status", "goalId", "ownerAmbiguous", "eligible", "title",
-                "createdAt", "updatedAt", "priority", "tags", "supersededBy" },
+                "createdAt", "updatedAt", "priority", "tags", "supersededBy", "epicId" },
                 row.EnumerateObject().Select(property => property.Name));
             Assert.False(row.GetProperty("ownerAmbiguous").GetBoolean());
             Assert.EndsWith("Z", row.GetProperty("createdAt").GetString()!);

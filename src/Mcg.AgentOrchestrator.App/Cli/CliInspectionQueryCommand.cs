@@ -15,7 +15,10 @@ internal static class CliInspectionQueryCommand
         {
             "agents" => args.Count == 1,
             "doctor" or "tenant" => args.Count == 1,
-            "goals" => args.Count == 1 || (args.Count == 2 && args[1] == "--json"),
+            "goals" => args.Count == 1 || (args.Count == 2 && args[1] == "--json") ||
+                (!args[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase) &&
+                 !args[1].Equals("--board", StringComparison.OrdinalIgnoreCase) &&
+                 args.Skip(1).Any(arg => arg.Equals("--no-epic", StringComparison.OrdinalIgnoreCase))),
             "model-outcomes" or "architecture" or "backlog-view" => args.Count == 1,
             "config" => args.Count == 2 && args[1].ToLowerInvariant() is "agents" or "profiles" or "policy" or "doctor",
             _ => false
@@ -33,12 +36,17 @@ internal static class CliInspectionQueryCommand
         switch (args[0].ToLowerInvariant())
         {
             case "goals":
-                if (args.Count == 2 && args[1] == "--json")
+                ValidateGoalsArguments(args);
+                var epics = EpicMembershipIndex.Load(workspace.PortfolioStorePath);
+                var goals = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+                if (args.Contains("--no-epic", StringComparer.OrdinalIgnoreCase))
+                    goals = goals.Where(goal => epics.FindGoal(goal.Id) is null).ToArray();
+                if (args.Contains("--json", StringComparer.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine(GoalsAgentReadView.Serialize(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()));
+                    Console.WriteLine(GoalsAgentReadView.Serialize(goals, epics));
                     return;
                 }
-                GoalListTextView.Print(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult());
+                GoalListTextView.Print(goals, epics);
                 var debtHooks = WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks;
                 GoalListTextView.PrintCleanupDebtWarning(
@@ -54,5 +62,15 @@ internal static class CliInspectionQueryCommand
                     providers, ref agents, ref workerProfiles, ref commandGoal);
                 break;
         }
+    }
+
+    private static void ValidateGoalsArguments(IReadOnlyList<string> args)
+    {
+        var flags = args.Skip(1).ToArray();
+        if (flags.Count(arg => arg.Equals("--no-epic", StringComparison.OrdinalIgnoreCase)) > 1 ||
+            flags.Count(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)) > 1 ||
+            flags.Any(arg => !arg.Equals("--no-epic", StringComparison.OrdinalIgnoreCase) &&
+                             !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException(CliCommandHelp.GoalsUsage);
     }
 }

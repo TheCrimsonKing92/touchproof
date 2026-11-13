@@ -112,7 +112,7 @@ public sealed class CliAgentReadEnvelopeContractTests : CliTaskQueryTestSupport
             new GoalSummary("one", "Active", "Full objective", "2026-10-06", Condition: "active-with-failed-task"),
             new GoalSummary("two", "Completed", "Other objective", "2026-10-06", Condition: " \t"),
             new GoalSummary("three", "Draft", "Third objective", "2026-10-06")
-        ]));
+        ], EpicMembershipIndex.Empty));
         var payload = AssertEnvelope(json.RootElement, AgentReadEnvelope.GoalsSchema,
             AgentReadEnvelope.GoalsSchemaVersion);
         Assert.Equal(new[] { "goals" }, payload.EnumerateObject().Select(property => property.Name));
@@ -169,7 +169,7 @@ public sealed class CliAgentReadEnvelopeContractTests : CliTaskQueryTestSupport
     }
 
     private static void AssertGoalProperties(JsonElement row) =>
-        Assert.Equal(new[] { "id", "status", "condition", "objective" },
+        Assert.Equal(new[] { "id", "status", "condition", "objective", "epicId" },
             row.EnumerateObject().Select(property => property.Name));
 
     private static void AssertNoStateEffects(ProbeStateRepository repository) => Assert.Equal(0,

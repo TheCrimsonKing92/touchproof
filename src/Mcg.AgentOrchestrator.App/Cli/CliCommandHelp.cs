@@ -45,7 +45,8 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json] [--newest-first]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json] [--newest-first] [--no-epic]";
+    public const string GoalsUsage = "Usage: goals [--epic <id-or-title>] [--json] [--no-epic]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
@@ -244,9 +245,9 @@ internal static class CliCommandHelp
         ["--board", "--limit", "--all", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Goals = new(
-        "Usage: goals [--epic <id-or-title>] [--json]",
-        "List goals, optionally restricted to members of an epic. --json emits the mcg.goals agent envelope for the bare form and the --epic <ref> form.",
-        ["--epic", "--json", "--help", "-h"]);
+        GoalsUsage,
+        "List goals, optionally restricted to members of an epic. --json emits the mcg.goals agent envelope for the bare form and the --epic <ref> form. --no-epic lists only goals without an epic and cannot be combined with --epic.",
+        ["--epic", "--json", "--no-epic", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
@@ -443,8 +444,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List every backlog item with its status and linked goal id. --newest-first orders matches by creation time descending, then id ascending, before --limit. --json emits the mcg.backlog-list agent envelope.",
-        ["--all", "--newest-first", "--limit", "--status", "--text", "--help", "-h", "--json"]);
+        "List every backlog item with its status and linked goal id. --newest-first orders matches by creation time descending, then id ascending, before --limit. --json emits the mcg.backlog-list agent envelope. --no-epic lists only items without an epic before applying --limit.",
+        ["--all", "--newest-first", "--limit", "--status", "--text", "--help", "-h", "--json", "--no-epic"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(
         BacklogTriageUsage,

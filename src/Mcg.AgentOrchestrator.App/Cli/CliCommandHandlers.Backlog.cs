@@ -28,13 +28,13 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                         .Equals(status, StringComparison.OrdinalIgnoreCase))
                     .ToArray();
             }
+            var epics = EpicMembershipIndex.Load(context.Workspace.PortfolioStorePath);
             items = BacklogListAgentReadView.SelectItems(items,
-                HasCliConfirmation(parts, "--newest-first"), limit);
-
-            var json = HasCliConfirmation(parts, "--json");
-            var rows = json ? new List<BacklogListAgentReadView.Row>() : null;
+                HasCliConfirmation(parts, "--newest-first"), limit, HasCliConfirmation(parts, "--no-epic") ? epics : null);
+            var rows = HasCliConfirmation(parts, "--json") ? new List<BacklogListAgentReadView.Row>() : null;
             foreach (var item in items)
             {
+                var epic = epics.FindBacklogItem(item.Id);
                 var claim = ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
                 var linkedGoal = claim is null
                     ? null
@@ -52,10 +52,10 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                         },
                         goal => ResolveBacklogShowGoalLandingState(context, goal));
                     rows.Add(BacklogListAgentReadView.CreateRow(item, RenderBacklogListingStatus(item, linkedGoal),
-                        ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible));
+                        ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible, epic?.EpicId));
                     continue;
                 }
-                Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
+                Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | epic={BacklogListAgentReadView.FormatEpic(epic)} | title={item.Title}");
             }
             if (rows is not null)
             {

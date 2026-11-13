@@ -203,7 +203,7 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
 
             var listing = RunBacklogRead(["backlog-list"], seed.Workspace, seed.Kernel);
             Xunit.Assert.Contains($"{seed.Prerequisite.Id} | status=", listing);
-            Xunit.Assert.Contains($"| goal={LinkedGoalId} | title=Quartz query prerequisite", listing);
+            Xunit.Assert.Contains($"| goal={LinkedGoalId} | epic=none | title=Quartz query prerequisite", listing);
             Xunit.Assert.Contains($"{seed.Dependent.Id} | status=", listing);
             Xunit.Assert.Contains("| title=Quartz query dependent", listing);
             Xunit.Assert.Contains($"Backlog list: 2 item(s) from backlog store{Environment.NewLine}", listing);

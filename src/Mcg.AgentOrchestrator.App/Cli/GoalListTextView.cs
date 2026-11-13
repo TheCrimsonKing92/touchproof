@@ -30,6 +30,17 @@ internal static class GoalListTextView
         }
     }
 
+    public static void Print(IReadOnlyList<GoalSummary> goals, EpicMembershipIndex.Lookup epics)
+    {
+        foreach (var goal in goals)
+        {
+            var prefix = goal.Id.Length >= 8 ? goal.Id[..8] : goal.Id;
+            var condition = string.IsNullOrWhiteSpace(goal.Condition) ? string.Empty : $" [{goal.Condition}]";
+            var epic = epics.FindGoal(goal.Id)?.ShortId ?? "none";
+            Console.WriteLine($"{prefix} {goal.Status}{condition}: epic={epic} {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+        }
+    }
+
     public static void PrintCleanupDebtWarning(IReadOnlyList<GoalWorktreeCleanupDebt> debts)
     {
         var escalatedCount = debts.Count(debt => debt.EscalatedAtUtc is not null);

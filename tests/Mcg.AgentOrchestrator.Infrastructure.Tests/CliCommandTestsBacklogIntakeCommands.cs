@@ -1626,11 +1626,11 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(goalCountBeforeList, kernel.Goals.Count);
         Xunit.Assert.Contains(rows, row =>
             row.Contains("[created=2025-01-02] [updated=2025-06-07]", StringComparison.Ordinal) &&
-            row.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", StringComparison.Ordinal));
-        Xunit.Assert.Contains(rows, row => row.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", StringComparison.Ordinal));
-        Xunit.Assert.Contains(rows, row => row.Contains($"{items[6].Id} | status=closed | goal=- | title={items[6].Title}", StringComparison.Ordinal));
-        Xunit.Assert.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", open);
-        Xunit.Assert.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", open);
+            row.Contains($"{items[0].Id} | status=open | goal=- | epic=none | title={items[0].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains(rows, row => row.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | epic=none | title={items[2].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains(rows, row => row.Contains($"{items[6].Id} | status=closed | goal=- | epic=none | title={items[6].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains($"{items[0].Id} | status=open | goal=- | epic=none | title={items[0].Title}", open);
+        Xunit.Assert.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | epic=none | title={items[2].Title}", open);
         Xunit.Assert.DoesNotContain(items[6].Id, open);
 
         var claimedRow = Xunit.Assert.Single(rows.Where(row => row.Contains(items[2].Id, StringComparison.Ordinal)));
