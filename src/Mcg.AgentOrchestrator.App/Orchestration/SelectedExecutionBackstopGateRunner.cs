@@ -13,7 +13,8 @@ internal sealed class SelectedExecutionBackstopGateRunner(ConductorDriver driver
         var workspace = driver._cohortWorkspace ?? throw new InvalidOperationException("Backstop workspace is unavailable.");
         var verifier = driver._cohortAcceptanceVerifier ?? throw new InvalidOperationException("Backstop verifier is unavailable.");
         var root = AcceptanceOwnerResultsRoot.ResolveOwnerResultsRootForCandidate(workspace.ExecutionDirectory);
-        var checkout = Path.Combine(root, ".orchestrator-worktrees", "backstop-" + request.Id);
+        // Short like train checkouts: a 41-character name pushed nested test worktrees past git's path limit.
+        var checkout = Path.Combine(root, ".orchestrator-worktrees", "b-" + request.Id[..Math.Min(12, request.Id.Length)]);
         cancellationToken.ThrowIfCancellationRequested();
         // A restarted request reuses its identity but never trusts a previous checkout's contents.
         if (Directory.Exists(checkout))
