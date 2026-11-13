@@ -18,6 +18,18 @@ internal sealed class AcceptanceSelectedExecutionSession(
     private IReadOnlyList<AcceptanceTestLane> _actual = [];
     private double _milliseconds;
 
+    internal static async Task<AcceptanceSelectedExecutionSession> CreateAsync(
+        AcceptanceGateEngineSettings settings, string worktreePath, IReadOnlyList<string>? changedFiles,
+        bool attributionScoped, GoalAcceptanceVerifierTestOverrides testOverrides,
+        string? projectHomeDirectory)
+    {
+        var suspension = settings.SelectedExecutionMode == AcceptanceSelectedExecutionMode.Enforce
+            ? await AcceptanceSelectedExecutionSessionSuspension.ReadAsync(worktreePath, projectHomeDirectory).ConfigureAwait(false)
+            : null;
+        return new(settings.SelectedExecutionMode, worktreePath, changedFiles, attributionScoped,
+            testOverrides.ReadSelectedExecutionForTests, settings, suspension);
+    }
+
     internal bool Applied => _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
     internal Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? LaneTransform =>
         mode == AcceptanceSelectedExecutionMode.Off ? null : Transform;

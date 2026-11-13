@@ -308,20 +308,10 @@ internal sealed partial class ConductorDriver
 
             foreach (var goal in goals)
             {
-                var landingResult = new LandingResult(
-                    goal.Id.Value,
-                    goal.Id.Value[..8],
-                    new LandingDecision.Promote(),
-                    $"cohort/{identity.Value}",
-                    true,
-                    landing.Message,
-                    landing.CommitRevision,
+                var landingResult = CohortLandingResults.Create(
+                    goal.Id.Value, identity.Value, landing.Message, landing.CommitRevision,
                     selection.Members.SelectMany(member => member.LandingPaths).ToArray());
-                SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
-                    goal.Id.Value,
-                    landingResult.ChangedFiles ?? [],
-                    landingResult.MergeCommitSha, receipt.GateAttemptId, receipt.GateLanePlanPath,
-                    identity.ObservedMainRevision));
+                SuccessfulLandingSink?.Invoke(CohortLandingResults.Notification(landingResult, receipt));
                 _afterSuccessfulLanding(goal, landingResult);
             }
             _cohortAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);

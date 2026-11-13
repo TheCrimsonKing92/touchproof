@@ -488,7 +488,7 @@ internal sealed partial class ConductorBatchLoop
             }
             var candidate = soloAdmission.Candidate!;
             var stalledOldestBypass = soloAdmission.StalledOldestBypass;
-            var documentationExclusionAdmission = BuildDocumentationExclusionAdmissionRecord(
+            var documentationExclusionAdmission = ConductorDocumentationExclusionAdmission.Describe(
                 candidate,
                 state.ActiveCandidates,
                 tick);

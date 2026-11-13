@@ -569,11 +569,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardConcurrencyBudget = Math.Min(
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
-        var suspension = engineSettings.SelectedExecutionMode == AcceptanceSelectedExecutionMode.Enforce
-            ? await AcceptanceSelectedExecutionSessionSuspension.ReadAsync(worktreePath, executionOwner.ProjectHomeDirectory).ConfigureAwait(false)
-            : null;
-        var selectedExecution = new AcceptanceSelectedExecutionSession(engineSettings.SelectedExecutionMode, worktreePath, changedFiles,
-            executionOwner.AttributionLaneScope is not null, _testOverrides.ReadSelectedExecutionForTests, engineSettings, suspension);
+        var selectedExecution = await AcceptanceSelectedExecutionSession.CreateAsync(engineSettings, worktreePath, changedFiles,
+            executionOwner.AttributionLaneScope is not null, _testOverrides, executionOwner.ProjectHomeDirectory).ConfigureAwait(false);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
             executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.LaneTransform);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)

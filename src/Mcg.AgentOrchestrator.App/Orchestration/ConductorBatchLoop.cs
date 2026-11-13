@@ -2299,28 +2299,6 @@ internal sealed partial class ConductorBatchLoop
         }
     }
 
-    private static string? BuildDocumentationExclusionAdmissionRecord(
-        ConductorParallelAcceptanceCandidate candidate,
-        IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates,
-        int tick)
-    {
-        foreach (var existing in activeCandidates)
-        {
-            var excludedPaths = existing.GetDocumentationExclusionEvidence(candidate);
-            if (excludedPaths.Count == 0)
-            {
-                continue;
-            }
-
-            var sample = string.Join(",", excludedPaths.Take(3));
-            return $"ADMISSION tick={tick} result=admitted reason=documentation-exclusion " +
-                $"goal={candidate.GoalPrefix} peer={existing.GoalPrefix} " +
-                $"excludedPathCount={excludedPaths.Count} excludedPathSample={sample}";
-        }
-
-        return null;
-    }
-
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
