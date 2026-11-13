@@ -86,7 +86,7 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Fact]
-    public void Suspension_collaborator_registration_preserves_existing_trigger_coverage()
+    public void Suspension_collaborator_uses_existing_session_trigger_coverage()
     {
         const string prefix =
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSelectedExecutionSessionSuspension";
@@ -94,12 +94,12 @@ public class CanaryEngineSurfaceCoverageTests
         var surface = Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
             surface => surface.Name == CollaboratorSurfaceName);
 
-        Assert.Single(surface.PathPrefixes.Where(candidate => candidate == prefix));
+        Assert.DoesNotContain(prefix, surface.PathPrefixes);
         var result = PostLandingCanaryTrigger.Evaluate([path]);
         Assert.True(result.ShouldRun);
         Assert.Equal([path], result.TriggeringPaths);
-        // The existing session prefix already covers this helper; explicit membership keeps
-        // the direct-dependency census complete without broadening the canary trigger.
+        // The session owns suspension loading, so this indirect helper needs no separate
+        // direct-collaborator entry. The existing session prefix still covers its source.
         Assert.True(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes
             .Where(candidate => candidate != prefix))(path));
     }
