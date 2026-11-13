@@ -149,6 +149,174 @@ public sealed class BoardFillReadyItemSelectorTests
         Assert.Null(Select([]));
     }
 
+    [Fact]
+    public async Task Marker_store_write_preserves_stamp_and_round_currency()
+    {
+        // Parallel-safe: private real stores exercise the note's UpdatedAt side effect.
+        var root = Path.Combine(Path.GetTempPath(), "board-fill-marker-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var backlog = new BacklogStore(Path.Combine(root, "backlog.db"));
+            var item = await backlog.AddAsync("Ready", "Build the receipt");
+            var stamp = BoardFillReadyItemSelector.ChangeStamp(item);
+            var drafts = new ConductorBoardFillDraftStore(Path.Combine(root, "drafts.db"));
+            var round = drafts.Begin(item, Now);
+            drafts.Finish(round, new("draft", 0, BoardFillAssessmentTestFixture.Head, null, null, []), Now);
+            await backlog.AppendNoteAsync(item.Id, Marker(stamp));
+            var current = Assert.IsType<BacklogItem>(await backlog.GetByExactIdAsync(item.Id));
+
+            Assert.Equal(Assert.Single(current.Notes).CreatedAt, current.UpdatedAt);
+            Assert.Equal(stamp, BoardFillReadyItemSelector.ChangeStamp(current));
+            Assert.Contains(item.Id, drafts.AlreadyDrafted([current]));
+            var assessment = BoardFillFileability.Evaluate(Assert.Single(drafts.ReadAll()),
+                BoardFillAssessmentTestFixture.Brief, BoardFillAssessmentTestFixture.Verified,
+                BoardFillPreflightChecks.Run(BoardFillAssessmentTestFixture.Brief),
+                BoardFillAssessmentTestFixture.NoDepends, current, [], Ready);
+            Assert.DoesNotContain("backlog-changed", assessment.FailingReasons);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void Marker_note_does_not_advance_change_stamp()
+    {
+        var item = HeldItem();
+        Assert.Equal(Now, BoardFillReadyItemSelector.ChangeStamp(item));
+        var withPriorNote = item with { Notes = [new(Now.AddSeconds(30), "Operator context"), .. item.Notes] };
+        Assert.Equal(Now.AddSeconds(30), BoardFillReadyItemSelector.ChangeStamp(withPriorNote));
+    }
+
+    [Fact]
+    public void Active_marker_blocks_unchanged_item_before_readiness()
+    {
+        var item = HeldItem();
+        Assert.Null(BoardFillReadyItemSelector.Select([item], [], None,
+            _ => throw new InvalidOperationException("Held items must not reach readiness"),
+            currentMainHead: BoardFillAssessmentTestFixture.Head));
+    }
+
+    [Fact]
+    public void Item_edit_after_marker_releases_hold()
+    {
+        var item = HeldItem() with { Body = "Corrected claim", UpdatedAt = Now.AddMinutes(2) };
+        Assert.Same(item, Select([item]));
+        Assert.Equal(item.UpdatedAt, BoardFillReadyItemSelector.ChangeStamp(item));
+    }
+
+    [Fact]
+    public void Plain_note_after_marker_releases_hold_and_advances_stamp()
+    {
+        var held = HeldItem();
+        var item = held with { Notes = [.. held.Notes, new(Now.AddMinutes(2), "Corrected by operator")] };
+        Assert.Equal(Now.AddMinutes(2), BoardFillReadyItemSelector.ChangeStamp(item));
+        Assert.Same(item, Select([item]));
+    }
+
+    [Fact]
+    public void Changed_cited_file_releases_hold()
+    {
+        var item = HeldItem();
+        var calls = 0;
+        Assert.Same(item, BoardFillReadyItemSelector.Select([item], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (from, to) =>
+            {
+                calls++;
+                Assert.Equal(BoardFillAssessmentTestFixture.Head, from);
+                Assert.Equal(new string('d', 40), to);
+                return ["SRC\\Feature\\File.cs"];
+            }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Changed_uncited_file_keeps_hold()
+    {
+        var calls = 0;
+        Assert.Null(BoardFillReadyItemSelector.Select([HeldItem()], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (_, _) =>
+            {
+                calls++;
+                return ["src/Other.cs"];
+            }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Unavailable_changed_file_list_keeps_hold()
+    {
+        var calls = 0;
+        Assert.Null(BoardFillReadyItemSelector.Select([HeldItem()], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (_, _) => { calls++; return null; }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Throwing_changed_files_keeps_hold_without_escaping()
+    {
+        var calls = 0;
+        Assert.Null(BoardFillReadyItemSelector.Select([HeldItem()], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (_, _) =>
+            {
+                calls++;
+                throw new InvalidOperationException("diff failed");
+            }));
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(BoardFillAssessmentTestFixture.Head)]
+    public void Unknown_or_unchanged_head_keeps_hold_without_diff(string? head)
+    {
+        var calls = 0;
+        Assert.Null(BoardFillReadyItemSelector.Select([HeldItem()], [], None, Ready,
+            currentMainHead: head, changedFiles: (_, _) => { calls++; return ["src/Feature/File.cs"]; }));
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void Newest_marker_supersedes_older_release()
+    {
+        var held = HeldItem();
+        var item = held with { UpdatedAt = Now.AddMinutes(3), Notes = [.. held.Notes,
+            new(Now.AddMinutes(2), "Operator correction"),
+            new(Now.AddMinutes(3), Marker(Now.AddMinutes(2)))] };
+        Assert.Equal(Now.AddMinutes(2), BoardFillReadyItemSelector.ChangeStamp(item));
+        Assert.Null(Select([item]));
+    }
+
+    [Fact]
+    public void Malformed_marker_holds_until_plain_note()
+    {
+        var held = Item() with { UpdatedAt = Now.AddMinutes(1),
+            Notes = [new(Now.AddMinutes(1), BoardFillContradictionHold.Prefix + "\nbroken")] };
+        Assert.Null(BoardFillReadyItemSelector.Select([held], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (_, _) => ["src/Feature/File.cs"]));
+        var released = held with { Notes = [.. held.Notes, new(Now.AddMinutes(2), "Operator correction")] };
+        Assert.Same(released, Select([released]));
+    }
+
+    [Fact]
+    public void Owner_phrase_in_marker_claim_does_not_owner_gate()
+    {
+        var held = HeldItem();
+        var note = Assert.Single(held.Notes);
+        var item = held with { Notes = [note with { Text = note.Text + "\nNeeds owner decision" }] };
+        Assert.False(BoardFillReadyItemSelector.IsOwnerGated(item));
+        Assert.Same(item, BoardFillReadyItemSelector.Select([item], [], None, Ready,
+            currentMainHead: new string('d', 40), changedFiles: (_, _) => ["src/Feature/File.cs"]));
+    }
+
+    private static string Marker(DateTimeOffset stamp) => BoardFillContradictionHold.Format(
+        BoardFillAssessmentTestFixture.Head, stamp,
+        BoardFillVerifierContract.Premise(BoardFillAssessmentTestFixture.Brief),
+        [new(1, "contradicted", "src/Feature/File.cs:17")]);
+
+    private static BacklogItem HeldItem() => Item() with { UpdatedAt = Now.AddMinutes(1),
+        Notes = [new(Now.AddMinutes(1), Marker(Now))] };
+
     private static BacklogReadiness Ready(BacklogItem item) =>
         BacklogDependencyReadiness.Evaluate(item, _ => null, _ => null, _ => new(null), _ => "Running");
     private static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal>? goals = null) =>

@@ -9,7 +9,10 @@ internal sealed partial class ConductorBoardFillHost
 {
     internal static ConductorBoardFillHost CreateDefault(OrchestratorWorkspace workspace,
         Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null,
-        Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null) => new(
+        Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null)
+    {
+        var changedFiles = CreateChangedFilesSeam(workspace);
+        return new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         draft ?? ((id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
@@ -53,13 +56,16 @@ internal sealed partial class ConductorBoardFillHost
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
-        filing: CreateFilingSeams(workspace), mainHead: mainHead,
+        filing: CreateFilingSeams(workspace, changedFiles), mainHead: mainHead,
         trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
         staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)),
         preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace),
         stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), new(workspace.ConductEventsLogPath)),
-        revise: CreateRevisionSeam(workspace));
+        revise: CreateRevisionSeam(workspace),
+        appendBacklogNote: (id, text) => new BacklogStore(workspace.BacklogStorePath)
+            .AppendNoteAsync(id, text).GetAwaiter().GetResult(), changedFiles: changedFiles);
+    }
 
     private static Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>
         CreateRevisionSeam(OrchestratorWorkspace workspace) => async (request, token) =>
@@ -92,23 +98,39 @@ internal sealed partial class ConductorBoardFillHost
         return new("draft", 0, markdown, repository.ResolveMainHead(), refreshed);
     };
 
-    private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
+    private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace,
+        Func<string, string, IReadOnlyList<string>?> changedFiles)
     {
         var intake = new BoardFillCliGoalIntake(workspace);
         return new(intake, intake.ReadBoard, () =>
         {
             var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", $"{workspace.IntegrationBranch}^{{commit}}");
             return result.Succeeded ? result.Output.Trim() : null;
-        }, (from, to) =>
+        }, changedFiles);
+    }
+
+    private static Func<string, string, IReadOnlyList<string>?> CreateChangedFilesSeam(OrchestratorWorkspace workspace)
+    {
+        // Filing and selection share successful diffs. Bound retention to the observed destination head.
+        var cache = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        string? cachedHead = null;
+        return (from, to) =>
         {
-            // Include the source of a rename: a citation to that path is no longer current.
-            var result = GitCli.Run(workspace.ExecutionDirectory, "diff", "--no-renames", "--name-only", from, to);
-            if (!result.Succeeded || result.DrainTimedOut) return null;
-            var paths = result.Output.Split('\n').Select(line => line.TrimEnd('\r'))
-                .Where(line => line.Length > 0).ToArray();
-            // Git quotes paths it cannot print verbatim; do not compare an encoded path as if literal.
-            return paths.Any(path => path.StartsWith('"')) ? null : paths;
-        });
+            lock (cache)
+            {
+                if (cachedHead != to) { cache.Clear(); cachedHead = to; }
+                if (cache.TryGetValue(from, out var cached)) return cached;
+                // Include the source of a rename: a citation to that path is no longer current.
+                var result = GitCli.Run(workspace.ExecutionDirectory, "diff", "--no-renames", "--name-only", from, to);
+                if (!result.Succeeded || result.DrainTimedOut) return null;
+                var paths = result.Output.Split('\n').Select(line => line.TrimEnd('\r'))
+                    .Where(line => line.Length > 0).ToArray();
+                // Git quotes paths it cannot print verbatim; do not compare an encoded path as if literal.
+                if (paths.Any(path => path.StartsWith('"'))) return null;
+                cache[from] = paths;
+                return paths;
+            }
+        };
     }
 
     private static string LandingState(OrchestratorWorkspace workspace, Goal goal)

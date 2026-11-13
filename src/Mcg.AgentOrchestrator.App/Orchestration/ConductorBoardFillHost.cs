@@ -20,6 +20,8 @@ internal sealed partial class ConductorBoardFillHost
     private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
     private readonly Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? _revise;
+    private readonly Action<string, string>? _appendBacklogNote;
+    private readonly Func<string, string, IReadOnlyList<string>?>? _changedFiles;
     private readonly CancellationTokenSource _shutdown = new();
     private BoardFillDraftRound? _running;
     private Task<BoardFillRoundResult>? _round;
@@ -40,7 +42,9 @@ internal sealed partial class ConductorBoardFillHost
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
         Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null,
         StalledEpicAttention? stalledEpics = null,
-        Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null)
+        Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>? revise = null,
+        Action<string, string>? appendBacklogNote = null,
+        Func<string, string, IReadOnlyList<string>?>? changedFiles = null)
     {
         _store = store;
         _draft = draft;
@@ -51,6 +55,8 @@ internal sealed partial class ConductorBoardFillHost
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _verifier = verifier;
         _revise = revise;
+        _appendBacklogNote = appendBacklogNote;
+        _changedFiles = changedFiles;
         _filingSeams = filing;
         _mainHead = mainHead ?? (() => null);
         _staleMainHead = staleMainHead ?? _mainHead;
@@ -96,13 +102,36 @@ internal sealed partial class ConductorBoardFillHost
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
+        items = ReleaseContradictionHolds(items, observedMain);
         var preferredOrder = ReadPreferredOrder(now);
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items, observedMain),
-            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll(), preferredOrder);
+            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll(), preferredOrder,
+            // Evidence releases must first advance the durable item stamp; otherwise Begin
+            // would capture the marker time and the new round would fail backlog-changed.
+            observedMain);
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
+    }
+
+    private IReadOnlyList<BacklogItem> ReleaseContradictionHolds(IReadOnlyList<BacklogItem> items, string? head)
+    {
+        if (_appendBacklogNote is null || string.IsNullOrWhiteSpace(head)) return items;
+        var wrote = false;
+        foreach (var item in items.Where(item => item.Status == BacklogItemStatus.Open))
+        {
+            var note = BoardFillContradictionHold.ActiveMarker(item);
+            var marker = note is null ? null : BoardFillContradictionHold.Parse(note.Text);
+            if (marker?.EvidenceChanged(head, _changedFiles) != true) continue;
+            try
+            {
+                _appendBacklogNote(item.Id, marker.ReleaseNote(head));
+                wrote = true;
+            }
+            catch (Exception) { } // The marker continues to hold when its release cannot be recorded.
+        }
+        return wrote ? _backlog() : items;
     }
 
     private IReadOnlyList<string> ReadPreferredOrder(DateTimeOffset now)

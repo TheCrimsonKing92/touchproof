@@ -96,6 +96,18 @@ internal sealed partial class ConductorBoardFillHost
             firstPass.Markdown, firstPass.Verification, firstPass.PreflightChecks);
         _store.Assess(round.Id, assessment, revisionAttempted,
             revisionAttempted is null ? null : firstAssessment.FailingReasons);
+        if (revisionAttempted == true && current is not null && _appendBacklogNote is not null &&
+            !string.IsNullOrWhiteSpace(round.MainHead) &&
+            verification.Verdicts.Any(verdict => verdict.Verdict == "contradicted"))
+        {
+            try
+            {
+                _appendBacklogNote(current.Id, BoardFillContradictionHold.Format(round.MainHead,
+                    BoardFillReadyItemSelector.ChangeStamp(current), BoardFillVerifierContract.Premise(markdown ?? ""),
+                    verification.Verdicts));
+            }
+            catch (Exception) { } // Assessment is durable; a failed annotation must not strand harvest.
+        }
 
         BoardFillDraftAssessment Evaluate(BoardFillDraftRound passRound, string? passMarkdown,
             BoardFillPremiseVerification passVerification, IReadOnlyList<AuthorBriefDraftCheck> preflight) =>

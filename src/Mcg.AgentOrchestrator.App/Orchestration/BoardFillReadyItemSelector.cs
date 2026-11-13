@@ -10,13 +10,21 @@ internal static class BoardFillReadyItemSelector
     private static readonly string[] OwnerMarkers =
         ["owner decision", "owner approval", "owner ruling", "approve-policy-change", "decision for you"];
 
-    internal static DateTimeOffset ChangeStamp(BacklogItem item) =>
-        item.Notes.Select(note => note.CreatedAt).Append(item.UpdatedAt).Max();
+    internal static DateTimeOffset ChangeStamp(BacklogItem item)
+    {
+        var marker = BoardFillContradictionHold.NewestMarker(item);
+        // AppendNoteAsync also bumps UpdatedAt to the marker's time. Preserve the pre-write stamp.
+        var updated = marker is null || item.UpdatedAt > marker.CreatedAt ? item.UpdatedAt :
+            BoardFillContradictionHold.Parse(marker.Text)?.ItemChangeStamp ?? item.CreatedAt;
+        return item.Notes.Where(note => !BoardFillContradictionHold.IsMarker(note.Text))
+            .Select(note => note.CreatedAt).Append(updated).Max();
+    }
 
     internal static bool IsOwnerGated(BacklogItem item) =>
         HasTag(item, "owner-gated") ||
         OwnerMarkers.Any(marker => item.Body.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
-            item.Notes.Any(note => note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
+            item.Notes.Any(note => !BoardFillContradictionHold.IsMarker(note.Text) &&
+                note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
 
     internal static bool IsAuthorRefused(BacklogItem item) => HasTag(item, AuthorStaleRetirement.Tag);
 
@@ -26,7 +34,8 @@ internal static class BoardFillReadyItemSelector
 
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
-        IReadOnlyList<BoardFillDraftRound>? rounds = null, IReadOnlyList<string>? preferredOrder = null)
+        IReadOnlyList<BoardFillDraftRound>? rounds = null, IReadOnlyList<string>? preferredOrder = null,
+        string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null)
     {
         var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
         if (preferredOrder is not null)
@@ -38,7 +47,8 @@ internal static class BoardFillReadyItemSelector
             (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
                 BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
             !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
-            !IsOwnerGated(item) && !IsAuthorRefused(item))
+            !IsOwnerGated(item) && !IsAuthorRefused(item) &&
+            !BoardFillContradictionHold.Blocks(item, currentMainHead, changedFiles))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)
         .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
