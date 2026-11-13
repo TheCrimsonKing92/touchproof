@@ -7,17 +7,18 @@ using Xunit;
 public sealed class WorkerMcgEnvironmentAllowlistTests
 {
     [Fact]
-    public void Names_AreExactlyTheFourOrchestratorHandoffConstants()
+    public void Names_AreExactlyTheFiveOrchestratorHandoffConstants()
     {
         string[] expected =
         [
             DispatchProcessHost.StartGatePathVariable,
             WorkerSandboxOptions.DispatchWorkerVariable,
             DotnetBuildStorageLayout.IsolatedRootOverrideVariable,
-            "MCG_ORCHESTRATOR_DOTNET_PATH"
+            "MCG_ORCHESTRATOR_DOTNET_PATH",
+            "MCG_ORCHESTRATOR_APP_OUTPUT"
         ];
 
-        Assert.Equal(4, WorkerMcgEnvironmentAllowlist.Names.Count);
+        Assert.Equal(5, WorkerMcgEnvironmentAllowlist.Names.Count);
         Assert.True(WorkerMcgEnvironmentAllowlist.Names.SetEquals(expected));
     }
 
@@ -52,6 +53,7 @@ public sealed class WorkerMcgEnvironmentAllowlistTests
             [WorkerSandboxOptions.DispatchWorkerVariable] = "worker-marker",
             [DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = "isolated-root",
             [WorkerMcgEnvironmentAllowlist.OrchestratorDotnetPathVariable] = "dotnet-path",
+            [WorkerMcgEnvironmentAllowlist.OrchestratorAppOutputVariable] = "app-output",
             ["PATH"] = "tool-path",
             ["mcg_lowercase"] = "nonmatching-prefix"
         };
@@ -59,11 +61,13 @@ public sealed class WorkerMcgEnvironmentAllowlistTests
             startInfo.Environment[name] = value;
         startInfo.Environment["MCG_ACCEPTANCE_CHECK_TIMEOUT_MINUTES"] = "17";
         startInfo.Environment["MCG_ORCHESTRATOR_TENANT"] = "host-tenant";
+        startInfo.Environment["MCG_ORCHESTRATOR_HOME"] = "orchestrator-home";
 
         WorkerMcgEnvironmentAllowlist.RemoveDisallowed(startInfo.Environment);
 
         Assert.False(startInfo.Environment.ContainsKey("MCG_ACCEPTANCE_CHECK_TIMEOUT_MINUTES"));
         Assert.False(startInfo.Environment.ContainsKey("MCG_ORCHESTRATOR_TENANT"));
+        Assert.False(startInfo.Environment.ContainsKey("MCG_ORCHESTRATOR_HOME"));
         Assert.Equal(expected.Count, startInfo.Environment.Count);
         foreach (var (name, value) in expected)
             Assert.Equal(value, startInfo.Environment[name]);
@@ -142,7 +146,8 @@ public sealed class WorkerMcgEnvironmentAllowlistTests
             "**ORCHESTRATOR**   for its own DISPATCH HOST",
             "orchestrator sets it for its own worker child",
             "Passed by the orchestrator to its own worker child",
-            "operator; orchestrator passes it to its own worker child"
+            "operator; orchestrator passes it to its own worker child",
+            "orchestrator for its own worker child; tests"
         };
         var rows = WorkerMcgEnvironmentAllowlist.Names.Select((name, index) =>
             $"| {descriptions[index]} | `{name}` | unused |");

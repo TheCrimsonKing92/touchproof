@@ -22,8 +22,8 @@ public sealed class WorkerHelperForwarderScriptTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, true, 1, "worker_build_channel_unavailable")]
-    [InlineData(true, true, 1, "worker_build_channel_unavailable")]
+    [InlineData(false, true, 1, "worker_build_client_missing")]
+    [InlineData(true, true, 1, "worker_build_client_missing")]
     [InlineData(false, false, 3, "REJECTED: submit tool unavailable")]
     [InlineData(true, false, 3, "REJECTED: submit tool unavailable")]
     public async Task MissingApp_ReportsOneLineAndExpectedExit(
@@ -129,7 +129,66 @@ public sealed class WorkerHelperForwarderScriptTests : IDisposable
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StandardOutput);
         var line = Assert.Single(result.StandardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
-        Assert.Equal($"worker_build_channel_unavailable app=\"{app}\"", line);
+        Assert.Equal($"worker_build_client_missing app=\"{app}\"", line);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Build_MissingClient_ReportsResolvedPathWithoutChannelFailure(bool legacyShell)
+    {
+        var script = CreateFixtureBuildScript();
+        var localApp = Path.Combine(AppOutput(Path.GetDirectoryName(Path.GetDirectoryName(script)!)!),
+            "Mcg.AgentOrchestrator.App.dll");
+        var start = FixtureBuildStart(legacyShell, script);
+        start.Environment.Remove("MCG_ORCHESTRATOR_APP_OUTPUT");
+        start.Environment.Remove("MCG_ORCHESTRATOR_HOME");
+        await AssertMissingClient(start, localApp);
+
+        var output = Directory.CreateDirectory(Path.Combine(_root, "empty override")).FullName;
+        var home = Path.Combine(_root, "fallback home");
+        Directory.CreateDirectory(AppOutput(home));
+        File.WriteAllText(Path.Combine(AppOutput(home), "Mcg.AgentOrchestrator.App.dll"), "unused fallback");
+        start = FixtureBuildStart(legacyShell, script);
+        start.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = output;
+        start.Environment["MCG_ORCHESTRATOR_HOME"] = home;
+        await AssertMissingClient(start, Path.Combine(output, "Mcg.AgentOrchestrator.App.dll"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Build_LaunchException_RetainsChannelUnavailableReason(bool legacyShell)
+    {
+        var script = CreateFixtureBuildScript();
+        var output = Directory.CreateDirectory(Path.Combine(_root, "dummy app")).FullName;
+        var app = Path.Combine(output, "Mcg.AgentOrchestrator.App.dll");
+        File.WriteAllText(app, "not executed");
+        var start = FixtureBuildStart(legacyShell, script);
+        start.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = output;
+        start.Environment.Remove("MCG_ORCHESTRATOR_HOME");
+        start.Environment["PATH"] = Directory.CreateDirectory(Path.Combine(_root, "empty path")).FullName;
+
+        var result = await CliChildProcessRunner.RunAsync(start);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StandardOutput);
+        Assert.Equal($"worker_build_channel_unavailable app=\"{app}\"{Environment.NewLine}", result.StandardError);
+        Assert.DoesNotContain("worker_build_client_missing", result.StandardError);
+    }
+
+    private ProcessStartInfo FixtureBuildStart(bool legacyShell, string script) =>
+        CliWorkerHelperCommandTests.ChildStart(_root, Shell(legacyShell),
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Projects", "p.csproj"]);
+
+    private static async Task AssertMissingClient(ProcessStartInfo start, string app)
+    {
+        Assert.False(File.Exists(app));
+        var result = await CliChildProcessRunner.RunAsync(start);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StandardOutput);
+        Assert.Equal($"worker_build_client_missing app=\"{app}\"{Environment.NewLine}", result.StandardError);
+        Assert.DoesNotContain("worker_build_channel_unavailable", result.StandardError);
     }
 
     private ProcessStartInfo BuildRequestStart(bool legacyShell, string script)
