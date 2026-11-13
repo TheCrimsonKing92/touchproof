@@ -1,11 +1,19 @@
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerMainHealthNarration
 {
+    internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        Func<string?, string> name, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence,
+        IReadOnlyList<string> recentLanding, IReadOnlyList<string> recentLandingPrefixes) =>
+        TryNarrate(ordered[index], name, evidence, recentLanding, recentLandingPrefixes, out var health)
+            ? Item(ordered[index], name(ordered[index].GoalId), ordered,
+                health.Sentence, health.Why, health.Next, health.Act, health.Spans, health.GoalPrefixes) : null;
+
     internal static bool TryNarrate(OwnerConductEvent item, Func<string?, string> name,
         Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence,
         IReadOnlyList<string> recentLanding, IReadOnlyList<string> recentLandingPrefixes,

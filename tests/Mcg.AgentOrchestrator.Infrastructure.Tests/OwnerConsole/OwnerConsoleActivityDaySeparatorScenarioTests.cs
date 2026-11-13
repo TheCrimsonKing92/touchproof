@@ -13,8 +13,8 @@ public sealed class OwnerConsoleActivityDaySeparatorScenarioTests
         await scene.Render([Event(17, 23, 59, 30), Event(18, 0, 0, 30)]);
         var items = scene.Controller.Model!.Activity;
         Assert.Equal(2, items.Length);
-        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityNarrator.Line(items[0]),
-            "-- Sat 2026-10-17 --", OwnerActivityNarrator.Line(items[1]) }, scene.View.ActivityLines);
+        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityLinePresentation.Line(items[0]),
+            "-- Sat 2026-10-17 --", OwnerActivityLinePresentation.Line(items[1]) }, scene.View.ActivityLines);
         await FocusActivity(scene);
         Assert.Equal(0, scene.View.ActivityPane.SelectedItem);
 
@@ -25,7 +25,7 @@ public sealed class OwnerConsoleActivityDaySeparatorScenarioTests
         await scene.View.HandleKeyAsync(Key.CursorDown);
         Assert.Equal(1, scene.View.ActivityPane.SelectedItem);
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.StartsWith("What happened: " + OwnerActivityNarrator.Line(items[0]) + "\n",
+        Assert.StartsWith("What happened: " + OwnerActivityLinePresentation.Line(items[0]) + "\n",
             Assert.Single(scene.Dialogs.Messages).Text);
 
         await scene.View.HandleKeyAsync(Key.Home);
@@ -34,7 +34,7 @@ public sealed class OwnerConsoleActivityDaySeparatorScenarioTests
         Assert.Equal(3, scene.View.ActivityPane.SelectedItem);
         await scene.View.HandleKeyAsync(Key.Enter);
         Assert.Equal(2, scene.Dialogs.Messages.Count);
-        Assert.StartsWith("What happened: " + OwnerActivityNarrator.Line(items[1]) + "\n",
+        Assert.StartsWith("What happened: " + OwnerActivityLinePresentation.Line(items[1]) + "\n",
             scene.Dialogs.Messages[1].Text);
     }
 
@@ -47,12 +47,12 @@ public sealed class OwnerConsoleActivityDaySeparatorScenarioTests
         var model = scene.Controller.Model!;
         Assert.Equal(3, model.Activity.Length);
         Assert.Equal(model.Activity.Select(item => OwnerConsoleLineFitter.Fit(
-            OwnerActivityNarrator.Line(item), OwnerActivityNarrator.LineSpans(item), 0)), scene.View.ActivityLines);
+            OwnerActivityLinePresentation.Line(item), OwnerActivityLinePresentation.LineSpans(item), 0)), scene.View.ActivityLines);
         await FocusActivity(scene);
 
         await scene.View.HandleKeyAsync(Key.Enter);
 
-        Assert.StartsWith("What happened: " + OwnerActivityNarrator.Line(model.Activity[0]) + "\n",
+        Assert.StartsWith("What happened: " + OwnerActivityLinePresentation.Line(model.Activity[0]) + "\n",
             Assert.Single(scene.Dialogs.Messages).Text);
         var lines = scene.View.ActivityLines.ToArray();
         scene.View.Render(model with { ActivityState = new(Loading: true) });

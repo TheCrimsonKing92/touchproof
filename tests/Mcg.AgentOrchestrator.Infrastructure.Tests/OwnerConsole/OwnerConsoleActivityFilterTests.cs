@@ -47,8 +47,8 @@ public sealed class OwnerConsoleActivityFilterTests
             [Item(19, "11111111"), duplicate, duplicate, Item(17, "33333333"), Item(16, "22222222")];
         var keys = OwnerConsoleActivityFollow.Keys(items);
         var rows = OwnerConsoleActivityRows.Build(items, "  2222  ");
-        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityNarrator.Line(items[1]),
-            OwnerActivityNarrator.Line(items[2]), "-- Fri 2026-10-16 --", OwnerActivityNarrator.Line(items[4]) },
+        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityLinePresentation.Line(items[1]),
+            OwnerActivityLinePresentation.Line(items[2]), "-- Fri 2026-10-16 --", OwnerActivityLinePresentation.Line(items[4]) },
             rows.Select(row => row.Text));
         Assert.Equal(new int?[] { null, 1, 2, null, 4 }, rows.Select(row => row.ItemIndex));
         Assert.Equal(new[] { keys[1], keys[2], keys[4] }, rows.Where(row => row.ItemIndex is not null).Select(row => row.Key));

@@ -71,7 +71,7 @@ public sealed class OwnerConsoleLineFitTests
         string[] labels = ["UI:", "Ops:", "Db:"];
         var titles = labels.Select((label, i) => label + " " + new string((char)('a' + i), 90 + i * 20)).ToArray();
         var item = Landed(ids, titles);
-        var full = OwnerActivityNarrator.Line(item);
+        var full = OwnerActivityLinePresentation.Line(item);
         Assert.True(full.GetColumns() > width);
         var fit = Fit(item, width);
         Assert.True(fit.GetColumns() <= width);
@@ -89,7 +89,7 @@ public sealed class OwnerConsoleLineFitTests
                 Assert.True(segment.Length < titles[i].Length);
             }
         }
-        Assert.Equal(full, OwnerActivityNarrator.Line(item));
+        Assert.Equal(full, OwnerActivityLinePresentation.Line(item));
         Assert.Equal(titles, item.Spans!.Titles.Select(span => item.Phrase.Substring(span.Start, span.Length)));
     }
 
@@ -134,8 +134,8 @@ public sealed class OwnerConsoleLineFitTests
     {
         const string raw = "Queries: serve `status [<goal>] --tasks-only` as a read-only receipt query with more detail";
         var item = Landed(["2ccd209d", "e70f1a44"], [raw, "UI: " + new string('x', 100)]);
-        var spans = OwnerActivityNarrator.LineSpans(item);
-        var full = OwnerActivityNarrator.Line(item);
+        var spans = OwnerActivityLinePresentation.LineSpans(item);
+        var full = OwnerActivityLinePresentation.Line(item);
         var first = spans.Titles[0];
         var rendered = full.Substring(first.Start, first.Length);
         Assert.Contains("`status [<goal>] --tasks-only`", rendered);
@@ -204,7 +204,7 @@ public sealed class OwnerConsoleLineFitTests
     public void FittingPreservesShortTitlesLongLabelsAndAlreadyFittingLines()
     {
         var item = Joint(["UI: short", "An exceptionally long label: " + new string('a', 100), new string('b', 100)]);
-        var full = OwnerActivityNarrator.Line(item);
+        var full = OwnerActivityLinePresentation.Line(item);
         Assert.Equal(full, Fit(item, full.GetColumns()));
         Assert.Equal(full, Fit(item, 0));
         var fit = Fit(item, 110);
@@ -212,7 +212,7 @@ public sealed class OwnerConsoleLineFitTests
         Assert.Contains("UI: short, An exceptionally long label:", fit);
         Assert.EndsWith(": passed", fit);
         var single = Landed(["11111111"], ["UI: short"]);
-        Assert.Equal(OwnerActivityNarrator.Line(single), Fit(single, 80));
+        Assert.Equal(OwnerActivityLinePresentation.Line(single), Fit(single, 80));
     }
 
     [Fact]
@@ -253,8 +253,8 @@ public sealed class OwnerConsoleLineFitTests
     {
         var title = "UI: `status [<goal>]` " + new string('x', 100);
         var item = Assert.Single(OwnerActivityNarrator.Narrate([new(DateTimeOffset.UnixEpoch, kind, "11111111", detail)], _ => title));
-        var full = OwnerActivityNarrator.Line(item);
-        var spans = OwnerActivityNarrator.LineSpans(item);
+        var full = OwnerActivityLinePresentation.Line(item);
+        var spans = OwnerActivityLinePresentation.LineSpans(item);
         var span = Assert.Single(spans.Titles);
         Assert.Equal(title, full.Substring(span.Start, span.Length));
         Assert.Equal(3, span.PrefixLength);
@@ -267,7 +267,7 @@ public sealed class OwnerConsoleLineFitTests
             Assert.Equal(outcome, full.Substring(spans.OutcomeStart, spans.OutcomeLength));
             Assert.Contains(outcome, fit);
         }
-        Assert.Equal(full, OwnerActivityNarrator.Line(item));
+        Assert.Equal(full, OwnerActivityLinePresentation.Line(item));
         Assert.Equal(title, item.GoalTitle);
     }
 
@@ -280,8 +280,8 @@ public sealed class OwnerConsoleLineFitTests
             new(DateTimeOffset.UnixEpoch, "loop-relaunch", "22222222", "LOOP_RELAUNCH_SCHEDULED tick=7"),
             new(DateTimeOffset.UnixEpoch.AddSeconds(1), "canary-gate", null, "CANARY_GATE result=failed tests=Check.Main")], _ => title);
         var item = Assert.Single(items, value => value.Kind == "canary-gate");
-        var spans = OwnerActivityNarrator.LineSpans(item);
-        var full = OwnerActivityNarrator.Line(item);
+        var spans = OwnerActivityLinePresentation.LineSpans(item);
+        var full = OwnerActivityLinePresentation.Line(item);
         Assert.Equal(2, spans.Titles.Count);
         Assert.All(spans.Titles, span => Assert.Equal(title, full.Substring(span.Start, span.Length)));
         var fit = Fit(item, 80);
@@ -291,7 +291,7 @@ public sealed class OwnerConsoleLineFitTests
     }
 
     private static string Fit(OwnerConsoleActivityItem item, int width) =>
-        OwnerConsoleLineFitter.Fit(OwnerActivityNarrator.Line(item), OwnerActivityNarrator.LineSpans(item), width);
+        OwnerConsoleLineFitter.Fit(OwnerActivityLinePresentation.Line(item), OwnerActivityLinePresentation.LineSpans(item), width);
 
     private static OwnerConsoleActivityItem Landed(string[] ids, string[] titles) => Assert.Single(
         OwnerActivityNarrator.Narrate(ids.Select(id => new OwnerConductEvent(DateTimeOffset.UnixEpoch,

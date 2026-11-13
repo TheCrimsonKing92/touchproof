@@ -14,7 +14,7 @@ internal static class OwnerConsoleActivityFilter
     internal static bool Matches(OwnerConsoleActivityItem item, string filter) =>
         (item.GoalPrefix.Length > 0 && item.GoalPrefix.StartsWith(filter, StringComparison.OrdinalIgnoreCase)) ||
         (item.GoalPrefix.Length == 8 && filter.Length > 8 && filter.StartsWith(item.GoalPrefix, StringComparison.OrdinalIgnoreCase)) ||
-        OwnerActivityNarrator.Line(item).Contains(filter, StringComparison.OrdinalIgnoreCase);
+        OwnerActivityLinePresentation.Line(item).Contains(filter, StringComparison.OrdinalIgnoreCase);
 
     internal static string AppliedNotice(string filter, int matching, int total) =>
         $"ACTIVITY filter \"{filter}\": {matching} of {total} rows";
@@ -60,7 +60,7 @@ internal static class OwnerConsoleActivityFilter
                 rows.Add(new(text, null, new(default, "day-separator", "", text, null, 0)));
             }
             var index = matching[position];
-            rows.Add(new(OwnerActivityNarrator.Line(items[index]), index, keys[index]));
+            rows.Add(new(OwnerActivityLinePresentation.Line(items[index]), index, keys[index]));
         }
         return rows;
     }

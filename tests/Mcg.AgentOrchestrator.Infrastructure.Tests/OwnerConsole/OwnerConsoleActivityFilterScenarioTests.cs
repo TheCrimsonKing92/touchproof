@@ -31,12 +31,12 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         Assert.Equal("2222", scene.View.ActivityFilter);
         var matching = scene.Controller.Model.Activity.Where(item => item.GoalPrefix == "22222222").ToArray();
         Assert.Equal(2, matching.Length);
-        Assert.Equal(matching.Select(OwnerActivityNarrator.Line), scene.View.ActivityLines);
+        Assert.Equal(matching.Select(OwnerActivityLinePresentation.Line), scene.View.ActivityLines);
         Assert.Contains("ACTIVITY filter \"2222\": 2 of 6 rows", scene.View.NoticeText);
         Assert.StartsWith("ACTIVITY · filter \"2222\" · following", scene.View.PaneTitle(OwnerConsolePane.Activity));
         Assert.Equal(0, scene.View.ActivityPane.SelectedItem);
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.StartsWith("What happened: " + OwnerActivityNarrator.Line(matching[0]) + "\n",
+        Assert.StartsWith("What happened: " + OwnerActivityLinePresentation.Line(matching[0]) + "\n",
             Assert.Single(scene.Dialogs.Messages).Text);
 
         await Command(scene, ":filter");
@@ -54,7 +54,7 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         using var scene = new Scene();
         await Populate(scene);
         var expectedItems = scene.Controller.Model!.Activity.Where(item => filter == "developer"
-            ? OwnerActivityNarrator.Line(item).Contains("Developer", StringComparison.OrdinalIgnoreCase)
+            ? OwnerActivityLinePresentation.Line(item).Contains("Developer", StringComparison.OrdinalIgnoreCase)
             : item.GoalPrefix == "11111111").ToArray();
         Assert.Equal(2, expectedItems.Length);
 
@@ -77,7 +77,7 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         Assert.True(scene.View.ActivityFollowing);
         Assert.Equal("2222", scene.View.ActivityFilter);
         Assert.Equal(0, scene.View.ActivityPane.SelectedItem);
-        Assert.Equal(OwnerActivityNarrator.Line(scene.Controller.Model!.Activity[0]), SelectedLine(scene));
+        Assert.Equal(OwnerActivityLinePresentation.Line(scene.Controller.Model!.Activity[0]), SelectedLine(scene));
         var lines = scene.View.ActivityLines.ToArray();
         var selected = scene.View.ActivityPane.SelectedItem;
         var top = scene.View.ActivityPane.Viewport.Y;
@@ -95,15 +95,15 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         await Populate(scene);
         await FocusActivity(scene);
         var olderMatch = scene.Controller.Model!.Activity.Last(item => item.GoalPrefix == "22222222");
-        await SelectLine(scene, OwnerActivityNarrator.Line(olderMatch));
+        await SelectLine(scene, OwnerActivityLinePresentation.Line(olderMatch));
         Assert.False(scene.View.ActivityFollowing);
 
         await Command(scene, "filter 2222");
 
-        Assert.Equal(OwnerActivityNarrator.Line(olderMatch), SelectedLine(scene));
+        Assert.Equal(OwnerActivityLinePresentation.Line(olderMatch), SelectedLine(scene));
         Assert.False(scene.View.ActivityFollowing);
         await Command(scene, "filter");
-        Assert.Equal(OwnerActivityNarrator.Line(olderMatch), SelectedLine(scene));
+        Assert.Equal(OwnerActivityLinePresentation.Line(olderMatch), SelectedLine(scene));
         Assert.False(scene.View.ActivityFollowing);
         Assert.Null(scene.View.ActivityFilter);
     }
@@ -115,14 +115,14 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         await Populate(scene);
         await FocusActivity(scene);
         var hidden = scene.Controller.Model!.Activity.First(item => item.GoalPrefix == "11111111");
-        await SelectLine(scene, OwnerActivityNarrator.Line(hidden));
+        await SelectLine(scene, OwnerActivityLinePresentation.Line(hidden));
         Assert.False(scene.View.ActivityFollowing);
 
         await Command(scene, "filter 2222");
 
         Assert.False(scene.View.ActivityFollowing);
         Assert.Equal(0, scene.View.ActivityPane.SelectedItem);
-        Assert.Equal(OwnerActivityNarrator.Line(scene.Controller.Model.Activity.First(item => item.GoalPrefix == "22222222")),
+        Assert.Equal(OwnerActivityLinePresentation.Line(scene.Controller.Model.Activity.First(item => item.GoalPrefix == "22222222")),
             SelectedLine(scene));
         await Command(scene, "follow");
         Assert.True(scene.View.ActivityFollowing);
@@ -196,7 +196,7 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
             if (mode == "inspecting")
             {
                 var item = current.Controller.Model!.Activity.First(item => item.GoalPrefix == "22222222");
-                await SelectLine(current, OwnerActivityNarrator.Line(item));
+                await SelectLine(current, OwnerActivityLinePresentation.Line(item));
                 Assert.False(current.View.ActivityFollowing);
                 Assert.Equal(0, current.View.ActivityPane.Viewport.Y);
             }
@@ -252,7 +252,7 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         {
             if (dates.Distinct().Count() > 1 && (index == 0 || dates[index] != dates[index - 1]))
                 rows.Add(OwnerConsoleActivityRows.Separator(dates[index]));
-            rows.Add(OwnerActivityNarrator.Line(items[index]));
+            rows.Add(OwnerActivityLinePresentation.Line(items[index]));
         }
         return rows.ToArray();
     }

@@ -1,6 +1,7 @@
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 

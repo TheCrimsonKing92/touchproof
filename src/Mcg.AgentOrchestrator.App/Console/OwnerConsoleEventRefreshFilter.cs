@@ -12,7 +12,7 @@ internal sealed class OwnerConsoleEventRefreshFilter
     // Maps protects activity; committed changes protect board and decisions;
     // gate/evidence kinds and ACCEPTANCE details protect the gate pane; tick protects latest tick.
     internal static bool ChangesView(OwnerConductEvent item) =>
-        OwnerActivityNarrator.Maps(item) ||
+        OwnerActivityEventMap.Maps(item) ||
         ChangeStreamRecord.TryClassify(item.EventKind, item.GoalId, out _) ||
         item.EventKind is "gate-progress" or "remote-lane" or "EVIDENCE_START" or "EVIDENCE_END" ||
         item.Detail.StartsWith("ACCEPTANCE", StringComparison.Ordinal) ||

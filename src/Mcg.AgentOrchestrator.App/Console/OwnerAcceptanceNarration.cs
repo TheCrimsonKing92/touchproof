@@ -1,6 +1,7 @@
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -9,6 +10,13 @@ internal static class OwnerAcceptanceNarration
 {
     public sealed record Narrated(string Sentence, string Why, string Next, string Act,
         OwnerConsoleLineSpans Spans, IReadOnlyList<string>? GoalPrefixes = null);
+
+    internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        Func<string?, string> name, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence,
+        IReadOnlyList<OwnerAttentionObservation>? attention) =>
+        TryNarrate(ordered, index, name, evidence, attention, out var accepted)
+            ? Item(ordered[index], name(ordered[index].GoalId), ordered,
+                accepted.Sentence, accepted.Why, accepted.Next, accepted.Act, accepted.Spans, accepted.GoalPrefixes) : null;
 
     public static bool TryNarrate(IReadOnlyList<OwnerConductEvent> ordered, int index,
         Func<string?, string> name, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence,

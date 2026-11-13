@@ -187,6 +187,24 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains("1-based declared_index", prompt, StringComparison.Ordinal);
     }
 
+    // Parallel-safe: builds prompt text without shared resources.
+    [Xunit.Fact]
+    public void BuildPrompt_ArbitraryObjective_KeepsEvidenceRoutingSelfContained()
+    {
+        const string objective = "Add a retry budget to the import job.";
+
+        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
+
+        Xunit.Assert.Contains(objective, prompt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("docs/", prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "Use evidence_owner \"acceptance-gate\" when evidence is a test execution or gate receipt that no worker may run.",
+            prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "Use \"operator\" when evidence needs a real host, a human, or post-landing observation.",
+            prompt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public async Task GoalRefinementServiceKeepsBf434fdbCriterionFiveAsOneRefinedEntry()
     {

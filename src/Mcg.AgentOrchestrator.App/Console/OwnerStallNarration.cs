@@ -2,12 +2,19 @@ using System.Globalization;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Uses the fold's held set so escalation and explicit stalls share suppression.
 internal sealed class OwnerStallNarration
 {
+    internal static OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        ISet<string> held, Func<string?, string> name) =>
+        TryNarrate(ordered[index], held, name, out var stall)
+            ? Item(ordered[index], name(ordered[index].GoalId), ordered,
+                stall.Sentence, stall.Why, stall.Next, stall.Act, stall.Spans) : null;
+
     internal static bool TryNarrate(OwnerConductEvent source, ISet<string> held, Func<string?, string> name,
         out OwnerAcceptanceNarration.Narrated narrated)
     {

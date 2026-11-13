@@ -9,7 +9,7 @@ public sealed class OwnerTestImpactHeadroomActivityTests
     public void Narrate_HeadroomWarning_ShowsCountsAndOwnerAction()
     {
         var evt = Headroom(Fields);
-        Assert.True(OwnerActivityNarrator.Maps(evt));
+        Assert.True(OwnerActivityEventMap.Maps(evt));
         Assert.True(OwnerConsoleStartupActivity.IsOperatorEvent(evt));
         var item = Assert.Single(OwnerActivityNarrator.Narrate([evt], _ => ""));
         Assert.Equal("Focused test selection near its limit: IndexedSourceFiles 3200 of 4000", item.Phrase);

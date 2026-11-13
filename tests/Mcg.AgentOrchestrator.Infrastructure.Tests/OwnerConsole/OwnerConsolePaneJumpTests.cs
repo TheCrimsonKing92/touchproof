@@ -45,7 +45,7 @@ public sealed class OwnerConsolePaneJumpTests
                 Assert.Equal("00000005  Goal 5", lines[0]);
                 Assert.DoesNotContain(lines, line => line.StartsWith("Title: ", StringComparison.Ordinal));
             }
-            else Assert.Contains(OwnerActivityNarrator.Line(scene.Controller.Model!.Activity[5]), text);
+            else Assert.Contains(OwnerActivityLinePresentation.Line(scene.Controller.Model!.Activity[5]), text);
             await scene.View.HandleKeyAsync(Key.PageUp);
             Assert.Equal(0, Selection());
             await scene.View.HandleKeyAsync(Key.Tab);

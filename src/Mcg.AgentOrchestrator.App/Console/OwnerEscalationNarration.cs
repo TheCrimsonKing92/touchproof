@@ -1,6 +1,7 @@
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityLinePresentation;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -10,6 +11,15 @@ internal sealed class OwnerEscalationNarration(IReadOnlyList<OwnerConductEvent> 
     internal sealed record Narrated(string Sentence, string Why, string Next,
         string Act = "No. You can let the conductor continue.", OwnerConsoleLineSpans? Spans = null,
         OwnerActivityResolution? Resolution = null, bool Stall = false);
+
+    internal OwnerConsoleActivityItem? NarrateItem(int index, HashSet<string> held)
+    {
+        if (Narrate(index, held) is not { } escalation) return null;
+        if (escalation.Stall) return OwnerStallNarration.NarrateItem(ordered, index, held, title);
+        var item = Item(ordered[index], title(ordered[index].GoalId), ordered,
+            escalation.Sentence, escalation.Why, escalation.Next, escalation.Act, escalation.Spans);
+        return escalation.Resolution is { } resolution ? item with { Resolution = resolution } : item;
+    }
 
     internal Narrated? Narrate(int index, IReadOnlySet<string> held)
     {

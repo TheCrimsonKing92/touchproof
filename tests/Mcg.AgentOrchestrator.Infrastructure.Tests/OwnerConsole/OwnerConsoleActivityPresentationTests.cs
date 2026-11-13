@@ -212,7 +212,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         Assert.Equal("unknown-", activity.GoalTitle);
         Assert.Equal(detail, activity.Detail);
         Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} " + (phrase.Contains("unknown-") ? "" : "unknown- ") + phrase,
-            OwnerActivityNarrator.Line(activity));
+            OwnerActivityLinePresentation.Line(activity));
     }
 
     // Matches FormatOwnerReviewEscalation, including its multiline command payload.

@@ -123,7 +123,7 @@ internal static class OwnerConsoleBindings
             OwnerConsolePane.Activity => (following ? "Following latest  " : "Inspecting  Home follow latest  ") + "Up/Down scroll  Enter what this means",
             _ => throw new ArgumentOutOfRangeException(nameof(pane))
         };
-        return string.Join("  ", new[] { prefix, OwnerActivityNarrator.JumpKeyHint, "Tab/Shift+Tab pane" }
+        return string.Join("  ", new[] { prefix, OwnerActivityLinePresentation.JumpKeyHint, "Tab/Shift+Tab pane" }
             .Concat(All.Where(row => row.Scope == OwnerConsoleScope.Global && row.Key.HasValue)
                 .SelectMany(row => row == Help ? new[] { ": command", Hint(row) } : [Hint(row)])));
     }
@@ -133,7 +133,7 @@ internal static class OwnerConsoleBindings
     internal static string HelpText => string.Join("\n", NavigationHelp
         .Concat(Commands.Where(row => row.Key.HasValue).SelectMany(row =>
             new[] { row.KeyHelp!, $":{row.Usage}: {Description(row)}" }.Concat(ExtraHelp(row))))
-        .Concat(OwnerActivityNarrator.JumpKeyHelp)
+        .Concat(OwnerActivityLinePresentation.JumpKeyHelp)
         .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}"))
         .Append(OwnerConsoleDialogBindings.FleetExpand.KeyHelp!));
 

@@ -17,7 +17,6 @@ internal static class OwnerConsoleSizeBaseline
     {
         "OwnerActivityDetailPresentation.cs::OwnerActivityDetailPresentation.Build",
         "OwnerActivityDiagnosticParser.cs::OwnerActivityDiagnosticParser.Parse",
-        "OwnerActivityNarrator.cs::OwnerActivityNarrator.Narrate",
         "OwnerConsoleBindingRunner.cs::OwnerConsoleBindingRunner.RunAsync",
         "OwnerConsoleFullScreenHost.cs::OwnerConsoleFullScreenHost.RunCoreAsync",
         "OwnerConsoleGateLayout.cs::OwnerConsoleGateLayout.Lines",

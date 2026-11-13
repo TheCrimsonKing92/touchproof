@@ -17,7 +17,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
         AssertFollowing(scene);
         await scene.Render(Events(scene, 33));
         AssertFollowing(scene);
-        Assert.Equal(OwnerActivityNarrator.Line(scene.Controller.Model!.Activity[0]), scene.View.ActivityLines[0]);
+        Assert.Equal(OwnerActivityLinePresentation.Line(scene.Controller.Model!.Activity[0]), scene.View.ActivityLines[0]);
         Assert.Equal(scene.Harness.Clock.GetUtcNow().AddSeconds(32), scene.Controller.Model.Activity[0].Timestamp);
         await scene.View.HandleKeyAsync(Key.CursorDown);
         await scene.View.HandleKeyAsync(Key.CursorDown);
@@ -33,7 +33,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
         await scene.Render(Events(scene, 36));
         AssertFollowing(scene);
         Assert.Equal(scene.Harness.Clock.GetUtcNow().AddSeconds(35), scene.Controller.Model!.Activity[0].Timestamp);
-        Assert.Equal(OwnerActivityNarrator.Line(scene.Controller.Model.Activity[0]), SelectedLine(scene));
+        Assert.Equal(OwnerActivityLinePresentation.Line(scene.Controller.Model.Activity[0]), SelectedLine(scene));
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
         await scene.View.HandleKeyAsync(Key.Esc);
         Unchanged();
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.Contains(OwnerActivityNarrator.Line(item), Assert.Single(scene.Dialogs.Messages).Text);
+        Assert.Contains(OwnerActivityLinePresentation.Line(item), Assert.Single(scene.Dialogs.Messages).Text);
         Unchanged();
         await Command(scene, "epics");
         Assert.True(scene.View.EpicView.IsOpen);

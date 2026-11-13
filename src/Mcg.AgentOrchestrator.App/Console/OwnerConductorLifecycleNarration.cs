@@ -1,5 +1,6 @@
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerEventFields;
 using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityText;
+using static Mcg.AgentOrchestrator.App.OwnerConsole.OwnerActivityNarrator;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -8,6 +9,10 @@ internal sealed class OwnerConductorLifecycleNarration
 {
     private bool stopped;
     private bool restarting;
+
+    internal OwnerConsoleActivityItem? NarrateItem(IReadOnlyList<OwnerConductEvent> ordered, int index,
+        Func<string?, string> name) => TryNarrate(ordered, index, out var sentence, out var why, out var next, out var act)
+            ? Item(ordered[index], name(ordered[index].GoalId), ordered, sentence, why, next, act) : null;
 
     internal bool TryNarrate(IReadOnlyList<OwnerConductEvent> ordered, int index,
         out string sentence, out string why, out string next, out string act)

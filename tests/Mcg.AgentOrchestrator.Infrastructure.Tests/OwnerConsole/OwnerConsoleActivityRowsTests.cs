@@ -10,8 +10,8 @@ public sealed class OwnerConsoleActivityRowsTests
 
         var rows = OwnerConsoleActivityRows.Build(items);
 
-        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityNarrator.Line(items[0]),
-            OwnerActivityNarrator.Line(items[1]), "-- Sat 2026-10-17 --", OwnerActivityNarrator.Line(items[2]) },
+        Assert.Equal(new[] { "-- Sun 2026-10-18 --", OwnerActivityLinePresentation.Line(items[0]),
+            OwnerActivityLinePresentation.Line(items[1]), "-- Sat 2026-10-17 --", OwnerActivityLinePresentation.Line(items[2]) },
             rows.Select(row => row.Text));
         Assert.Equal(new int?[] { null, 0, 1, null, 2 }, rows.Select(row => row.ItemIndex));
     }
@@ -49,7 +49,7 @@ public sealed class OwnerConsoleActivityRowsTests
         Assert.Equal(items.Length, rows.Count);
         for (var index = 0; index < items.Length; index++)
         {
-            Assert.Equal(OwnerActivityNarrator.Line(items[index]), rows[index].Text);
+            Assert.Equal(OwnerActivityLinePresentation.Line(items[index]), rows[index].Text);
             Assert.Equal(index, rows[index].ItemIndex);
             Assert.Equal(keys[index], rows[index].Key);
         }

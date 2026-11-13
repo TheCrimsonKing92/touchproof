@@ -20,6 +20,26 @@ internal static partial class AcceptanceCriterionEvidence
             $"{item.DisplayLabel}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
         var reason = $"Repeat full acceptance deferred pending Operator PreLanding evidence: {detail}. " +
             "Next actor=Operator; action=criterion-evidence-record. Historical pass does not attest current main.";
+        var staleCandidates = new List<string>();
+        foreach (var blocker in blockers)
+        {
+            var boundCandidate = string.IsNullOrWhiteSpace(blocker.ExpectedCandidateSha)
+                ? blocker.CandidateSha : blocker.ExpectedCandidateSha;
+            if (!string.IsNullOrWhiteSpace(boundCandidate) &&
+                !string.Equals(boundCandidate, candidateSha, StringComparison.OrdinalIgnoreCase))
+            {
+                staleCandidates.Add($"{blocker.Id}={boundCandidate}");
+                reason += $" Obligation '{blocker.Id}' is bound to stale candidate {boundCandidate}; gated candidate={candidateSha}. " +
+                    $"Operator rebind: `criterion-evidence-map --goal {goal.Id.Value} --criterion {blocker.CriterionNumber} " +
+                    $"--version {blocker.CriterionVersion} operator {QuoteArgument(blocker.RequiredScope)} " +
+                    $"{QuoteArgument(blocker.FindingStableId ?? blocker.Id)} {candidateSha}`.";
+            }
+            else
+            {
+                reason += $" Operator record: `criterion-evidence-record --goal {goal.Id.Value} {blocker.Id} operator " +
+                    $"{candidateSha} <receipt-id> {QuoteArgument(blocker.RequiredScope)} <passed|failed> <detail>`.";
+            }
+        }
         return new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason,
             StableIdentity: HoldIdentity(goal, candidateSha))
         {
@@ -29,8 +49,11 @@ internal static partial class AcceptanceCriterionEvidence
                     new PolicyDecisionFact("briefVersion", goal.AuthoritativeRefinedSpecVersion!.BriefVersion.ToString()),
                     new PolicyDecisionFact("attemptId", attempt.AttemptId), new PolicyDecisionFact("historicalMainSha", attempt.MainHeadSha!),
                     new PolicyDecisionFact("obligationIds", string.Join(",", blockers.Select(item => item.Id))),
-                    new PolicyDecisionFact("nextActor", "Operator"), new PolicyDecisionFact("nextAction", "criterion-evidence-record")]))
+                    new PolicyDecisionFact("nextActor", "Operator"), new PolicyDecisionFact("nextAction", "criterion-evidence-record"),
+                    new PolicyDecisionFact("staleCandidateShas", string.Join(",", staleCandidates))]))
         };
+
+        static string QuoteArgument(string value) => value.Any(char.IsWhiteSpace) ? $"\"{value}\"" : value;
     }
 
     // Called only with a coordinator-validated exact-pair full pass, while both

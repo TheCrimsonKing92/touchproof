@@ -14,7 +14,7 @@ internal static class OwnerConsoleActivityRows
         var dates = items.Select(item => DateOnly.FromDateTime(item.Timestamp.ToLocalTime().DateTime)).ToArray();
         if (dates.Distinct().Count() < 2)
             return items.Select((item, index) => new OwnerConsoleActivityRow(
-                OwnerActivityNarrator.Line(item), index, keys[index])).ToArray();
+                OwnerActivityLinePresentation.Line(item), index, keys[index])).ToArray();
 
         var rows = new List<OwnerConsoleActivityRow>();
         for (var index = 0; index < items.Count; index++)
@@ -24,7 +24,7 @@ internal static class OwnerConsoleActivityRows
                 var text = Separator(dates[index]);
                 rows.Add(new(text, null, new(default, "day-separator", "", text, null, 0)));
             }
-            rows.Add(new(OwnerActivityNarrator.Line(items[index]), index, keys[index]));
+            rows.Add(new(OwnerActivityLinePresentation.Line(items[index]), index, keys[index]));
         }
         return rows;
     }

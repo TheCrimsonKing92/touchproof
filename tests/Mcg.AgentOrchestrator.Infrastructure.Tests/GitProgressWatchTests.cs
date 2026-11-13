@@ -21,6 +21,27 @@ public sealed class GitProgressWatchTests
         Assert.True(child.Clock.Elapsed > TimeSpan.FromSeconds(60));
         Assert.Equal(0, child.Kills);
         Assert.Equal(TimeSpan.Zero, result.Last.EligibleIdle);
+        Assert.Equal(TimeSpan.Zero, result.LongestIdle);
+    }
+
+    [Theory]
+    [InlineData("cpu")]
+    [InlineData("stdout")]
+    [InlineData("stderr")]
+    public void Wait_ProgressAfterLongestGap_PreservesMaximum(string signal)
+    {
+        var child = new FakeChild(5, (value, tick) =>
+        {
+            if (tick != 4) return;
+            if (signal == "cpu") value.Cpu += TimeSpan.FromMilliseconds(1);
+            if (signal == "stdout") value.OutputBytes++;
+            if (signal == "stderr") value.ErrorBytes++;
+        });
+        var result = Watch(child, null);
+        Assert.False(result.Stalled);
+        Assert.Equal(5, result.Last.Samples);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), result.Last.EligibleIdle);
+        Assert.Equal(TimeSpan.FromMilliseconds(300), result.LongestIdle);
     }
 
     [Fact]
@@ -31,6 +52,7 @@ public sealed class GitProgressWatchTests
         var result = GitCli.StallResult("worktree add", watched, "captured output", "captured error");
         Assert.True(watched.Stalled);
         Assert.Equal(1, child.Kills);
+        Assert.Equal(TimeSpan.FromMilliseconds(300), watched.LongestIdle);
         Assert.Equal(-1, result.ExitCode);
         Assert.Equal("captured output", result.Output);
         Assert.StartsWith("captured error" + Environment.NewLine, result.Error);
@@ -63,6 +85,7 @@ public sealed class GitProgressWatchTests
         Assert.Equal(4, result.Last.Samples);
         Assert.Equal(1, result.Last.StarvedSamples);
         Assert.Equal(TimeSpan.FromMilliseconds(300), result.Last.EligibleIdle);
+        Assert.Equal(TimeSpan.FromMilliseconds(300), result.LongestIdle);
     }
 
     [Fact]
@@ -77,6 +100,7 @@ public sealed class GitProgressWatchTests
         Assert.False(result.Stalled);
         Assert.Equal(1, result.Last.StarvedSamples);
         Assert.Equal(TimeSpan.FromMilliseconds(200), result.Last.EligibleIdle);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), result.LongestIdle);
     }
 
     [Fact]
@@ -87,6 +111,7 @@ public sealed class GitProgressWatchTests
         var result = Watch(child, TimeSpan.FromMilliseconds(1));
         Assert.False(result.Stalled);
         Assert.Equal(TimeSpan.Zero, result.Last.EligibleIdle);
+        Assert.Equal(TimeSpan.Zero, result.LongestIdle);
         Assert.Equal(0, child.Kills);
     }
 

@@ -26,8 +26,8 @@ public sealed class OwnerActivityGoalListExplainTests
         var lead = kind == "landing" ? "Landed together: " : kind == "joint" ? "Joint test run for " : "Main broke after landing ";
         var time = $"{item.Timestamp.ToLocalTime():HH:mm:ss} ";
         var row = time + (kind == "joint" ? "11111111 " : "") + lead + list + suffix;
-        Assert.Equal(row, OwnerActivityNarrator.Line(item));
-        var spans = OwnerActivityNarrator.LineSpans(item).Titles;
+        Assert.Equal(row, OwnerActivityLinePresentation.Line(item));
+        var spans = OwnerActivityLinePresentation.LineSpans(item).Titles;
         Assert.Equal(count, spans.Count);
         for (var i = 0; i < count; i++)
             Assert.Equal(Titles[i], row.Substring(spans[i].Start, spans[i].Length));
@@ -77,7 +77,7 @@ public sealed class OwnerActivityGoalListExplainTests
         var lines = OwnerActivityExplanation.Explain(item).Split('\n').TakeWhile(line => line != "Diagnostics").Where(line => line.Length > 0).ToArray();
         Assert.Equal(4, lines.Length);
         Assert.Null(item.GoalPrefixes);
-        Assert.Equal("What happened: " + OwnerActivityNarrator.Line(item), lines[0]);
+        Assert.Equal("What happened: " + OwnerActivityLinePresentation.Line(item), lines[0]);
         if (kind == "landing") Assert.Contains("Landed: " + Titles[0] + " (11111111)", lines[0]);
         Assert.Equal("Reason: " + item.Why, lines[1]);
         Assert.DoesNotContain('\n', item.Why);
