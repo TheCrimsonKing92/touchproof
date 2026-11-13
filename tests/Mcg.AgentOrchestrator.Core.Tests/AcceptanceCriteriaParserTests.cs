@@ -272,12 +272,69 @@ public sealed class AcceptanceCriteriaParserTests
             This sentence mentions acceptance criteria: but is not a section.
             1. Unrelated numbered prose.
 
-            Acceptance criteria
+            - Acceptance criteria
             2. Still unrelated numbered prose.
             """;
 
         Assert.Empty(AcceptanceCriteriaParser.ParseDeclared(text));
         Assert.Equal(text, AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Theory(DisplayName = "Explicit headings separate three criteria from operating context")]
+    [InlineData("Acceptance criteria", "Operating instructions")]
+    [InlineData("Acceptance criteria:", "Operating instructions:")]
+    [InlineData("## Acceptance criteria", "## Operating instructions")]
+    [InlineData("  aCcEpTaNcE cRiTeRiA  ", "  oPeRaTiNg InStRuCtIoNs:  ")]
+    public void DeclaredHeadingsKeepThreeCriteriaAndRetainOperatingContext(string heading, string boundary)
+    {
+        var text = $"Build the product.\n\n{heading}\n1. First.\n2. Second.\n3. Third.\n\n" +
+            $"{boundary}\n- Trace the Planner.\n- Use the configured Reviewer.\n- Keep the parent open.";
+
+        Assert.Equal(["First.", "Second.", "Third."], AcceptanceCriteriaParser.ParseDeclared(text));
+        Assert.Equal($"Build the product.\n\n{boundary}\n- Trace the Planner.\n" +
+            "- Use the configured Reviewer.\n- Keep the parent open.",
+            AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Theory(DisplayName = "A repeated standalone heading ends the first criteria section")]
+    [InlineData("Acceptance criteria")]
+    [InlineData("acceptance criteria:")]
+    public void SubsequentStandaloneHeadingEndsFirstSection(string boundary)
+    {
+        var text = $"Acceptance criteria\n- First.\n{boundary}\n- Later.";
+        Assert.Equal(["First."], AcceptanceCriteriaParser.ParseDeclared(text));
+        Assert.Equal($"{boundary}\n- Later.", AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Theory(DisplayName = "Prose and list labels do not declare a criteria section")]
+    [InlineData("This sentence mentions Acceptance criteria but is prose.")]
+    [InlineData("Acceptance criteria extra")]
+    [InlineData("Acceptance criteria::")]
+    [InlineData("- Acceptance criteria")]
+    [InlineData("1. Acceptance criteria:")]
+    public void ProseAndListItemsDoNotStartASection(string line)
+    {
+        var text = $"{line}\n- Unrelated.";
+        Assert.Empty(AcceptanceCriteriaParser.ParseDeclared(text));
+        Assert.Equal(text, AcceptanceCriteriaParser.RemoveDeclaredSection(text));
+    }
+
+    [Theory(DisplayName = "Operating prose does not end the declared criteria section")]
+    [InlineData("Discuss Operating instructions here.")]
+    [InlineData("Operating instructions extra")]
+    [InlineData("Operating instructions::")]
+    public void OperatingProseDoesNotEndASection(string line)
+    {
+        Assert.Equal(["First.", "Second."], AcceptanceCriteriaParser.ParseDeclared(
+            $"Acceptance criteria\n- First.\n{line}\n- Second."));
+    }
+
+    [Fact(DisplayName = "A listed operating label remains part of the criteria list")]
+    public void OperatingListItemRemainsACriterion()
+    {
+        Assert.Equal(["First.", "Operating instructions", "Third."],
+            AcceptanceCriteriaParser.ParseDeclared(
+                "Acceptance criteria\n- First.\n- Operating instructions\n- Third."));
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_stops_at_plain_text_intake_trailer")]
