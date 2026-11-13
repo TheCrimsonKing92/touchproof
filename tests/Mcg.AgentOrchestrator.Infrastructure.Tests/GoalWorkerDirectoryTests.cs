@@ -38,6 +38,36 @@ public sealed class GoalWorkerDirectoryTests : GoalWorktreeRecoveryTestBase
     }
 
     [Xunit.Fact]
+    public void Resolve_ExecutionDirectoryIsGoalWorktree_ReturnsExecutionDirectory()
+    {
+        using var f = new MissingFixture();
+        Assert.True(f.Recover().Succeeded);
+        f.AssertRestored();
+        Assert.Null(GoalWorktrees.TryResolve(f.Path, f.Goal.Id));
+
+        Assert.Equal(f.Path, GoalWorkerDirectory.Resolve(
+            OrchestratorWorkspace.ForDirectory(f.Repo, f.Path), f.Goal.Id));
+        AssertNoDispatch(f.Goal);
+    }
+
+    [Xunit.Fact]
+    public void Resolve_ExecutionDirectoryIsAnotherGoalWorktree_ThrowsTypedRefusal()
+    {
+        using var f = new MissingFixture();
+        Assert.True(f.Recover().Succeeded);
+        f.AssertRestored();
+        var otherGoalId = GoalId.New();
+        Assert.True(GoalWorktrees.IsGitWorkTree(f.Path));
+
+        var refusal = Assert.Throws<MissingGoalWorktreeException>(() =>
+            GoalWorkerDirectory.Resolve(OrchestratorWorkspace.ForDirectory(f.Repo, f.Path), otherGoalId));
+
+        Assert.Equal(otherGoalId, refusal.GoalId);
+        Assert.Equal(GoalWorktrees.WorktreePath(f.Path, otherGoalId), refusal.ExpectedWorktreePath);
+        AssertNoDispatch(f.Goal);
+    }
+
+    [Xunit.Fact]
     public void Resolve_NonGitDirectory_ReturnsExecutionDirectory()
     {
         var root = CreateTempDirectory();
