@@ -66,7 +66,11 @@ internal static class AcceptanceLaneMembership
         return result;
     }
 
-    private static bool Includes(AcceptanceTestLane lane, string classFullName)
+    private static bool Includes(AcceptanceTestLane lane, string classFullName) =>
+        CreateClassMatcher(lane)(classFullName);
+
+    // Inventory callers translate each lane once rather than once for every candidate class.
+    internal static Func<string, bool> CreateClassMatcher(AcceptanceTestLane lane)
     {
         var args = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
         var included = new List<string>();
@@ -83,7 +87,7 @@ internal static class AcceptanceLaneMembership
                 default: throw new InvalidDataException($"Lane '{lane.Name}' has unsupported MTP argument '{args[index]}'.");
             }
         }
-        return (included.Count == 0 || included.Any(pattern => Matches(classFullName, pattern))) &&
+        return classFullName => (included.Count == 0 || included.Any(pattern => Matches(classFullName, pattern))) &&
                excluded.All(pattern => !Matches(classFullName, pattern));
     }
 

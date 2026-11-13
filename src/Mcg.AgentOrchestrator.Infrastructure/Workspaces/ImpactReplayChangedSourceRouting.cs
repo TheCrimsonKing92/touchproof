@@ -1,7 +1,7 @@
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class ImpactReplayChangedSourceRouting
 {

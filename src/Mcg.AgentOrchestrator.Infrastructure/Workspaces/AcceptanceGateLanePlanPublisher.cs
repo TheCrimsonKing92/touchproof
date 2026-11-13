@@ -12,7 +12,8 @@ internal static class AcceptanceGateLanePlanPublisher
         PolicyShardPlan policy, DotnetShardDisposition disposition,
         IReadOnlyList<GoalAcceptanceVerifier.SemanticExecutionDeduplicationReceipt> deduplications,
         IReadOnlyList<AcceptanceManifestCheck> planned, IReadOnlyList<AcceptanceManifestCheck> attributed,
-        IReadOnlyList<AcceptanceManifestCheck> dispatched, IReadOnlyDictionary<string, string>? testSettings = null)
+        IReadOnlyList<AcceptanceManifestCheck> dispatched, IReadOnlyDictionary<string, string>? testSettings = null,
+        AcceptanceSelectedExecutionSession? selectedExecution = null)
     {
         var scheduled = new List<string>();
         var skipped = new List<AcceptanceGateLaneSkip>();
@@ -20,10 +21,12 @@ internal static class AcceptanceGateLanePlanPublisher
         var focused = requiredChecks.Where(IsFocusedProjectDotnetCheck).ToArray();
         foreach (var lane in candidates)
         {
-            bool Contains(IReadOnlyList<AcceptanceManifestCheck> checks) => checks.Any(check => Matches(check, lane));
+            var executionLane = selected.FirstOrDefault(item => item.Name == lane.Name) ?? lane;
+            bool Contains(IReadOnlyList<AcceptanceManifestCheck> checks) => checks.Any(check => Matches(check, executionLane));
             // Actual dispatch wins: attribution can restore a lane excluded by an earlier stage.
             if (Contains(dispatched)) { scheduled.Add(lane.Name); continue; }
-            string? reason = !selected.Any(item => item.Name == lane.Name) ? AcceptanceGateLaneSkip.NoBuildSystemChange :
+            string? reason = selectedExecution?.ExcludesLane(lane.Name) == true ? AcceptanceGateLaneSkip.LaneNotSelected :
+                !selected.Any(item => item.Name == lane.Name) ? AcceptanceGateLaneSkip.NoBuildSystemChange :
                 disposition != DotnetShardDisposition.RunDotnetShards ? DotnetShardDispositionReason(disposition) :
                 policy.IsAbsentProject(InfrastructureTestsProject) ? AcceptanceGateLaneSkip.AbsentProject :
                 Contains(attributed) ? AcceptanceGateLaneSkip.OutsideChangeScope :
@@ -34,8 +37,9 @@ internal static class AcceptanceGateLanePlanPublisher
             // No matching check and no exclusion evidence means this is an unrelated manifest row.
             if (reason is not null) skipped.Add(new(lane.Name, reason));
         }
-        return new(AcceptanceGateLanePlan.CurrentSchemaVersion, attemptId, scheduled, skipped)
+        var observation = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, attemptId, scheduled, skipped)
             { TestSettings = testSettings ?? AcceptanceDeclaredTestSettings.Empty };
+        return selectedExecution?.Observe(observation) ?? observation;
     }
 
     private static bool Matches(AcceptanceManifestCheck check, AcceptanceTestLane lane)

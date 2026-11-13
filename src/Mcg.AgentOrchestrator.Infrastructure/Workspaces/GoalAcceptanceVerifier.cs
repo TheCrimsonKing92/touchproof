@@ -569,8 +569,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardConcurrencyBudget = Math.Min(
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
+        var selectedExecution = new AcceptanceSelectedExecutionSession(engineSettings.SelectedExecutionMode, worktreePath, changedFiles,
+            executionOwner.AttributionLaneScope is not null, _testOverrides.ReadSelectedExecutionForTests, engineSettings);
         var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
-            executionOwner.ProjectHomeDirectory);
+            executionOwner.ProjectHomeDirectory, laneTransform: selectedExecution.LaneTransform);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
@@ -587,7 +589,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyShardPlan = effectivePlan.PolicyShardPlan;
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
         var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
-            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, effectivePlan.CandidateLanes), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
+            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, effectivePlan.CandidateLanes), effectivePlan.StructuralCoverageApplies && !selectedExecution.Applied, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
             goalId, worktreePath, effectiveChecks, engineSettings, executionOwner,
             engineSettings.BalancedLanePool is null ? null : ComputeEffectiveAcceptancePlanIdentity(
@@ -642,7 +644,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
             effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
             scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
-                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray(), engineSettings.DeclaredTestSettings),
+                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray(), engineSettings.DeclaredTestSettings, selectedExecution),
             AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider, worktreePath, effectivePlan.BalancedLayout);
 
         if (scopedChecks is not null)
@@ -1789,7 +1791,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         AcceptanceGateEngineSettings engineSettings,
         string? projectHomeDirectory = null,
-        AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null)
+        AcceptanceBalancedLaneExpansion? infrastructureLaneExpansion = null,
+        Func<IReadOnlyList<AcceptanceTestLane>, IReadOnlyList<AcceptanceTestLane>>? laneTransform = null)
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
@@ -1817,6 +1820,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidateLanes,
             changedFiles,
             policyShardPlan);
+        infrastructureTestLanes = laneTransform?.Invoke(infrastructureTestLanes) ?? infrastructureTestLanes;
         // This owns environment and scope expansion for both execution and identity.
         // Identity supplies a flattened pool; execution retains its measured lane layout.
         var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));

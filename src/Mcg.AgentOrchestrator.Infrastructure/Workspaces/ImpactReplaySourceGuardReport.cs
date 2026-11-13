@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record ImpactReplaySourceGuardReport(IReadOnlyList<string> Classes)
 {

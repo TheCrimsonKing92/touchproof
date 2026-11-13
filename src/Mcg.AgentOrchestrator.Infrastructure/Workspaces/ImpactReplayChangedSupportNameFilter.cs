@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // A conservative syntax-only candidate set; semantic identity remains the scan's decision.
 internal sealed class ImpactReplayChangedSupportNameFilter
