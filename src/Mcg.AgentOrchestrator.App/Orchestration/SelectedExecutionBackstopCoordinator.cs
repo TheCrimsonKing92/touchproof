@@ -91,7 +91,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     appliedLandings: state.Uncovered);
             }
             // A queued entrant keeps its place but covers the newest head when its turn arrives.
-            if (state.Request is { Attempts: 0 } queued && mainHead() is { } newest &&
+            if (state.Request is { } queued && (queued.Attempts == 0 || queued.RetryPending) && mainHead() is { } newest &&
                 (newest != queued.ToCommit || queued.ThroughOrdinal != state.LastLandingOrdinal))
             {
                 state = state with { Request = queued with { ToCommit = newest, ThroughOrdinal = state.LastLandingOrdinal,
@@ -99,8 +99,9 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                 await store.WriteAsync("coalesced", state, clock()).ConfigureAwait(false);
             }
             if (state.Request is not { } pending || suppressed || !capacityAvailable ||
+                (pending.RetryPending && waiting.Any(goal => GoalSchedulingOrder.AcceptanceWaitingAt(goal) <= pending.QueuedAt)) ||
                 GoalSchedulingOrder.BeforeBackstop(waiting, pending.QueuedAt, pending.Overtakes).Count > 0) return;
-            var started = pending with { Attempts = pending.Attempts + 1 };
+            var started = pending with { Attempts = pending.Attempts + 1, RetryPending = false };
             await store.WriteAsync("started", state with { Request = started }, clock()).ConfigureAwait(false);
             Report(pending.Attempts > 0 ? "resumed" : "started", started);
             _activeRequestId = started.Id;
@@ -193,10 +194,14 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     AcceptanceSelectedExecutionSessionSuspension.Write(home, new(miss.Id, stateHome), stateHome);
                     state = state with { Request = null, OpenMiss = miss };
                     break;
-                case "infrastructure-failure": break; // Keep exactly this request pending for normal admission next tick.
+                case "infrastructure-failure": break;
                 default: throw new InvalidDataException("Unknown backstop outcome: " + outcome.Result);
             }
-            await store.WriteAsync(outcome.Result, state, clock()).ConfigureAwait(false);
+            var recordedAt = clock();
+            // A completed infrastructure attempt rejoins the queue; an interrupted attempt does not.
+            if (outcome.Result == "infrastructure-failure")
+                state = state with { Request = state.Request! with { QueuedAt = recordedAt, Overtakes = 0, RetryPending = true } };
+            await store.WriteAsync(outcome.Result, state, recordedAt).ConfigureAwait(false);
             Report(outcome.Result, request, outcome.FailingTests.Count, outcome.InfrastructureReason);
             if (state.OpenMiss is not null) await ReconcileMissAsync(state).ConfigureAwait(false);
         }
