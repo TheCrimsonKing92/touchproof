@@ -795,6 +795,8 @@ The table above is for goals that are stuck. This is for a goal that is running 
 | A goal should stop and nothing in the system will tell us when to resume | `park-goal <goal> --text-file <path> --confirm-goal-park` | Stops it until someone runs `unpark-goal`. If you can name the landing that ends the hold, use the dependency instead. |
 | One running worker round is wrong | `cancel-dispatch <task-number> --goal <goal>` | Stops that process. It does not hold the goal. |
 
+When a plain-brief filing cites a live goal with a waste cue in its Measured premise, filing output now proposes `DEPENDENCY_SUGGESTION goal=<new8> cited=<cited8> status=<cited status> command=goal-depends <cited8> --on <new8>` to hold the cited goal until the new fix lands; applying the hold remains the operator's judgment.
+
 When you find a goal wasting gate-host time or paid rounds and the cause has a fix filed or in flight, link the two in the same turn and say so in your report. Reporting the waste and leaving it running is the mistake this section exists to prevent (2026-11-12: a goal's 1,490-class evidence run competed with gates for hours after the cause was known and a fix was filed).
 
 Before adding the link, read what is in flight for the goal (`Get-GoalCard`, the latest evidence attempt) so you can say what will finish and what will wait. After adding it, confirm the next tick reports the dependency hold.

@@ -626,7 +626,8 @@ internal static class SourceSizeRatchet
             // Goal 350ad330: repository intake, start-failure and manual acceptance guards at existing command seams.
             // Goal c1182160: one defensive guard protects direct callers of the acceptance merge core from repository-set landing.
             // Goal 98758ac2: one composition-root census lifetime line; measured 11012 lines in the same 30 partials.
-            new SourceClassCeiling("CliCommandHandlers", 11012, 30),
+            // Goal 88d3f039 adds one post-commit call; citation parsing and output belong to GoalCitedDefectAdvisory.
+            new SourceClassCeiling("CliCommandHandlers", 11013, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

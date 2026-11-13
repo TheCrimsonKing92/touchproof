@@ -361,6 +361,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (goalRepositories is not null) context.Kernel.DeclareGoalRepositories(context.CurrentGoal.Id, goalRepositories);
             context.FinalizeGoalCreation(context.CurrentGoal, preparedSourceBacklogDependencies);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
+            GoalCitedDefectAdvisory.Warn(goalObjective, () => context.Kernel.Goals, context.CurrentGoal, context.Workspace.ConductEventsLogPath);
             if (summary)
                 GoalCreationSummaryView.Print(context.CurrentGoal, "created", context.Workspace.PortfolioStorePath);
             else
