@@ -20,6 +20,9 @@ internal sealed class TestChildProcessCapture : IDisposable
     private readonly Task<StreamCapture> _stderr;
     private readonly TaskCompletionSource<string> _overflow = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _stopped;
+    private long _stdoutBytes;
+    private long _stderrBytes;
+    private ChildProgressWatch.Stall? _stall;
     private bool _disposed;
 
     internal sealed record Result(int ExitCode, string Stdout, string Stderr);
@@ -112,7 +115,7 @@ internal sealed class TestChildProcessCapture : IDisposable
 
     internal bool TryWaitForExit(TimeSpan bound)
     {
-        if (!_wait(_exit, Remaining(bound)))
+        if (!WaitWithProgress(_exit, bound))
         {
             StopOwnedTree();
             return false;
@@ -126,7 +129,7 @@ internal sealed class TestChildProcessCapture : IDisposable
         var bound = hangBound ?? TestHangGuard.Bound;
         var all = Task.WhenAll(_exit, _stdout, _stderr);
         var first = Task.WhenAny(all, _overflow.Task);
-        if (!_wait(first, Remaining(bound)))
+        if (!WaitWithProgress(first, bound))
             Fail("stdout/stderr or exit", bound);
         first.GetAwaiter().GetResult();
         if (_overflow.Task.IsCompletedSuccessfully)
@@ -158,6 +161,7 @@ internal sealed class TestChildProcessCapture : IDisposable
             {
                 observed += read;
                 _diagnostics.Publish(isStdout, buffer.AsSpan(0, read));
+                Interlocked.Exchange(ref (isStdout ? ref _stdoutBytes : ref _stderrBytes), observed);
                 var keep = (int)Math.Min(read, Math.Max(0, _retentionBytes - retained.Length));
                 retained.Write(buffer, 0, keep);
                 if (observed > _retentionBytes)
@@ -186,9 +190,11 @@ internal sealed class TestChildProcessCapture : IDisposable
         var elapsedSeconds = _elapsed.Elapsed.TotalSeconds.ToString("0.000", CultureInfo.InvariantCulture);
         var snapshot = _diagnostics.ReadFrozen();
         StopOwnedTree();
-        Assert.Fail($"Child {Describe(_startInfo)} exceeded {bound.TotalSeconds:g} s while capturing {stream}; " +
+        var reason = _stall is null ? "exceeded the retention limit" : $"made no progress for {bound.TotalSeconds:g} s";
+        Assert.Fail($"Child {Describe(_startInfo)} {reason} while capturing {stream}; " +
             $"stdout={snapshot.StdoutBytes} bytes; stderr={snapshot.StderrBytes} bytes; " +
             $"retention limit={_retentionBytes} bytes. pid={_pid}; elapsed={elapsedSeconds} s.\n" +
+            (_stall is null ? "" : $"{_stall}\n") +
             $"{snapshot.Stdout}\n{snapshot.Stderr}");
     }
 
@@ -218,8 +224,26 @@ internal sealed class TestChildProcessCapture : IDisposable
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
-    private TimeSpan Remaining(TimeSpan bound) =>
-        bound - _elapsed.Elapsed > TimeSpan.Zero ? bound - _elapsed.Elapsed : TimeSpan.Zero;
+    private bool WaitWithProgress(Task completion, TimeSpan window)
+    {
+        if (_stall is not null) return false;
+        // Credit only slices consumed by the waiter. Injected waiters can advance
+        // deterministically, and scheduling delays never manufacture idle time.
+        var waited = TimeSpan.Zero;
+        var watch = ChildProgressWatch.ForProcess(_process,
+            () => Interlocked.Read(ref _stdoutBytes), () => Interlocked.Read(ref _stderrBytes),
+            window, () => waited);
+        watch.Observe();
+        var slice = window < ChildProgressWatch.SamplingSlice ? window : ChildProgressWatch.SamplingSlice;
+        while (!completion.IsCompleted)
+        {
+            if (_wait(completion, slice) || completion.IsCompleted) return true;
+            waited += slice;
+            _stall = watch.Observe();
+            if (_stall is not null) return false;
+        }
+        return true;
+    }
 
     private static string Decode(byte[] bytes, System.Text.Encoding encoding)
     {

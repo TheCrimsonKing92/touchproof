@@ -82,8 +82,10 @@ public sealed class TestChildProcessCaptureTests
             "Hang guard: timeout failure and owned-child cleanup did not finish within the bound plus cleanup margin");
         Assert.IsType<Xunit.Sdk.FailException>(error);
         var expectedCommand = $"'{info.FileName}' -NoProfile -NonInteractive -Command \"{info.ArgumentList[3]}\"";
-        Assert.Contains($"Child {expectedCommand} exceeded 30 s while capturing stdout/stderr or exit;", error.Message,
+        Assert.Contains($"Child {expectedCommand} made no progress for 30 s while capturing stdout/stderr or exit;", error.Message,
             StringComparison.Ordinal);
+        Assert.Contains("processor time=", error.Message);
+        Assert.Contains("time since last progress=30.000 s", error.Message);
         Assert.Contains($"pid={childPid};", error.Message, StringComparison.Ordinal);
         var elapsed = System.Text.RegularExpressions.Regex.Match(error.Message, @"elapsed=(\d+\.\d{3}) s\.");
         Assert.True(elapsed.Success, error.Message);
@@ -100,6 +102,45 @@ public sealed class TestChildProcessCaptureTests
         Assert.Equal("stderr-phase", SnapshotText(error.Message, "stderr"));
         Assert.Contains("stdout snapshot [nonempty, incomplete, untruncated]:", error.Message);
         Assert.Contains("stderr snapshot [nonempty, incomplete, untruncated]:", error.Message);
+    }
+
+    [Fact]
+    public void OutputBeyondFormerElapsedBoundIsCapturedInFull()
+    {
+        const int lines = 36;
+        var clock = Stopwatch.StartNew();
+        var result = TestChildProcessCapture.Run(Shell(
+            $"for ($i = 0; $i -lt {lines}; $i++) {{ " +
+            "[Console]::Out.WriteLine('out-' + $i); [Console]::Out.Flush(); " +
+            "[Console]::Error.WriteLine('err-' + $i); [Console]::Error.Flush(); Start-Sleep -Seconds 1 }"),
+            hangBound: TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Concat(Enumerable.Range(0, lines).Select(i => $"out-{i}{Environment.NewLine}")), result.Stdout);
+        Assert.Equal(string.Concat(Enumerable.Range(0, lines).Select(i => $"err-{i}{Environment.NewLine}")), result.Stderr);
+        // Lower bound proves this real child crossed the former elapsed cutoff.
+        Assert.True(clock.Elapsed > TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void SilentIdleChildIsStoppedWithRealNoProgressEvidence()
+    {
+        Process? owned = null;
+        var stopped = false;
+        var error = Assert.Throws<Xunit.Sdk.FailException>(() => TestChildProcessCapture.Run(Shell(
+            "[Console]::Out.Write('ready'); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null"),
+            start: info => owned = Process.Start(info),
+            stopTree: child =>
+            {
+                Assert.Same(owned, child);
+                child.Kill(entireProcessTree: true);
+                stopped = child.WaitForExit((int)TestChildProcessCapture.CleanupMargin.TotalMilliseconds);
+            }));
+        Assert.True(stopped, "silent child exited after tree termination");
+        Assert.Contains("made no progress for 30 s", error.Message);
+        Assert.Contains("stdout=5 bytes; stderr=0 bytes", error.Message);
+        Assert.Contains("processor time=", error.Message);
+        Assert.Contains("time since last progress=30.000 s", error.Message);
     }
 
     [Theory]

@@ -9,7 +9,7 @@ internal sealed class StorageHealthSnapshotWriter(
     internal static StorageHealthSnapshotWriter Default { get; } = new();
 
     internal void Publish(string orchestratorDirectory, DateTimeOffset now,
-        List<EvidenceRetentionDecision> decisions)
+        List<EvidenceRetentionDecision> decisions, IReadOnlyList<AcceptanceHeldEvidenceRow>? heldAcceptanceEvidence = null)
     {
         if (!Directory.Exists(orchestratorDirectory)) return;
         string? temporaryPath = null;
@@ -21,7 +21,7 @@ internal sealed class StorageHealthSnapshotWriter(
             var snapshot = new StorageHealthSnapshot(report.Totals.Bytes, report.Totals.Files,
                 report.Totals.Over, report.Totals.Unregistered,
                 report.Totals.Over == 0 ? null : report.Classes.First(row => row.Status == "over").Pattern,
-                now.ToUniversalTime());
+                now.ToUniversalTime(), heldAcceptanceEvidence ?? []);
             var parent = Directory.GetParent(Path.GetFullPath(orchestratorDirectory))
                 ?? throw new IOException("Storage snapshot directory has no parent.");
             temporaryPath = Path.Combine(parent.FullName, $"storage-health-snapshot-{Guid.NewGuid():N}.tmp");

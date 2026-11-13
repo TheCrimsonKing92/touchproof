@@ -202,19 +202,8 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start app process.");
-        process.StandardInput.Close();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(60000))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("App command did not exit within 60 seconds.");
-        }
-
-        return new CliProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(),
-            stderr.GetAwaiter().GetResult());
+        var result = CliAppCommandTimeoutReport.Run(startInfo, arguments, 60000);
+        return new CliProcessResult(result.ExitCode, result.Stdout, result.Stderr);
     }
 
     private protected sealed record CliProcessResult(int ExitCode, string Stdout, string Stderr);

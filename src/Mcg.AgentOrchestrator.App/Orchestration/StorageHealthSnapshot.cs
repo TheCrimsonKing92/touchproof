@@ -4,9 +4,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // One completed retention measurement, captured before replacing the previous snapshot.
 internal sealed record StorageHealthSnapshot(long TotalBytes, long TotalFiles, int OverBudgetCount,
-    int UnregisteredCount, string? LargestOverBudgetClass, DateTimeOffset MeasuredAtUtc)
+    int UnregisteredCount, string? LargestOverBudgetClass, DateTimeOffset MeasuredAtUtc,
+    IReadOnlyList<AcceptanceHeldEvidenceRow>? HeldAcceptanceEvidence = null)
 {
-    internal string Serialize() => JsonSerializer.Serialize(this, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    internal string Serialize() => JsonSerializer.Serialize(this with
+    {
+        HeldAcceptanceEvidence = (HeldAcceptanceEvidence ?? []).OrderBy(row => row.Action, StringComparer.Ordinal)
+            .ThenBy(row => row.Reason, StringComparer.Ordinal).ToArray()
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
     internal static StorageHealthSnapshot? Parse(ReadOnlyMemory<byte> json)
     {
@@ -27,7 +32,25 @@ internal sealed record StorageHealthSnapshot(long TotalBytes, long TotalFiles, i
         var name = offender.GetString();
         if (over == 0 ? name is not null : string.IsNullOrWhiteSpace(name) || name.IndexOfAny(['\r', '\n']) >= 0)
             return null;
-        return new(bytes, files, (int)over, (int)unregistered, name, measuredAt.ToUniversalTime());
+        var rows = new List<AcceptanceHeldEvidenceRow>();
+        if (root.TryGetProperty("heldAcceptanceEvidence", out var held))
+        {
+            if (held.ValueKind != JsonValueKind.Array) return null;
+            foreach (var row in held.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object ||
+                    !row.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.String ||
+                    !Enum.GetNames<EvidenceRetentionAction>().Contains(action.GetString(), StringComparer.Ordinal) ||
+                    action.GetString() == nameof(EvidenceRetentionAction.Deleted) ||
+                    !row.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String ||
+                    !Nonnegative(row, "decisionCount", out var count) || count > int.MaxValue ||
+                    !Nonnegative(row, "bytes", out var heldBytes) ||
+                    !Nonnegative(row, "unmeasured", out var unmeasured) || unmeasured > int.MaxValue)
+                    return null;
+                rows.Add(new(action.GetString()!, reason.GetString()!, (int)count, heldBytes, (int)unmeasured));
+            }
+        }
+        return new(bytes, files, (int)over, (int)unregistered, name, measuredAt.ToUniversalTime(), rows);
     }
 
     private static bool Nonnegative(JsonElement root, string name, out long value)

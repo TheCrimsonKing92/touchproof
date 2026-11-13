@@ -175,13 +175,11 @@ public sealed class AcceptanceGateFlakeInventoryGeneratorTests
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to launch inventory generator fixture.");
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            ScriptFixtureProcessRunner.AssertExited(process, "Inventory generator exceeded its 30-second failsafe.");
+            var output = ScriptFixtureProcessRunner.AssertExited(process, "Inventory generator made no progress for its 30-second window.");
             return new ProcessResult(
                 process.ExitCode,
-                stdout.GetAwaiter().GetResult(),
-                stderr.GetAwaiter().GetResult());
+                output.Stdout,
+                output.Stderr);
         }
 
         public void Dispose()

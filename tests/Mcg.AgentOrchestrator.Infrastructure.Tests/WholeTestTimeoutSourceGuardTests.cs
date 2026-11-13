@@ -60,7 +60,6 @@ public sealed class WholeTestTimeoutSourceGuardTests
     [Fact]
     public void WholeTestFailsafeKeepsHungTestNamesBelowLaneStallLimit()
     {
-        Assert.Equal(300_000, TestHangGuard.WholeTestMilliseconds);
         Assert.True(TestHangGuard.WholeTestMilliseconds < AcceptanceLaneStallPolicy.StallLimitSeconds * 1_000);
     }
 
@@ -79,9 +78,10 @@ public sealed class WholeTestTimeoutSourceGuardTests
             .OfType<MethodDeclarationSyntax>().Single(method => method.Identifier.ValueText == "WaitForExit"
                 && method.ParameterList.Parameters.Count == 5).Body?.ToString();
         Assert.False(string.IsNullOrWhiteSpace(helperBody), $"WaitForExit declaration not found in {helperPath}");
-        // The helper owns both the no-progress window and the total-wait failsafe.
+        // The external child is governed by its observed progress tuple.
         Assert.Contains("TestHangGuard.HangSafetyBound", helperBody, StringComparison.Ordinal);
-        Assert.Contains("TimeSpan.FromMilliseconds(TestHangGuard.WholeTestMilliseconds)", helperBody, StringComparison.Ordinal);
+        Assert.Contains("current.Progress != previous.Progress", helperBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("TestHangGuard.WholeTestMilliseconds", helperBody, StringComparison.Ordinal);
         // Guard the external child only; the separate finally cleanup wait is outside this change's scope.
         Assert.Empty(FindNumericLiteralWaitForExitCalls(body!, receiver: "externalProcess"));
     }

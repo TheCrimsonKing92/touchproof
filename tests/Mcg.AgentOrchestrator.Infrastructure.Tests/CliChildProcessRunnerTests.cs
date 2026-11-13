@@ -1,9 +1,38 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 public sealed class CliChildProcessRunnerTests
 {
+    [Fact]
+    public async Task OutputBeyondFormerElapsedBoundIsReturnedInFull()
+    {
+        const int lines = 125;
+        var start = new ProcessStartInfo(WorkerShell.Executable)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-NonInteractive");
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add($"for ($i = 0; $i -lt {lines}; $i++) {{ " +
+            "[Console]::Out.WriteLine('out-' + $i); [Console]::Out.Flush(); " +
+            "[Console]::Error.WriteLine('err-' + $i); [Console]::Error.Flush(); Start-Sleep -Seconds 1 }");
+        var clock = Stopwatch.StartNew();
+        var result = await CliChildProcessRunner.RunAsync(start);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Concat(Enumerable.Range(0, lines).Select(i => $"out-{i}{Environment.NewLine}")), result.StandardOutput);
+        Assert.Equal(string.Concat(Enumerable.Range(0, lines).Select(i => $"err-{i}{Environment.NewLine}")), result.StandardError);
+        // Lower bound proves the child survived the former default cutoff.
+        Assert.True(clock.Elapsed > TimeSpan.FromSeconds(120));
+    }
+
     [Fact]
     public async Task HangingChildIsTreeKilledAndNamedWhenInjectedGuardExpires()
     {

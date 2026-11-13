@@ -20,12 +20,10 @@ internal static class OwnedAttemptExitWait
         var previous = observe();
         var lastProgress = started;
         var window = TestHangGuard.HangSafetyBound;
-        var failsafe = TimeSpan.FromMilliseconds(TestHangGuard.WholeTestMilliseconds);
         while (true)
         {
             var elapsed = now();
-            var remaining = TimeSpan.FromTicks(Math.Min(
-                (started + failsafe - elapsed).Ticks, (lastProgress + window - elapsed).Ticks));
+            var remaining = lastProgress + window - elapsed;
             if (remaining > TimeSpan.Zero)
                 sleep(remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1));
             if (hasExited()) return;
@@ -33,9 +31,7 @@ internal static class OwnedAttemptExitWait
             elapsed = now();
             if (current.Progress != previous.Progress) lastProgress = elapsed;
             previous = current;
-            var reason = elapsed - started >= failsafe
-                ? $"did not exit within the {failsafe.TotalSeconds:0} s whole-test failsafe"
-                : elapsed - lastProgress >= window ? $"made no progress for {window.TotalSeconds:0} s" : null;
+            var reason = elapsed - lastProgress >= window ? $"made no progress for {window.TotalSeconds:0} s" : null;
             if (reason is not null)
                 Assert.Fail($"External acceptance PID {processId} {reason}. "
                     + $"lastPhase={AcceptanceAttemptOwnedPhaseTrail.LastPhaseIn(current.Trail) ?? "none"}"
