@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class TestChildProcessCaptureTests
@@ -24,20 +26,41 @@ public sealed class TestChildProcessCaptureTests
     {
         Process? owned = null;
         Process? stopped = null;
+        Process? childHandle = null;
+        ConductorSupervisorProcessIdentity? childIdentity = null;
+        var childPid = 0;
         using var ready = new CountdownEvent(2);
         var info = Shell("[Console]::Out.Write('stdout-phase'); [Console]::Out.Flush(); " +
             "[Console]::Error.Write('stderr-phase'); [Console]::Error.Flush(); [Console]::In.ReadLine() | Out-Null");
         var stdoutReady = 0;
         var stderrReady = 0;
         var terminated = false;
+        var latency = Stopwatch.StartNew();
         var error = Record.Exception(() => TestChildProcessCapture.Run(info,
-            start: startInfo => owned = Process.Start(startInfo),
-            wait: (_, _) => { Await(ready.WaitHandle, "both real child markers captured"); return false; },
+            hangBound: TimeSpan.FromSeconds(30),
+            start: startInfo =>
+            {
+                owned = Process.Start(startInfo);
+                Assert.NotNull(owned);
+                childPid = owned.Id;
+                childIdentity = TestOwnedProcessStop.Identify(owned);
+                Assert.NotNull(childIdentity);
+                childHandle = Process.GetProcessById(childPid);
+                _ = childHandle.Handle; // Retain this child's identity across capture disposal.
+                return owned;
+            },
+            wait: (_, _) =>
+            {
+                Await(ready.WaitHandle, "both real child markers captured");
+                Assert.NotNull(childHandle);
+                Assert.False(childHandle.HasExited);
+                return false;
+            },
             stopTree: child =>
             {
                 stopped = child;
-                child.Kill(entireProcessTree: true);
-                terminated = child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds);
+                Assert.True(TestOwnedProcessStop.StopTreeIfSame(childIdentity), "stop the recorded owned child identity");
+                terminated = child.WaitForExit((int)TestChildProcessCapture.CleanupMargin.TotalMilliseconds);
             },
             controls: new(Progress: (stdout, bytes, _) =>
             {
@@ -46,11 +69,26 @@ public sealed class TestChildProcessCaptureTests
                 if (!stdout && bytes >= 12 && Interlocked.Exchange(ref stderrReady, 1) == 0)
                     ready.Signal();
             })));
+        latency.Stop();
+        using var observedChild = childHandle;
 
         Assert.NotNull(error);
         Assert.Same(owned, stopped);
         Assert.True(terminated, "owned child exit after stop");
+        Assert.NotNull(observedChild);
+        Assert.True(observedChild.HasExited, "owned child is no longer running after capture disposal");
+        // This is the hang-only ceiling for execution plus all cleanup, not a performance target.
+        Assert.True(latency.Elapsed <= TimeSpan.FromSeconds(30) + TestChildProcessCapture.CleanupMargin,
+            "Hang guard: timeout failure and owned-child cleanup did not finish within the bound plus cleanup margin");
         Assert.IsType<Xunit.Sdk.FailException>(error);
+        var expectedCommand = $"'{info.FileName}' -NoProfile -NonInteractive -Command \"{info.ArgumentList[3]}\"";
+        Assert.Contains($"Child {expectedCommand} exceeded 30 s while capturing stdout/stderr or exit;", error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains($"pid={childPid};", error.Message, StringComparison.Ordinal);
+        var elapsed = System.Text.RegularExpressions.Regex.Match(error.Message, @"elapsed=(\d+\.\d{3}) s\.");
+        Assert.True(elapsed.Success, error.Message);
+        var elapsedSeconds = double.Parse(elapsed.Groups[1].Value, CultureInfo.InvariantCulture);
+        Assert.InRange(elapsedSeconds, 0, Math.Ceiling(latency.Elapsed.TotalSeconds * 1000) / 1000);
         Assert.Contains(info.FileName, error.Message, StringComparison.Ordinal);
         Assert.Contains("-Command", error.Message, StringComparison.Ordinal);
         Assert.Contains("stdout/stderr", error.Message, StringComparison.Ordinal);
@@ -302,20 +340,35 @@ public sealed class TestChildProcessCaptureTests
         Process? owned = null;
         var stops = 0;
         var exitedDuringStop = false;
-        var capture = TestChildProcessCapture.Start(Shell("[Console]::In.ReadLine() | Out-Null"),
+        using var childReady = new ManualResetEventSlim();
+        using var stopFinished = new ManualResetEventSlim();
+        var capture = TestChildProcessCapture.Start(Shell(
+            "[Console]::Out.Write('ready'); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null"),
             start: info => owned = Process.Start(info),
-            wait: (_, _) => false,
+            wait: (_, _) =>
+            {
+                Await(childReady.WaitHandle, "cooperative child ready for release");
+                return false;
+            },
             stopTree: child =>
             {
-                Assert.Same(owned, child);
-                stops++;
-                child.StandardInput.WriteLine("release");
-                child.StandardInput.Flush();
-                exitedDuringStop = child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds);
-                if (!exitedDuringStop) child.Kill(entireProcessTree: true);
-                // The existing stop policy tolerates an exit race.
-                throw new InvalidOperationException("owned child already exited");
-            });
+                try
+                {
+                    Assert.Same(owned, child);
+                    Interlocked.Increment(ref stops);
+                    child.StandardInput.WriteLine("release");
+                    child.StandardInput.Flush();
+                    exitedDuringStop = child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds);
+                    if (!exitedDuringStop) child.Kill(entireProcessTree: true);
+                    // The existing stop policy tolerates an exit race.
+                    throw new InvalidOperationException("owned child already exited");
+                }
+                finally { stopFinished.Set(); }
+            },
+            controls: new(Progress: (output, bytes, _) =>
+            {
+                if (output && bytes >= 5) childReady.Set();
+            }));
         try
         {
             Assert.False(capture.TryWaitForExit(TestHangGuard.Bound));
@@ -324,8 +377,12 @@ public sealed class TestChildProcessCaptureTests
         }
         finally
         {
-            capture.Dispose();
-            capture.Dispose();
+            try { Await(stopFinished.WaitHandle, "cooperative stop delegate finished"); }
+            finally
+            {
+                capture.Dispose();
+                capture.Dispose();
+            }
         }
         Assert.True(exitedDuringStop, "owned child exited during failure cleanup");
         Assert.Equal(1, stops);
@@ -337,23 +394,33 @@ public sealed class TestChildProcessCaptureTests
         var stops = 0;
         var terminated = false;
         Process? owned = null;
-        var error = Record.Exception(() => TestChildProcessCapture.Run(Shell("[Console]::In.ReadLine() | Out-Null"),
+        using var stopFinished = new ManualResetEventSlim();
+        using var capture = TestChildProcessCapture.Start(Shell("[Console]::In.ReadLine() | Out-Null"),
             start: info => owned = Process.Start(info),
             controls: controls with { OpenStream = controls.OpenStream ?? ((_, output) => output ? stdout : stderr) },
             wait: (_, _) => { ready(); return false; },
             stopTree: child =>
             {
-                Assert.Same(owned, child);
-                Interlocked.Increment(ref stops);
-                try { cleanup?.Invoke(); }
+                try
+                {
+                    Assert.Same(owned, child);
+                    Interlocked.Increment(ref stops);
+                    try { cleanup?.Invoke(); }
+                    finally
+                    {
+                        stdout.End();
+                        stderr.End();
+                        child.Kill(entireProcessTree: true);
+                        terminated = child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds);
+                    }
+                }
                 finally
                 {
-                    stdout.End();
-                    stderr.End();
-                    child.Kill(entireProcessTree: true);
-                    terminated = child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds);
+                    stopFinished.Set();
                 }
-            }));
+            });
+        var error = Record.Exception(() => capture.Complete());
+        Await(stopFinished.WaitHandle, "capture failure stop delegate finished");
         Assert.Equal(1, stops);
         Assert.True(terminated, "owned child exit after stop");
         Assert.IsType<Xunit.Sdk.FailException>(error);
