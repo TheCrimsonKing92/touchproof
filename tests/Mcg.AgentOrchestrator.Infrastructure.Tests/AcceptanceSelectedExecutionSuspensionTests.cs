@@ -10,7 +10,7 @@ public sealed class AcceptanceSelectedExecutionSuspensionTests
     public async Task UnchangedOpenMissMarkerIsNotReplacedWhileAGateReadsIt()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
-        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Tests.Missed"], ["lane"]));
+        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Candidate.X.Missed"], ["lane"]));
         await fixture.Land();
         await fixture.Finish();
         var miss = (await fixture.Store.ReadAsync())!.OpenMiss!;
@@ -30,7 +30,7 @@ public sealed class AcceptanceSelectedExecutionSuspensionTests
     public async Task OpenMissSuspendsEnforceAndResolutionRestoresSameSelectionImmediately()
     {
         using var fixture = new SelectedExecutionBackstopFixture();
-        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Tests.Missed"], ["lane"]));
+        fixture.Run = _ => Task.FromResult(new SelectedExecutionBackstopOutcome("red", ["Candidate.X.Missed"], ["lane"]));
         await fixture.Land();
         await fixture.Finish();
         var miss = (await fixture.Store.ReadAsync())!.OpenMiss!;

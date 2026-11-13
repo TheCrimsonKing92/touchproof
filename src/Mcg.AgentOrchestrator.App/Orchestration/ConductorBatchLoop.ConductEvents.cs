@@ -112,7 +112,7 @@ internal sealed partial class ConductorBatchLoop
             "TICK_WRITE_BUSY" => "lock-blocker", "TICK_GIT_CENSUS" => "tick-git-census",
             "TICK_WRITE_DEGRADED" => "lock-blocker",
             "GLANCE" => "progressive-review-glance",
-            "WATCH_TRANSITION" => "watch-transition",
+            "WATCH_TRANSITION" => "watch-transition", "SELECTED_EXECUTION_BACKSTOP" => "selected-execution-backstop",
             "PROMPT_ROLLOUT_SUSPECT" => "prompt-rollout-suspect", "CONSOLE_CODE_PAGE_CHANGED" => "console-code-page-changed",
             _ => string.Empty
         };
