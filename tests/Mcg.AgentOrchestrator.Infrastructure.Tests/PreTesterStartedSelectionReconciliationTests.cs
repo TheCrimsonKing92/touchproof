@@ -22,7 +22,7 @@ public sealed class PreTesterStartedSelectionReconciliationTests
         var lines = new List<string>();
 
         var result = PreTesterGuardSelections.ReconcileStarted(prior, recomputed,
-            ["FirstMissingTests", "SecondMissingTests"], Format, lines.Add);
+            ["FirstMissingTests", "SecondMissingTests"], Format, lines.Add, RejectAbandonment, RejectRebuild, out _);
 
         Assert.Equal(recorded, result.Selections.Select(Format));
         Assert.Equal(string.Join("|", recorded), FindingEvidenceExecutionClassifier.BuildRequestIdentity(new(result.Selections)));
@@ -39,7 +39,7 @@ public sealed class PreTesterStartedSelectionReconciliationTests
 
         var result = PreTesterGuardSelections.ReconcileStarted(prior,
             [new("Core.Tests", "SecondAddedTests"), new("Core.Tests", "FirstAddedTests"), new("core.tests", "secondaddedtests")],
-            [], Format, lines.Add);
+            [], Format, lines.Add, RejectAbandonment, RejectRebuild, out _);
 
         const string detail = "missing=Core.Tests:SecondMissingTests,Core.Tests:FirstMissingTests " +
             "added=Core.Tests:SecondAddedTests,Core.Tests:FirstAddedTests not_run_missing=<none> not_run_added=<none>";
@@ -57,7 +57,7 @@ public sealed class PreTesterStartedSelectionReconciliationTests
         var lines = new List<string>();
 
         var result = PreTesterGuardSelections.ReconcileStarted(prior,
-            [new("Core.Tests", "DeclaredTests")], [recomputed], Format, lines.Add);
+            [new("Core.Tests", "DeclaredTests")], [recomputed], Format, lines.Add, RejectAbandonment, RejectRebuild, out _);
 
         var detail = $"missing=<none> added=<none> not_run_missing={recorded} not_run_added={recomputed}";
         Assert.Equal(prior.Selections, result.Selections.Select(Format));
@@ -76,7 +76,8 @@ public sealed class PreTesterStartedSelectionReconciliationTests
             [new("Core.Tests", "DeclaredTests"), new("Core.Tests", "AddedTests")];
         var lines = new List<string>();
 
-        var result = PreTesterGuardSelections.ReconcileStarted(prior, recomputed, [], Format, lines.Add);
+        var result = PreTesterGuardSelections.ReconcileStarted(prior, recomputed, [], Format, lines.Add,
+            RejectAbandonment, RejectRebuild, out _);
 
         var detail = missing ? "missing=Core.Tests:RemovedTests added=<none>" : "missing=<none> added=Core.Tests:AddedTests";
         Assert.Equal(prior.Selections, result.Selections.Select(Format));
@@ -86,22 +87,46 @@ public sealed class PreTesterStartedSelectionReconciliationTests
     }
 
     [Fact]
-    public void RecordedNameWithoutColonIsReportedAndLeftOutOfSelections()
+    public void RecordedNameWithoutColonAbandonsEntryAndReturnsRebuiltRequest()
     {
         const string malformed = "CutSelection[omitted 6815 characters";
-        var prior = Started(["Core.Tests:DeclaredTests", malformed]);
+        var recorded = new[] { "Core.Tests:DeclaredTests", malformed, "Infrastructure.Tests:GuardTests" };
+        var prior = Started(recorded, ["OldMissingTests"]);
         var lines = new List<string>();
+        var records = new List<string>();
+        var rebuilt = new DeveloperDeferredTestSelection(
+            [new("Core.Tests", "DeclaredTests"), new("Infrastructure.Tests", "GuardTests"), new("Core.Tests", "AddedTests")],
+            ["CurrentMissingTests"]);
+        var rebuilds = 0;
 
         var result = PreTesterGuardSelections.ReconcileStarted(prior,
-            [new("Core.Tests", "DeclaredTests")], [], Format, lines.Add);
+            [new("Core.Tests", "DeclaredTests")], [], Format, lines.Add, records.Add,
+            () => { rebuilds++; return rebuilt; }, out var abandoned);
 
-        Assert.Equal(["Core.Tests:DeclaredTests"], result.Selections.Select(Format));
+        Assert.True(abandoned);
+        Assert.Equal(1, rebuilds);
+        Assert.Same(rebuilt, result);
+        Assert.Equal(["Core.Tests:DeclaredTests", "Infrastructure.Tests:GuardTests", "Core.Tests:AddedTests"],
+            result.Selections.Select(Format));
+        Assert.Equal(["CurrentMissingTests"], result.NotRun);
+        var record = Assert.Single(records);
+        var entry = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Parse(record));
+        Assert.Equal("abandoned", entry.Outcome);
+        Assert.Equal(prior.ReceiptId, entry.ReceiptId);
+        Assert.Equal(prior.CandidateSha, entry.CandidateSha);
+        Assert.EndsWith("; abandoned_reason=malformed-selection-name", record, StringComparison.Ordinal);
+        Assert.DoesNotContain("abandoned_reason=truncated-stored-message", record, StringComparison.Ordinal);
         var line = Assert.Single(lines);
-        Assert.StartsWith("PRE_TESTER_STARTED_SELECTION_DRIFT receipt=recorded-receipt ", line, StringComparison.Ordinal);
-        Assert.Contains("missing=" + malformed, line, StringComparison.Ordinal);
-        Assert.EndsWith(" malformed=" + malformed, line, StringComparison.Ordinal);
-        Assert.Equal(["Core.Tests:DeclaredTests", malformed], prior.Selections);
+        Assert.StartsWith("PRE_TESTER_STARTED_ENTRY_MALFORMED receipt=recorded-receipt ", line, StringComparison.Ordinal);
+        Assert.Contains("malformed=" + malformed, line, StringComparison.Ordinal);
+        Assert.Equal(recorded, prior.Selections);
+        Assert.Equal("started", prior.Outcome);
     }
+
+    private static void RejectAbandonment(string _) => Assert.Fail("Valid selections must not be abandoned.");
+
+    private static DeveloperDeferredTestSelection RejectRebuild() =>
+        throw new Xunit.Sdk.XunitException("Valid selections must retain their recording.");
 
     private static PreTesterEvidenceEntry Started(IReadOnlyList<string> selections, IReadOnlyList<string>? notRun = null) =>
         new("started", "bbb2222", "recorded-receipt", selections, notRun ?? [], null, []);

@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record FindingStagnationRouteSource(string StableId, string RoundKey, AgentRole Role, DateTimeOffset ResetAt)
 {
     private const string Prefix = "finding-stagnation-source: ";
+    private const string InvalidSourceMessage = "Stored finding stagnation source is invalid.";
 
     public string ToTimelineMessage() => Prefix + JsonSerializer.Serialize(this);
 
@@ -13,10 +14,18 @@ public sealed record FindingStagnationRouteSource(string StableId, string RoundK
     {
         if (evt.Kind != ProgressKind.TaskNote || !evt.Message.StartsWith(Prefix, StringComparison.Ordinal))
             return null;
-        var source = JsonSerializer.Deserialize<FindingStagnationRouteSource>(evt.Message[Prefix.Length..]);
+        FindingStagnationRouteSource? source;
+        try
+        {
+            source = JsonSerializer.Deserialize<FindingStagnationRouteSource>(evt.Message[Prefix.Length..]);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException(InvalidSourceMessage, exception);
+        }
         if (source is null || string.IsNullOrWhiteSpace(source.StableId) || string.IsNullOrWhiteSpace(source.RoundKey) ||
             source.Role is not (AgentRole.Tester or AgentRole.Reviewer))
-            throw new InvalidOperationException("Stored finding stagnation source is invalid.");
+            throw new InvalidOperationException(InvalidSourceMessage);
         return source;
     }
 }

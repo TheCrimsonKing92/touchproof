@@ -3,6 +3,25 @@ using static FindingStagnationScenario;
 
 public sealed class FindingStagnationReplayTests
 {
+    [Xunit.Fact]
+    public void Malformed_stored_source_json_raises_the_invalid_source_error()
+    {
+        // Parallel safe: source parsing uses only private immutable events.
+        var invalid = new FindingStagnationRouteSource("", "round", AgentRole.Tester, DateTimeOffset.UnixEpoch);
+        var evt = new ProgressEvent(GoalId.New(), null, ProgressKind.TaskNote,
+            invalid.ToTimelineMessage(), DateTimeOffset.UnixEpoch);
+        var invalidFields = Assert.Throws<InvalidOperationException>(() => FindingStagnationRouteSource.Read(evt));
+        Assert.Equal("Stored finding stagnation source is invalid.", invalidFields.Message);
+
+        foreach (var payload in new[] { "{\"StableId\":", "[]" })
+        {
+            var malformed = evt with { Message = "finding-stagnation-source: " + payload };
+            var exception = Assert.Throws<InvalidOperationException>(() => FindingStagnationRouteSource.Read(malformed));
+            Assert.Equal(invalidFields.Message, exception.Message);
+            Assert.IsAssignableFrom<System.Text.Json.JsonException>(exception.InnerException);
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Reviewer)]
     [Xunit.InlineData(AgentRole.Tester)]

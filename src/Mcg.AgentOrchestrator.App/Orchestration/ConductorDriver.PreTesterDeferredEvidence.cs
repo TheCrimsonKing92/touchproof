@@ -39,7 +39,7 @@ internal sealed partial class ConductorDriver
         out ConductorAdvanceResult result)
     {
         result = default!;
-        var (prior, healedTruncatedEntry) = PreTesterStoredEntryRecovery.ReadAndHeal(goal, tester.Id, candidateSha, line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
+        var (prior, needsReplacementStartedEntry) = PreTesterStoredEntryRecovery.ReadAndHeal(goal, tester.Id, candidateSha, line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
         var decline = EvaluatePreTesterDeferredEvidenceGuard(developer, candidateSha, out var testsField);
         if (decline != PreTesterDeferredEvidenceDeclineClause.None)
         {
@@ -118,14 +118,12 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        var guards = PreTesterGuardSelections.Create(_preTesterChangedFileGuards, worktreePath,
+        var (guards, augmented, abandoned) = PreTesterGuardSelections.CreateForRequest(_preTesterChangedFileGuards, worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
-            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), settings: settings,
-            priorSelections: prior?.Outcome == "started" ? prior.Selections : null);
-        var augmented = guards.Augment(new(selected, notRun), settings, prior, FormatFindingEvidenceSelection);
-        if (prior?.Outcome == "started")
-            augmented = PreTesterGuardSelections.ReconcileStarted(prior, augmented.Selections, augmented.NotRun,
-                FormatFindingEvidenceSelection, PreTesterStartedEvidence.DriftProgress(prior.ReceiptId));
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), new(selected, notRun), settings, prior,
+            FormatFindingEvidenceSelection, line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
+        if (abandoned) prior = null;
+        needsReplacementStartedEntry |= abandoned;
         var distinct = augmented.Selections.ToArray();
         notRun = augmented.NotRun.ToList();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
@@ -145,6 +143,8 @@ internal sealed partial class ConductorDriver
             "pre-tester-deferred",
             CreateFindingEvidenceBatchId(candidateSha!, salt, policy.Name, identity),
             [], ExecutionBasisIdentity: BuildFindingEvidenceExecutionBasisIdentity(settings), ReceiptId: receiptId);
+        if (prior is null && needsReplacementStartedEntry)
+            PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, line => _recordFindingEvidenceRequest(goal.Id, tester.Id, line));
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
             out var evidence, out var attempt, out var decision, out var kind);
@@ -156,10 +156,8 @@ internal sealed partial class ConductorDriver
              kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
              decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
         {
-            if (prior is null && (kind == ConductorParallelAcceptanceAttemptDecisionKind.Started || healedTruncatedEntry))
-                _recordFindingEvidenceRequest(goal.Id, tester.Id,
-                    PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
-                        "started", candidateSha!, receiptId, selectionNames, notRun, null, [])));
+            if (prior is null && !needsReplacementStartedEntry && kind == ConductorParallelAcceptanceAttemptDecisionKind.Started)
+                PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, line => _recordFindingEvidenceRequest(goal.Id, tester.Id, line));
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
                 FocusedEvidencePendingHeld(fromState, decision, kind));
             return true;

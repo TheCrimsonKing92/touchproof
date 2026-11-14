@@ -115,27 +115,57 @@ internal sealed class PreTesterGuardSelections
             prior?.Outcome == "started" ? prior.Selections : null, format), notRun);
     }
 
+    internal static (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned) CreateForRequest(
+        PreTesterChangedFileGuardClasses cache, string worktreePath, IReadOnlyList<string> changedPaths,
+        string mainRevision, DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings,
+        PreTesterEvidenceEntry? prior, Func<FindingEvidenceSelection, string> format, Action<string> record)
+    {
+        PreTesterGuardSelections CreateForPrior(PreTesterEvidenceEntry? entry) => Create(cache, worktreePath,
+            changedPaths, mainRevision, settings: settings,
+            priorSelections: entry?.Outcome == "started" ? entry.Selections : null);
+        var guards = CreateForPrior(prior);
+        var augmented = guards.Augment(declaration, settings, prior, format);
+        var abandoned = false;
+        if (prior?.Outcome == "started")
+            augmented = ReconcileStarted(prior, augmented.Selections, augmented.NotRun,
+                format, PreTesterStartedEvidence.DriftProgress(prior.ReceiptId), record,
+                () =>
+                {
+                    guards = CreateForPrior(null);
+                    return guards.Augment(declaration, settings, null, format);
+                }, out abandoned);
+        return (guards, augmented, abandoned);
+    }
+
     internal static DeveloperDeferredTestSelection ReconcileStarted(PreTesterEvidenceEntry prior,
         IReadOnlyList<FindingEvidenceSelection> recomputed, IReadOnlyList<string> notRun,
-        Func<FindingEvidenceSelection, string> format, Action<string> progress)
+        Func<FindingEvidenceSelection, string> format, Action<string> progress,
+        Action<string> record, Func<DeveloperDeferredTestSelection> rebuild, out bool abandoned)
     {
+        abandoned = false;
+        var malformed = prior.Selections.Where(name => !name.Contains(':')).ToArray();
+        if (malformed.Length > 0)
+        {
+            progress($"PRE_TESTER_STARTED_ENTRY_MALFORMED receipt={prior.ReceiptId} " +
+                $"malformed={string.Join(",", malformed)} abandoned_reason=malformed-selection-name");
+            abandoned = PreTesterStartedEvidence.TryAbandon(prior, PreTesterStartedEvidence.MalformedSelectionName, record);
+            return rebuild();
+        }
         var names = recomputed.Select(format).ToArray();
         var missing = prior.Selections.Except(names, StringComparer.OrdinalIgnoreCase).ToArray();
         var added = names.Except(prior.Selections, StringComparer.OrdinalIgnoreCase).ToArray();
         var notRunMissing = prior.NotRun.Except(notRun, StringComparer.Ordinal).ToArray();
         var notRunAdded = notRun.Except(prior.NotRun, StringComparer.Ordinal).ToArray();
-        var malformed = prior.Selections.Where(name => !name.Contains(':')).ToArray();
-        if (missing.Length + added.Length + notRunMissing.Length + notRunAdded.Length + malformed.Length != 0)
+        if (missing.Length + added.Length + notRunMissing.Length + notRunAdded.Length != 0)
         {
             static string List(string[] items) => items.Length == 0 ? "<none>" : string.Join(",", items);
             var detail = $"missing={List(missing)} added={List(added)} " +
                 $"not_run_missing={List(notRunMissing)} not_run_added={List(notRunAdded)}";
-            if (malformed.Length > 0) detail += $" malformed={List(malformed)}";
             progress($"PRE_TESTER_STARTED_SELECTION_DRIFT receipt={prior.ReceiptId} {detail}");
         }
 
         // Equality ignores order, casing and duplicates; request identity retains the exact recording.
-        var recorded = prior.Selections.Where(name => name.Contains(':')).Select(name =>
+        var recorded = prior.Selections.Select(name =>
         {
             var separator = name.IndexOf(':');
             return new FindingEvidenceSelection(name[..separator], name[(separator + 1)..]);
@@ -186,12 +216,15 @@ internal static class PreTesterStoredEntryRecovery
                 evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded)) continue;
             if (PreTesterEvidenceIndexLines.Parse(evt.Message) is not { } entry ||
                 !string.Equals(entry.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) continue;
+            if (entry.Outcome == "abandoned" && PreTesterStartedEvidence.HasAbandonmentReason(
+                    evt.Message, PreTesterStartedEvidence.TruncatedStoredMessage))
+                return (null, true);
             // The index parser splits on semicolons, so inspect the original record for the full marker.
             if (entry.Outcome != "started" ||
                 !Regex.IsMatch(evt.Message, @"\[omitted [0-9]+ characters; goal id: ", RegexOptions.CultureInvariant))
                 return (entry, false);
 
-            PreTesterStartedEvidence.TryAbandon(entry, "TruncatedStoredMessage", record);
+            PreTesterStartedEvidence.TryAbandon(entry, PreTesterStartedEvidence.TruncatedStoredMessage, record);
             Console.WriteLine($"PRE_TESTER_STARTED_ENTRY_TRUNCATED receipt={entry.ReceiptId} " +
                 $"candidate_sha={candidateSha} abandoned_reason=truncated-stored-message");
             return (null, true);
