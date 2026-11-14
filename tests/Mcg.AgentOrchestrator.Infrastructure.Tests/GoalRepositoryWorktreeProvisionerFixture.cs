@@ -8,11 +8,20 @@ internal sealed class GoalRepositoryWorktreeProvisionerFixture : IDisposable
     internal string CheckoutPath => Path.Combine(Root, "checkout");
     internal string IntegrationBranch { get; }
 
-    internal GoalRepositoryWorktreeProvisionerFixture(string integrationBranch = "main")
+    internal GoalRepositoryWorktreeProvisionerFixture(string integrationBranch = "main",
+        MultiRepositoryAcceptanceGateSeedTemplate.RepositoryRole? startingPoint = null)
     {
         IntegrationBranch = integrationBranch;
         try
         {
+            if (startingPoint is { } role)
+            {
+                if (integrationBranch != "main")
+                    throw new ArgumentException("Acceptance gate seed requires the main branch.", nameof(integrationBranch));
+                MultiRepositoryAcceptanceGateSeedTemplate.CopyTo(CheckoutPath, role);
+                return;
+            }
+
             if (GoalRepositoryWorktreeProvisionerSeedTemplate.TryCopyTo(CheckoutPath, integrationBranch))
                 return;
 

@@ -6,8 +6,8 @@ using Xunit;
 
 internal sealed class GoalRepositoriesTestFixture : IDisposable
 {
-    internal GoalRepositoryWorktreeProvisionerFixture Home { get; } = new();
-    internal GoalRepositoryWorktreeProvisionerFixture Crosswalk { get; } = new();
+    internal GoalRepositoryWorktreeProvisionerFixture Home { get; }
+    internal GoalRepositoryWorktreeProvisionerFixture Crosswalk { get; }
     internal AgentOrchestratorKernel Kernel { get; } = new();
     internal OrchestratorWorkspace Workspace { get; }
     internal OrchestratorProjectRegistry Registry { get; }
@@ -16,8 +16,10 @@ internal sealed class GoalRepositoriesTestFixture : IDisposable
     internal static WorkerSandboxOptions DisabledSandbox => new(false,
         WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
-    internal GoalRepositoriesTestFixture()
+    internal GoalRepositoriesTestFixture(bool useAcceptanceGateSeed = false)
     {
+        Home = new(startingPoint: useAcceptanceGateSeed ? MultiRepositoryAcceptanceGateSeedTemplate.RepositoryRole.Home : null);
+        Crosswalk = new(startingPoint: useAcceptanceGateSeed ? MultiRepositoryAcceptanceGateSeedTemplate.RepositoryRole.Second : null);
         Registry = new OrchestratorProjectRegistry(Path.Combine(Home.Root, "registry"), Path.Combine(Home.Root, "data"));
         Registry.CreateProject("crosswalk", Crosswalk.CheckoutPath, "main");
         Workspace = OrchestratorWorkspace.ForDirectory(Home.CheckoutPath, Home.CheckoutPath, null, Registry)
