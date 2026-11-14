@@ -1494,13 +1494,13 @@ public sealed class Goal
                 evt.GoalId.Value,
                 evt.TaskId?.Value,
                 evt.Kind,
-                TimelineMessageBound.Bound(evt.Message, evt.GoalId.Value, evt.TaskId?.Value),
+                evt.Message,
                 evt.OccurredAt,
                 evt.RequeueSkipped,
                 evt.OperatorGates,
                 evt.OperatorIntentApplied,
                 evt.HumanInputSuperseded,
-                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt)).ToList(),
+                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt, evt.PreTesterEvidence)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
@@ -1607,7 +1607,7 @@ public sealed class Goal
                 evt.OperatorGates,
                 evt.OperatorIntentApplied,
                 evt.HumanInputSuperseded,
-                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt));
+                evt.TickOutcome, evt.Failure, evt.OperatorIntentCreatedAt, evt.PreTesterEvidence));
         }
 
         foreach (var depId in snapshot.DependsOn ?? [])

@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -12,13 +11,7 @@ public sealed class NodeStackSelectionTests
     public void Detect_NecromancerMarkers_SelectsNodeAdapter()
     {
         using var fixture = new Fixture();
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-
-        Assert.Equal(ProjectStack.Node, detection.Stack);
-        Assert.Equal("package.json", detection.Marker);
-        Assert.Null(detection.Refusal);
-        using var crosswalk = new FakeCrosswalkProcess("node");
+        using var crosswalk = EvidenceReader("package.json");
         Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
     }
 
@@ -27,8 +20,8 @@ public sealed class NodeStackSelectionTests
     {
         using var fixture = new Fixture();
         fixture.Write("standalone/package.json", "{}");
-
-        Assert.Equal(ProjectStack.Node, ProjectDiscoveryAdapterSelector.Detect(Path.Combine(fixture.Root, "standalone")).Stack);
+        using var crosswalk = EvidenceReader("package.json");
+        Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(Path.Combine(fixture.Root, "standalone"), crosswalk.Reader));
     }
 
     [Theory]
@@ -41,19 +34,11 @@ public sealed class NodeStackSelectionTests
     public void Detect_ConflictingStack_RefusesAmbiguity(string marker)
     {
         using var fixture = new Fixture();
-        fixture.Write(marker, marker == "go.mod" ? "module example.com/app\n" : "");
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-
-        Assert.Null(detection.Stack);
-        Assert.Null(detection.Marker);
-        Assert.StartsWith("Ambiguous stack markers", detection.Refusal, StringComparison.Ordinal);
-        Assert.Contains("package.json", detection.Refusal, StringComparison.Ordinal);
-        Assert.Contains(marker, detection.Refusal, StringComparison.Ordinal);
-        using var crosswalk = new FakeCrosswalkProcess();
-        crosswalk.DetectException = new Win32Exception("injected process-start failure");
+        using var crosswalk = EvidenceReader("package.json", marker);
         var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
-        Assert.Contains(detection.Refusal, refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Ambiguous stack markers", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("package.json", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(marker, refusal.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -61,8 +46,8 @@ public sealed class NodeStackSelectionTests
     {
         using var fixture = new Fixture();
         fixture.Write("vendor/App.csproj", "");
-
-        Assert.Equal(ProjectStack.Node, ProjectDiscoveryAdapterSelector.Detect(fixture.Root, ["vendor"]).Stack);
+        using var crosswalk = EvidenceReader("package.json");
+        Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
     }
 
     [Fact]
@@ -70,11 +55,10 @@ public sealed class NodeStackSelectionTests
     {
         using var fixture = new Fixture();
         var empty = Directory.CreateDirectory(Path.Combine(fixture.Root, "empty")).FullName;
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(empty);
-
-        Assert.Null(detection.Stack);
-        Assert.Contains("package.json", detection.Refusal, StringComparison.Ordinal);
+        var path = Path.Combine(empty, "missing-crosswalk.exe");
+        var reader = new CrosswalkStackReader(new CrosswalkExecutableResolver(path), TimeSpan.FromSeconds(30));
+        var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(empty, reader));
+        Assert.Contains(path, refusal.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -110,5 +94,13 @@ public sealed class NodeStackSelectionTests
         using var document = JsonDocument.Parse(json);
         Assert.Equal(name, document.RootElement.GetProperty("stack").GetString());
         Assert.Equal(stack, ProjectModelJson.Deserialize(json).Stack);
+    }
+
+    private static FakeCrosswalkProcess EvidenceReader(params string[] paths)
+    {
+        var crosswalk = new FakeCrosswalkProcess("node");
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack = "node",
+            evidence = paths.Select(path => new { path, reason = "" }) }), "");
+        return crosswalk;
     }
 }

@@ -490,17 +490,17 @@ internal sealed partial class ConductorDriver
     private readonly ConcurrentDictionary<string, int> _cohortGateFaultCounts = new(StringComparer.Ordinal);
     private readonly object _cohortGateRegistrationSync = new();
 
-    private void SweepCompletedCohortGateRuns()
+    private int _cohortGateSweepCount;
+    internal int CohortGateSweepCount => Volatile.Read(ref _cohortGateSweepCount);
+    internal void SweepCompletedCohortGateRuns()
     {
+        Interlocked.Increment(ref _cohortGateSweepCount);
         ObserveOwnedGroupedGateAttempts();
         foreach (var pair in _cohortGateRuns)
         {
             if (!pair.Value.Completion.Task.IsCompleted ||
                 !_cohortGateRuns.TryRemove(pair.Key, out var completed))
-            {
                 continue;
-            }
-
             ObserveCohortGateCompletion(pair.Key, completed);
         }
         RestoreRunningGroupedGateAttempts();

@@ -25,8 +25,9 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         var sourceFiles = Directory.GetFiles(root, "*", SearchOption.AllDirectories).ToDictionary(path => path, File.ReadAllBytes);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--root", root + Path.DirectorySeparatorChar],
-            registry, home.Root, null, output));
+            registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
 
         var modelPath = Path.Combine(home.Root, ".orchestrator", "projects", "sample-repo", "project-model.json");
         Assert.Equal(Path.Combine(OrchestratorWorkspace.ForProject("sample-repo", root,
@@ -65,7 +66,8 @@ public sealed class ProjectDiscoverUnregisteredRootTests
             ? ["project", "discover", "--root", Path.Combine(home.Root, ".") + Path.DirectorySeparatorChar]
             : ["project", "discover"];
 
-        Assert.Equal(0, ProjectCliCommand.Execute(parts, registry, home.Root, null, output));
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        Assert.Equal(0, ProjectCliCommand.Execute(parts, registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
 
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
@@ -91,8 +93,9 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(
-            ["project", "discover", "--root", root], registry, home.Root, null, output));
+            ["project", "discover", "--root", root], registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
 
         var modelPath = Path.Combine(registry.DataRootDirectory, "projects", name, "project-model.json");
         Assert.True(File.Exists(modelPath));
@@ -110,10 +113,11 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var error = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(
             ["project", "discover", "--root", Path.GetPathRoot(home.Root)!, "--measure", "all"],
             registry, home.Root, null, output,
-            () => throw new InvalidOperationException("Invalid roots must fail before selecting a measurer.")));
+            () => throw new InvalidOperationException("Invalid roots must fail before selecting a measurer."), crosswalkReaderFactory: () => crosswalk.Reader));
 
         Assert.Equal("rootOverride", error.ParamName);
         Assert.Contains("Discovery root", error.Message);
@@ -129,8 +133,11 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
-        Assert.Throws<DirectoryNotFoundException>(() => ProjectCliCommand.Execute(
-            ["project", "discover", "--root", Path.Combine(home.Root, "missing-repo")], registry, home.Root, null, output));
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        crosswalk.DetectException = new System.ComponentModel.Win32Exception("injected process-start failure");
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "discover", "--root", Path.Combine(home.Root, "missing-repo")], registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
+        Assert.Contains(crosswalk.Binary, error.Message, StringComparison.Ordinal);
 
         Assert.False(Directory.Exists(Path.Combine(registry.DataRootDirectory, "projects", "missing-repo")));
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory, "project-model.json")));

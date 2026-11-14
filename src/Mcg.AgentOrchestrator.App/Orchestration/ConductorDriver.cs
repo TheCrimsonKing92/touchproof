@@ -705,10 +705,10 @@ internal sealed partial class ConductorDriver
         {
             kernel.RecordTaskNote(goalId, taskId, message);
         };
-        _recordFindingEvidenceRequest = (goalId, taskId, message) =>
-            kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
-        _recordFindingEvidenceRun = (goalId, taskId, message) =>
-            kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _recordFindingEvidenceRequest = (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+        _recordFindingEvidenceRun = (goalId, taskId, message) => kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        PreTesterRecorder = new((gid, tid, entry, message) => kernel.RecordFindingEvidenceRequest(gid, tid, entry, message),
+            (gid, tid, entry, message) => kernel.RecordFindingEvidenceRun(gid, tid, entry, message));
         _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
             kernel.RecordFindingEvidenceSuppressed(
                 goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);

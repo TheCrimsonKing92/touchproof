@@ -27,13 +27,19 @@ internal sealed class SelectedExecutionBackstopFixture : ISelectedExecutionBacks
         Coordinator = CreateCoordinator();
     }
 
-    internal SelectedExecutionBackstopCoordinator CreateCoordinator(Action<string>? progress = null) =>
-        new(Store, this, Items, Home, () => Now, line => { Lines.Enqueue(line); progress?.Invoke(line); });
+    internal SelectedExecutionBackstopCoordinator CreateCoordinator(Action<string>? progress = null, bool consumeInitialTick = true)
+    {
+        var coordinator = new SelectedExecutionBackstopCoordinator(Store, this, Items, Home, () => Now,
+            line => { Lines.Enqueue(line); progress?.Invoke(line); });
+        // Ordinary fixture calls observe a coordinator whose initial service tick is consumed.
+        if (consumeInitialTick) coordinator.ServiceAsync(() => Head, [], [], false, false).GetAwaiter().GetResult();
+        return coordinator;
+    }
     internal static AcceptanceSelectedExecutionRecord Applied => AcceptanceSelectedExecutionFixture.Observe(
         AcceptanceSelectedExecutionFixture.Session(AcceptanceSelectedExecutionMode.Enforce)).SelectedExecution!;
     internal Task Land(string goal = "goal-1", string commit = "main-1", AcceptanceSelectedExecutionRecord? record = null) =>
         Coordinator.NoteLandingAsync(goal, commit, record ?? Applied, "main-0");
-    internal Task Service(bool capacity = true, bool suppressed = false) => Coordinator.ServiceAsync(() => Head, [], capacity, suppressed);
+    internal Task Service(bool capacity = true, bool suppressed = false) => Coordinator.ServiceAsync(() => Head, [], [], capacity, suppressed);
     internal async Task Finish()
     {
         await Service();

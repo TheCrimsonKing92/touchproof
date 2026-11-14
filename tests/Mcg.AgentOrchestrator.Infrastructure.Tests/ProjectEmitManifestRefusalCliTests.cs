@@ -191,9 +191,10 @@ public sealed class ProjectEmitManifestRefusalCliTests
         {
             using var output = new StringWriter();
             var measurer = new RecordingUnitCommandMeasurer();
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
             Assert.Equal(0, ProjectCliCommand.Execute(measured
                 ? ["project", "discover", "sample", "--measure", "test"] : ["project", "discover", "sample"],
-                Registry, Home.Root, null, output, () => measurer));
+                Registry, Home.Root, null, output, () => measurer, crosswalkReaderFactory: () => crosswalk.Reader));
             Assert.True(File.Exists(ModelPath));
             if (measured)
             {

@@ -11,6 +11,25 @@ public sealed class PullRequestReviewConflictCheckTests : Xunit.IClassFixture<Is
     private const string Url = PullRequestLandingTestFixture.Url;
 
     [Fact]
+    public void Recorded_conflict_without_reviewers_fails_as_malformed_record()
+    {
+        var check = new PullRequestReviewConflictCheck();
+        using var fixture = new PullRequestTrackingTestFixture(check);
+        var latest = Open(fixture);
+        var message = $"{PullRequestReviewConflictCheck.ConflictPrefix}{Url} latest={Stamp(latest)}";
+        fixture.Kernel.RecordGoalPolicyDecision(fixture.Goal.Id, message);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => check.TryProceed(
+            fixture.Kernel, fixture.Workspace, fixture.Attention, fixture.Goal, fixture.Goal.DeliveredForReview!,
+            new(PullRequestStatusKind.Open, Url: Url), [], out _));
+
+        Assert.Equal("Recorded pull request review conflict has no reviewers delimiter: " + message, exception.Message);
+        // The tracker handles integrity failures per goal rather than leaking a range error.
+        Assert.Null(Record.Exception(() => fixture.Tick()));
+        AssertHeld(fixture);
+    }
+
+    [Fact]
     public void Single_reviewer_starts_without_a_check()
     {
         var runner = new Runner();

@@ -12,7 +12,8 @@ public sealed record ProgressEvent(
     HumanInputSupersededPayload? HumanInputSuperseded = null,
     ConductorTickOutcomePayload? TickOutcome = null,
     ProgressFailurePayload? Failure = null,
-    DateTimeOffset? OperatorIntentCreatedAt = null);
+    DateTimeOffset? OperatorIntentCreatedAt = null,
+    PreTesterEvidenceEntry? PreTesterEvidence = null);
 
 // Facts captured when a failure is recorded, before its diagnostic text is composed.
 public sealed record ProgressFailurePayload(string Kind, string? Rule, IReadOnlyList<ProgressFailureEvidence> Evidence)

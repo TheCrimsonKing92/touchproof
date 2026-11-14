@@ -26,14 +26,37 @@ public sealed class LuaStackDetectionTests
         using var fixture = new Fixture();
         foreach (var path in paths.Split('|'))
             fixture.Write(path);
-        var before = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-        Assert.True(before.Stack is not null || before.Refusal!.StartsWith("Ambiguous stack markers", StringComparison.Ordinal));
-        fixture.Write(".busted");
-        fixture.Write("spec/a_spec.lua");
-        fixture.Write("x-1.0-1.rockspec");
-        fixture.Write("scripts/a.lua");
+        File.WriteAllText(Path.Combine(fixture.Root, "go.mod"), "module example.com/app\n");
+        var stack = paths.StartsWith("go.mod", StringComparison.Ordinal) ? "go"
+            : paths.StartsWith("package.json", StringComparison.Ordinal) ? "node" : "dotnet";
+        using var crosswalk = new FakeCrosswalkProcess(stack);
+        var originalPaths = paths.Split('|');
+        SetEvidence(originalPaths);
+        var before = Outcome();
+        Assert.True(before is "go" or "node" or "dotnet" || before.Contains("Ambiguous stack markers", StringComparison.Ordinal));
+        SetEvidence([.. originalPaths, ".busted", "spec/a_spec.lua", "x-1.0-1.rockspec", "scripts/a.lua"]);
+        Assert.Equal(before, Outcome());
 
-        Assert.Equal(before, ProjectDiscoveryAdapterSelector.Detect(fixture.Root));
+        void SetEvidence(string[] evidencePaths) => crosswalk.DetectResult = new(0,
+            JsonSerializer.Serialize(new { stack, evidence = evidencePaths.Select(path => new { path, reason = "" }) }), "");
+
+        string Outcome()
+        {
+            try
+            {
+                return ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader) switch
+                {
+                    GoProjectDiscoveryAdapter => "go",
+                    NodeProjectDiscoveryAdapter => "node",
+                    DotnetProjectDiscoveryAdapter => "dotnet",
+                    var adapter => throw new InvalidOperationException($"Unexpected adapter: {adapter.GetType().Name}")
+                };
+            }
+            catch (InvalidOperationException error) when (error.Message.Contains("Ambiguous stack markers", StringComparison.Ordinal))
+            {
+                return error.Message;
+            }
+        }
     }
 
     [Fact]

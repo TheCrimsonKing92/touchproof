@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Fixture = LuaProjectDiscoveryAdapterTests.Fixture;
 
@@ -43,37 +44,41 @@ public sealed class RootMarkerSelectionWithoutCrosswalkTests
     }
 
     [Theory]
-    [InlineData("go-module", typeof(GoProjectDiscoveryAdapter))]
-    [InlineData("node", typeof(NodeProjectDiscoveryAdapter))]
-    [InlineData("solution", typeof(DotnetProjectDiscoveryAdapter))]
-    [InlineData("no-solution", typeof(DotnetProjectDiscoveryAdapter))]
-    public void Select_ProcessStartFailure_UsesMarkerFallback(string name, Type adapterType)
+    [InlineData("go-module")]
+    [InlineData("node")]
+    [InlineData("solution")]
+    [InlineData("no-solution")]
+    public void Select_ProcessStartFailure_UsesMarkerFallback(string name)
     {
         using var fixture = CreateFixture(name, out var root);
+        WriteConflictingMarkers(root);
         using var crosswalk = new FakeCrosswalkProcess();
         crosswalk.DetectException = new Win32Exception("injected process-start failure");
 
-        var adapter = ProjectDiscoveryAdapterSelector.Select(root, crosswalk.Reader);
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root, crosswalk.Reader));
 
-        Assert.Equal(adapterType, adapter.GetType());
+        Assert.Contains(crosswalk.Binary, error.Message, StringComparison.Ordinal);
+        Assert.Same(crosswalk.DetectException, error.InnerException);
         Assert.Equal(new[] { "detect", root }, Assert.Single(crosswalk.Calls).Arguments);
     }
 
     [Theory]
-    [InlineData("go-module", typeof(GoProjectDiscoveryAdapter))]
-    [InlineData("node", typeof(NodeProjectDiscoveryAdapter))]
-    [InlineData("solution", typeof(DotnetProjectDiscoveryAdapter))]
-    [InlineData("no-solution", typeof(DotnetProjectDiscoveryAdapter))]
-    public void Select_MissingTool_UsesMarkerFallback(string name, Type adapterType)
+    [InlineData("go-module")]
+    [InlineData("node")]
+    [InlineData("solution")]
+    [InlineData("no-solution")]
+    public void Select_MissingTool_UsesMarkerFallback(string name)
     {
         using var fixture = CreateFixture(name, out var root);
+        WriteConflictingMarkers(root);
         var path = Path.Combine(root, "missing-crosswalk.exe");
         var resolver = new CrosswalkExecutableResolver(path,
             runVersionAsync: (_, _) => throw new InvalidOperationException("Missing tool must never launch."));
         var reader = new CrosswalkStackReader(resolver, TimeSpan.FromSeconds(30),
             (_, _) => throw new InvalidOperationException("Missing tool must never launch."));
 
-        Assert.Equal(adapterType, ProjectDiscoveryAdapterSelector.Select(root, reader).GetType());
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root, reader));
+        Assert.Contains(path, error.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -112,15 +117,14 @@ public sealed class RootMarkerSelectionWithoutCrosswalkTests
     public void Select_LaunchFailure_PreservesNodeOrAmbiguity(string paths, string? refusal)
     {
         using var fixture = new Fixture();
-        foreach (var path in paths.Split('|')) fixture.Write(path);
-        using var crosswalk = new FakeCrosswalkProcess();
-        crosswalk.DetectException = new Win32Exception("injected process-start failure");
+        using var crosswalk = new FakeCrosswalkProcess("node");
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack = "node",
+            evidence = paths.Split('|').Select(path => new { path, reason = "fixture" }) }), "");
 
         if (refusal is null)
             Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
         else
         {
-            Assert.Equal(refusal, ProjectDiscoveryAdapterSelector.Detect(fixture.Root).Refusal);
             var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
             Assert.Equal($"No discovery adapter is available for this repository: {refusal}", error.Message);
         }
@@ -144,6 +148,82 @@ public sealed class RootMarkerSelectionWithoutCrosswalkTests
         var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, reader));
 
         Assert.Contains(path, error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("go", "go.mod", typeof(GoProjectDiscoveryAdapter))]
+    [InlineData("node", "package.json", typeof(NodeProjectDiscoveryAdapter))]
+    [InlineData("dotnet", "Root.sln|src/App.csproj", typeof(DotnetProjectDiscoveryAdapter))]
+    [InlineData("unknown", "package.json", typeof(DeclaredProjectDiscoveryAdapter))]
+    [InlineData("node", "go.mod", typeof(NodeProjectDiscoveryAdapter))]
+    public void Select_SingleStackEvidence_PreservesReportedAdapter(string stack, string paths, Type adapterType)
+    {
+        using var fixture = new Fixture();
+        fixture.Write("go.mod", "module example.com/app\n");
+        using var crosswalk = new FakeCrosswalkProcess(stack);
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack,
+            evidence = paths.Split('|').Select(path => new { path, reason = "" }) }), "");
+
+        Assert.Equal(adapterType, ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader).GetType());
+    }
+
+    [Theory]
+    [InlineData("absolute", true)]
+    [InlineData("backslash", true)]
+    [InlineData("dot-segments", true)]
+    [InlineData("outside", false)]
+    [InlineData("prefix-sibling", false)]
+    [InlineData("nested-go", false)]
+    [InlineData("nested-solution", false)]
+    [InlineData("duplicate", false)]
+    public void Select_EvidencePaths_UsesLexicalRepositoryMembership(string scenario, bool ambiguous)
+    {
+        using var fixture = new Fixture();
+        var path = scenario switch
+        {
+            "absolute" => Path.Combine(fixture.Root, "Root.sln"),
+            "backslash" => "src\\App.csproj",
+            "dot-segments" => "src/../Root.slnx",
+            "outside" => "../Outside.csproj",
+            "prefix-sibling" => fixture.Root + "-sibling/Outside.csproj",
+            "nested-go" => "nested/go.mod",
+            "nested-solution" => "nested/Other.sln",
+            _ => "./package.json"
+        };
+        using var crosswalk = new FakeCrosswalkProcess("node");
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack = "node",
+            evidence = new[] { new { path = "package.json", reason = "" }, new { path, reason = "" } } }), "");
+
+        if (ambiguous)
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
+            Assert.Contains("package.json", error.Message, StringComparison.Ordinal);
+            Assert.Contains(path, error.Message, StringComparison.Ordinal);
+        }
+        else
+            Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
+    }
+
+    [Fact]
+    public void Discover_DefaultReader_RefusesWithInstalledToolPath()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var registry = new Mcg.AgentOrchestrator.App.Orchestration.OrchestratorProjectRegistry(
+            Path.Combine(fixture.Root, "registry"), Path.Combine(fixture.Root, "data"));
+        using var output = new StringWriter();
+
+        var error = Assert.Throws<InvalidOperationException>(() => Mcg.AgentOrchestrator.App.Cli.ProjectCliCommand.Execute(
+            ["project", "discover"], registry, fixture.Root, null, output));
+
+        Assert.Contains(Path.Combine("tools", "crosswalk", "crosswalk.exe"), error.Message, StringComparison.Ordinal);
+        Assert.Empty(output.ToString());
+    }
+
+    private static void WriteConflictingMarkers(string root)
+    {
+        File.WriteAllText(Path.Combine(root, "go.mod"), "module example.com/app\n");
+        File.WriteAllText(Path.Combine(root, "package.json"), "{}");
+        File.WriteAllText(Path.Combine(root, "Root.sln"), "");
     }
 
     private static IDisposable CreateFixture(string name, out string root)

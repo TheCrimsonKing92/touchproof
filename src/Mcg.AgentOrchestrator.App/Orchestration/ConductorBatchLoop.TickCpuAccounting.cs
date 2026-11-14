@@ -10,7 +10,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<TimeSpan> _processCpuTime;
     private TimeSpan _lastCpuReading;
     private TimeSpan _tickCpuStart;
-    private long _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs;
+    private long _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, _tickCpuAdmissionMs;
 
     private TimeSpan ReadProcessCpu()
     {
@@ -22,7 +22,7 @@ internal sealed partial class ConductorBatchLoop
     private void BeginTickCpuAccounting()
     {
         _tickCpuStart = ReadProcessCpu();
-        _tickCpuSweepMs = _tickCpuPrewalkMs = _tickCpuWalkMs = 0;
+        _tickCpuSweepMs = _tickCpuPrewalkMs = _tickCpuWalkMs = _tickCpuAdmissionMs = 0;
     }
 
     private static long CpuDeltaMs(TimeSpan start, TimeSpan end) =>
@@ -36,7 +36,7 @@ internal sealed partial class ConductorBatchLoop
     }
 
     private string FormatTickCpuSummary() =>
-        $" cpu_ms={CpuDeltaMs(_tickCpuStart, ReadProcessCpu())} cpu_sweep_ms={_tickCpuSweepMs} cpu_prewalk_ms={_tickCpuPrewalkMs} cpu_walk_ms={_tickCpuWalkMs}";
+        $" cpu_ms={CpuDeltaMs(_tickCpuStart, ReadProcessCpu())} cpu_sweep_ms={_tickCpuSweepMs} cpu_prewalk_ms={_tickCpuPrewalkMs} cpu_walk_ms={_tickCpuWalkMs} cpu_admission_ms={_tickCpuAdmissionMs}";
 
     private static bool ShouldEmitTickSummary(int changedCount, int parkedExcludedCount, int tick) =>
         changedCount > 0 || parkedExcludedCount > 0 || tick % QuietSummaryEveryTicks == 0;
@@ -44,7 +44,7 @@ internal sealed partial class ConductorBatchLoop
     private void AppendTickCpuLedger(int tick, bool hadGoalChanges)
     {
         TickCpuLedger.TryAppend(_workspace?.ExecutionDirectory, tick, CpuDeltaMs(_tickCpuStart, _lastCpuReading),
-            _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, hadGoalChanges);
+            _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, hadGoalChanges, _tickCpuAdmissionMs);
         if (_tickGitWindow is { } window && _tickGitTimer is { } timer)
         {
             timer.Stop();

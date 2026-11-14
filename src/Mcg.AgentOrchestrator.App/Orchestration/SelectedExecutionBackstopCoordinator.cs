@@ -15,6 +15,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
     private readonly SemaphoreSlim _transitions = new(1, 1);
     private Task? _running;
     private string? _activeRequestId;
+    private bool _initialTickServiced;
     private IReadOnlyDictionary<string, (DateTimeOffset ReadyAt, GoalPriority Level)> _admissionOrder =
         new Dictionary<string, (DateTimeOffset, GoalPriority)>();
     internal int RunningCount => _running is { IsCompleted: false } ? 1 : 0;
@@ -71,11 +72,14 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         finally { _transitions.Release(); }
     }
 
-    internal async Task ServiceAsync(Func<string> mainHead, IReadOnlyList<Goal> waiting, bool capacityAvailable, bool suppressed)
+    internal async Task ServiceAsync(Func<string> mainHead, IReadOnlyList<Goal> waiting,
+        IReadOnlyCollection<Goal> waitingForAcceptance, bool capacityAvailable, bool suppressed)
     {
         await _transitions.WaitAsync().ConfigureAwait(false);
         try
         {
+            var initialTick = !_initialTickServiced;
+            _initialTickServiced = true;
             var state = await store.ReadAsync().ConfigureAwait(false);
             if (state is null) return;
             var missingInstants = state.Uncovered.Where(landing => !state.RecordedLandingInstants
@@ -110,8 +114,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
                     GoalIds = state.RangeLandings.Select(landing => landing.GoalId).Distinct(StringComparer.Ordinal).ToArray() } };
                 await store.WriteAsync("coalesced", state, clock()).ConfigureAwait(false);
             }
-            if (state.Request is not { } pending || suppressed || !capacityAvailable) return;
-            var rule = SelectedExecutionBackstopYieldPolicy.Decide(waiting.Count, state.Uncovered.Count,
+            if (state.Request is not { } pending || initialTick || suppressed || !capacityAvailable) return;
+            var rule = SelectedExecutionBackstopYieldPolicy.Decide(waitingForAcceptance.Count, state.Uncovered.Count,
                 state.OldestUncoveredAt is { } oldest ? clock() - oldest : null);
             if (rule is null) return;
             var started = pending with { Attempts = pending.Attempts + 1, RetryPending = false };
@@ -152,19 +156,19 @@ internal sealed class SelectedExecutionBackstopCoordinator(
     internal Task DrainAsync() => _running ?? Task.CompletedTask;
 
     internal void ServiceIdle(OrchestratorWorkspace workspace, ConductorDriver driver, AgentOrchestratorKernel kernel,
-        int width, bool suppressed, int tick)
+        IReadOnlyCollection<Goal> waitingForAcceptance, int width, bool suppressed, int tick)
     {
         var admission = ConductorBatchLoop.DecideFallbackAcceptanceAdmission(driver.ParallelAcceptanceAttemptCoordinator,
             kernel.Goals.ToArray(), driver.GetActiveAcceptanceCohortCapacity(), "", width, tick, ActiveRequestId);
         ServiceAsync(() => GoalWorktrees.ResolveRequiredRef(workspace.ExecutionDirectory, "refs/heads/" + workspace.IntegrationBranch),
-            [], admission.IsAdmitted, suppressed).GetAwaiter().GetResult();
+            [], waitingForAcceptance, admission.IsAdmitted, suppressed).GetAwaiter().GetResult();
     }
 
     internal ConductorBatchLoop.LiveAcceptanceCensus ServiceAdmission(OrchestratorWorkspace workspace, IReadOnlyList<Goal> waiting,
-        ConductorBatchLoop.LiveAcceptanceCensus census, int width, bool suppressed)
+        IReadOnlyCollection<Goal> waitingForAcceptance, ConductorBatchLoop.LiveAcceptanceCensus census, int width, bool suppressed)
     {
         ServiceAsync(() => GoalWorktrees.ResolveRequiredRef(workspace.ExecutionDirectory, "refs/heads/" + workspace.IntegrationBranch),
-            waiting, ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, width).IsAdmitted, suppressed).GetAwaiter().GetResult();
+            waiting, waitingForAcceptance, ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, width).IsAdmitted, suppressed).GetAwaiter().GetResult();
         return Reserve(census);
     }
 

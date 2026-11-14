@@ -897,7 +897,7 @@ internal sealed partial class ConductorBatchLoop
                 admissionHold.Acknowledge();
                 RunJanitorialPhase("selected-execution-backstop-idle", nextTick, () =>
                 {
-                    _selectedExecutionBackstop?.ServiceIdle(_workspace!, driver, kernel, policy.AcceptanceWidth, SuppressNewAcceptanceAdmission(), nextTick);
+                    _selectedExecutionBackstop?.ServiceIdle(_workspace!, driver, kernel, SelectedExecutionBackstopWaitingGoals.Select(kernel, driver, policy), policy.AcceptanceWidth, SuppressNewAcceptanceAdmission(), nextTick);
                     return true;
                 });
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
@@ -1170,7 +1170,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
             admissionClock.Stop();
             EmitProgress(FormatPhaseTiming(totalTicks, "acceptance-admission", admissionClock.Elapsed,
-                _stepLedger!.FormatAdmission(admissionClock.Elapsed), CpuDeltaMs(admissionCpuStart, ReadProcessCpu())), tickLines);
+                _stepLedger!.FormatAdmission(admissionClock.Elapsed), EndCpuPhase(admissionCpuStart, ref _tickCpuAdmissionMs)), tickLines);
             var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
@@ -2251,7 +2251,7 @@ internal sealed partial class ConductorBatchLoop
             (GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver),
              state.Results.Keys.ToHashSet(StringComparer.Ordinal), GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible)));
         state.AcceptanceCensus = RunJanitorialPhase("selected-execution-backstop-admission", tick, () =>
-            _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()))
+            _selectedExecutionBackstop?.ServiceAdmission(_workspace!, state.OrderedEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value) && !priorityOccupantsBefore.Contains(goal.Id.Value)).ToArray(), SelectedExecutionBackstopWaitingGoals.Select(kernel, driver, policy), state.AcceptanceCensus, configuredAcceptanceWidth, suppressNewAcceptanceAdmission()))
             ?? _selectedExecutionBackstop?.Reserve(state.AcceptanceCensus) ?? state.AcceptanceCensus;
         if (!suppressNewAcceptanceAdmission())
             ConductorTickStepLedger.Measure("merge-train", () => AdmitMergeTrain(state, driver, policy, tick, changedGoalLines));

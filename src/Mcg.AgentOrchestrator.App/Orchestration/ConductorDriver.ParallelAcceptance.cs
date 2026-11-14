@@ -238,9 +238,9 @@ internal sealed partial class ConductorDriver
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);
 
-    internal bool TryGetCohortGateHold(GoalId goalId, out string detail)
+    internal bool TryGetCohortGateHold(GoalId goalId, out string detail, bool sweep = true)
     {
-        SweepCompletedCohortGateRuns();
+        if (sweep) SweepCompletedCohortGateRuns();
         foreach (var pair in _cohortGateRuns)
         {
             if (!pair.Value.MemberGoalIds.Contains(goalId.Value))

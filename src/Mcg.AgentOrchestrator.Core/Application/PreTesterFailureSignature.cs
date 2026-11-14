@@ -25,9 +25,14 @@ public static class PreTesterFailureSignature
             string.Join(',', signatures.Select(pair =>
                 Uri.EscapeDataString(pair.Key) + "|" + Uri.EscapeDataString(pair.Value)));
 
-    public static PreTesterRedRun ReadRun(string indexLine)
+    public static PreTesterRedRun ReadRun(ProgressEvent evt) =>
+        ReadRun(PreTesterEvidenceEntryReader.Read(evt), evt.Message);
+
+    public static PreTesterRedRun ReadRun(string indexLine) =>
+        ReadRun(PreTesterEvidenceEntryReader.ReadLegacy(indexLine), indexLine);
+
+    private static PreTesterRedRun ReadRun(PreTesterEvidenceEntry? entry, string indexLine)
     {
-        var entry = PreTesterEvidenceIndexLines.Parse(indexLine);
         var signatures = new Dictionary<string, string>(StringComparer.Ordinal);
         if (entry is null) return new([], signatures);
         var field = indexLine.Split(';', StringSplitOptions.TrimEntries)

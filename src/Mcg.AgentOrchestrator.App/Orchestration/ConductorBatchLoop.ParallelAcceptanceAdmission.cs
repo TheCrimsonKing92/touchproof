@@ -423,27 +423,27 @@ internal sealed partial class ConductorBatchLoop
             AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
     }
 
-    private void HoldCohortMembers(
-        ParallelAcceptanceBatchState state,
-        ConductorDriver driver,
+    private void HoldCohortMembers(ParallelAcceptanceBatchState state, ConductorDriver driver,
         ConductorAutonomyPolicy policy,
         int tick,
-        List<string> changedGoalLines)
+        List<string> changedGoalLines) =>
+        HoldCohortMembers(state.OrderedEligible, state.Results, driver, policy, tick, changedGoalLines);
+
+    internal static void HoldCohortMembers(IReadOnlyList<Goal> orderedEligible,
+        IDictionary<string, ParallelLandingOutcome> results, ConductorDriver driver,
+        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines)
     {
-        foreach (var goal in state.OrderedEligible)
+        driver.SweepCompletedCohortGateRuns();
+        foreach (var goal in orderedEligible)
         {
-            if (TrainEjectionReport.RefreshHold(driver, goal.Id, state.Results) ||
-                !TrainEjectionReport.TryGetCohortMemberHold(driver, goal.Id, out var cohortHoldDetail))
+            if (TrainEjectionReport.RefreshHold(driver, goal.Id, results) ||
+                !TrainEjectionReport.TryGetCohortMemberHold(driver, goal.Id, out var cohortHoldDetail, sweep: false))
             {
                 continue;
             }
 
-            state.Results[goal.Id.Value] = new ParallelLandingOutcome(
-                CohortMemberHeld(
-                    goal,
-                    policy,
-                    cohortHoldDetail),
-                SlotIndex: null);
+            results[goal.Id.Value] = new ParallelLandingOutcome(
+                CohortMemberHeld(goal, policy, cohortHoldDetail), SlotIndex: null);
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
                 changedGoalLines);

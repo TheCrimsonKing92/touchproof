@@ -62,6 +62,12 @@ if (args.Length >= 1 && args[0].Equals("repo-process-info", StringComparison.Ord
     }
 }
 
+if (args.Length >= 1 && args[0].Equals("console-ownership", StringComparison.OrdinalIgnoreCase) &&
+    !CliCommandHelp.IsCommandSpecificHelp(args))
+{
+    return ConsoleOwnershipCliCommand.Run(args, Console.Out, Console.Error);
+}
+
 if (args.Length >= 1 && args[0].Equals("repo-process-stop", StringComparison.OrdinalIgnoreCase))
 {
     try

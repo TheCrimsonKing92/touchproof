@@ -106,7 +106,10 @@ internal sealed class PullRequestReviewConflictCheck(
     private static bool TryReadRuling(ICollaborationItemStore attention, Goal goal, ProgressEvent conflict, out string? ruling)
     {
         ruling = null;
-        var marker = conflict.Message[ConflictPrefix.Length..conflict.Message.LastIndexOf(" reviewers=", StringComparison.Ordinal)];
+        var reviewersIndex = conflict.Message.LastIndexOf(" reviewers=", StringComparison.Ordinal);
+        if (reviewersIndex < ConflictPrefix.Length)
+            throw new InvalidOperationException("Recorded pull request review conflict has no reviewers delimiter: " + conflict.Message);
+        var marker = conflict.Message[ConflictPrefix.Length..reviewersIndex];
         var item = attention.ListAsync(goal.Id.Value).GetAwaiter().GetResult()
             .Where(item => item.CorrelationKey == KeyPrefix + goal.Id.Value &&
                 item.Body.StartsWith(marker + "\n", StringComparison.Ordinal))

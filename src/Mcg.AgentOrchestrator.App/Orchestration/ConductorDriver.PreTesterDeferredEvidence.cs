@@ -8,6 +8,7 @@ internal sealed partial class ConductorDriver
 {
     internal Func<Goal, IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<string>>>? PreTesterFailureHistory { get; set; }
     internal Func<string, string>? PreTesterMainRevision { get; set; }
+    internal PreTesterEvidenceRecorder? PreTesterRecorder { get; set; }
     private readonly PreTesterChangedFileGuardClasses _preTesterChangedFileGuards = new();
 
     private void RecordPreTesterDeferredEvidenceExit(
@@ -39,12 +40,13 @@ internal sealed partial class ConductorDriver
         out ConductorAdvanceResult result)
     {
         result = default!;
-        var prior = PreTesterEvidenceIndexLines.Latest(goal, tester.Id, candidateSha);
+        var recorder = PreTesterRecorder ?? PreTesterEvidenceRecorder.FromLegacy(_recordFindingEvidenceRequest, _recordFindingEvidenceRun);
+        var (prior, needsReplacementStartedEntry) = PreTesterStoredEntryRecovery.ReadAndHeal(goal, tester.Id, candidateSha, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line));
         var decline = EvaluatePreTesterDeferredEvidenceGuard(developer, candidateSha, out var testsField);
         if (decline != PreTesterDeferredEvidenceDeclineClause.None)
         {
             RecordPreTesterDeferredEvidenceDecline(goal, developer, decline, candidateSha);
-            PreTesterStartedEvidence.TryAbandon(prior, decline.ToString(), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
+            PreTesterStartedEvidence.TryAbandon(prior, decline.ToString(), (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line));
             return false;
         }
         var priorEvidence = prior is { Outcome: "unusable" } ? _focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!) : null;
@@ -74,7 +76,7 @@ internal sealed partial class ConductorDriver
             worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull);
         if (declaration.Selections.Count == 0)
         {
-            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoResolvedClasses), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line)))
+            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoResolvedClasses), (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line)))
                 return false;
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.NoResolvedClasses, prior?.Outcome, declaration.NotRun);
@@ -87,7 +89,7 @@ internal sealed partial class ConductorDriver
         var notRun = new List<string>(normalizedDeclaration.NotRun);
         if (selected.Count == 0)
         {
-            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoNormalizedClasses), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line)))
+            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoNormalizedClasses), (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line)))
                 return false;
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.NoNormalizedClasses, prior?.Outcome, notRun);
@@ -118,14 +120,12 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        var guards = PreTesterGuardSelections.Create(_preTesterChangedFileGuards, worktreePath,
+        var (guards, augmented, abandoned) = PreTesterGuardSelections.CreateForRequest(_preTesterChangedFileGuards, worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
-            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), settings: settings,
-            priorSelections: prior?.Outcome == "started" ? prior.Selections : null);
-        var augmented = guards.Augment(new(selected, notRun), settings, prior, FormatFindingEvidenceSelection);
-        if (prior?.Outcome == "started")
-            augmented = PreTesterGuardSelections.ReconcileStarted(prior, augmented.Selections, augmented.NotRun,
-                FormatFindingEvidenceSelection, PreTesterStartedEvidence.DriftProgress(prior.ReceiptId));
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), new(selected, notRun), settings, prior,
+            FormatFindingEvidenceSelection, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line));
+        if (abandoned) prior = null;
+        needsReplacementStartedEntry |= abandoned;
         var distinct = augmented.Selections.ToArray();
         notRun = augmented.NotRun.ToList();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
@@ -145,6 +145,8 @@ internal sealed partial class ConductorDriver
             "pre-tester-deferred",
             CreateFindingEvidenceBatchId(candidateSha!, salt, policy.Name, identity),
             [], ExecutionBasisIdentity: BuildFindingEvidenceExecutionBasisIdentity(settings), ReceiptId: receiptId);
+        if (prior is null && needsReplacementStartedEntry)
+            PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, (entry, line) => recorder.Request(goal.Id, tester.Id, entry, line));
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
             out var evidence, out var attempt, out var decision, out var kind);
@@ -156,10 +158,8 @@ internal sealed partial class ConductorDriver
              kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
              decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
         {
-            if (kind == ConductorParallelAcceptanceAttemptDecisionKind.Started && prior is null)
-                _recordFindingEvidenceRequest(goal.Id, tester.Id,
-                    PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
-                        "started", candidateSha!, receiptId, selectionNames, notRun, null, [])));
+            if (prior is null && !needsReplacementStartedEntry && kind == ConductorParallelAcceptanceAttemptDecisionKind.Started)
+                PreTesterStartedEvidence.RecordStarted(candidateSha!, receiptId, selectionNames, notRun, (entry, line) => recorder.Request(goal.Id, tester.Id, entry, line));
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
                 FocusedEvidencePendingHeld(fromState, decision, kind));
             return true;
@@ -183,10 +183,9 @@ internal sealed partial class ConductorDriver
                 otherFailures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, otherFailures)));
         if (attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
-        _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
-            PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
-                outcome, candidateSha!, receiptId, selectionNames, notRun,
-                attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths)));
+        var runEntry = new PreTesterEvidenceEntry(outcome, candidateSha!, receiptId, selectionNames, notRun, attempt?.ResultPath, failingTests);
+        recorder.Run(goal.Id, tester.Id, runEntry, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
+            PreTesterEvidenceIndexLines.FormatMarker(runEntry), outcome, failingTests, candidate?.TestResultPaths)));
         if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.ContinueAfterUnusableRefresh)
         {
             RecordPreTesterDeferredEvidenceContinuation(goal, developer, candidateSha!, refresh!.SupersededReceiptId, receiptId);
@@ -199,8 +198,7 @@ internal sealed partial class ConductorDriver
                 $"PRE_TESTER_BUILD_PHASE_REFRESH: candidate_sha={candidateSha}; receipt_id={receiptId}"));
             return true;
         }
-        if (outcome == "red" && OutOfDiffRerun(worktreePath).TryRun(GetCurrentGoal(goal), tester,
-                new(outcome, candidateSha!, receiptId, selectionNames, notRun, attempt?.ResultPath, failingTests), policy, out var hold, out var holdKind))
+        if (outcome == "red" && OutOfDiffRerun(worktreePath).TryRun(GetCurrentGoal(goal), tester, runEntry, policy, out var hold, out var holdKind))
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(fromState, hold, holdKind));
             return true;
@@ -233,14 +231,14 @@ internal sealed partial class ConductorDriver
         var redHistory = goal.Timeline
             .Where((evt, index) => index > lastOperatorAnswer)
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
-                          evt.Message.StartsWith("finding-evidence pre-tester outcome=actionable-red;", StringComparison.Ordinal))
+                          PreTesterEvidenceEntryReader.Read(evt)?.Outcome == "actionable-red")
             .ToArray();
         var lastTesterDispatch = goal.Timeline
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.TaskDispatchRecorded)
             .Select(evt => evt.OccurredAt).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var window = redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).ToArray();
         var decision = PreTesterRedLoopRule.EvaluateRuns(
-            window.Select(evt => PreTesterFailureSignature.ReadRun(evt.Message)).ToArray());
+            window.Select(evt => PreTesterFailureSignature.ReadRun(evt)).ToArray());
         if (!decision.Trip) return false;
         result = Escalate(goal, goalPrefix, policy, fromState,
             "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; " +

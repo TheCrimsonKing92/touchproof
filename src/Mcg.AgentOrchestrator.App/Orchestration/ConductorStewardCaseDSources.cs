@@ -25,8 +25,7 @@ internal sealed record ConductorStewardCaseDSources(
         {
             var worktree = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
             if (worktree is null) return null;
-            var result = GitCli.Run(worktree, "rev-parse", "HEAD");
-            return result.Succeeded ? result.Output.Trim() : null;
+            return GitRevisionReader.Shared.TryResolve(worktree, "HEAD", out var head) ? head : null;
         },
         (goal, sha) => ReadGenuineReason(workspace.ExecutionDirectory, goal, sha),
         (goal, sha) =>

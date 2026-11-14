@@ -77,7 +77,8 @@ public sealed class ProjectCheckTimeoutAnswerCliTests
         public (int Exit, string[] Lines) Execute(string[] parts)
         {
             using var writer = new StringWriter();
-            var exit = ProjectCliCommand.Execute(parts, registry, home.Root, null, writer);
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
+            var exit = ProjectCliCommand.Execute(parts, registry, home.Root, null, writer, crosswalkReaderFactory: () => crosswalk.Reader);
             return (exit, writer.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
 

@@ -43,15 +43,15 @@ public sealed class SelectedExecutionBackstopAdmissionTests
         var high = Enumerable.Range(1, 3).Select(index => GoalAt(fixture.Now.AddMinutes(index), GoalPriority.High)).ToArray();
         foreach (var goal in high)
         {
-            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [goal], true, false);
+            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [goal], [goal], true, false);
             Assert.Empty(fixture.Calls);
             await fixture.Coordinator.ObserveServedAsync([goal]);
         }
         Assert.Equal(3, (await fixture.Store.ReadAsync())!.Request!.Overtakes);
         var resumed = fixture.CreateCoordinator();
-        await resumed.ServiceAsync(() => fixture.Head, high, true, false);
+        await resumed.ServiceAsync(() => fixture.Head, high, high, true, false);
         Assert.Empty(fixture.Calls);
-        await resumed.ServiceAsync(() => fixture.Head, [], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [], [], true, false);
         await resumed.DrainAsync();
         Assert.Equal(3, Assert.Single(fixture.Calls).Overtakes);
     }
@@ -66,7 +66,7 @@ public sealed class SelectedExecutionBackstopAdmissionTests
         await QueueFailedAttempt(fixture);
         var pending = (await fixture.Store.ReadAsync())!.Request!;
         var waiting = GoalAt(equalTime ? fixture.Now : originalTime.AddMinutes(1));
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         Assert.Single(fixture.Calls);
         Assert.Equal(1, (await fixture.Store.ReadAsync())!.Request!.Attempts);
         await fixture.Coordinator.ObserveServedAsync([waiting]);
@@ -101,7 +101,7 @@ public sealed class SelectedExecutionBackstopAdmissionTests
             .Select(index => GoalAt(originalTime.AddMinutes(index), GoalPriority.High)).ToArray();
         for (var index = 0; index < waiting.Length; index++)
         {
-            await fixture.Coordinator.ServiceAsync(() => fixture.Head, waiting[index..], true, false);
+            await fixture.Coordinator.ServiceAsync(() => fixture.Head, waiting[index..], waiting[index..], true, false);
             Assert.Single(fixture.Calls);
             await fixture.Coordinator.ObserveServedAsync([waiting[index]]);
             Assert.Equal(0, (await fixture.Store.ReadAsync())!.Request!.Overtakes);
@@ -121,14 +121,14 @@ public sealed class SelectedExecutionBackstopAdmissionTests
             .Select(index => GoalAt(fixture.Now.AddMinutes(index), GoalPriority.High)).ToArray();
         foreach (var goal in later)
         {
-            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [.. waiting, goal], true, false);
+            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [.. waiting, goal], [.. waiting, goal], true, false);
             Assert.Single(fixture.Calls);
             await fixture.Coordinator.ObserveServedAsync([goal]);
         }
         Assert.Equal(3, (await fixture.Store.ReadAsync())!.Request!.Overtakes);
         for (var index = 0; index < waiting.Length; index++)
         {
-            await fixture.Coordinator.ServiceAsync(() => fixture.Head, waiting[index..], true, false);
+            await fixture.Coordinator.ServiceAsync(() => fixture.Head, waiting[index..], waiting[index..], true, false);
             Assert.Single(fixture.Calls);
             Assert.Equal(1, (await fixture.Store.ReadAsync())!.Request!.Attempts);
             await fixture.Coordinator.ObserveServedAsync([waiting[index]]);
@@ -148,12 +148,14 @@ public sealed class SelectedExecutionBackstopAdmissionTests
         var store = new SelectedExecutionBackstopStore(events);
         var coordinator = new SelectedExecutionBackstopCoordinator(store, fixture, fixture.Items,
             fixture.Home, () => fixture.Now, fixture.Lines.Enqueue);
+        await coordinator.ServiceAsync(() => fixture.Head, [], [], false, false);
         var pending = Assert.IsType<SelectedExecutionBackstopRequest>((await store.ReadAsync())!.Request);
         Assert.Equal(fixture.Now, pending.QueuedAt);
         Assert.Equal(0, pending.Overtakes);
         Assert.Equal(1, pending.Attempts);
         Assert.True(pending.RetryPending);
-        await coordinator.ServiceAsync(() => fixture.Head, [GoalAt(originalTime.AddMinutes(1))], true, false);
+        var waiting = GoalAt(originalTime.AddMinutes(1));
+        await coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await coordinator.DrainAsync();
         Assert.Single(fixture.Calls);
         var persisted = (await new SelectedExecutionBackstopStore(new SqliteRunEventStore(

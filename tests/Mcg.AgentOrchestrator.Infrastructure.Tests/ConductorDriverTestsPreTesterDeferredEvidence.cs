@@ -12,6 +12,162 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
     private const string BaseSha = "aaa1111";
 
     [Fact]
+    public void TruncatedStartedEntryIsAbandonedAndEvidenceIsRequestedAgain()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        const string receipt = "truncated-started-receipt";
+        var selections = Enumerable.Range(0, 600)
+            .Select(index => $"Infrastructure.Tests:RecordedSelection{index:D4}Tests").ToArray();
+        var message = PreTesterEvidenceIndexLines.FormatMarker(
+            new("started", CandidateSha, receipt, selections, [], null, []));
+        Assert.True(message.Length > TimelineMessageBound.CharacterLimit);
+        var truncated = TimelineMessageBound.Bound(message, scenario.Goal.Id.Value, scenario.Tester.Id.Value);
+        Assert.Contains("[omitted", truncated, StringComparison.Ordinal);
+        scenario.Kernel.RecordFindingEvidenceRequest(scenario.Goal.Id, scenario.Tester.Id, truncated);
+        Assert.Equal("started", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+        var requests = new List<string>();
+        var roles = new List<AgentRole>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                scenario.Root, request, CandidateSha);
+        }, roles.Add);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+            Assert.Equal("green", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        });
+
+        var abandoned = Assert.Single(scenario.Goal.Timeline.Where(evt =>
+            evt.TaskId == scenario.Tester.Id && evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            PreTesterEvidenceIndexLines.Parse(evt.Message) is { Outcome: "abandoned", ReceiptId: receipt }));
+        Assert.EndsWith("; abandoned_reason=truncated-stored-message", abandoned.Message, StringComparison.Ordinal);
+        var entry = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Parse(abandoned.Message));
+        Assert.Equal(CandidateSha, entry.CandidateSha);
+        Assert.Null(entry.ResultPath);
+        Assert.Empty(entry.FailingTests);
+        var request = Assert.Single(requests);
+        Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", request);
+        Assert.DoesNotContain("[omitted", request, StringComparison.Ordinal);
+        Assert.Equal("green", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+        Assert.Contains(AgentRole.Tester, roles);
+        Assert.Contains(scenario.Goal.Timeline, evt => evt.Message == truncated);
+        var notice = Assert.Single(output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("PRE_TESTER_STARTED_ENTRY_TRUNCATED ", StringComparison.Ordinal)));
+        Assert.Contains("receipt=" + receipt, notice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InterruptedTruncationRetriesEvidenceAndOtherAbandonmentsStayFinished()
+    {
+        using (var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]))
+        {
+            const string receipt = "interrupted-truncation-receipt";
+            var selections = Enumerable.Range(0, 600)
+                .Select(index => $"Infrastructure.Tests:RecordedSelection{index:D4}Tests").ToArray();
+            var truncated = TimelineMessageBound.Bound(PreTesterEvidenceIndexLines.FormatMarker(
+                new("started", CandidateSha, receipt, selections, [], null, [])), scenario.Goal.Id.Value, scenario.Tester.Id.Value);
+            Assert.Contains("[omitted", truncated, StringComparison.Ordinal);
+            scenario.Kernel.RecordFindingEvidenceRequest(scenario.Goal.Id, scenario.Tester.Id, truncated);
+            var started = Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Parse(truncated));
+            // Pin the suffix written before this change, independently of the current abandonment writer.
+            scenario.Kernel.RecordFindingEvidenceRun(scenario.Goal.Id, scenario.Tester.Id,
+                PreTesterEvidenceIndexLines.FormatMarker(started with { Outcome = "abandoned" }) +
+                "; abandoned_reason=truncated-stored-message");
+            Assert.Equal("abandoned", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+            var before = scenario.Goal.Timeline.Count;
+            var requests = new List<string>();
+            var roles = new List<AgentRole>();
+            var notes = new List<string>();
+            var driver = scenario.Driver(request =>
+            {
+                // Recovery must record its replacement even when this attempt completes inline.
+                Assert.Equal("started", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+                requests.Add(request);
+                return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    scenario.Root, request, CandidateSha);
+            }, roles.Add, notes: notes.Add);
+
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", Assert.Single(requests));
+            var replacement = Assert.Single(scenario.Goal.Timeline.Skip(before).Where(evt =>
+                evt.TaskId == scenario.Tester.Id && evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+                PreTesterEvidenceIndexLines.Parse(evt.Message)?.Outcome == "started"));
+            Assert.Equal(["Infrastructure.Tests:DeferredAlphaTests"], PreTesterEvidenceIndexLines.Parse(replacement.Message)!.Selections);
+            Assert.DoesNotContain("[omitted", replacement.Message, StringComparison.Ordinal);
+            Assert.Single(scenario.Goal.Timeline.Where(evt => evt.TaskId == scenario.Tester.Id &&
+                PreTesterEvidenceIndexLines.Parse(evt.Message)?.Outcome == "abandoned"));
+            Assert.DoesNotContain(notes, note => note.Contains("exit=prior-outcome-not-started", StringComparison.Ordinal));
+            Assert.Equal("green", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+            Assert.Equal([AgentRole.Tester], roles);
+        }
+
+        foreach (var reason in new[] { "malformed-selection-name", "truncated-stored-message-extra", "Truncated-stored-message" })
+        {
+            using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+            scenario.Kernel.RecordFindingEvidenceRun(scenario.Goal.Id, scenario.Tester.Id,
+                PreTesterEvidenceIndexLines.FormatMarker(new("abandoned", CandidateSha, "other-abandonment",
+                    ["Infrastructure.Tests:DeferredAlphaTests"], [], null, [])) + "; abandoned_reason=" + reason);
+            var before = scenario.Goal.Timeline.Count;
+            var requests = new List<string>();
+            var roles = new List<AgentRole>();
+            var notes = new List<string>();
+            var driver = scenario.Driver(request =>
+            {
+                requests.Add(request);
+                return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    scenario.Root, request, CandidateSha);
+            }, roles.Add, notes: notes.Add);
+
+            driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Empty(requests);
+            Assert.DoesNotContain(scenario.Goal.Timeline.Skip(before), evt =>
+                PreTesterEvidenceIndexLines.Parse(evt.Message)?.Outcome == "started");
+            Assert.Contains(notes, note => note.Contains("exit=prior-outcome-not-started prior=abandoned", StringComparison.Ordinal));
+            Assert.Equal("abandoned", PreTesterEvidenceIndexLines.Latest(scenario.Goal, scenario.Tester.Id, CandidateSha)?.Outcome);
+            Assert.Equal([AgentRole.Tester], roles);
+        }
+    }
+
+    [Fact]
+    public void StartedEntryWithColonlessNameIsAbandonedAndDeclaredClassesRun()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests, DeferredBetaTests", BaseSha,
+            ["DeferredAlphaTests", "DeferredBetaTests"]);
+        const string receipt = "malformed-selection-receipt";
+        var declared = new[] { "Infrastructure.Tests:DeferredAlphaTests", "Infrastructure.Tests:DeferredBetaTests" };
+        scenario.Kernel.RecordFindingEvidenceRequest(scenario.Goal.Id, scenario.Tester.Id,
+            PreTesterEvidenceIndexLines.FormatMarker(new("started", CandidateSha, receipt,
+                [declared[0], "ColonlessSelection", declared[1]], [], null, [])));
+        var before = scenario.Goal.Timeline.Count;
+        var requests = new List<string>();
+        var roles = new List<AgentRole>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                scenario.Root, request, CandidateSha);
+        }, roles.Add);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(declared, Assert.Single(requests).Split("; ", StringSplitOptions.RemoveEmptyEntries));
+        var records = scenario.Goal.Timeline.Skip(before).Where(evt =>
+            evt.TaskId == scenario.Tester.Id && PreTesterEvidenceIndexLines.Parse(evt.Message) is not null).ToArray();
+        Assert.Equal(["abandoned", "started", "green"], records.Select(evt => PreTesterEvidenceIndexLines.Parse(evt.Message)!.Outcome));
+        Assert.Equal(receipt, PreTesterEvidenceIndexLines.Parse(records[0].Message)!.ReceiptId);
+        Assert.EndsWith("; abandoned_reason=malformed-selection-name", records[0].Message, StringComparison.Ordinal);
+        Assert.Equal(declared, PreTesterEvidenceIndexLines.Parse(records[1].Message)!.Selections);
+        Assert.Equal(declared, PreTesterEvidenceIndexLines.Parse(records[2].Message)!.Selections);
+        Assert.Equal([AgentRole.Tester], roles);
+    }
+
+    [Fact]
     public void StartedBackgroundAttemptHoldsTesterAcrossTicks()
     {
         using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
@@ -284,7 +440,8 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             Action<AgentRole> dispatched,
             Action<string>? feedback = null,
             ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,
-            IReadOnlyList<string>? changedPaths = null)
+            IReadOnlyList<string>? changedPaths = null,
+            Action<string>? notes = null)
         {
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -293,6 +450,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
+                recordTaskNote: (_, _, message) => notes?.Invoke(message),
                 dispatchAndStart: goal =>
                 {
                     dispatched(goal.Tasks.First(task => task.Status == WorkTaskStatus.Assigned).RequiredRole);

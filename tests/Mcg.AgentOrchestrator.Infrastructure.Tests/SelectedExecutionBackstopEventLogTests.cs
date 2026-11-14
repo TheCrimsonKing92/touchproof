@@ -45,7 +45,7 @@ public sealed class SelectedExecutionBackstopEventLogTests
                 await coordinator.DrainAsync();
                 ConductorBatchLoop.EmitProgress("SELECTED_EXECUTION_BACKSTOP_OTHER result=green");
 
-                Task Service(bool capacity = true) => coordinator.ServiceAsync(() => fixture.Head, [], capacity, false);
+                Task Service(bool capacity = true) => coordinator.ServiceAsync(() => fixture.Head, [], [], capacity, false);
             });
         }
         finally { ConductorBatchLoop.CurrentConductEventLogWriter.Value = previous; }

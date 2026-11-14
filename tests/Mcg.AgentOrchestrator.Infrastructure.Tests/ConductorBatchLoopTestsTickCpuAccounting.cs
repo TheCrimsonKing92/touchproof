@@ -41,7 +41,7 @@ public sealed class ConductorBatchLoopTestsTickCpuAccounting : ConductorBatchLoo
         Assert.EndsWith(" cpu_ms=40", PhaseLine(tick, "sweep"));
         Assert.EndsWith(" cpu_ms=0", PhaseLine(tick, "prewalk"));
         Assert.EndsWith(" cpu_ms=25", PhaseLine(tick, "per-goal-walk"));
-        Assert.EndsWith(" cpu_ms=65 cpu_sweep_ms=40 cpu_prewalk_ms=0 cpu_walk_ms=25", SummaryLine(tick));
+        Assert.EndsWith(" cpu_ms=65 cpu_sweep_ms=40 cpu_prewalk_ms=0 cpu_walk_ms=25 cpu_admission_ms=0", SummaryLine(tick));
     }
 
     [Xunit.Fact]
@@ -79,7 +79,7 @@ public sealed class ConductorBatchLoopTestsTickCpuAccounting : ConductorBatchLoo
         var secondTick = Assert.Single(ticks, tick => tick.Tick == 2);
         Assert.EndsWith(" cpu_ms=40", PhaseLine(firstTick, "sweep"));
         Assert.EndsWith(" cpu_ms=10", PhaseLine(secondTick, "sweep"));
-        Assert.EndsWith(" cpu_ms=10 cpu_sweep_ms=10 cpu_prewalk_ms=0 cpu_walk_ms=0", SummaryLine(secondTick));
+        Assert.EndsWith(" cpu_ms=10 cpu_sweep_ms=10 cpu_prewalk_ms=0 cpu_walk_ms=0 cpu_admission_ms=0", SummaryLine(secondTick));
     }
 
     [Xunit.Fact]
@@ -104,7 +104,7 @@ public sealed class ConductorBatchLoopTestsTickCpuAccounting : ConductorBatchLoo
 
         Assert.Equal(1, sweepCalls);
         Assert.EndsWith(" cpu_ms=0", PhaseLine(tick, "sweep"));
-        Assert.EndsWith(" cpu_ms=0 cpu_sweep_ms=0 cpu_prewalk_ms=0 cpu_walk_ms=0", SummaryLine(tick));
+        Assert.EndsWith(" cpu_ms=0 cpu_sweep_ms=0 cpu_prewalk_ms=0 cpu_walk_ms=0 cpu_admission_ms=0", SummaryLine(tick));
         Assert.DoesNotContain(tick.ProgressLines!, line => Regex.IsMatch(line, @"cpu(?:_\w+)?_ms=-"));
     }
 
@@ -118,7 +118,7 @@ public sealed class ConductorBatchLoopTestsTickCpuAccounting : ConductorBatchLoo
 
         var tick = RunOneTick(new ConductorBatchLoop(), kernel, driver);
 
-        Assert.Matches(@"cpu_ms=\d+ cpu_sweep_ms=\d+ cpu_prewalk_ms=\d+ cpu_walk_ms=\d+$", SummaryLine(tick));
+        Assert.Matches(@"cpu_ms=\d+ cpu_sweep_ms=\d+ cpu_prewalk_ms=\d+ cpu_walk_ms=\d+ cpu_admission_ms=\d+$", SummaryLine(tick));
     }
 
     private static BatchTickSummary RunOneTick(ConductorBatchLoop loop, AgentOrchestratorKernel kernel, ConductorDriver driver)

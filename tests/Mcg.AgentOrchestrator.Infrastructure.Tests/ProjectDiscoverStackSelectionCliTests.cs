@@ -15,7 +15,8 @@ public sealed class ProjectDiscoverStackSelectionCliTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(workspace.Root, "registry"), Path.Combine(workspace.Root, "data"));
         using var output = new StringWriter();
 
-        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output);
+        using var crosswalk = new FakeCrosswalkProcess("go");
+        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
 
         Assert.Equal(0, exit);
         var modelPath = Path.Combine(OrchestratorWorkspace.ForProject(Path.GetFileName(source.Root), source.Root,
@@ -37,7 +38,8 @@ public sealed class ProjectDiscoverStackSelectionCliTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(workspace.Root, "registry"), Path.Combine(workspace.Root, "data"));
         using var output = new StringWriter();
 
-        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output);
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
 
         Assert.Equal(0, exit);
         var modelPath = Path.Combine(OrchestratorWorkspace.ForProject(Path.GetFileName(source.Root), source.Root,

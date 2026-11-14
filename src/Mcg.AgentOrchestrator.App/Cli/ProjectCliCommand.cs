@@ -22,7 +22,8 @@ internal static class ProjectCliCommand
         TextWriter? eventSourcesError = null,
         string? tenant = null,
         OrchestratorWorkspace? homeWorkspace = null,
-        WorkspaceInvocationBinding? eventSourcesBinding = null)
+        WorkspaceInvocationBinding? eventSourcesBinding = null,
+        Func<CrosswalkStackReader>? crosswalkReaderFactory = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
@@ -63,14 +64,14 @@ internal static class ProjectCliCommand
 
             case "discover":
                 Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory,
-                    pullRequestProbeFactory);
+                    pullRequestProbeFactory, crosswalkReaderFactory);
                 return 0;
 
             case "answer":
                 return ProjectAnswerCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
             case "compare-manifest":
-                return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
+                return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, crosswalkReaderFactory);
 
             case "compare-manifest-engine":
                 return ProjectCompareManifestEngineCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
@@ -99,7 +100,8 @@ internal static class ProjectCliCommand
         string? activeProjectOverride,
         TextWriter output,
         Func<IUnitCommandMeasurer>? measurerFactory,
-        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory)
+        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory,
+        Func<CrosswalkStackReader>? crosswalkReaderFactory)
     {
         var (rootOverride, measuredKinds) = ParseDiscoveryOptions(parts);
 
@@ -112,7 +114,7 @@ internal static class ProjectCliCommand
         var workspaceDirectory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory,
             registry.DataRootDirectory);
         IProjectDiscoveryAdapter adapter = ProjectDiscoveryAdapterSelector.Select(rootOverride ?? project.RootDirectory,
-            CrosswalkExecutableComposition.ForOnboarding(), RepositorySourceInventory.ExcludedDirectoryNames);
+            (crosswalkReaderFactory ?? CrosswalkExecutableComposition.ForOnboarding)());
         var measurer = measuredKinds is null ? null : measurerFactory is null ? new ProcessUnitCommandMeasurer()
             : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
         var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,

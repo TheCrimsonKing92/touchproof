@@ -84,7 +84,8 @@ public sealed class ProjectEmitManifestCliTests
     private static int Execute(OrchestratorProjectRegistry registry, string root, string[] parts)
     {
         using var output = new StringWriter();
-        return ProjectCliCommand.Execute(parts, registry, root, null, output);
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        return ProjectCliCommand.Execute(parts, registry, root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
     }
 
     private static Dictionary<string, string> Snapshot(params string[] roots) => roots
