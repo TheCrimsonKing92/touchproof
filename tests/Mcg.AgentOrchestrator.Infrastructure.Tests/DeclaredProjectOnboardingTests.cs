@@ -130,10 +130,15 @@ public sealed class DeclaredProjectOnboardingTests
     {
         using var fixture = new ProjectOnboardingFixture(name);
         if (stack is ProjectStack.Node) File.WriteAllText(Path.Combine(fixture.Root, marker), "{}");
-        var detection = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-        Assert.Equal(stack, detection.Stack);
-        Assert.Equal(marker, detection.Marker);
-        Assert.Null(detection.Refusal);
+        using var crosswalk = new FakeCrosswalkProcess(stack.ToString().ToLowerInvariant());
+        crosswalk.DetectResult = new(0, System.Text.Json.JsonSerializer.Serialize(new {
+            stack = stack.ToString().ToLowerInvariant(), evidence = new[] { new { path = marker, reason = "" } } }), "");
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
+        Assert.Equal(stack switch {
+            ProjectStack.Go => typeof(GoProjectDiscoveryAdapter),
+            ProjectStack.Node => typeof(NodeProjectDiscoveryAdapter),
+            _ => typeof(DotnetProjectDiscoveryAdapter)
+        }, adapter.GetType());
     }
 
     private static OwnerAnswer[] Answers(string build = "none", string reports = "reports/*.xml") =>

@@ -100,10 +100,13 @@ public sealed class ProjectStackResolverDecisionTests : IDisposable
         Write(target, "go.mod", string.Empty);
         Write(target, "App.sln", string.Empty);
 
-        var detection = ProjectDiscoveryAdapterSelector.Detect(target);
-
-        Assert.Null(detection.Stack);
-        Assert.StartsWith("Ambiguous stack markers", detection.Refusal, StringComparison.Ordinal);
+        using var crosswalk = new FakeCrosswalkProcess("go");
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack = "go",
+            evidence = new[] { new { path = "go.mod", reason = "" }, new { path = "App.sln", reason = "" } } }), "");
+        var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(target, crosswalk.Reader));
+        Assert.Contains("Ambiguous stack markers", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("go.mod", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("App.sln", refusal.Message, StringComparison.Ordinal);
         Assert.Equal(TargetToolchainDetector.Detect(target), ProjectStackResolver.Resolve(target, null));
     }
 

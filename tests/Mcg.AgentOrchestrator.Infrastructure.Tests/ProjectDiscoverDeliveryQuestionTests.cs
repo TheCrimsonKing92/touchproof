@@ -144,9 +144,10 @@ public sealed class ProjectDiscoverDeliveryQuestionTests
         public (ProjectModel Model, string Output) Discover(IPullRequestRequirementProbe probe)
         {
             using var output = new StringWriter();
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
             Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "sample"], Registry, Home.Root, null, output,
                 measurerFactory: () => throw new InvalidOperationException("Unexpected measurement."),
-                pullRequestProbeFactory: () => probe));
+                pullRequestProbeFactory: () => probe, crosswalkReaderFactory: () => crosswalk.Reader));
             Assert.True(File.Exists(ModelPath), "Discovery must write its project model.");
             return (ProjectModelJson.Deserialize(File.ReadAllText(ModelPath)), output.ToString());
         }

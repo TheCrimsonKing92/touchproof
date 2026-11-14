@@ -31,8 +31,9 @@ public sealed class ProjectDiscoverCliTests
             .ToDictionary(path => path, File.ReadAllBytes);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var exit = ProjectCliCommand.Execute(["project", "discover", "--root", sourceFixture.Root],
-            registry, workspaceFixture.Root, null, output);
+            registry, workspaceFixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
 
         Assert.Equal(0, exit);
         var modelDirectory = OrchestratorWorkspace.ForProject(Path.GetFileName(sourceFixture.Root), sourceFixture.Root,
@@ -76,7 +77,8 @@ public sealed class ProjectDiscoverCliTests
         var selection = File.ReadAllBytes(registry.CurrentProjectPath);
         using var output = new StringWriter();
 
-        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, defaultFixture.Root, null, output));
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, defaultFixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(3, model.Units.Count);
@@ -96,7 +98,8 @@ public sealed class ProjectDiscoverCliTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
         using var output = new StringWriter();
 
-        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, fixture.Root, null, output));
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, fixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
 
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
@@ -125,8 +128,9 @@ public sealed class ProjectDiscoverCliTests
         registry.CreateProject("sample", namedFixture.Root);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "sample", "--root=" + defaultFixture.Root],
-            registry, defaultFixture.Root, null, output));
+            registry, defaultFixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
         var modelPath = Path.Combine(registry.GetRequiredProject("sample").ResolveWorkspace().OrchestratorDirectory, "project-model.json");
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal(".", model.RepositoryRoot);
@@ -145,8 +149,11 @@ public sealed class ProjectDiscoverCliTests
         File.WriteAllText(modelPath, "previous snapshot");
         using var output = new StringWriter();
 
-        Assert.Throws<DirectoryNotFoundException>(() => ProjectCliCommand.Execute(
-            ["project", "discover", "--root", Path.Combine(fixture.Root, "missing")], registry, fixture.Root, null, output));
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
+        crosswalk.DetectException = new System.ComponentModel.Win32Exception("injected process-start failure");
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "discover", "--root", Path.Combine(fixture.Root, "missing")], registry, fixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
+        Assert.Contains(crosswalk.Binary, error.Message, StringComparison.Ordinal);
         Assert.Equal("previous snapshot", File.ReadAllText(modelPath));
         Assert.Empty(output.ToString());
         Assert.Empty(Directory.GetFiles(workspace.OrchestratorDirectory, ".project-model-*.tmp"));
@@ -158,8 +165,9 @@ public sealed class ProjectDiscoverCliTests
         using var fixture = new ProjectOnboardingFixture("solution");
         var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(["project", "discover", "--root"],
-            registry, fixture.Root, null, output));
+            registry, fixture.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json")));
     }
 
@@ -171,8 +179,9 @@ public sealed class ProjectDiscoverCliTests
         var fake = new RecordingUnitCommandMeasurer();
         var creations = 0;
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--measure", "all"],
-            registry, fixture.Root, null, output, () => { creations++; return fake; }));
+            registry, fixture.Root, null, output, () => { creations++; return fake; }, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal(1, creations);
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
@@ -197,8 +206,9 @@ public sealed class ProjectDiscoverCliTests
         using var fixture = new ProjectOnboardingFixture("solution");
         var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, fixture.Root, null,
-            output, () => throw new InvalidOperationException("Unexpected measurer construction")));
+            output, () => throw new InvalidOperationException("Unexpected measurer construction"), crosswalkReaderFactory: () => crosswalk.Reader));
         var path = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
         Assert.Empty(ProjectModelJson.Deserialize(File.ReadAllText(path)).Measurements);
     }
@@ -216,8 +226,9 @@ public sealed class ProjectDiscoverCliTests
         using var fixture = new ProjectOnboardingFixture("solution");
         var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var exception = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(["project", "discover", .. options],
-            registry, fixture.Root, null, output, () => throw new InvalidOperationException("Unexpected measurer construction")));
+            registry, fixture.Root, null, output, () => throw new InvalidOperationException("Unexpected measurer construction"), crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal("Usage: project discover [name] [--root <path>] [--measure build|test|all]", exception.Message);
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json")));
         Assert.Empty(output.ToString());
@@ -233,8 +244,9 @@ public sealed class ProjectDiscoverCliTests
         var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
         var fake = new RecordingUnitCommandMeasurer();
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--measure=" + value],
-            registry, fixture.Root, null, output, () => fake));
+            registry, fixture.Root, null, output, () => fake, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal(count, fake.Calls.Count);
         if (kinds == UnitCommandKinds.Test)
             Assert.Equal(new[] { UnitCommandKinds.Build, UnitCommandKinds.Test, UnitCommandKinds.Build, UnitCommandKinds.Test },
@@ -254,8 +266,9 @@ public sealed class ProjectDiscoverCliTests
         File.WriteAllText(path, "previous snapshot");
         var fake = new RecordingUnitCommandMeasurer { Result = (_, _) => throw new InvalidOperationException("fixture exception") };
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(["project", "discover", "--measure", "all"],
-            registry, fixture.Root, null, output, () => fake));
+            registry, fixture.Root, null, output, () => fake, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal("previous snapshot", File.ReadAllText(path));
         Assert.Empty(output.ToString());
         Assert.Empty(Directory.GetFiles(workspace.OrchestratorDirectory, ".project-model-*.tmp"));

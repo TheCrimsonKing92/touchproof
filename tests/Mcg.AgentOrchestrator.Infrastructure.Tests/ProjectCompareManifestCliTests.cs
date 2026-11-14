@@ -30,9 +30,10 @@ public sealed class ProjectCompareManifestCliTests
         var homeBefore = Snapshot(home.Root);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var exit = ProjectCliCommand.Execute(
             ["project", "compare-manifest", "--root", source.Root, "--manifest", manifestPath],
-            registry, home.Root, null, output);
+            registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
 
         Assert.Equal(mismatch ? 1 : 0, exit);
         var lines = Lines(output);
@@ -66,9 +67,10 @@ public sealed class ProjectCompareManifestCliTests
         var registry = Registry(home);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(1, ProjectCliCommand.Execute(
             ["project", "compare-manifest", "--root", source.Root, "--manifest", manifestPath],
-            registry, home.Root, null, output));
+            registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal("MissingFromManifest tool dotnet", Assert.Single(Lines(output)));
 
         // Settling the SDK contract is sufficient even when there are no test checks.
@@ -76,9 +78,10 @@ public sealed class ProjectCompareManifestCliTests
             [new("dotnet", "dotnet", ["--version"], Variables: [])]).ToJson();
         File.WriteAllText(manifestPath, manifest.ToJsonString());
         using var matched = new StringWriter();
+        using var matchedCrosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(
             ["project", "compare-manifest", "--root", source.Root, "--manifest", manifestPath],
-            registry, home.Root, null, matched));
+            registry, home.Root, null, matched, crosswalkReaderFactory: () => matchedCrosswalk.Reader));
         Assert.Equal("Match tool dotnet", Assert.Single(Lines(matched)));
         AssertNoModel(registry.DataRootDirectory);
     }
@@ -122,8 +125,9 @@ public sealed class ProjectCompareManifestCliTests
         var homeBefore = Snapshot(home.Root);
         using var output = new StringWriter();
 
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var exception = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(
-            ["project", "compare-manifest", "--root", source.Root, .. tail], registry, home.Root, null, output));
+            ["project", "compare-manifest", "--root", source.Root, .. tail], registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader));
 
         Assert.Contains(Usage, exception.Message);
         Assert.Empty(output.ToString());
@@ -171,9 +175,10 @@ public sealed class ProjectCompareManifestCliTests
         var sourceBefore = Snapshot(source.Root);
         var homeBefore = Snapshot(home.Root);
         using var output = new StringWriter();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         Assert.Equal(0, ProjectCliCommand.Execute(
             ["project", "compare-manifest", .. options, "--manifest=" + manifestPath], registry, home.Root,
-            selection == "active-override" ? "sample" : null, output));
+            selection == "active-override" ? "sample" : null, output, crosswalkReaderFactory: () => crosswalk.Reader));
         Assert.Equal(new[]
         {
             $"Match {AppTest} learned=vstest manifest=vstest",

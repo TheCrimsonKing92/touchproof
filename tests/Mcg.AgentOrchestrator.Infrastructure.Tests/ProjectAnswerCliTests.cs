@@ -402,8 +402,9 @@ public sealed class ProjectAnswerCliTests
         public (int Exit, string Output) Discover()
         {
             using var output = new StringWriter();
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
             var exit = ProjectCliCommand.Execute(["project", "discover", "sample"], Registry,
-                Home.Root, null, output, () => throw new InvalidOperationException("Unexpected measurement"));
+                Home.Root, null, output, () => throw new InvalidOperationException("Unexpected measurement"), crosswalkReaderFactory: () => crosswalk.Reader);
             return (exit, output.ToString());
         }
 

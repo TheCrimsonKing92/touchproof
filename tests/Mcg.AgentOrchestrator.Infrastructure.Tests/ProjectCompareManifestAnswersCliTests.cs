@@ -104,7 +104,8 @@ public sealed class ProjectCompareManifestAnswersCliTests
         public (int Exit, string[] Lines) Execute(string[] parts)
         {
             using var output = new StringWriter();
-            var exit = ProjectCliCommand.Execute(parts, registry, home.Root, null, output);
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
+            var exit = ProjectCliCommand.Execute(parts, registry, home.Root, null, output, crosswalkReaderFactory: () => crosswalk.Reader);
             return (exit, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
 

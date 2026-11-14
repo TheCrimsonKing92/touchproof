@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -12,12 +13,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     public void Detect_DotnetFixture_ReturnsExactMarker(string fixtureName, string marker)
     {
         using var fixture = new ProjectOnboardingFixture(fixtureName);
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(fixture.Root, RepositorySourceInventory.ExcludedDirectoryNames);
-
-        Assert.Equal(ProjectStack.Dotnet, detection.Stack);
-        Assert.Equal(marker, detection.Marker);
-        Assert.Null(detection.Refusal);
+        using var crosswalk = EvidenceReader("dotnet", marker);
+        Assert.IsType<DotnetProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
     }
 
     [Fact]
@@ -25,12 +22,9 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     {
         using var root = new TemporaryRoot();
         root.Write("go.mod");
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(root.Path);
-
-        Assert.Equal(ProjectStack.Go, detection.Stack);
-        Assert.Equal("go.mod", detection.Marker);
-        Assert.Null(detection.Refusal);
+        File.WriteAllText(Path.Combine(root.Path, "go.mod"), "module example.com/app\n");
+        using var crosswalk = EvidenceReader("go", "go.mod");
+        Assert.IsType<GoProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
     }
 
     [Theory]
@@ -39,24 +33,18 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     public void Detect_GoModAndRootSolution_RefusesBothMarkers(string solution)
     {
         using var root = new TemporaryRoot();
-        root.Write("go.mod");
-        root.Write(solution);
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(root.Path);
-
-        Assert.Null(detection.Stack);
-        Assert.Null(detection.Marker);
-        Assert.Contains("Ambiguous", detection.Refusal);
-        Assert.Contains("go.mod", detection.Refusal);
-        Assert.Contains(solution, detection.Refusal);
+        using var crosswalk = EvidenceReader("go", "go.mod", solution);
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
+        Assert.Contains("Ambiguous", error.Message);
+        Assert.Contains("go.mod", error.Message);
+        Assert.Contains(solution, error.Message);
     }
 
     [Fact]
     public void Detect_EmptyRoot_RefusesAndListsMarkers()
     {
         using var root = new TemporaryRoot();
-
-        AssertNoMarker(ProjectDiscoveryAdapterSelector.Detect(root.Path));
+        AssertToolRefusal(root.Path);
     }
 
     [Theory]
@@ -68,34 +56,22 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     {
         using var root = new TemporaryRoot();
         root.Write($"src/{directory}/Only.csproj");
-
-        AssertNoMarker(ProjectDiscoveryAdapterSelector.Detect(root.Path, ["custom-excluded"]));
+        AssertToolRefusal(root.Path);
     }
 
     [Fact]
     public void Detect_MissingRoot_ThrowsDirectoryNotFound()
     {
         using var root = new TemporaryRoot();
-        var missing = System.IO.Path.Combine(root.Path, "missing");
-
-        var exception = Assert.Throws<DirectoryNotFoundException>(() => ProjectDiscoveryAdapterSelector.Detect(missing));
-
-        Assert.Equal($"Repository root does not exist: {missing}", exception.Message);
+        AssertToolRefusal(Path.Combine(root.Path, "missing"));
     }
 
     [Fact]
     public void Detect_MultipleSolutions_ChoosesOrdinalFirstBeforeProjects()
     {
         using var root = new TemporaryRoot();
-        root.Write("Z.sln");
-        root.Write("A.slnx");
-        root.Write("0.csproj");
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(root.Path);
-
-        Assert.Equal(ProjectStack.Dotnet, detection.Stack);
-        Assert.Equal("A.slnx", detection.Marker);
-        Assert.Null(detection.Refusal);
+        using var crosswalk = EvidenceReader("dotnet", "Z.sln", "A.slnx", "0.csproj");
+        Assert.IsType<DotnetProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
     }
 
     [Theory]
@@ -105,14 +81,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     public void Detect_DeepProjects_OrdersNormalizedRelativePaths(string extension)
     {
         using var root = new TemporaryRoot();
-        root.Write($"src/aZ.{extension}");
-        root.Write($"src/a/deep/First.{extension}");
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(root.Path);
-
-        Assert.Equal(ProjectStack.Dotnet, detection.Stack);
-        Assert.Equal($"src/a/deep/First.{extension}", detection.Marker);
-        Assert.Null(detection.Refusal);
+        using var crosswalk = EvidenceReader("dotnet", $"src/aZ.{extension}", $"src/a/deep/First.{extension}");
+        Assert.IsType<DotnetProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
     }
 
     [Fact]
@@ -120,14 +90,11 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     {
         using var root = new TemporaryRoot();
         root.Write("go.mod");
+        File.WriteAllText(Path.Combine(root.Path, "go.mod"), "module example.com/app\n");
         root.Write("nested/Other.sln");
         root.Write("nested/Other.csproj");
-
-        var detection = ProjectDiscoveryAdapterSelector.Detect(root.Path);
-
-        Assert.Equal(ProjectStack.Go, detection.Stack);
-        Assert.Equal("go.mod", detection.Marker);
-        Assert.Null(detection.Refusal);
+        using var crosswalk = EvidenceReader("go", "go.mod", "nested/Other.sln");
+        Assert.IsType<GoProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
     }
 
     [Theory]
@@ -142,7 +109,9 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
             root.Write("Root.sln");
 
         using var crosswalk = new FakeCrosswalkProcess("go");
-        if (setup == "ambiguous") crosswalk.DetectException = new Win32Exception("injected process-start failure");
+        if (setup == "ambiguous")
+            crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack = "go",
+                evidence = new[] { new { path = "go.mod", reason = "" }, new { path = "Root.sln", reason = "" } } }), "");
         var exception = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
 
         Assert.Contains("No discovery adapter is available", exception.Message);
@@ -155,7 +124,6 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         using var root = new TemporaryRoot();
         using var crosswalk = new FakeCrosswalkProcess();
         Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
-        AssertNoMarker(ProjectDiscoveryAdapterSelector.Detect(root.Path));
     }
 
     [Theory]
@@ -168,7 +136,7 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
 
         using var crosswalk = new FakeCrosswalkProcess("dotnet");
-        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
         var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
         var direct = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
 
@@ -184,7 +152,7 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
         using var crosswalk = new FakeCrosswalkProcess("go");
 
-        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
         var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
         var direct = new GoProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
 
@@ -201,7 +169,7 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
         using var crosswalk = new FakeCrosswalkProcess("node");
 
-        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
         var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
         var direct = new NodeProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
 
@@ -211,13 +179,22 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         Assert.Equal(new[] { "detect", fixture.Root }, Assert.Single(crosswalk.Calls).Arguments);
     }
 
-    private static void AssertNoMarker(ProjectDiscoveryAdapterSelector.Detection detection)
+    private static FakeCrosswalkProcess EvidenceReader(string stack, params string[] paths)
     {
-        Assert.Null(detection.Stack);
-        Assert.Null(detection.Marker);
-        Assert.Contains("No stack marker", detection.Refusal);
-        foreach (var marker in new[] { "go.mod", "*.sln", "*.slnx", "*.csproj", "*.fsproj", "*.vbproj" })
-            Assert.Contains(marker, detection.Refusal);
+        var crosswalk = new FakeCrosswalkProcess(stack);
+        crosswalk.DetectResult = new(0, JsonSerializer.Serialize(new { stack,
+            evidence = paths.Select(path => new { path, reason = "" }) }), "");
+        return crosswalk;
+    }
+
+    private static void AssertToolRefusal(string root)
+    {
+        using var crosswalk = new FakeCrosswalkProcess();
+        crosswalk.DetectException = new Win32Exception("injected process-start failure");
+        var error = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root, crosswalk.Reader));
+        Assert.Contains(crosswalk.Binary, error.Message, StringComparison.Ordinal);
+        Assert.Same(crosswalk.DetectException, error.InnerException);
+        Assert.Equal(new[] { "detect", root }, Assert.Single(crosswalk.Calls).Arguments);
     }
 
     private sealed class TemporaryRoot : IDisposable

@@ -328,7 +328,8 @@ public sealed class ProjectInstallManifestCliTests
         public (int Exit, string[] Lines) Execute(string[] parts, string? activeProject = null)
         {
             using var output = new StringWriter();
-            var exit = ProjectCliCommand.Execute(parts, Registry, Home.Root, activeProject, output);
+            using var crosswalk = new FakeCrosswalkProcess("dotnet");
+            var exit = ProjectCliCommand.Execute(parts, Registry, Home.Root, activeProject, output, crosswalkReaderFactory: () => crosswalk.Reader);
             return (exit, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
         public Dictionary<string, string> Snapshot() => new[] { Home.Root, Source.Root, Scratch.Root }

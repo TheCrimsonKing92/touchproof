@@ -10,7 +10,8 @@ internal static class ProjectCompareManifestCommand
     internal const string Usage = "Usage: project compare-manifest [name] [--root <path>] --manifest <path>";
 
     internal static int Execute(IReadOnlyList<string> parts, OrchestratorProjectRegistry registry,
-        string defaultRootDirectory, string? activeProjectOverride, TextWriter output)
+        string defaultRootDirectory, string? activeProjectOverride, TextWriter output,
+        Func<CrosswalkStackReader>? crosswalkReaderFactory = null)
     {
         var (rootOverride, manifestPath) = ParseOptions(parts);
         string manifestJson;
@@ -30,8 +31,8 @@ internal static class ProjectCompareManifestCommand
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
         var root = rootOverride ?? project.RootDirectory;
-        var adapter = ProjectDiscoveryAdapterSelector.Select(root, CrosswalkExecutableComposition.ForOnboarding(),
-            RepositorySourceInventory.ExcludedDirectoryNames);
+        var adapter = ProjectDiscoveryAdapterSelector.Select(root,
+            (crosswalkReaderFactory ?? CrosswalkExecutableComposition.ForOnboarding)());
         var model = adapter.Discover(root,
             RepositorySourceInventory.ExcludedDirectoryNames, null, UnitCommandKinds.None);
         string? answerDirectory = null;
