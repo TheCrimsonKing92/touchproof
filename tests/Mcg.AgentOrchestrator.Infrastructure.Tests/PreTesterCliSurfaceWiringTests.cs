@@ -379,7 +379,7 @@ public sealed class PreTesterCliSurfaceWiringTests
             var core = Path.Combine(Worktree, "tests", "Mcg.AgentOrchestrator.Core.Tests");
             Directory.CreateDirectory(core);
             File.WriteAllText(Path.Combine(core, "Mcg.AgentOrchestrator.Core.Tests.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(core, "DeclaredCoreTests.cs"), "public class DeclaredCoreTests {}");
+            File.WriteAllText(Path.Combine(core, "DeclaredCoreTests.cs"), "public class DeclaredCoreTests { [Xunit.Fact] public void Runs() {} }");
             DeclareCli(Golden);
             DeclareCli(Writer);
             File.WriteAllText(Path.Combine(Path.GetDirectoryName(CliDirectory)!, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),

@@ -6,6 +6,23 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record FocusedEvidenceAllSkippedSelectionDecision(
     string? PolicyFailure, string? ApparatusDetail, IReadOnlyList<string> ZeroMatchSelections)
 {
+    // The persisted check carries the decision as OutputTail, not as structured coverage.
+    // Keep this reader beside the writer so consumers can retain names even when their
+    // request/coverage mapping is absent or no longer matches the failed check.
+    internal static IReadOnlyList<string> ReadZeroMatchSelections(string? detail)
+    {
+        const string marker = " had selection(s) matching 0 tests: ";
+        if (detail is null) return [];
+        var start = detail.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0) return [];
+        var line = detail[(start + marker.Length)..].Split(['\r', '\n'], 2)[0].Trim();
+        if (!line.EndsWith(".", StringComparison.Ordinal)) return [];
+        return line[..^1].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(name => name.StartsWith("FullyQualifiedName~", StringComparison.Ordinal))
+            .Select(name => name["FullyQualifiedName~".Length..])
+            .Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.Ordinal).ToArray();
+    }
+
     internal static FocusedEvidenceAllSkippedSelectionDecision Decide(
         string checkName, bool isFocusedEvidenceSelection, int? executedTestCount,
         FocusedEvidenceSelectionCoverage coverage)

@@ -61,7 +61,12 @@ internal static class PreTesterApparatusReceiptClassifier
         bool completed, FindingEvidenceArmReceipt? candidate, IReadOnlyList<FindingEvidenceSelection> selections)
     {
         if (!completed) return new("not-completed", []);
-        if (evidence is not { IsValidEvidence: true }) return new("evidence-invalid", []);
+        if (evidence is not { IsValidEvidence: true }) return new("evidence-invalid",
+            evidence is null ? [] : TimedOutSelectionRerunMapping.AllRoundChecks(evidence)
+                .Where(check => !check.Passed && check.FailureClassification ==
+                    AcceptanceFailureClassifications.FocusedSelectionApparatusFailure)
+                .SelectMany(check => FocusedEvidenceAllSkippedSelectionDecision.ReadZeroMatchSelections(check.OutputTail))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
         if (candidate is null) return new("candidate-arm-missing", []);
         if (!candidate.Accepted) return new("candidate-arm-not-accepted", []);
         if (!candidate.Passed) return new("candidate-arm-not-passed", []);

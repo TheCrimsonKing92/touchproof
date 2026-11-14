@@ -204,7 +204,7 @@ public sealed class DeferredNoChangeEvidenceClassSetChangeTests
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             foreach (var name in Expanded)
-                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " {}");
+                File.WriteAllText(Path.Combine(project, name + ".cs"), "public class " + name + " { [Xunit.Fact] public void Runs() {} }");
         }
 
         public void CompleteDeveloper(IReadOnlyList<string> classes)

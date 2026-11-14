@@ -91,7 +91,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeInterruption
     [Fact]
     public void CompletedUnmatchedClassesStillRetryDeveloperAsUnusable()
     {
-        using var scenario = new Scenario(testSource: "public abstract class DeferredAlphaTests {}");
+        using var scenario = new Scenario(testSource: "public abstract class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }");
         var inline = new ConductorParallelAcceptanceAttemptCoordinator(
             scenario.AttemptRoot, TrunkBranchName.Default, utcNow: () => scenario.Now,
             runInline: true, acquireStableSlotLease: (_, _) => null);
@@ -136,7 +136,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeInterruption
         public List<string> Feedback { get; } = [];
         public List<AgentRole> Dispatches { get; } = [];
 
-        public Scenario(string testSource = "public class DeferredAlphaTests {}")
+        public Scenario(string testSource = "public class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }")
         {
             (Kernel, Goal) = SoftwareGoal("Deferred no-change interrupted evidence");
             Developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);

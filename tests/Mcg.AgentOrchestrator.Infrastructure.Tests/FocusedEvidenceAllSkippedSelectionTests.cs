@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
@@ -76,6 +77,17 @@ public sealed class FocusedEvidenceAllSkippedSelectionTests
         var trx = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence([path]);
         Assert.False(GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
             new CommandResult(0, "completed"), trx, decision.PolicyFailure).Passed);
+
+        // The persisted detail already names the selection; the pre-Tester reason
+        // must retain it even when its request/coverage context is missing.
+        var check = new AcceptanceCheckResult("missing", false, 0, decision.ApparatusDetail,
+            FailureClassification: decision.PolicyFailure, ExecutedTestCount: trx.ExecutedTestCount);
+        var evidence = new FocusedEvidenceRunResult("request", true, false, "apparatus", [check]);
+        var result = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, true, "candidate", [], _ => false);
+        Assert.Equal("evidence-invalid", result.Unusable!.Check);
+        Assert.Equal("MisspeledTests", Assert.Single(result.Unusable.MissingClasses));
+        Assert.Contains("unusable_classes=MisspeledTests",
+            PreTesterUnusableReason.AppendTo(result.Unusable, "event"));
     }
 
     [Fact]

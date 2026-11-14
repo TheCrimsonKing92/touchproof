@@ -30,8 +30,8 @@ public sealed class PreTesterNamedTestClassesTests
             var project = Path.Combine(root, "tests", "Example.Tests");
             Directory.CreateDirectory(Path.Combine(project, "nested"));
             File.WriteAllText(Path.Combine(project, "Example.Tests.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(project, "DuplicateTests.cs"), "class DuplicateTests {}");
-            File.WriteAllText(Path.Combine(project, "nested", "DuplicateTests.cs"), "class DuplicateTests {}");
+            File.WriteAllText(Path.Combine(project, "DuplicateTests.cs"), "class DuplicateTests { [Xunit.Fact] void Runs() {} }");
+            File.WriteAllText(Path.Combine(project, "nested", "DuplicateTests.cs"), "class DuplicateTests { [Xunit.Fact] void Runs() {} }");
 
             Assert.Empty(DeveloperDeferredTestSelections.ResolveNames(
                 root, ["DuplicateTests"], requireUniqueSourceFile: true).Selections);

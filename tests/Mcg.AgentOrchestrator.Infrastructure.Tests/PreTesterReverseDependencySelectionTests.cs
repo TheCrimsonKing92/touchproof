@@ -376,7 +376,7 @@ public sealed class PreTesterReverseDependencySelectionTests
                 WorkerResultPresent: true, HasCommittedChanges: true));
             Repository = PreTesterReverseDependencySelectionTests.Repository(GoalWorktrees.WorktreePath(Root, Goal.Id));
             Repository.Write("tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs",
-                "public class DeclaredCoreTests { [Fact] public void Works() {} }");
+                "public class DeclaredCoreTests { [Xunit.Fact] public void Works() {} }");
             // Broad Infrastructure checks expand into configured lanes; without a lane,
             // the cost reader sees no full-gate classes for this App-only change.
             Repository.Write("config/acceptance-manifest.json", """

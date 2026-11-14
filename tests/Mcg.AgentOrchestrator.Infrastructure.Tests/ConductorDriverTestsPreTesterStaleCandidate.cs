@@ -221,7 +221,7 @@ public sealed class ConductorDriverTestsPreTesterStaleCandidate
             Goal.Id, Tester.Id, targetHeadCommit: candidate).Segments.SelectMany(segment => segment.Lines);
 
         private void WriteDeveloperChange() => File.WriteAllText(
-            Path.Combine(Worktree, ProjectPath, "DeferredAlphaTests.cs"), "public class DeferredAlphaTests {}");
+            Path.Combine(Worktree, ProjectPath, "DeferredAlphaTests.cs"), "public class DeferredAlphaTests { [Xunit.Fact] public void Runs() {} }");
 
         private void Commit(string message)
         {
