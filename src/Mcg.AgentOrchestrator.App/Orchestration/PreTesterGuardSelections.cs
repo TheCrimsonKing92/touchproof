@@ -129,7 +129,6 @@ internal sealed class PreTesterGuardSelections
             var detail = $"missing={List(missing)} added={List(added)} " +
                 $"not_run_missing={List(notRunMissing)} not_run_added={List(notRunAdded)}";
             progress($"PRE_TESTER_STARTED_SELECTION_DRIFT receipt={prior.ReceiptId} {detail}");
-            throw new InvalidDataException("Started pre-Tester evidence selection changed before reconciliation. " + detail);
         }
 
         // Equality ignores order, casing and duplicates; request identity retains the exact recording.

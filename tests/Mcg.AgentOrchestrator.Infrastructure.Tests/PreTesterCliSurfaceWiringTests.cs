@@ -207,7 +207,7 @@ public sealed class PreTesterCliSurfaceWiringTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void RecordedCliMembershipDoesNotMaskNotRunDrift(bool unresolvedDeclaration)
+    public void RecordedCliMembershipAndNotRunRemainBindingOnDrift(bool unresolvedDeclaration)
     {
         using var scenario = new Scenario("deferred - DeclaredCoreTests" +
             (unresolvedDeclaration ? ", MissingDeclaredTests" : ""));
@@ -217,19 +217,15 @@ public sealed class PreTesterCliSurfaceWiringTests
             PreTesterEvidenceIndexLines.FormatMarker(original));
         var driver = scenario.Driver(scenario.Green);
 
-        var exception = Assert.Throws<InvalidDataException>(() =>
+        var exception = Record.Exception(() =>
             driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
-        Assert.Contains(unresolvedDeclaration
-            ? "not_run_missing=<none> not_run_added=MissingDeclaredTests"
-            : "not_run_missing=UnexpectedTests not_run_added=<none>", exception.Message, StringComparison.Ordinal);
-        Assert.Equal("started", scenario.Latest().Outcome);
+        Assert.Null(exception);
+        Assert.Equal(original.Selections, Selections(Assert.Single(scenario.Requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
         Assert.Equal(original.Selections, scenario.Latest().Selections);
         Assert.Equal(original.NotRun, scenario.Latest().NotRun);
-        Assert.Equal(original.ReceiptId, scenario.Latest().ReceiptId);
-        Assert.Empty(scenario.Requests);
-        Assert.Empty(scenario.Roles);
+        Assert.Equal([AgentRole.Tester], scenario.Roles);
         Assert.Equal(0, scenario.GateRuns);
     }
 

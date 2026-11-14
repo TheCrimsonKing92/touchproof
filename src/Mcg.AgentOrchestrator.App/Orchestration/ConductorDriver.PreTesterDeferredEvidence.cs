@@ -44,8 +44,7 @@ internal sealed partial class ConductorDriver
         if (decline != PreTesterDeferredEvidenceDeclineClause.None)
         {
             RecordPreTesterDeferredEvidenceDecline(goal, developer, decline, candidateSha);
-            if (prior?.Outcome == "started")
-                throw new InvalidDataException("Started pre-Tester evidence lost its Developer declaration or candidate binding.");
+            PreTesterStartedEvidence.TryAbandon(prior, decline.ToString(), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
             return false;
         }
         var priorEvidence = prior is { Outcome: "unusable" } ? _focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!) : null;
@@ -75,8 +74,8 @@ internal sealed partial class ConductorDriver
             worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull);
         if (declaration.Selections.Count == 0)
         {
-            if (prior?.Outcome == "started")
-                throw new InvalidDataException("Started pre-Tester evidence lost all selectable classes.");
+            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoResolvedClasses), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line)))
+                return false;
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.NoResolvedClasses, prior?.Outcome, declaration.NotRun);
             return false;
@@ -88,8 +87,8 @@ internal sealed partial class ConductorDriver
         var notRun = new List<string>(normalizedDeclaration.NotRun);
         if (selected.Count == 0)
         {
-            if (prior?.Outcome == "started")
-                throw new InvalidDataException("Started pre-Tester evidence lost its normalized selection.");
+            if (PreTesterStartedEvidence.TryAbandon(prior, nameof(PreTesterDeferredEvidenceExit.NoNormalizedClasses), line => _recordFindingEvidenceRun(goal.Id, tester.Id, line)))
+                return false;
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.NoNormalizedClasses, prior?.Outcome, notRun);
             return false;
@@ -126,7 +125,7 @@ internal sealed partial class ConductorDriver
         var augmented = guards.Augment(new(selected, notRun), settings, prior, FormatFindingEvidenceSelection);
         if (prior?.Outcome == "started")
             augmented = PreTesterGuardSelections.ReconcileStarted(prior, augmented.Selections, augmented.NotRun,
-                FormatFindingEvidenceSelection, Console.WriteLine);
+                FormatFindingEvidenceSelection, PreTesterStartedEvidence.DriftProgress(prior.ReceiptId));
         var distinct = augmented.Selections.ToArray();
         notRun = augmented.NotRun.ToList();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
