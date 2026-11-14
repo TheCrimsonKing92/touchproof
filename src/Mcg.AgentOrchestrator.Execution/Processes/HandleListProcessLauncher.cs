@@ -88,6 +88,8 @@ internal static class HandleListProcessLauncher
         Func<IReadOnlyList<SafeFileHandle>>? acquireAdditionalHandles = null,
         Action<HandleListLaunchedProcess>? createdObserver = null)
     {
+        using var imageScope = LaunchLockTelemetry.Attribution.IsActive
+            ? LaunchLockImageCounters.Begin(info?.FileName) : (LaunchLockImageCounters.ImageScope?)null;
         var process = new HandleListLaunchedProcess { StartInfo = info };
         try { process.Start(entry, errorModeAccess, job, creationFlags, windowObserver, additionalHandles, acquireAdditionalHandles, createdObserver); return process; }
         catch { process.Dispose(); throw; }

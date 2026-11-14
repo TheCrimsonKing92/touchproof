@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 // Reads the bounded class attribution emitted at host teardown; retries count as real launches.
 internal static class CliGateStatsLaunchesCommand
 {
+    private static readonly string[] ImageFields = ["git", "powershell", "pwsh", "icacls", "cmd", "dotnet", "other"];
     private static readonly Regex SummaryFile = new(
         @"^(?<attempt>.+-(?<time>\d{17})-[0-9a-f]{32})\.(?<lane>.+)\.launch-lock-summary\.txt$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -14,10 +15,17 @@ internal static class CliGateStatsLaunchesCommand
     {
         var flags = new Dictionary<string, int>(StringComparer.Ordinal);
         var bySite = false;
+        var byImage = false;
         string? classFilter = null;
         for (var i = 2; i < args.Count; i++)
         {
             var flag = args[i];
+            if (flag == "--by-image")
+            {
+                if (byImage) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
+                byImage = true;
+                continue;
+            }
             if (flag == "--by-site")
             {
                 if (bySite) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
@@ -38,6 +46,7 @@ internal static class CliGateStatsLaunchesCommand
                 throw new ArgumentException(CliCommandHelp.GateStatsUsage);
         }
         if (classFilter is not null && !bySite) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
+        if (byImage && bySite) throw new ArgumentException(CliCommandHelp.GateStatsUsage);
 
         var skipped = 0;
         var files = new List<(string Path, string Attempt, DateTimeOffset Time)>();
@@ -56,6 +65,8 @@ internal static class CliGateStatsLaunchesCommand
             .Take(flags.GetValueOrDefault("--last", 10)).ToArray();
         var totals = new Dictionary<string, ClassTotal>(StringComparer.Ordinal);
         var siteTotals = new Dictionary<(string Site, string Git), long>();
+        // Decimal keeps sums exact even when several valid Int64 fields exceed Int64 in aggregate.
+        var imageTotals = new Dictionary<string, decimal[]>(StringComparer.Ordinal);
         foreach (var attempt in attempts)
         foreach (var file in attempt)
         {
@@ -65,6 +76,16 @@ internal static class CliGateStatsLaunchesCommand
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { skipped++; continue; }
             foreach (var line in lines)
             {
+                if (byImage)
+                {
+                    if (!line.StartsWith("LAUNCH_LOCK_BY_IMAGE", StringComparison.Ordinal)) continue;
+                    if (!TryParseImage(line, out var imageClass, out var counts))
+                    { skipped++; continue; }
+                    if (!imageTotals.TryGetValue(imageClass, out var images))
+                        imageTotals.Add(imageClass, images = new decimal[ImageFields.Length]);
+                    for (var i = 0; i < counts.Length; i++) images[i] += counts[i];
+                    continue;
+                }
                 if (bySite)
                 {
                     if (!line.StartsWith("LAUNCH_LOCK_BY_SITE", StringComparison.Ordinal)) continue;
@@ -85,7 +106,15 @@ internal static class CliGateStatsLaunchesCommand
             }
         }
 
-        if (bySite)
+        if (byImage)
+        {
+            foreach (var pair in imageTotals.OrderByDescending(pair => pair.Value.Sum())
+                         .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(flags.GetValueOrDefault("--top", 20)))
+                output.WriteLine(FormattableString.Invariant($"class={pair.Key}\ttotal={pair.Value.Sum()}") + "\t" +
+                    string.Join('\t', ImageFields.Select((field, index) =>
+                        $"{field}={pair.Value[index].ToString(CultureInfo.InvariantCulture)}")));
+        }
+        else if (bySite)
         {
             foreach (var pair in siteTotals.OrderByDescending(pair => pair.Value)
                          .ThenBy(pair => pair.Key.Site, StringComparer.Ordinal)
@@ -142,6 +171,31 @@ internal static class CliGateStatsLaunchesCommand
 
     private static bool Count(string text, out long value) =>
         long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value);
+
+    private static bool TryParseImage(string line, out string name, out long[] counts)
+    {
+        name = "";
+        counts = new long[ImageFields.Length];
+        var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0 || tokens[0] != "LAUNCH_LOCK_BY_IMAGE") return false;
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var token in tokens.Skip(1))
+        {
+            var separator = token.IndexOf('=');
+            if (separator <= 0 || separator == token.Length - 1 || token.Any(char.IsWhiteSpace)) return false;
+            var field = token[..separator];
+            // Only required fields participate in validation; future metadata is ignored.
+            if (field is "pid" or "class" || ImageFields.Contains(field, StringComparer.Ordinal))
+                if (!fields.TryAdd(field, token[(separator + 1)..])) return false;
+        }
+        if (!fields.TryGetValue("pid", out var pid) ||
+            !int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out _) ||
+            !fields.TryGetValue("class", out var className)) return false;
+        for (var i = 0; i < ImageFields.Length; i++)
+            if (!fields.TryGetValue(ImageFields[i], out var count) || !Count(count, out counts[i])) return false;
+        name = className;
+        return true;
+    }
 
     private static bool TryParseSite(string line, out string name, out string site, out string git, out long launches)
     {

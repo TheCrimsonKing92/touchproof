@@ -7,6 +7,7 @@ internal static class AcceptanceLaunchLockSummary
     private const string LaunchLockSummaryPrefix = "LAUNCH_LOCK_SUMMARY ";
     private const string ByClassPrefix = "LAUNCH_LOCK_BY_CLASS ";
     private const string BySitePrefix = "LAUNCH_LOCK_BY_SITE ";
+    private const string ByImagePrefix = "LAUNCH_LOCK_BY_IMAGE ";
 
     internal static void Preserve(
         string output,
@@ -56,6 +57,7 @@ internal static class AcceptanceLaunchLockSummary
             while (classReader.ReadLine() is { } line)
                 if ((line.StartsWith(ByClassPrefix, StringComparison.Ordinal) ||
                      line.StartsWith(BySitePrefix, StringComparison.Ordinal) ||
+                     line.StartsWith(ByImagePrefix, StringComparison.Ordinal) ||
                      line.StartsWith("LAUNCH_LOCK_CPU_BY_CLASS ", StringComparison.Ordinal)) &&
                     TryReadPid(line, out var classProcessId) && classProcessId == processId)
                     lines.Add(line);

@@ -15,12 +15,13 @@ public sealed class LaunchLockSiteFormatterTests
                 new(i < 2 ? "Shared.Call" : $"Site{i}.Call", $"cmd{i}"));
         Assert.Equal(12, attribution.SiteSnapshot().Count);
         var lines = LaunchLockTelemetry.FormatTeardownLines(new LaunchLockCounters().Snapshot(), attribution, 42).ToArray();
-        Assert.Equal(12, lines.Length);
+        Assert.Equal(13, lines.Length);
         Assert.StartsWith("LAUNCH_LOCK_SUMMARY ", lines[0]);
         Assert.StartsWith("LAUNCH_LOCK_BY_CLASS ", lines[1]);
+        Assert.StartsWith("LAUNCH_LOCK_BY_IMAGE ", lines[2]);
         Assert.Equal(Enumerable.Range(0, 10).Select(i =>
             $"LAUNCH_LOCK_BY_SITE pid=42 class=A site={(i < 2 ? "Shared.Call" : $"Site{i}.Call")} git=cmd{i} launches={12 - i}"),
-            lines.Skip(2));
+            lines.Skip(3));
     }
 
     [Fact]
