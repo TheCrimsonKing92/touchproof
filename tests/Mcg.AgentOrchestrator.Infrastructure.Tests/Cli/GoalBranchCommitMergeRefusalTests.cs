@@ -49,6 +49,7 @@ public sealed class GoalBranchCommitMergeRefusalTests
         fixture.StartPendingMerge();
         var beforeHead = fixture.Head;
         var beforeMergeHead = fixture.Git("rev-parse", "-q", "--verify", "MERGE_HEAD");
+        var beforeParents = fixture.Git("rev-list", "--parents", "-n", "1", "HEAD");
         var beforeStatus = fixture.Git("status", "--porcelain=v1");
         var beforeState = fixture.StateJson();
         Assert.Empty(fixture.Intents());
@@ -60,8 +61,7 @@ public sealed class GoalBranchCommitMergeRefusalTests
             result.Error.Trim());
         Assert.DoesNotContain("New head:", result.Output);
         Assert.Equal(beforeHead, fixture.Head);
-        Assert.Equal(2, fixture.Git("rev-list", "--parents", "-n", "1", "HEAD")
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Equal(beforeParents, fixture.Git("rev-list", "--parents", "-n", "1", "HEAD"));
         Assert.Equal(beforeMergeHead, fixture.Git("rev-parse", "-q", "--verify", "MERGE_HEAD"));
         Assert.Equal(beforeStatus, fixture.Git("status", "--porcelain=v1"));
         Assert.Empty(fixture.Intents());
