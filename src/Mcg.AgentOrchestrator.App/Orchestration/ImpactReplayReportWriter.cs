@@ -159,6 +159,7 @@ internal static class ImpactReplayReportWriter
             }
         }
         ImpactReplayUnboundedSelectionReportWriter.Append(text, report.Attempts);
+        ImpactReplayShippingFollowReportWriter.Append(text, report.Attempts);
         return text.ToString();
     }
 

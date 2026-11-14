@@ -25,7 +25,8 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyList<string> changedSourcePaths,
         bool bypassCache = false,
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
-        bool propagateShippingSourceReach = false)
+        bool propagateShippingSourceReach = false,
+        Action<string, string>? shippingReachDiagnostics = null)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null,
@@ -92,7 +93,7 @@ internal static class ReverseDependencyTestImpactReader
                 index = cachedIndex;
                 disposition = ReverseDependencyCacheDisposition.Hit;
                 var hitReceipt = CreateReceipt(snapshot, disposition, reparsedFileCount, hitCount);
-                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom, propagateShippingSourceReach);
+                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics);
             }
 
             index = ParseSnapshot(snapshot, repositoryRoot, out var parseFailure, out reparsedFileCount)!;
@@ -110,7 +111,7 @@ internal static class ReverseDependencyTestImpactReader
                 ? RetainedSnapshotCount()
                 : RetainIndex(snapshot.Fingerprint, index);
             var receipt = CreateReceipt(snapshot, disposition, reparsedFileCount, retainedSnapshotCount);
-            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach);
+            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics);
         }
         catch (IOException exception)
         {
@@ -150,7 +151,8 @@ internal static class ReverseDependencyTestImpactReader
         string repositoryRoot,
         ReverseDependencyCacheReceipt receipt,
         RepositoryTestImpactHeadroom headroom,
-        bool propagateShippingSourceReach)
+        bool propagateShippingSourceReach,
+        Action<string, string>? shippingReachDiagnostics)
     {
         var indexedFiles = index.Files;
         try
@@ -216,6 +218,7 @@ internal static class ReverseDependencyTestImpactReader
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
+            HashSet<string>? shippingFrontier = shippingReachDiagnostics is null ? null : new(StringComparer.Ordinal);
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
                 headroom = headroom with
@@ -255,12 +258,30 @@ internal static class ReverseDependencyTestImpactReader
                                 ownedClassNames.Contains(declaration.Name) ||
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
                             .Select(declaration => declaration.Name));
+                    if (shippingReachDiagnostics is not null && hop == 2)
+                    {
+                        foreach (var declaration in consumer.Symbols!.DeclaredTypes.Where(declaration =>
+                                     consumer.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal)))
+                        foreach (var symbol in referencedFrontier.Where(symbol => shippingFrontier!.Contains(symbol.Name)))
+                        {
+                            if (symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses
+                                    ? declaration.ReferencedIdentifiers.Contains(symbol.Name)
+                                    : declaration.Name == $"{symbol.Name}Tests")
+                                shippingReachDiagnostics(symbol.Name, declaration.Name);
+                        }
+                    }
                 }
 
                 foreach (var consumer in consumers)
                 {
                     seenPaths.Add(consumer.Path);
                 }
+
+                if (shippingFrontier is not null && hop == 1)
+                    shippingFrontier.UnionWith(consumers.Where(file => !file.IsTargetTestProject)
+                        .SelectMany(file => file.Symbols!.DeclaredTypes)
+                        .Where(declaration => declaration.ReferencedIdentifiers.Overlaps(frontierSet))
+                        .Select(declaration => declaration.Name));
 
                 frontier = consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes

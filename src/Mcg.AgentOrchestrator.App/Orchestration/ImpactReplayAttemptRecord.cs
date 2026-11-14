@@ -41,7 +41,17 @@ internal sealed record ImpactReplayAttemptRecord(
     int? UnboundedSelectedClassCount = null,
     double? UnboundedNonFloorTestSecondsShare = null,
     string? UnboundedClassCountUnavailableReason = null,
-    string? UnboundedDurationShareUnavailableReason = null)
+    string? UnboundedDurationShareUnavailableReason = null,
+    IReadOnlyList<string>? ShippingFollowAddedClasses = null,
+    IReadOnlyList<string>? ShippingFollowAddedLanes = null,
+    double? ShippingFollowAddedSeconds = null,
+    double? ShippingFollowRemainingSavingPercent = null,
+    string? ShippingFollowClassesUnavailableReason = null,
+    string? ShippingFollowSecondsUnavailableReason = null,
+    string? ShippingFollowRemainingSavingUnavailableReason = null,
+    IReadOnlyList<ImpactReplayShippingFollowAttribution>? ShippingFollowAttributions = null)
 {
     public double ShareOfLanesSkipped => RanLanes.Count == 0 ? 0 : (double)SkippedLanes.Count / RanLanes.Count;
 }
+
+internal sealed record ImpactReplayShippingFollowAttribution(string ShippingType, IReadOnlyList<string> AddedClasses);
