@@ -10,54 +10,51 @@ public sealed class CliAppCommandTimeoutReportTests
     private const string ErrorSentinel = "stderr-terminal-sentinel";
     private const string FloodLine = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCD";
     private const int FloodLines = 512;
+    private const int NominalDeadlineMilliseconds = 1000;
+    private const int FirstOutputDelaySeconds = 2;
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Run_ChildOutlivesDeadline_ReportsIdentityAndCappedStreamTails()
     {
         var start = ShellStart(FloodCommand(wait: true));
+        var readiness = new CliAppCommandTimeoutReport.Readiness(OutputSentinel, ErrorSentinel);
+        await AssertTimeoutFixtureAsync(start, readiness);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task Run_FirstOutputAfterNominalDeadline_ReportsIdentityAndCappedStreamTails()
+    {
+        var start = ShellStart(FloodCommand(wait: true, delayFirstOutput: true));
+        var readiness = new CliAppCommandTimeoutReport.Readiness(OutputSentinel, ErrorSentinel);
+        await AssertTimeoutFixtureAsync(start, readiness);
+    }
+
+    private static async Task AssertTimeoutFixtureAsync(
+        ProcessStartInfo start, CliAppCommandTimeoutReport.Readiness readiness)
+    {
         string[] arguments = ["start-dispatch", "--goal", "goal with spaces", "", "a\"b", "C:\\folder with spaces\\"];
         Process? child = null;
         ConductorSupervisorProcessIdentity? childIdentity = null;
         var pid = 0;
-        var elapsed = Stopwatch.StartNew();
         try
         {
-            var run = Task.Run(() => CliAppCommandTimeoutReport.Run(start, arguments, 1000, process =>
+            var run = Task.Run(() => CliAppCommandTimeoutReport.Run(start, arguments, NominalDeadlineMilliseconds, process =>
             {
                 pid = process.Id;
                 childIdentity = TestOwnedProcessStop.Identify(process);
                 child = Process.GetProcessById(pid);
                 _ = child.SafeHandle; // Hold the original process identity through test cleanup.
-            }));
+            }, readiness));
+            await TestHangGuard.CompletesWithinAsync(Task.WhenAny(readiness.Observed, run),
+                TimeSpan.FromMilliseconds(10000),
+                "timeout fixture readiness: both stream sentinel lines observed by the capture pumps");
             // Hang-only ceiling: detect a missing timeout report well before the child's 30 s wait.
             await TestHangGuard.CompletesWithinAsync(run, TimeSpan.FromMilliseconds(10000),
                 "CLI timeout report after bounded termination and concurrent output drain");
             var error = await Assert.ThrowsAsync<TimeoutException>(() => run);
-            elapsed.Stop();
-
-            Assert.True(elapsed.ElapsedMilliseconds < 10000,
-                "Hang guard: timeout reporting did not finish before the 10 s cleanup ceiling.");
-            Assert.Contains("App command did not exit within 1000 ms.", error.Message, StringComparison.Ordinal);
-            Assert.Contains("Command arguments: start-dispatch --goal \"goal with spaces\" \"\" \"a\\\"b\" \"C:\\\\folder with spaces\\\\\"\n",
-                error.Message, StringComparison.Ordinal);
-            Assert.True(pid > 0);
-            Assert.Contains($"PID: {pid.ToString(CultureInfo.InvariantCulture)}\n", error.Message, StringComparison.Ordinal);
-            var elapsedLine = error.Message.Split('\n').Single(line => line.StartsWith("Elapsed milliseconds: ", StringComparison.Ordinal));
-            Assert.True(long.TryParse(elapsedLine["Elapsed milliseconds: ".Length..],
-                NumberStyles.None, CultureInfo.InvariantCulture, out var reportedMilliseconds));
-            Assert.InRange(reportedMilliseconds, 0, elapsed.ElapsedMilliseconds);
-            Assert.Contains("Termination: ", error.Message, StringComparison.Ordinal);
-            Assert.Contains("Drain: ", error.Message, StringComparison.Ordinal);
-
-            var (stdout, stderr) = StreamPayloads(error.Message);
-            Assert.Contains(OutputSentinel, stdout, StringComparison.Ordinal);
-            Assert.Contains(ErrorSentinel, stderr, StringComparison.Ordinal);
-            Assert.DoesNotContain(ErrorSentinel, stdout, StringComparison.Ordinal);
-            Assert.DoesNotContain(OutputSentinel, stderr, StringComparison.Ordinal);
-            Assert.StartsWith(CliAppCommandTimeoutReport.TruncationMarker, stdout, StringComparison.Ordinal);
-            Assert.StartsWith(CliAppCommandTimeoutReport.TruncationMarker, stderr, StringComparison.Ordinal);
-            Assert.InRange(stdout.Length, 1, 16384);
-            Assert.InRange(stderr.Length, 1, 16384);
+            Assert.True(readiness.Observed.IsCompletedSuccessfully,
+                "The timeout report must follow capture of both complete sentinel lines.");
+            AssertTimeoutReport(error, pid);
         }
         finally
         {
@@ -79,6 +76,31 @@ public sealed class CliAppCommandTimeoutReportTests
                 finally { child.Dispose(); }
             }
         }
+    }
+
+    private static void AssertTimeoutReport(TimeoutException error, int pid)
+    {
+        Assert.Contains("App command did not exit within 1000 ms.", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Command arguments: start-dispatch --goal \"goal with spaces\" \"\" \"a\\\"b\" \"C:\\\\folder with spaces\\\\\"\n",
+            error.Message, StringComparison.Ordinal);
+        Assert.True(pid > 0);
+        Assert.Contains($"PID: {pid.ToString(CultureInfo.InvariantCulture)}\n", error.Message, StringComparison.Ordinal);
+        var elapsedLine = error.Message.Split('\n').Single(line => line.StartsWith("Elapsed milliseconds: ", StringComparison.Ordinal));
+        Assert.True(long.TryParse(elapsedLine["Elapsed milliseconds: ".Length..],
+            NumberStyles.None, CultureInfo.InvariantCulture, out var reportedMilliseconds));
+        Assert.True(reportedMilliseconds >= 0);
+        Assert.Contains("Termination: ", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Drain: ", error.Message, StringComparison.Ordinal);
+
+        var (stdout, stderr) = StreamPayloads(error.Message);
+        Assert.Contains(OutputSentinel, stdout, StringComparison.Ordinal);
+        Assert.Contains(ErrorSentinel, stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain(ErrorSentinel, stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain(OutputSentinel, stderr, StringComparison.Ordinal);
+        Assert.StartsWith(CliAppCommandTimeoutReport.TruncationMarker, stdout, StringComparison.Ordinal);
+        Assert.StartsWith(CliAppCommandTimeoutReport.TruncationMarker, stderr, StringComparison.Ordinal);
+        Assert.InRange(stdout.Length, 1, 16384);
+        Assert.InRange(stderr.Length, 1, 16384);
     }
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
@@ -137,17 +159,24 @@ public sealed class CliAppCommandTimeoutReportTests
         return (message[outputStart..errorHeader], message[errorStart..]);
     }
 
-    private static string FloodCommand(bool wait)
+    private static string FloodCommand(bool wait, bool delayFirstOutput = false)
     {
         if (OperatingSystem.IsWindows())
         {
-            var finish = wait ? "ping -n 31 127.0.0.1 >nul" : "exit /b 3";
-            return $"(for /L %i in (1,1,{FloodLines}) do @echo {FloodLine}) & echo {OutputSentinel}& " +
+            // Child-owned delays work with redirected input and need no network access.
+            const string sleep = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds";
+            // Isolate IF so a successful delay still executes the following flood.
+            var delay = delayFirstOutput
+                ? $"{sleep} {FirstOutputDelaySeconds} & (if errorlevel 1 exit /b 97) & "
+                : "";
+            var finish = wait ? $"{sleep} 30" : "exit /b 3";
+            return delay + $"(for /L %i in (1,1,{FloodLines}) do @echo {FloodLine}) & echo {OutputSentinel}& " +
                 $"(for /L %i in (1,1,{FloodLines}) do @echo {FloodLine}) 1>&2 & 1>&2 echo {ErrorSentinel}& {finish}";
         }
 
+        var outputDelay = delayFirstOutput ? $"sleep {FirstOutputDelaySeconds} || exit 97; " : "";
         var ending = wait ? "sleep 30" : "exit 3";
-        return $"i=0; while [ $i -lt {FloodLines} ]; do printf '%s\\n' '{FloodLine}'; i=$((i+1)); done; " +
+        return outputDelay + $"i=0; while [ $i -lt {FloodLines} ]; do printf '%s\\n' '{FloodLine}'; i=$((i+1)); done; " +
             $"printf '%s\\n' '{OutputSentinel}'; i=0; " +
             $"while [ $i -lt {FloodLines} ]; do printf '%s\\n' '{FloodLine}' >&2; i=$((i+1)); done; " +
             $"printf '%s\\n' '{ErrorSentinel}' >&2; {ending}";

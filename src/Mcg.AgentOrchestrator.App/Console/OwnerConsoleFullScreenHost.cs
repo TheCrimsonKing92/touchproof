@@ -131,11 +131,15 @@ internal static class OwnerConsoleFullScreenHost
                 var settingsPath = Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json");
                 var settings = new OwnerConsoleNotificationSettingsProvider(OwnerConsoleNotificationSettings.Load(settingsPath));
                 var soundOutput = new WindowsOwnerConsoleSoundOutput();
+                var defaultLibraryRoot = OwnerConsoleSoundCommand.DefaultLibraryRoot(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
                 var notifier = new SystemOwnerConsoleNotifier(soundOutput, settings.Current, File.Exists,
                     Directory.Exists, path => Directory.EnumerateFiles(path, "*.wav", SearchOption.TopDirectoryOnly),
-                    Random.Shared.Next, current: () => settings.Current);
+                    Random.Shared.Next, current: () => settings.Current,
+                    decisionLibraryFolder: snapshot => OwnerConsoleSoundCommand.LibraryFolder(
+                        settingsPath, snapshot.SoundLibrary, defaultLibraryRoot, OwnerConsoleNotificationTier.Decision));
                 var sound = new OwnerConsoleSoundCommand(settingsPath, settings, notifier, soundOutput,
-                    OwnerConsoleSoundCommand.DefaultLibraryRoot(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)),
+                    defaultLibraryRoot,
                     Directory.Exists, path => Directory.EnumerateFiles(path, "*", SearchOption.TopDirectoryOnly));
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                     new TerminalGuiOwnerConsoleDialogs(app, token), new OwnerGoalDetailQuery(state,

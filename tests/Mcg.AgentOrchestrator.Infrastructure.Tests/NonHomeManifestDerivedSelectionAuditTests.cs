@@ -23,8 +23,8 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 /// | Inventory | src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory.cs:16-20,27-114 | manifest-derived: shape and declaration govern resolution; legacy help is not selection |
 /// | Goal scope | src/Mcg.AgentOrchestrator.App/Orchestration/GoalTargetImpactPlanScope.cs:9-64 | fail-closed: rootless non-home build plan uses existing missing-manifest scope |
 /// | Rootless compiler | src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler.cs:37-55 | home-only: no production callers; all production policies receive scoped plans |
-/// | Reuse shadow | src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestReuseShadow.cs:51-81 | home-only: cache factory requires Mcg Infrastructure partition (verifier:2082-2110) |
-/// | Train attribution | src/Mcg.AgentOrchestrator.App/Orchestration/MergeTrainImpactAttribution.cs:9-83 | fail-closed: non-home runs return null without Mcg selections/project file; emits no checks |
+/// | Reuse shadow | src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestReuseShadow.cs:51-86 | partition-bound: no non-home reach unless manifest declares built-in Infrastructure partition (verifier:2082-2110) |
+/// | Train attribution | src/Mcg.AgentOrchestrator.App/Orchestration/MergeTrainImpactAttribution.cs:9-99 | manifest-derived: gate home classification, strict declared-check filter, null on unavailable manifest |
 /// | Gate scope | src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ManifestScopedImpactPlan.cs:29-50 | manifest-derived: filter executable plans to declared checks |
 /// </summary>
 // Parallel-safe: each case owns its repository, linked worktree, manifest and TRX.
@@ -179,7 +179,7 @@ public sealed class NonHomeManifestDerivedSelectionAuditTests
         foreach (var paths in new[] { new[] { ForeignSource }, new[] { ForeignSource, "config/widget.json" } })
         {
             var members = new[] { Member('a', paths), Member('b', [ForeignTest]) };
-            Assert.Null(MergeTrainImpactAttribution.TryAttribute([trx], fixture.Worktree, members, out var classes));
+            Assert.Null(MergeTrainImpactAttribution.TryAttribute([trx], fixture.Worktree, members, out var classes, fixture.Home));
             Assert.Empty(classes);
         }
     }

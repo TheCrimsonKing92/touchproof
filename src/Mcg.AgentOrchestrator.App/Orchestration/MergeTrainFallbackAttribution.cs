@@ -10,7 +10,7 @@ internal static class MergeTrainFallbackAttribution
         IReadOnlyList<MergeTrainMemberBinding> members, int attempt,
         out IReadOnlyList<string> subjects, out string source,
         MergeTrainReceipt? receipt = null, MergeTrainMemberBinding? ownership = null,
-        IReadOnlyList<string>? ownershipSubjects = null)
+        IReadOnlyList<string>? ownershipSubjects = null, string? projectHomeDirectory = null)
     {
         if (ownership is not null ||
             receipt?.FailedChecks.Contains(SourceSizeRatchetPreflight.CheckName, StringComparer.Ordinal) == true)
@@ -27,7 +27,7 @@ internal static class MergeTrainFallbackAttribution
             ? MergeTrainReachAttribution.TryAttribute(resultPaths, workspacePath, members, out reachSubjects, confirmed) : null;
         subjects = [];
         source = "ownership";
-        var attributed = MergeTrainImpactAttribution.TryAttribute(resultPaths, workspacePath, members, out subjects);
+        var attributed = MergeTrainImpactAttribution.TryAttribute(resultPaths, workspacePath, members, out subjects, projectHomeDirectory);
         source = "impact";
         if (attributed is not null) return attributed;
         // With no ownership verdict, disagreement between the new rules skips only

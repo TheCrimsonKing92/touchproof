@@ -31,11 +31,11 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         var started = before == false && after == true;
         if (started) _restartAt = now;
         var calm = current.Status.LandedToday > previous.Status.LandedToday;
-        var attention = ObserveDecisions(current, now, settings, baseline: false);
+        var (attention, opened) = ObserveDecisions(current, now, settings, baseline: false);
         var alarm = ObserveStop(before, after, current.Status, now, settings);
         alarm |= ObserveTick(current, after, now, settings, baseline: false);
 
-        var result = new List<OwnerConsoleNotificationTier>(3);
+        var result = new List<OwnerConsoleNotificationTier>(4);
         if (calm && enabled.Calm && (_lastCalm is null || now - _lastCalm >= settings.CalmCoalesce))
         {
             result.Add(OwnerConsoleNotificationTier.Calm);
@@ -43,6 +43,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         }
         if (attention && enabled.Attention) result.Add(OwnerConsoleNotificationTier.Attention);
         if (alarm && enabled.Alarm) result.Add(OwnerConsoleNotificationTier.Alarm);
+        if (opened && enabled.Decision) result.Add(OwnerConsoleNotificationTier.Decision);
         return result;
     }
 
@@ -98,18 +99,20 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         ObserveTick(model, _lastKnownRunning, now, settings, baseline: true);
     }
 
-    private bool ObserveDecisions(OwnerConsoleViewModel model, DateTimeOffset now,
+    private (bool Attention, bool Opened) ObserveDecisions(OwnerConsoleViewModel model, DateTimeOffset now,
         OwnerConsoleNotificationSettings settings, bool baseline)
     {
         var live = model.Decisions.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var id in _decisions.Keys.Where(id => !live.Contains(id)).ToArray()) _decisions.Remove(id);
         var ring = false;
+        var opened = false;
         foreach (var decision in model.Decisions)
         {
             var fresh = decision.RaisedAt is { } raised && now - raised < settings.AttentionThreshold;
             if (!_decisions.TryGetValue(decision.Id, out var state))
             {
                 _decisions[decision.Id] = (fresh, !fresh);
+                opened = !baseline;
                 continue;
             }
             if (state.Eligible && !state.Consumed && decision.RaisedAt is { } at &&
@@ -119,7 +122,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
                 ring = !baseline;
             }
         }
-        return ring;
+        return (ring, opened);
     }
 
     private bool ObserveTick(OwnerConsoleViewModel model, bool? running, DateTimeOffset now,

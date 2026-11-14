@@ -1,3 +1,3 @@
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal enum OwnerConsoleNotificationTier { Calm, Attention, Alarm }
+internal enum OwnerConsoleNotificationTier { Calm, Attention, Alarm, Decision }

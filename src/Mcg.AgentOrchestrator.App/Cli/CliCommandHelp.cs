@@ -104,7 +104,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds] [--relaunch]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string StorageHealthUsage = "Usage: storage-health [--json]";
-    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...] | gate-stats launches [--last <n>] [--top <k>] [--by-site [--class <name>]] | gate-stats builds [--last-hours <n>] | gate-stats cpu [--last <n>] [--top <k>] | gate-stats git [--last <n>] [--top <k>]";
+    public const string GateStatsUsage = "Usage: gate-stats lanes [--last <n>] [--json] | gate-stats classes [--last <n>] [--lane <name>] [--top <k>] [--json] | gate-stats compare --before <iso-time> --after <iso-time> [--last <n>] [--json] | gate-stats flakes [--last <n>] [--top <k>] [--json] | gate-stats waits [--last <n>] [--top <k>] [--json] | gate-stats failures [--last <n>] [--json] | gate-stats failure --attempt <id> [--json] | gate-stats replay --gate <manifest.json> [--gate <manifest.json> ...] | gate-stats launches [--last <n>] [--top <k>] [--by-site [--class <name>]] [--by-image] | gate-stats builds [--last-hours <n>] | gate-stats cpu [--last <n>] [--top <k>] | gate-stats git [--last <n>] [--top <k>]";
     public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
@@ -701,7 +701,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GateStats = new(
         GateStatsUsage,
         "Read gate timings (default last=10, top=20), test flakes (default last=20, top=20), and failures (default last=20). Drill into one failure with --attempt. Lane timings use recorded observations; classes use TRX lane slugs. P90 is nearest rank; ISO times require Z or an offset.",
-        ["--last", "--last-hours", "--lane", "--top", "--before", "--after", "--attempt", "--gate", "--json", "--by-site", "--class", "--help", "-h"]);
+        ["--last", "--last-hours", "--lane", "--top", "--before", "--after", "--attempt", "--gate", "--json", "--by-site", "--by-image", "--class", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BuildAttribution = new(
         BuildAttributionUsage,

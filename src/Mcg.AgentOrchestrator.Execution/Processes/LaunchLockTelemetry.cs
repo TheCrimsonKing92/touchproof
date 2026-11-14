@@ -167,6 +167,7 @@ internal sealed class LaunchLockAttribution
         if (key is null) return;
         var current = counters.GetOrAdd(key, static _ => new ClassCounters());
         current.Record(entry, createTicks);
+        current.Images.RecordCurrent();
         if (capture)
         {
             try { site = captureSite(entry); }
@@ -181,8 +182,12 @@ internal sealed class LaunchLockAttribution
     internal IReadOnlyList<LaunchLockSiteSnapshot> SiteSnapshot() =>
         counters.SelectMany(pair => pair.Value.SiteSnapshot(pair.Key)).ToArray();
 
+    internal IReadOnlyDictionary<string, long[]> ImageSnapshot() =>
+        counters.ToDictionary(pair => pair.Key, pair => pair.Value.Images.Snapshot(), StringComparer.Ordinal);
+
     private sealed class ClassCounters
     {
+        internal LaunchLockImageCounters Images { get; } = new();
         private readonly long[] byEntry = new long[Enum.GetValues<LaunchLockEntryPoint>().Length];
         private long launches;
         private long createTicksTotal;
@@ -264,7 +269,12 @@ internal static class LaunchLockTelemetry
         if (attribution is not null)
         {
             var classes = attribution.Snapshot();
-            foreach (var line in FormatByClass(classes, processId)) yield return line;
+            var images = attribution.ImageSnapshot();
+            foreach (var row in ReportedClasses(classes))
+            {
+                foreach (var line in FormatByClass([row], processId)) yield return line;
+                yield return LaunchLockImageCounters.Format(row.Key, images[row.Key], processId);
+            }
             foreach (var line in LaunchLockSiteFormatter.FormatBySite(classes, attribution.SiteSnapshot(), processId))
                 yield return line;
             if (ReferenceEquals(attribution, Attribution) && attribution.IsActive)

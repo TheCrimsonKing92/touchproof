@@ -31,6 +31,7 @@ internal sealed class OwnerConsoleAlertSettingsCommand(OwnerConsoleNotificationS
         if (!tiers.Calm) muted.Add("calm");
         if (!tiers.Attention) muted.Add("attention");
         if (!tiers.Alarm) muted.Add("alarm");
+        if (!tiers.Decision) muted.Add("decision");
         if (!write("mutedTiers", muted.Count == 0 ? null : muted, "bell save failed", output)) return false;
         settings.Publish(settings.Current with { BellTiers = tiers });
         return true;

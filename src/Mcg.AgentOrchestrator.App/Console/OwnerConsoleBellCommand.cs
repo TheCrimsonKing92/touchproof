@@ -12,20 +12,21 @@ internal sealed class OwnerConsoleBellCommand(OwnerConsoleSoundCommand? sound)
         OwnerConsoleBellTiers tiers;
         if (parts.Length == 1 && parts[0] is "on" or "off")
             tiers = parts[0] == "on" ? OwnerConsoleBellTiers.All : OwnerConsoleBellTiers.None;
-        else if (parts.Length == 2 && parts[0] is "calm" or "attention" or "alarm" &&
+        else if (parts.Length == 2 && parts[0] is "calm" or "attention" or "alarm" or "decision" &&
                  parts[1] is "on" or "off")
         {
             var tier = parts[0] switch
             {
                 "calm" => OwnerConsoleNotificationTier.Calm,
                 "attention" => OwnerConsoleNotificationTier.Attention,
+                "decision" => OwnerConsoleNotificationTier.Decision,
                 _ => OwnerConsoleNotificationTier.Alarm
             };
             tiers = Tiers.With(tier, parts[1] == "on");
         }
         else
         {
-            output.WriteLine("usage: bell on|off | bell <calm|attention|alarm> on|off");
+            output.WriteLine("usage: bell on|off | bell <calm|attention|alarm|decision> on|off");
             return;
         }
 

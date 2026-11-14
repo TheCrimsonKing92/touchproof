@@ -29,7 +29,7 @@ public sealed class OwnerConsoleBellTierCommandTests
 
         await controller.RunCommandAsync("bell attention off");
         Assert.True(controller.BellEnabled);
-        Assert.Equal("calm on, attention off, alarm on", controller.BellStatusText);
+        Assert.Equal("calm on, attention off, alarm on, decision on", controller.BellStatusText);
         Assert.Equal("bell attention off", dialogs.Texts[^1].Trim());
         var question = new OwnerConsoleDecision("q", 1, "goal", "goal", OwnerQuestionKind.HumanInput,
             "Answer?", "Answer?", null, null, null, clock.Now.AddMinutes(-29));
@@ -37,19 +37,19 @@ public sealed class OwnerConsoleBellTierCommandTests
         controller.Apply(model);
         clock.Now = clock.Now.AddMinutes(2);
         controller.Apply(model);
-        Assert.Empty(notifier.Calls);
+        Assert.Equal([OwnerConsoleNotificationTier.Decision], notifier.Calls);
         controller.Apply(model with { Status = model.Status with { LandedToday = 5 } });
-        Assert.Equal([OwnerConsoleNotificationTier.Calm], notifier.Calls);
+        Assert.Equal([OwnerConsoleNotificationTier.Decision, OwnerConsoleNotificationTier.Calm], notifier.Calls);
         await controller.RunCommandAsync("bell attention on");
         controller.Apply(controller.Model!);
-        Assert.Equal([OwnerConsoleNotificationTier.Calm], notifier.Calls);
+        Assert.Equal([OwnerConsoleNotificationTier.Decision, OwnerConsoleNotificationTier.Calm], notifier.Calls);
 
         await controller.RunCommandAsync("bell alarm off");
-        Assert.Equal("calm on, attention on, alarm off", controller.BellStatusText);
+        Assert.Equal("calm on, attention on, alarm off, decision on", controller.BellStatusText);
         await controller.RunCommandAsync("bell alarm on");
         Assert.Equal("on", controller.BellStatusText);
         await controller.RunCommandAsync("bell calm off");
-        Assert.Equal("calm off, attention on, alarm on", controller.BellStatusText);
+        Assert.Equal("calm off, attention on, alarm on, decision on", controller.BellStatusText);
         await controller.RunCommandAsync(" :BeLl CaLm ON ");
         Assert.Equal("on", controller.BellStatusText);
         Assert.Equal("bell calm on", dialogs.Texts[^1].Trim());
@@ -67,7 +67,7 @@ public sealed class OwnerConsoleBellTierCommandTests
         var dialogs = new Dialogs();
         using var controller = Controller(harness, dialogs, new ManualClock());
         await controller.RunCommandAsync(command);
-        Assert.Equal("usage: bell on|off | bell <calm|attention|alarm> on|off", Assert.Single(dialogs.Texts).Trim());
+        Assert.Equal("usage: bell on|off | bell <calm|attention|alarm|decision> on|off", Assert.Single(dialogs.Texts).Trim());
         Assert.Equal("on", controller.BellStatusText);
     }
 

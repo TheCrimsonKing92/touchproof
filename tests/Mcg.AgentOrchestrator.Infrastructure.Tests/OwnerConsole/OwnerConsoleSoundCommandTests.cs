@@ -14,7 +14,8 @@ public sealed class OwnerConsoleSoundCommandTests
         {
             "calm: chosen.wav", "  [1] alpha.wav", "  [2] Beta.WAV",
             "attention: system sound", "  (no clips)",
-            "alarm: system sound", $"alarm library folder not found: {Path.Combine(fixture.Root, "alarm") }"
+            "alarm: system sound", $"alarm library folder not found: {Path.Combine(fixture.Root, "alarm") }",
+            "decision: system sound", "  (no clips)"
         }, output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         Assert.Empty(fixture.Audio.Files);
         Assert.Empty(fixture.Audio.SystemSounds);

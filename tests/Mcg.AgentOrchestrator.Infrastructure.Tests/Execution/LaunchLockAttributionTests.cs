@@ -111,10 +111,12 @@ public sealed class LaunchLockAttributionTests
         using var diagnostics = new StringWriter();
         await new AssemblyTempRootCleanupFixture(() => null, diagnostics, attribution: attribution).DisposeAsync();
         var lines = diagnostics.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(3, lines.Length);
+        Assert.Equal(5, lines.Length);
         Assert.StartsWith($"LAUNCH_LOCK_SUMMARY pid={Environment.ProcessId} ", lines[0]);
         Assert.StartsWith($"LAUNCH_LOCK_BY_CLASS pid={Environment.ProcessId} class=A ", lines[1]);
-        Assert.StartsWith($"LAUNCH_LOCK_BY_CLASS pid={Environment.ProcessId} class=B ", lines[2]);
+        Assert.StartsWith($"LAUNCH_LOCK_BY_IMAGE pid={Environment.ProcessId} class=A ", lines[2]);
+        Assert.StartsWith($"LAUNCH_LOCK_BY_CLASS pid={Environment.ProcessId} class=B ", lines[3]);
+        Assert.StartsWith($"LAUNCH_LOCK_BY_IMAGE pid={Environment.ProcessId} class=B ", lines[4]);
         using var noAttribution = new StringWriter();
         await new AssemblyTempRootCleanupFixture(() => null, noAttribution).DisposeAsync();
         Assert.Single(noAttribution.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));

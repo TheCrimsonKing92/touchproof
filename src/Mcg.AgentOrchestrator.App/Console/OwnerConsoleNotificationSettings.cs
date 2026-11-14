@@ -11,6 +11,7 @@ internal sealed record OwnerConsoleNotificationSettings
     internal string? CalmSoundFile { get; init; }
     internal string? AttentionSoundFile { get; init; }
     internal string? AlarmSoundFile { get; init; }
+    internal string? DecisionSoundFile { get; init; }
     internal string? SoundLibrary { get; init; }
     internal OwnerConsoleBellTiers BellTiers { get; init; } = OwnerConsoleBellTiers.All;
 
@@ -32,6 +33,7 @@ internal sealed record OwnerConsoleNotificationSettings
                 CalmSoundFile = Sound("calmSoundFile"),
                 AttentionSoundFile = Sound("attentionSoundFile"),
                 AlarmSoundFile = Sound("alarmSoundFile"),
+                DecisionSoundFile = Sound("decisionSoundFile"),
                 SoundLibrary = Sound("soundLibrary"),
                 BellTiers = EnabledTiers()
             };
@@ -58,6 +60,7 @@ internal sealed record OwnerConsoleNotificationSettings
                         "calm" => tiers with { Calm = false },
                         "attention" => tiers with { Attention = false },
                         "alarm" => tiers with { Alarm = false },
+                        "decision" => tiers with { Decision = false },
                         _ => tiers
                     };
                 }

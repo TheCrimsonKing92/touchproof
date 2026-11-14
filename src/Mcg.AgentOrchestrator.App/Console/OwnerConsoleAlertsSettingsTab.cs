@@ -22,7 +22,7 @@ internal sealed class OwnerConsoleAlertsSettingsTab(OwnerConsoleSoundCommand sou
     {
         _rows.Clear();
         var snapshot = sound.Settings.Current;
-        foreach (var tier in new[] { OwnerConsoleNotificationTier.Calm, OwnerConsoleNotificationTier.Attention, OwnerConsoleNotificationTier.Alarm })
+        foreach (var tier in new[] { OwnerConsoleNotificationTier.Calm, OwnerConsoleNotificationTier.Attention, OwnerConsoleNotificationTier.Alarm, OwnerConsoleNotificationTier.Decision })
         {
             var selected = OwnerConsoleSoundCommand.Selected(snapshot, tier);
             var name = tier.ToString().ToLowerInvariant();
