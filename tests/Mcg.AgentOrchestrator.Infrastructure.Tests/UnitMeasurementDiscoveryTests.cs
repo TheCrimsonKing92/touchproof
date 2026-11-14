@@ -51,7 +51,7 @@ public sealed class UnitMeasurementDiscoveryTests
         using var fixture = new ProjectOnboardingFixture("solution");
         const string failed = "tests/Sample.MtpTests/Sample.MtpTests.csproj";
         var fake = new RecordingUnitCommandMeasurer { Result = (id, _) => id == failed
-            ? UnitCommandMeasurementResult.Failed("fixture failure") : UnitCommandMeasurementResult.Succeeded(7) };
+            ? UnitCommandMeasurementResult.Failed("fixture failure", UnitCommandMeasurementFailureCause.ExitedNonZero) : UnitCommandMeasurementResult.Succeeded(7) };
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, measurer: fake);
         Assert.DoesNotContain(model.Measurements, unit => unit.UnitId == failed);
         Assert.DoesNotContain(fake.Calls, call => call.UnitId == failed && call.Kind == UnitCommandKinds.Test);
@@ -65,7 +65,7 @@ public sealed class UnitMeasurementDiscoveryTests
     {
         using var fixture = new ProjectOnboardingFixture("solution");
         var fake = new RecordingUnitCommandMeasurer { Result = (_, kind) => kind == UnitCommandKinds.Test
-            ? UnitCommandMeasurementResult.Failed("fixture failure") : UnitCommandMeasurementResult.Succeeded(7) };
+            ? UnitCommandMeasurementResult.Failed("fixture failure", UnitCommandMeasurementFailureCause.ExitedNonZero) : UnitCommandMeasurementResult.Succeeded(7) };
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, measurer: fake);
         Assert.Equal(3, model.Measurements.Count);
         Assert.All(model.Measurements, unit => { Assert.Equal(7, unit.BuildSeconds!.Value); Assert.Null(unit.TestSeconds); });
@@ -88,14 +88,18 @@ public sealed class UnitMeasurementDiscoveryTests
 
     [Theory]
     [InlineData(UnitCommandKinds.Build, 3)]
-    [InlineData(UnitCommandKinds.Test, 2)]
+    [InlineData(UnitCommandKinds.Test, 4)]
     public void RequestedKindsRestrictExecution(UnitCommandKinds kind, int calls)
     {
         using var fixture = new ProjectOnboardingFixture("solution");
         var fake = new RecordingUnitCommandMeasurer();
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, measurer: fake, measuredKinds: kind);
         Assert.Equal(calls, fake.Calls.Count);
-        Assert.All(fake.Calls, call => Assert.Equal(kind, call.Kind));
+        if (kind == UnitCommandKinds.Test)
+            Assert.Equal(new[] { UnitCommandKinds.Build, UnitCommandKinds.Test, UnitCommandKinds.Build, UnitCommandKinds.Test },
+                fake.Calls.Select(call => call.Kind));
+        else
+            Assert.All(fake.Calls, call => Assert.Equal(kind, call.Kind));
         Assert.All(model.Measurements, unit => Assert.Null(kind == UnitCommandKinds.Build ? unit.TestSeconds : unit.BuildSeconds));
     }
 

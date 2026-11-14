@@ -109,6 +109,33 @@ public sealed class MonitorTextViewCharacterizationTests
             "", ""), actual);
     }
 
+    [Theory]
+    [InlineData(true, false, "gate passed, merge pending")]
+    [InlineData(true, true, "accepted")]
+    [InlineData(false, false, "not accepted")]
+    [InlineData(false, true, "not accepted")]
+    public void PrintAcceptanceSummary_MergeDurability_RendersExpectedText(
+        bool isAccepted, bool mergeDurable, string expectedHeader)
+    {
+        var goal = CreateGoal();
+        var summary = new GoalAcceptanceSummary(goal.Id, goal.Objective, GoalStatus.Completed,
+            isAccepted, 2, 2, 0, 0, [], []);
+
+        var actual = AsyncLocalConsoleRouter.Capture(() =>
+            MonitorTextView.PrintAcceptanceSummary(goal, summary, mergeDurable));
+
+        Assert.Equal(string.Join(Environment.NewLine,
+            "",
+            $"Goal aaaaaaaa acceptance: {expectedHeader}",
+            "Objective: Extract monitor output",
+            "Status: Completed",
+            "Tasks passed: 2/2",
+            "Open verification: 0",
+            "Pending human input: 0",
+            "Blockers: none",
+            "", ""), actual);
+    }
+
     private static Goal CreateGoal() => new(new GoalId("aaaaaaaa00000000"), "Extract monitor output",
         [new TaskSpec(new TaskId("bbbbbbbb00000000"), "Move printers", AgentRole.Developer),
          new TaskSpec(new TaskId("dddddddd00000000"), "Characterize printers", AgentRole.Tester)]);

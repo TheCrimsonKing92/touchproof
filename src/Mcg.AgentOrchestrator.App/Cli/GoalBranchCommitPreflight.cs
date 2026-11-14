@@ -24,6 +24,8 @@ internal static class GoalBranchCommitPreflight
         // Any failure to read authoritative attempt state fails closed, before mutation.
         if (live(goal.Id))
             throw new InvalidOperationException("AcceptanceAttemptLive: goal has a live acceptance attempt.");
+        if (HasPendingMerge(path))
+            throw new InvalidOperationException("MergeInProgress: The goal worktree has an unfinished merge. Complete it with an ordinary reviewed git merge --continue, or use git merge --abort to drop it. goal-branch-commit only records one-parent commits.");
         var staged = HasDiff(path, "--cached");
         if (!resume && !staged)
             throw new InvalidOperationException("NothingStaged: the goal worktree index has no changes.");
@@ -55,6 +57,19 @@ internal static class GoalBranchCommitPreflight
         if (!result.Succeeded)
             throw new InvalidOperationException($"GitFailure ({args[0]}): {result.Error.Trim()}");
         return result.Output.Trim();
+    }
+
+    private static bool HasPendingMerge(string path)
+    {
+        var result = GitCli.RunForRepository(path, "rev-parse", "-q", "--verify", "MERGE_HEAD");
+        if (!result.ProcessStarted || result.DrainTimedOut)
+            throw new InvalidOperationException($"GitFailure (rev-parse): {result.Error.Trim()}");
+        return result.ExitCode switch
+        {
+            0 => true,
+            1 when string.IsNullOrWhiteSpace(result.Error) => false,
+            _ => throw new InvalidOperationException($"GitFailure (rev-parse): {result.Error.Trim()}")
+        };
     }
 
     private static bool HasDiff(string path, params string[] flags)

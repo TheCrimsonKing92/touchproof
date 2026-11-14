@@ -155,11 +155,13 @@ internal static class ReverseDependencyTestImpactReader
         var indexedFiles = index.Files;
         try
         {
-            var changedPaths = new List<string>();
-            foreach (var changedSourcePath in changedSourcePaths
+            var normalizedChangedPaths = changedSourcePaths
                 .Select(NormalizeRepositoryPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.Ordinal))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var changedPaths = new List<string>();
+            foreach (var changedSourcePath in normalizedChangedPaths)
             {
                 var fullPath = ResolveWithinRepository(repositoryRoot, changedSourcePath);
                 if (fullPath is null)
@@ -204,6 +206,13 @@ internal static class ReverseDependencyTestImpactReader
                     "Changed source declared no top-level type for reverse-dependency selection.",
                     receipt, headroom);
             }
+
+            frontier = frontier
+                .Concat(WideImpactTestSelectionInputs.GetSeedTypeNames(normalizedChangedPaths)
+                    .Select(name => new FrontierSymbol(name, TestSelectionMode.AllReferencingClasses)))
+                .Distinct()
+                .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
+                .ToArray();
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);

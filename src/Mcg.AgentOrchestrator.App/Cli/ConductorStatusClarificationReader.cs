@@ -23,11 +23,14 @@ internal static class ConductorStatusClarificationReader
                 .Where(CliCommandHandlers.IsSpecClarification);
             var goals = kernel.Goals.ToDictionary(goal => goal.Id.Value, StringComparer.OrdinalIgnoreCase);
             var byGoal = new Dictionary<string, IReadOnlyList<ConductorStatusClarification>>(StringComparer.OrdinalIgnoreCase);
+            List<CollaborationItem>? clarifications = null;
             foreach (var group in items.Where(item => item.GoalId is not null && goals.ContainsKey(item.GoalId))
                 .GroupBy(item => item.GoalId!, StringComparer.OrdinalIgnoreCase))
             {
                 var goal = goals[group.Key];
-                var all = CliCommandHandlers.AllClarificationsForGoal(store, goal);
+                clarifications ??= CliCommandHandlers.AllClarifications(store);
+                var all = clarifications.Where(item => string.Equals(item.GoalId, goal.Id.Value,
+                    StringComparison.OrdinalIgnoreCase)).ToList();
                 var hold = AuthorOwnerQuestionHold.TryParse(goal.CurrentHold);
                 byGoal[goal.Id.Value] = group.OrderBy(item => item.RaisedAt).Select(item =>
                 {

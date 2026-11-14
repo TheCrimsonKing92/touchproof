@@ -43,10 +43,13 @@ public static void Print(GoalMonitor monitor, string? statusText = null)
     Console.WriteLine();
 }
 
-public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summary)
+public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summary, bool mergeDurable = true)
 {
     Console.WriteLine();
-    Console.WriteLine($"Goal {summary.GoalId.Value[..8]} acceptance: {(summary.IsAccepted ? "accepted" : "not accepted")}");
+    var status = summary.IsAccepted
+        ? mergeDurable ? "accepted" : "gate passed, merge pending"
+        : "not accepted";
+    Console.WriteLine($"Goal {summary.GoalId.Value[..8]} acceptance: {status}");
     Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(summary.Objective).Text}");
     Console.WriteLine($"Status: {summary.Status}");
     Console.WriteLine($"Tasks passed: {summary.PassedTasks}/{summary.TotalTasks}");

@@ -25,7 +25,8 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
     {
         var tool = MeasurableTool(command);
         if (tool is null)
-            return UnitCommandMeasurementResult.Failed("Only learned dotnet or go commands can be measured.");
+            return UnitCommandMeasurementResult.Failed("Only learned dotnet or go commands can be measured.",
+                UnitCommandMeasurementFailureCause.NotMeasurableTool);
         var tokens = Tokenize(command);
         var start = new ProcessStartInfo(tool)
         {
@@ -42,15 +43,18 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
         try
         {
             if (!process.Start())
-                return UnitCommandMeasurementResult.Failed($"The {tool} process did not start.");
+                return UnitCommandMeasurementResult.Failed($"The {tool} process did not start.",
+                    UnitCommandMeasurementFailureCause.CommandDidNotStart);
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
         {
-            return UnitCommandMeasurementResult.Failed($"Could not start {tool}: {exception.Message}");
+            return UnitCommandMeasurementResult.Failed($"Could not start {tool}: {exception.Message}",
+                UnitCommandMeasurementFailureCause.CommandDidNotStart);
         }
         process.StandardInput.Close();
-        var stdout = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-        var stderr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+        var output = new BoundedOutputTail();
+        var stdout = output.Capture(process.StandardOutput);
+        var stderr = output.Capture(process.StandardError);
         var exited = process.WaitForExit((int)_timeout.TotalMilliseconds);
         if (!exited)
         {
@@ -60,9 +64,38 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
         }
         Task.WhenAll(stdout, stderr).GetAwaiter().GetResult();
         clock.Stop();
-        return !exited ? UnitCommandMeasurementResult.Failed($"The {tool} command timed out.")
-            : process.ExitCode != 0 ? UnitCommandMeasurementResult.Failed($"The {tool} command exited with code {process.ExitCode}.")
+        return !exited ? UnitCommandMeasurementResult.Failed($"The {tool} command timed out.",
+                UnitCommandMeasurementFailureCause.TimedOut, output.ToString())
+            : process.ExitCode != 0 ? UnitCommandMeasurementResult.Failed($"The {tool} command exited with code {process.ExitCode}.",
+                UnitCommandMeasurementFailureCause.ExitedNonZero, output.ToString())
             : UnitCommandMeasurementResult.Succeeded(clock.Elapsed.TotalSeconds);
+    }
+
+    private sealed class BoundedOutputTail
+    {
+        private readonly object _sync = new();
+        private readonly StringBuilder _tail = new(UnitCommandMeasurementResult.MaxOutputTailLength);
+
+        public async Task Capture(StreamReader reader)
+        {
+            var chunk = new char[1024];
+            int count;
+            while ((count = await reader.ReadAsync(chunk.AsMemory()).ConfigureAwait(false)) != 0)
+            {
+                lock (_sync)
+                {
+                    var excess = _tail.Length + count - UnitCommandMeasurementResult.MaxOutputTailLength;
+                    if (excess > 0) _tail.Remove(0, excess);
+                    _tail.Append(chunk, 0, count);
+                    if (excess > 0 && char.IsLowSurrogate(_tail[0])) _tail.Remove(0, 1);
+                }
+            }
+        }
+
+        public override string ToString()
+        {
+            lock (_sync) return _tail.ToString();
+        }
     }
 
     private static List<string> Tokenize(string command)

@@ -1082,7 +1082,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             EnsurePolicyAllows(context, context.CurrentGoal, acceptancePolicy, AutonomyAction.Acceptance, "acceptance merge");
             if (CliMultiRepositoryAcceptance.Apply(context, context.CurrentGoal, runGate: !skipVerify)) return true;
             AutoVerifyFromGitEvidence(context, context.CurrentGoal);
-            if (RunAcceptanceWorkspaceMerge(context, skipVerify))
+            var acceptanceMerged = RunAcceptanceWorkspaceMerge(context, skipVerify);
+            if (acceptanceMerged)
             {
                 if (acceptancePolicy.Kind == AutonomyPolicyKind.SupervisedAuto)
                 {
@@ -1106,9 +1107,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
-            MonitorTextView.PrintAcceptanceSummary(
-                context.CurrentGoal,
-                GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
+            MonitorTextView.PrintAcceptanceSummary(context.CurrentGoal,
+                GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch), acceptanceMerged);
             return false;
 
         case "workspace":

@@ -111,6 +111,67 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
             receipt.RootElement.GetProperty("identity").GetString()!);
     }
 
+    [Fact]
+    public void OwnedChild_DirectoryLaunch_ReportsBoundedFailureContext()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        var directory = Directory.CreateDirectory(Path.Combine(sandbox.Root, "unstartable")).FullName;
+        using var receipt = RunCase(sandbox, [], $$"""
+            $failureMessage = $null
+            $originalMessage = $null
+            try { $null = Invoke-OwnedChild -Executable '{{Quote(directory)}}' -ChildArguments @() }
+            catch {
+                $failureMessage = $_.Exception.Message
+                $originalMessage = $_.Exception.InnerException.Message
+            }
+            if ($null -eq $failureMessage) { throw 'Directory launch unexpectedly succeeded.' }
+            $longMessage = $null
+            try { $null = Invoke-OwnedChild -Executable ([IO.Path]::Combine($root, ('x' * 3000))) -ChildArguments @() }
+            catch { $longMessage = $_.Exception.Message }
+            if ($null -eq $longMessage) { throw 'Oversized executable launch unexpectedly succeeded.' }
+            @{ local = (Read-PublicEnvironment @()); child = (Read-ChildEnvironment); failure = $failureMessage; original = $originalMessage; oversized = $longMessage }
+            """);
+        var message = receipt.RootElement.GetProperty("failure").GetString()!;
+        Assert.StartsWith("OwnedChildLaunchFailure; ", message);
+        Assert.InRange(message.Length, 1, 2000);
+        Assert.Contains("executable=" + directory + ";", message);
+        Assert.Contains("resolved=" + directory + ";", message);
+        Assert.Contains("exists=True;", message);
+        Assert.Contains("workingDirectory=" + sandbox.Root + ";", message);
+        if (OperatingSystem.IsWindows())
+            Assert.Matches(@"integrity=\w+ \(S-1-16-\d+\);", message);
+        else
+            Assert.Contains("integrity=unknown: non-Windows;", message);
+        Assert.Contains("exceptionType=System.ComponentModel.Win32Exception;", message);
+        Assert.Matches(@"nativeErrorCode=\d+;", message);
+        var original = receipt.RootElement.GetProperty("original").GetString()!;
+        Assert.NotEmpty(original);
+        Assert.Contains("Exception calling", original);
+        var boundedOriginal = original.Length <= 500 ? original : original[..486] + "...[truncated]";
+        Assert.EndsWith("message=" + boundedOriginal, message);
+
+        var oversized = receipt.RootElement.GetProperty("oversized").GetString()!;
+        Assert.StartsWith("OwnedChildLaunchFailure; ", oversized);
+        Assert.InRange(oversized.Length, 1, 2000);
+        Assert.Contains("...[truncated]", oversized);
+        foreach (var label in new[] { "executable=", "resolved=", "exists=", "workingDirectory=", "integrity=", "exceptionType=", "nativeErrorCode=", "message=" })
+            Assert.Contains(label, oversized);
+    }
+
+    [Fact]
+    public void OwnedChild_PwshLaunch_PreservesOutputAndExitCode()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        using var receipt = RunCase(sandbox, [], """
+            $run = Invoke-OwnedChild -Executable $pwsh -ChildArguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write("owned-child-control")')
+            @{ local = (Read-PublicEnvironment @()); child = (Read-ChildEnvironment); run = $run }
+            """);
+        var run = receipt.RootElement.GetProperty("run");
+        Assert.Equal(0, run.GetProperty("exitCode").GetInt32());
+        Assert.Equal("owned-child-control", run.GetProperty("stdout").GetString());
+        Assert.Equal("", run.GetProperty("stderr").GetString());
+    }
+
     private JsonDocument RunCase(MtpTestRunnerScriptTests.ScriptSandbox sandbox, string[] names, string body)
     {
         var nameArguments = "@(" + string.Join(",", names.Select(name => $"'{Quote(name)}'")) + ")";
@@ -234,7 +295,85 @@ public sealed class MtpTestRunnerScriptTestsEnvironmentState(ITestOutputHelper o
             $process.StartInfo = $start
             $started = $false
             try {
-                $started = $process.Start()
+                try { $started = $process.Start() }
+                catch {
+                    $launchException = $_.Exception
+                    $exception = $launchException
+                    while (($exception -is [System.Management.Automation.MethodInvocationException] -or $exception -is [Reflection.TargetInvocationException]) -and $null -ne $exception.InnerException) {
+                        $exception = $exception.InnerException
+                    }
+                    $nativeErrorCode = 'unavailable'
+                    for ($errorCause = $launchException; $null -ne $errorCause; $errorCause = $errorCause.InnerException) {
+                        if ($errorCause -is [ComponentModel.Win32Exception]) { $nativeErrorCode = [string]$errorCause.NativeErrorCode; break }
+                    }
+                    $workingDirectory = 'unknown'
+                    try {
+                        $workingDirectory = if ([string]::IsNullOrEmpty($start.WorkingDirectory)) { [Environment]::CurrentDirectory } else { $start.WorkingDirectory }
+                    } catch { $workingDirectory = 'unknown: ' + $_.Exception.Message }
+                    $resolved = 'unresolved'
+                    $exists = 'unknown'
+                    try {
+                        # Native launch lookup uses the parent's current directory, not PowerShell's location or command table.
+                        $currentDirectory = [Environment]::CurrentDirectory
+                        if ([IO.Path]::IsPathRooted($Executable) -or $Executable.Contains('/') -or $Executable.Contains('\')) {
+                            $resolved = [IO.Path]::GetFullPath($Executable, $currentDirectory)
+                        } else {
+                            $directories = @()
+                            if ($IsWindows) {
+                                $windowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+                                $directories += [IO.Path]::GetDirectoryName([Environment]::ProcessPath), $currentDirectory, [Environment]::SystemDirectory, ([IO.Path]::Combine($windowsDirectory, 'System')), $windowsDirectory
+                            }
+                            $directories += ([string]$start.Environment['PATH']).Split([IO.Path]::PathSeparator)
+                            foreach ($directory in $directories) {
+                                $names = @($Executable)
+                                if ($IsWindows -and [string]::IsNullOrEmpty([IO.Path]::GetExtension($Executable))) { $names += $Executable + '.exe' }
+                                foreach ($name in $names) {
+                                    $candidate = [IO.Path]::GetFullPath([IO.Path]::Combine($directory.Trim('"'), $name), $currentDirectory)
+                                    if ([IO.File]::Exists($candidate) -or [IO.Directory]::Exists($candidate)) { $resolved = $candidate; break }
+                                }
+                                if ($resolved -ne 'unresolved') { break }
+                            }
+                        }
+                        if ($resolved -ne 'unresolved') { $exists = [string]([IO.File]::Exists($resolved) -or [IO.Directory]::Exists($resolved)) }
+                    } catch { $resolved = 'unresolved'; $exists = 'unknown' }
+                    $integrity = 'unknown: non-Windows'
+                    if ($IsWindows) {
+                        try {
+                            if (-not ('OwnedChildLaunchNative' -as [type])) {
+                                Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class OwnedChildLaunchNative { [DllImport("advapi32.dll", SetLastError=true)] public static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token); [DllImport("advapi32.dll", SetLastError=true)] public static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr buffer, uint size, out uint needed); [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle); }' -ErrorAction Stop
+                            }
+                            $token = [IntPtr]::Zero
+                            $buffer = [IntPtr]::Zero
+                            try {
+                                if (-not [OwnedChildLaunchNative]::OpenProcessToken([IntPtr]::new(-1), 8, [ref]$token)) { throw [ComponentModel.Win32Exception]::new() }
+                                [uint32]$needed = 0
+                                [void][OwnedChildLaunchNative]::GetTokenInformation($token, 25, [IntPtr]::Zero, 0, [ref]$needed)
+                                if ($needed -eq 0) { throw [ComponentModel.Win32Exception]::new() }
+                                $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal([int]$needed)
+                                if (-not [OwnedChildLaunchNative]::GetTokenInformation($token, 25, $buffer, $needed, [ref]$needed)) { throw [ComponentModel.Win32Exception]::new() }
+                                $sid = [Security.Principal.SecurityIdentifier]::new([Runtime.InteropServices.Marshal]::ReadIntPtr($buffer))
+                                $rid = [int]$sid.Value.Split('-')[-1]
+                                $level = if ($rid -lt 4096) { 'Untrusted' } elseif ($rid -lt 8192) { 'Low' } elseif ($rid -lt 8448) { 'Medium' } elseif ($rid -lt 12288) { 'MediumPlus' } elseif ($rid -lt 16384) { 'High' } elseif ($rid -lt 20480) { 'System' } else { 'Protected' }
+                                $integrity = $level + ' (' + $sid.Value + ')'
+                            } finally {
+                                if ($buffer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer) }
+                                if ($token -ne [IntPtr]::Zero) { [void][OwnedChildLaunchNative]::CloseHandle($token) }
+                            }
+                        } catch { $integrity = 'unknown: ' + $_.Exception.Message }
+                    }
+                    $fields = [ordered]@{ executable = $Executable; resolved = $resolved; exists = $exists; workingDirectory = $workingDirectory; integrity = $integrity; exceptionType = $exception.GetType().FullName; nativeErrorCode = $nativeErrorCode; message = $launchException.Message }
+                    $limits = @{ executable = 300; resolved = 300; exists = 32; workingDirectory = 300; integrity = 120; exceptionType = 120; nativeErrorCode = 32; message = 500 }
+                    $parts = foreach ($field in $fields.GetEnumerator()) {
+                        $value = [string]$field.Value
+                        $limit = $limits[$field.Key]
+                        $suffix = '...[truncated]'
+                        if ($value.Length -gt $limit) { $value = $value.Substring(0, $limit - $suffix.Length) + $suffix }
+                        $field.Key + '=' + $value
+                    }
+                    # The field budgets total less than 2000 including the marker, labels and separators.
+                    $diagnostic = 'OwnedChildLaunchFailure; ' + ($parts -join '; ')
+                    throw [InvalidOperationException]::new($diagnostic, $launchException)
+                }
                 if (-not $started) { throw 'Owned environment probe did not start.' }
                 $stdout = $process.StandardOutput.ReadToEndAsync()
                 $stderr = $process.StandardError.ReadToEndAsync()

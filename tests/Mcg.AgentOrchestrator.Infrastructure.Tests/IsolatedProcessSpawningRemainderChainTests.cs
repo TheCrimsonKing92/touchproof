@@ -41,7 +41,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(FocusedEvidenceTraitExcludedSelectionTests),
         typeof(GateDeclaredTestSettingsTests),
         typeof(WorkerBuildScopeToolCacheTests),
-        typeof(WorkerBuildScopeToolCacheDigestTests)
+        typeof(WorkerBuildScopeToolCacheDigestTests),
+        typeof(WorkerBuildCheckGoalLeaseOwnerTests)
     ];
 
     // Five-gate means: 9a0a3d15, a6926d29, c4014e44, 7dadc55c,
@@ -100,7 +101,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         // Provisional estimate, 1bdf4ee5 correction; replace with the Tester's measured summed seconds.
         [nameof(WorkerBuildScopeToolCacheTests)] = 14.0,
         // Provisional estimate, 1bdf4ee5 correction; replace with the Tester's measured summed seconds.
-        [nameof(WorkerBuildScopeToolCacheDigestTests)] = 12.0
+        [nameof(WorkerBuildScopeToolCacheDigestTests)] = 12.0,
+        // Provisional operator estimate, f1519407 correction; replace after the first gate measurement.
+        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 8.0
     };
 
     // Operator-supplied samples for candidate 822ad7fbc9bd0e3020afecfb850fff6bdb7468c5.
@@ -258,9 +261,11 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection],
             129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
-                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] - 1e-7,
+                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
+                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] - 1e-7,
             129.5138644 + ExecutorWaitGateSeconds + TraitExcludedSelectionGateSeconds + DeclaredTestSettingsFocusedSeconds +
-                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] + 1e-7);
+                MeanSeconds[nameof(WorkerBuildScopeToolCacheTests)] + MeanSeconds[nameof(WorkerBuildScopeToolCacheDigestTests)] +
+                MeanSeconds[nameof(WorkerBuildCheckGoalLeaseOwnerTests)] + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
     }

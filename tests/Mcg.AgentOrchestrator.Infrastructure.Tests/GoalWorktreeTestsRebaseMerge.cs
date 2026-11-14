@@ -485,6 +485,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
             Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal));
+            Assert.DoesNotContain("acceptance: gate passed, merge pending", output, StringComparison.Ordinal);
             Assert.True(output.Contains("Stop-host: test stopped host.", StringComparison.Ordinal));
             Assert.Equal(["stop-host", "merge", "mark-landed"], order);
             Assert.True(output.Contains("Workspace cleanup deferred", StringComparison.Ordinal));
@@ -754,6 +755,11 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
             Assert.Contains("merge blocked by outstanding criterion evidence", output, StringComparison.Ordinal);
+            var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, repo, context.Workspace.IntegrationBranch);
+            Assert.True(acceptance.IsAccepted);
+            Assert.Contains(acceptance.Outcomes, outcome => outcome.IsCurrentCandidate && outcome.Outcome == "gate-passed");
+            Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: gate passed, merge pending", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("acceptance: accepted", output, StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Contains(kernel.GetGoal(goal.Id).GetOutstandingCriterionEvidenceObligations(currentCandidate),
                 item => item.Id == obligation.Id && item.State == CriterionEvidenceState.Satisfied);

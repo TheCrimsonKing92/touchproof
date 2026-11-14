@@ -379,7 +379,61 @@ $metadata = [ordered]@{
     lastAttemptName = "worker-build-check"
     staleLockCleared = $false
 }
-($metadata | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath (Join-Path $leaseRoot "lease.json")
+$leasePath = Join-Path $leaseRoot "lease.json"
+$existingLeaseText = $null
+try { $existingLeaseText = [System.IO.File]::ReadAllText($leasePath) }
+catch [System.IO.FileNotFoundException] { }
+catch [System.IO.DirectoryNotFoundException] { }
+
+$existingLease = $null
+$skipLeaseWrite = $false
+$identityProperties = [System.Collections.Generic.List[string]]::new()
+try {
+    if ($null -ne $existingLeaseText) {
+        try { $existingLease = [System.Text.Json.JsonDocument]::Parse($existingLeaseText) }
+        catch [System.Text.Json.JsonException] { }
+    }
+    if ($null -ne $existingLease -and $existingLease.RootElement.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        $ownerProperty = [System.Text.Json.JsonElement]::new()
+        $ownerId = 0
+        if ($existingLease.RootElement.TryGetProperty("ownerProcessId", [ref]$ownerProperty) -and
+            $ownerProperty.ValueKind -eq [System.Text.Json.JsonValueKind]::Number -and
+            $ownerProperty.TryGetInt32([ref]$ownerId) -and $ownerId -gt 0 -and $ownerId -ne $PID) {
+            $ownerProcess = $null
+            try {
+                $ownerProcess = [System.Diagnostics.Process]::GetProcessById($ownerId)
+                $skipLeaseWrite = -not $ownerProcess.HasExited
+            }
+            catch [System.ArgumentException] { }
+            catch {
+                # An indeterminate liveness query cannot authorize replacing a foreign owner.
+                $skipLeaseWrite = $true
+            }
+            finally {
+                if ($null -ne $ownerProcess) { $ownerProcess.Dispose() }
+            }
+        }
+        foreach ($name in @("goalId", "repositoryRoot")) {
+            $property = [System.Text.Json.JsonElement]::new()
+            if ($existingLease.RootElement.TryGetProperty($name, [ref]$property)) {
+                # Carry raw JSON so nulls, nested values and date-like strings keep their values.
+                $identityProperties.Add(('"{0}": {1}' -f $name, $property.GetRawText()))
+            }
+        }
+    }
+
+    if (-not $skipLeaseWrite) {
+        # src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs supplies goalId and repositoryRoot.
+        $metadataJson = $metadata | ConvertTo-Json -Depth 3
+        if ($identityProperties.Count -gt 0) {
+            $metadataJson = $metadataJson.TrimEnd().TrimEnd('}') + ",`n" + ($identityProperties -join ",`n") + "`n}"
+        }
+        $metadataJson | Set-Content -LiteralPath $leasePath
+    }
+}
+finally {
+    if ($null -ne $existingLease) { $existingLease.Dispose() }
+}
 
 $processTempPath = Join-Path (Join-Path (Get-HostTempBase) "pt\$leaseId") "$PID"
 New-Item -ItemType Directory -Force -Path (Join-Path (Get-HostTempBase) "pt") | Out-Null

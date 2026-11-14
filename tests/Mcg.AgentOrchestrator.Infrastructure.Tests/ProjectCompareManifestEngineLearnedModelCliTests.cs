@@ -84,7 +84,7 @@ public sealed class ProjectCompareManifestEngineLearnedModelCliTests
         Assert.Equal("DiffersFromGateDefault engine.timeouts.defaultMinutes hand=10 learned=25 (The learned value comes from the gate's undeclared default.)", lines[2]);
         AssertOwnerQuestions(lines, true);
         Assert.Contains("fast, slow", lines[^3]);
-        Assert.Contains("project discover --measure test", lines[^3]);
+        Assert.Contains("project discover --measure all", lines[^3]);
     }
 
     [Theory]

@@ -31,7 +31,8 @@ internal static class ConductorStatusSnapshotReader
 
     internal static ConductorStatusSnapshot Read(OrchestratorWorkspace workspace, int? owner,
         DateTimeOffset bootTime, Func<string?>? mainCommit = null, ConductorLockOwnership? ownership = null,
-        DateTimeOffset? now = null, bool? fleetSummaryExpected = null)
+        DateTimeOffset? now = null, bool? fleetSummaryExpected = null,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
@@ -64,16 +65,17 @@ internal static class ConductorStatusSnapshotReader
             goalSnapshot = new(false, null, null, null);
         else
         {
-            var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
-            var metadata = repository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+            var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath, readObserver);
+            var metadata = repository.ListStatusGoalIdsAsync().GetAwaiter().GetResult();
             var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
-                    status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                    status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
                 .Select(item => new GoalId(item.Id)).ToArray();
-            var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
+            var kernel = repository.LoadStatusGoalsAsync(ids).GetAwaiter().GetResult();
             var raised = ConductorStatusClarificationReader.Read(workspace, kernel);
             var goals = kernel.Goals.Where(goal => !goal.IsTerminal).OrderBy(goal => goal.Id.Value).ToArray();
-            providerHolds = ProviderUsageHoldReader.Read(repository, kernel.Goals.Where(goal =>
-                !goal.IsTerminal || goal.Status == GoalStatus.Failed).ToArray(), now ?? DateTimeOffset.UtcNow);
+            var failed = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
+                status == GoalStatus.Failed).Select(item => new GoalId(item.Id)).ToArray();
+            providerHolds = ProviderUsageHoldReader.ReadStatus(repository, goals, failed, now ?? DateTimeOffset.UtcNow);
             var observations = goals.Select(goal =>
             {
                 var task = goal.Tasks.FirstOrDefault(item => item.Status is
@@ -89,11 +91,27 @@ internal static class ConductorStatusSnapshotReader
                 raised.Readable ? clarifications + raised.ByGoal.Values.Sum(items => items.Count) : null,
                 pending.Length - clarifications);
         }
-        var landing = ConductorStatusLatestLandingReader.Read(workspace.SqliteStatePath);
+        var landing = ReadLatestLanding(workspace.SqliteStatePath, readObserver);
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
             landing,
             ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds,
             ReadSupervisorJob(build?.Detail), loopBuild, lateFleetAdoption);
+    }
+
+    private static ConductorStatusSnapshot.LandingObservation? ReadLatestLanding(string path,
+        Action<GoalSnapshotReadObservation>? readObserver)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var repository = SqliteOrchestratorStateRepository.OpenReadOnly(path, readObserver);
+            var landing = repository.ReadLatestStatusLandingAsync().GetAwaiter().GetResult();
+            return landing is { } value ? new(value.GoalId, value.PromotedAt) : null;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static ConductorStatusSnapshot.AdoptionObservation? ReadAdoption(string path)

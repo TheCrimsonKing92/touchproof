@@ -12,6 +12,10 @@ using System.Text.Json;
 
 public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTestSupport
 {
+    private const int NonSizePromptCharacterEstimate = 1000;
+
+    private static int? EstimateNonSizePromptCharacters(TaskSpec _) => NonSizePromptCharacterEstimate;
+
     private static readonly WorkerSandboxOptions DisabledSandbox = new(
         false,
         WorkerSandboxOptions.DefaultAccount,
@@ -621,14 +625,14 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
-        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        EstimateNonSizePromptCharacters);
 
     var simple = plan.Items.First(item => item.Description.Contains("tooltip", StringComparison.Ordinal));
     var complex = plan.Items.First(item => item.Description.Contains("multi-tenant", StringComparison.Ordinal));
     var simpleTask = goal.Tasks.First(task => task.Description.Contains("tooltip", StringComparison.Ordinal));
     var complexTask = goal.Tasks.First(task => task.Description.Contains("multi-tenant", StringComparison.Ordinal));
-    var simplePromptCharacters = kernel.BuildTaskBrief(goal.Id, simpleTask.Id).Content.Length;
-    var complexPromptCharacters = kernel.BuildTaskBrief(goal.Id, complexTask.Id).Content.Length;
+    var simplePromptCharacters = EstimateNonSizePromptCharacters(simpleTask);
+    var complexPromptCharacters = EstimateNonSizePromptCharacters(complexTask);
     Assert.Equal(TaskComplexity.Simple, simple.TaskComplexity);
     Assert.Equal("OpenAI", simple.ProviderName);
     Assert.Equal("gpt-5-mini", simple.ModelName);
@@ -718,7 +722,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
-        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        EstimateNonSizePromptCharacters);
 
     var summary = plan.ReadyModelUsage.Single();
     Assert.Equal("OpenAI", summary.ProviderName);
@@ -771,7 +775,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
-        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+        EstimateNonSizePromptCharacters);
 
     var summary = plan.ReadyModelUsage.Single();
     Assert.Equal("OpenAI", summary.ProviderName);
@@ -811,7 +815,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
-        task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
+        EstimateNonSizePromptCharacters);
 
     var summary = plan.ReadyModelUsage.Single();
     Assert.Equal(1, summary.PreviousUnderpoweredCount);
@@ -852,7 +856,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         goal,
         [agent],
         WorkerProfileCatalog.Default(),
-        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]));
+        EstimateNonSizePromptCharacters);
     var thresholdRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
         goal,
         [agent],
@@ -1085,6 +1089,51 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
     Assert.Empty(batch.Blocked);
 }
+
+    [Xunit.Fact]
+    public void SubscriptionPlanSizeLabelFollowsSimplePromptThreshold()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Maintain dashboard views",
+            [new TaskSpec(TaskId.New(), "Update a tooltip label.", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
+        kernel.ActivateGoal(goal.Id, [agent]);
+
+        var aboveThreshold = SubscriptionPlanBuilder.Build(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            _ => PaidPromptThresholds.SimplePaidPrompt + 1,
+            sandboxOptions: DisabledSandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+        var belowThreshold = SubscriptionPlanBuilder.Build(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            _ => PaidPromptThresholds.SimplePaidPrompt - 1,
+            sandboxOptions: DisabledSandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+
+        foreach (var plan in new[] { aboveThreshold, belowThreshold })
+        {
+            var item = Assert.Single(plan.Items);
+            Assert.True(item.CanPrepare);
+            Assert.Equal(TaskComplexity.Simple, item.TaskComplexity);
+            Assert.False(item.UsesComplexModel);
+        }
+
+        Assert.Equal(PaidPromptThresholds.SimplePaidPrompt + 1, aboveThreshold.Items.Single().CostGuardPromptCharacterCount);
+        Assert.Equal(PaidPromptThresholds.SimplePaidPrompt - 1, belowThreshold.Items.Single().CostGuardPromptCharacterCount);
+        Assert.Equal("large paid subscription start", aboveThreshold.ReadyStartCostRisk);
+        Xunit.Assert.NotEqual("large paid subscription start", belowThreshold.ReadyStartCostRisk);
+    }
 
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_large_paid_ready_subscription_start_before_dispatch")]
     public void SubscriptionPromptCostGuardBlocksLargePaidReadySubscriptionStartBeforeDispatch()

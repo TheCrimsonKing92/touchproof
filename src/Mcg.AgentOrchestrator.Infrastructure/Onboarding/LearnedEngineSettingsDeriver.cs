@@ -36,7 +36,7 @@ public static class LearnedEngineSettingsDeriver
             timeoutReason = testUnits.Length == 0 ? "No units have a test command; no measured test duration is available"
                 : $"Missing measured test durations for units: {string.Join(", ", missing)}";
             questions.Add(Question("engine/timeouts/defaultMinutes",
-                $"{timeoutReason}. Supply a default timeout or run project discover --measure test."));
+                $"{timeoutReason}. Supply a default timeout or run project discover --measure all."));
         }
         else
         {
