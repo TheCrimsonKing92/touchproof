@@ -35,6 +35,7 @@ internal static class ConductorOperatorIntentBoundary
     {
         public HashSet<GoalId> ChangedGoalIds { get; } = [];
         public HashSet<GoalId> AppliedGoalIds { get; } = [];
+        public HashSet<GoalId> CompletedAnswerGoalIds { get; } = [];
         public HashSet<string> UnavailableGoalIds { get; } = new(StringComparer.Ordinal);
         public HashSet<GoalId> DurableGoalIds { get; } = [];
         public HashSet<string> ActionableGoalIds { get; } = new(StringComparer.Ordinal);
@@ -48,6 +49,7 @@ internal static class ConductorOperatorIntentBoundary
             ISet<string> escalatedGoals, ISet<string> completedGoals, ISet<string> reapedGoals,
             GoalProjectionCache goalProjectionCache)
         {
+            excludedGoals.UnionWith(CompletedAnswerGoalIds.Select(id => id.Value));
             foreach (var goalId in AppliedGoalIds)
             {
                 excludedGoals.Remove(goalId.Value);
@@ -64,6 +66,7 @@ internal static class ConductorOperatorIntentBoundary
         {
             ChangedGoalIds.UnionWith(reconciled.ChangedGoalIds);
             AppliedGoalIds.UnionWith(reconciled.AppliedGoalIds);
+            CompletedAnswerGoalIds.UnionWith(reconciled.CompletedAnswerGoalIds);
             // A second mutation needs its own successful checkpoint.
             DurableGoalIds.ExceptWith(reconciled.ChangedGoalIds);
             DurableGoalIds.UnionWith(reconciled.DurableGoalIds);
@@ -109,11 +112,28 @@ internal static class ConductorOperatorIntentBoundary
             try
             {
                 // Uncommitted effects must survive target reload, including a failed completion write.
-                var prepared = operatorIntents.HasPendingCompletion(target.Key) ||
+                var hasPendingCompletion = operatorIntents.HasPendingCompletion(target.Key);
+                var prepared = hasPendingCompletion ||
                     (prepareTarget?.Invoke(kernel, goalId) ?? goal is not null);
                 goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId);
                 if (goal is not null && before != GoalKernelChange.Capture(goal))
                     result.ChangedGoalIds.Add(goalId);
+                if (!hasPendingCompletion && prepareTarget is not null && goal?.Status == GoalStatus.Completed)
+                {
+                    var answers = CompletedGoalDeferredWaitAnswer.Service(
+                        kernel, goal, operatorIntents, driver.ParallelAcceptanceAttemptCoordinator, target.ToArray());
+                    result.Lines.AddRange(answers.Lines);
+                    if (answers.Mutated) result.ChangedGoalIds.Add(goalId);
+                    // An inspection reload must stay outside goal work both while its
+                    // answer is pending and after confirmation stops protecting it.
+                    if (answers.HandledIntentIds.Count > 0)
+                    {
+                        result.CompletedAnswerGoalIds.Add(goalId);
+                        result.UnavailableGoalIds.Add(target.Key);
+                    }
+                    ids = ids.Except(answers.HandledIntentIds).ToFrozenSet(StringComparer.Ordinal);
+                    if (ids.Count == 0) continue;
+                }
                 if (!prepared || goal is null)
                 {
                     var disposition = UnloadedGoalIntentDisposition.Decide(target.Key, onlyGoalId, observeGoal);
@@ -126,7 +146,7 @@ internal static class ConductorOperatorIntentBoundary
                     {
                         // Keep the frozen members for the ordinary post-maintenance application
                         // path. Deferral alone must not exclude a loaded target from the walk.
-                        result.DeferredIntents.AddRange(target);
+                        result.DeferredIntents.AddRange(target.Where(intent => ids.Contains(intent.Id)));
                         result.AwaitingReload++;
                         EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(target.Key)} result=deferred reason=awaiting-goal-reload");
                     }
