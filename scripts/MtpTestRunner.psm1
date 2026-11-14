@@ -411,13 +411,88 @@ function Read-MtpTestManifest {
 }
 
 function Get-MtpLocalPartitions {
-    param([Parameter(Mandatory = $true)]$Manifest)
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
+    )
 
     if ($null -eq $Manifest.engine.localTestPartitions) {
         throw 'Acceptance manifest is missing engine.localTestPartitions.'
     }
 
-    $lanes = @($Manifest.engine.infrastructureTestLanes)
+    $declaredLanes = @($Manifest.engine.infrastructureTestLanes)
+    $collectionMembers = [System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]]::new([StringComparer]::Ordinal)
+    foreach ($lane in $declaredLanes) {
+        $filterProperty = $lane.PSObject.Properties['filter']
+        if ($null -ne $filterProperty -and -not [string]::IsNullOrWhiteSpace([string]$filterProperty.Value)) { continue }
+        $ownersProperty = $lane.PSObject.Properties['ownedCollections']
+        if ($null -eq $ownersProperty -or @($ownersProperty.Value).Count -eq 0) {
+            throw "Acceptance lane '$($lane.name)' requires a filter or ownedCollections."
+        }
+        foreach ($collection in @($ownersProperty.Value)) {
+            if (-not $collectionMembers.ContainsKey([string]$collection)) {
+                $collectionMembers[[string]$collection] = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            }
+        }
+    }
+    if ($collectionMembers.Count -gt 0) {
+        $rootsProperty = $Manifest.engine.PSObject.Properties['laneTestSourceRoots']
+        if ($null -eq $rootsProperty -or @($rootsProperty.Value).Count -eq 0) {
+            $ownerNames = ($declaredLanes | Where-Object {
+                $null -eq $_.PSObject.Properties['filter'] -or [string]::IsNullOrWhiteSpace([string]$_.filter)
+            } | ForEach-Object { [string]$_.name }) -join ', '
+            throw "Acceptance collection-owned lanes '$ownerNames' require laneTestSourceRoots."
+        }
+        # Mask comments and string bodies before reading declarations. Keep literal collection
+        # attributes, but never mistake C# fixture source inside a string for a live class.
+        $maskPattern = '\[(?:Xunit\.)?Collection(?:Attribute)?\(\s*"[^"\r\n]+"\s*\)\]|//[^\r\n]*|/\*[\s\S]*?\*/|(?<quotes>"{3,})[\s\S]*?\k<quotes>|@"(?:""|[^"])*"|"(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*'''
+        $directories = [System.Collections.Generic.Stack[string]]::new()
+        foreach ($sourceRoot in @($rootsProperty.Value)) { $directories.Push((Join-Path $RepositoryRoot $sourceRoot)) }
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        while ($directories.Count -gt 0) {
+            $directory = $directories.Pop()
+            if (-not $seen.Add([System.IO.Path]::GetFullPath($directory))) { continue }
+            if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+                throw "Acceptance collection source root is missing: $directory"
+            }
+            foreach ($child in Get-ChildItem -LiteralPath $directory -Directory) {
+                if ($child.Name -notin @('bin', 'obj', '.scratch', '.orchestrator-prototype', 'TestResults', 'playwright-report')) {
+                    $directories.Push($child.FullName)
+                }
+            }
+            foreach ($file in Get-ChildItem -LiteralPath $directory -File -Filter '*.cs') {
+                $source = [regex]::Replace([System.IO.File]::ReadAllText($file.FullName), $maskPattern, {
+                    param($match)
+                    if ($match.Value.StartsWith('[')) { return $match.Value }
+                    return [regex]::Replace($match.Value, '[^\r\n]', ' ')
+                })
+                $namespaces = [regex]::Matches($source, '(?m)^\s*namespace\s+([\w.]+)\s*[;{]')
+                $declarations = [regex]::Matches($source, '(?m)(?<attributes>(?:\s*\[[^\]]*\])+\s*)(?:(?:public|internal|sealed|abstract|partial|static)\s+)*class\s+(?<name>\w+)')
+                foreach ($declaration in $declarations) {
+                    $collection = [regex]::Match($declaration.Groups['attributes'].Value, '\[(?:Xunit\.)?Collection(?:Attribute)?\(\s*"([^"]+)"\s*\)\]')
+                    if (-not $collection.Success -or -not $collectionMembers.ContainsKey($collection.Groups[1].Value)) { continue }
+                    if ($namespaces.Count -gt 1) { throw "Collection member has ambiguous namespaces: $($file.FullName)" }
+                    $name = $declaration.Groups['name'].Value
+                    if ($namespaces.Count -eq 1) { $name = $namespaces[0].Groups[1].Value + '.' + $name }
+                    [void]$collectionMembers[$collection.Groups[1].Value].Add($name)
+                }
+            }
+        }
+    }
+    $lanes = @(foreach ($lane in $declaredLanes) {
+        $copy = $lane.PSObject.Copy()
+        $filterProperty = $copy.PSObject.Properties['filter']
+        if ($null -eq $filterProperty -or [string]::IsNullOrWhiteSpace([string]$filterProperty.Value)) {
+            $members = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($collection in @($lane.ownedCollections)) { $members.UnionWith($collectionMembers[[string]$collection]) }
+            if ($members.Count -eq 0) { throw "Acceptance lane '$($lane.name)' has no scanned collection members." }
+            $names = [string[]]@($members)
+            [Array]::Sort($names, [StringComparer]::Ordinal)
+            $filter = ($names | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+            $copy | Add-Member -NotePropertyName filter -NotePropertyValue $filter -Force
+        }
+        $copy
+    })
     $partitions = foreach ($partition in @($Manifest.engine.localTestPartitions)) {
         if ([string]::IsNullOrWhiteSpace([string]$partition.name) -or $null -eq $partition.laneNames) {
             throw 'Every local test partition requires a non-empty name and laneNames.'

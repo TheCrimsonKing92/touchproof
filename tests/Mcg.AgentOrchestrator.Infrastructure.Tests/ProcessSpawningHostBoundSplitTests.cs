@@ -80,7 +80,7 @@ public sealed class ProcessSpawningHostBoundSplitTests
                 ? originalLane with
                 {
                     Filter = originalLane.Filter.Replace(TimeoutPolicyExclusion, "", StringComparison.Ordinal) +
-                        "|" + hostBoundLane.Filter
+                        "|" + Xunit.Assert.Single(resolved, lane => lane.Name == HostBoundLaneName).Filter
                 }
                 : lane).ToArray();
         var baselineDescriptors = descriptors.Select(descriptor => descriptor.Collection == HostBoundCollection
@@ -96,7 +96,7 @@ public sealed class ProcessSpawningHostBoundSplitTests
     [Xunit.Fact]
     public void HostKeyKeepsHostBoundLaneLocalAndRemainingLaneEligible()
     {
-        var lanes = LoadLanes();
+        var lanes = AcceptanceLaneMembership.ResolveOwnedCollections(LoadLanes(), RunnableClasses());
         var hostBoundLane = Xunit.Assert.Single(lanes, lane => lane.Name == HostBoundLaneName);
         var originalLane = Xunit.Assert.Single(lanes, lane => lane.Name == OriginalLaneName);
         Xunit.Assert.Contains("host:ProcessSpawningHostBound", hostBoundLane.ExclusiveResourceKeys);

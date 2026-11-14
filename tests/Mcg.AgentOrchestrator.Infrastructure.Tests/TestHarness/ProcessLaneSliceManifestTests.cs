@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: reads repository files; negative controls mutate only in-memory JSON.
 public sealed class ProcessLaneSliceManifestTests
@@ -35,6 +36,9 @@ public sealed class ProcessLaneSliceManifestTests
         var violations = new List<string>();
         var engine = manifest["engine"]!.AsObject();
         var infrastructureLanes = engine["infrastructureTestLanes"]!.AsArray();
+        var settings = AcceptanceGateEngineSettings.Parse(manifest.ToJsonString());
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(settings.InfrastructureTestLanes,
+            AcceptanceTestClassSourceScanner.Scan(InfrastructureTestSupport.FindRepositoryRoot()));
         foreach (var lane in infrastructureLanes)
         {
             var name = lane!["name"]!.GetValue<string>();
@@ -50,7 +54,13 @@ public sealed class ProcessLaneSliceManifestTests
             {
                 var name = lane!["name"]!.GetValue<string>();
                 laneNames.Add(name);
-                var filter = lane["filter"]!.GetValue<string>();
+                var filter = lane["filter"]?.GetValue<string>() ??
+                    resolved.SingleOrDefault(item => item.Name == name)?.Filter;
+                if (string.IsNullOrWhiteSpace(filter))
+                {
+                    violations.Add($"Lane {name} has no resolved filter.");
+                    continue;
+                }
                 foreach (var typeName in MovedTypes)
                 {
                     if (filter.Contains(typeName, StringComparison.Ordinal))

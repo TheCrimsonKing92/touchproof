@@ -59,14 +59,12 @@
       },
       {
         "name": "Process spawning host-bound",
-        "filter": "FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests|FullyQualifiedName~MtpTestRunnerScriptTestsTimeoutPolicy",
         "ownedCollections": [ "ProcessSpawningHostBound" ],
         "estimatedSerialSeconds": 170,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawningHostBound" ]
       },
       {
         "name": "Process spawning process-local",
-        "filter": "FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests",
         "ownedCollections": [ "ProcessSpawningProcessLocal" ],
         "estimatedSerialSeconds": 60.9,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawningProcessLocal" ]

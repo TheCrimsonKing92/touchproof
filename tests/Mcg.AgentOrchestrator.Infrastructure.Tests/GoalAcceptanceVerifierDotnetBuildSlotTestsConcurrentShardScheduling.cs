@@ -17,6 +17,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         var root = CreateCheckedInManifestShapeWorkspace();
         try
         {
+            var source = Directory.CreateDirectory(Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            File.WriteAllText(Path.Combine(source.FullName, "CollectionMembers.cs"), """
+                [Xunit.Collection("ProcessSpawningHostBound")]
+                public class DisposableTrialRootTests { [Xunit.Fact] public void Executes() { } }
+                [Xunit.Collection("ProcessSpawningProcessLocal")]
+                public class PipeDrainThreadPoolSaturationTests { [Xunit.Fact] public void Executes() { } }
+                """);
             var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root);
             var pool = AcceptanceGateEngineSettings.Load(root).BalancedLanePool!;
             Assert.Contains(lanes, lane => lane.Name.StartsWith(pool.LaneNamePrefix + " ", StringComparison.Ordinal));

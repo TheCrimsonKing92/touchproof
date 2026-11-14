@@ -19,11 +19,25 @@ public sealed class AcceptanceManifestTestDefaultsTests : IDisposable
         var expected = tracked.InfrastructureTestLanes.Select(lane => (lane.Name, lane.Filter)).ToArray();
         Assert.Equal(expected, settings.InfrastructureTestLanes.Select(lane => (lane.Name, lane.Filter)));
 
-        // These source-free fixtures still execute every declared partition, rather than
-        // dissolving unconstrained names and adding a scanner-complement residual.
+        // Collection owners need distinct discovered members while the default engine
+        // still preserves hand-written partitions without a balanced-pool residual.
         Directory.CreateDirectory(Path.Combine(_root, "config"));
         File.WriteAllText(Path.Combine(_root, "config", "acceptance-manifest.json"), manifest);
-        Assert.Empty(AcceptanceTestClassSourceScanner.Scan(_root));
+        var source = Directory.CreateDirectory(Path.Combine(_root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        File.WriteAllText(Path.Combine(source.FullName, "CollectionMembers.cs"), """
+            [Xunit.Collection("ProcessSpawningHostBound")]
+            public class DisposableTrialRootTests { [Xunit.Fact] public void Executes() { } }
+            [Xunit.Collection("ProcessSpawningProcessLocal")]
+            public class PipeDrainThreadPoolSaturationTests { [Xunit.Fact] public void Executes() { } }
+            """);
+        Assert.Equal(["DisposableTrialRootTests", "PipeDrainThreadPoolSaturationTests"],
+            AcceptanceTestClassSourceScanner.Scan(_root).Select(item => item.FullName));
+        expected = expected.Select(lane => (lane.Name, Filter: lane.Name switch
+        {
+            "Process spawning host-bound" => "FullyQualifiedName=DisposableTrialRootTests",
+            "Process spawning process-local" => "FullyQualifiedName=PipeDrainThreadPoolSaturationTests",
+            _ => lane.Filter
+        })).ToArray();
         var execution = AcceptanceInfrastructureLaneResolver.ResolveExecution(settings, _root);
         Assert.Null(execution.Layout);
         Assert.Equal(expected, execution.Lanes.Select(lane => (lane.Name, lane.Filter)));

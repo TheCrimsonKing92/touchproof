@@ -804,6 +804,101 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("Dashboard", partitionNames);
     }
 
+    [Xunit.Fact]
+    public void LocalPartitions_CollectionOwners_KeepEveryScannedMember()
+    {
+        var root = RepositoryRoot();
+        var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var manifest = Path.Combine(root, "config", "acceptance-manifest.json").Replace("'", "''", StringComparison.Ordinal);
+        var command = $"$ErrorActionPreference = 'Stop'; Import-Module '{module}' -Force; " +
+            $"$manifest = Read-MtpTestManifest '{manifest}'; " +
+            $"$partitions = @(Get-MtpLocalPartitions $manifest -RepositoryRoot '{root.Replace("'", "''")}'); " +
+            "$conductor = @($partitions | Where-Object Name -eq 'Conductor')[0]; " +
+            "$result = @{ lanes = @($conductor.Lanes | ForEach-Object { @{ name = $_.name; filter = $_.filter } }); " +
+            "filters = @($conductor.Filters) }; $result | ConvertTo-Json -Depth 5 -Compress";
+        var result = RunPowerShellCommand(root, command);
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var classes = AcceptanceTestClassSourceScanner.Scan(root);
+        Assert.NotEmpty(classes);
+        var owners = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes
+            .Where(AcceptanceLaneMembership.IsFilterlessCollectionOwner).ToArray();
+        Assert.NotEmpty(owners);
+        var partitionLanes = document.RootElement.GetProperty("filters").EnumerateArray()
+            .Select((item, index) => new AcceptanceTestLane($"partition filter {index}", item.GetString()!)).ToArray();
+        foreach (var owner in owners)
+        {
+            var lane = Assert.Single(document.RootElement.GetProperty("lanes").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == owner.Name);
+            var matches = AcceptanceLaneMembership.CreateClassMatcher(new(owner.Name, lane.GetProperty("filter").GetString()!));
+            var expected = classes.Where(item => item.Collection is not null && owner.OwnedCollections.Contains(item.Collection))
+                .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            Assert.NotEmpty(expected);
+            Assert.Equal(expected, classes.Where(item => matches(item.FullName)).Select(item => item.FullName)
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+            Assert.All(expected, name => Assert.NotEmpty(AcceptanceLaneMembership.LanesIncluding(partitionLanes, name)));
+        }
+    }
+
+    [Xunit.Fact]
+    public void LocalPartitions_FilterlessOwner_ResolvesMembersOrReportsManifestError()
+    {
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var source = Directory.CreateDirectory(Path.Combine(root, "tests"));
+            File.WriteAllText(Path.Combine(source.FullName, "PresentTests.cs"), """"
+                namespace Synthetic;
+                [Xunit.Collection("Owned")]
+                public class PresentTests { [Xunit.Fact] public void Executes() { } }
+                // [Xunit.Collection("Owned")] public class CommentDecoy { }
+                /* [Xunit.Collection("Owned")] public class BlockDecoy { } */
+                public class Fixture {
+                    private const string Source = """
+                        [Xunit.Collection("Owned")] public class StringDecoy { }
+                        """;
+                }
+                """");
+            foreach (var excluded in new[] { "bin", "obj" })
+            {
+                var generated = Directory.CreateDirectory(Path.Combine(source.FullName, excluded));
+                File.WriteAllText(Path.Combine(generated.FullName, "GeneratedTests.cs"),
+                    "[Xunit.Collection(\"Owned\")] public class GeneratedTests { [Xunit.Fact] public void Executes() { } }");
+            }
+            var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+            var command = $$"""
+                $ErrorActionPreference = 'Stop'; Import-Module '{{module}}' -Force
+                $results = @(foreach ($case in @('present', 'empty', 'invalid', 'missing-roots')) {
+                    $lane = @{ name = 'Fixture owner'; ownedCollections = @('Owned') }
+                    if ($case -eq 'empty') { $lane.ownedCollections = @('Absent') }
+                    if ($case -eq 'invalid') { $lane.Remove('ownedCollections') }
+                    $engine = @{ infrastructureTestLanes = @($lane); laneTestSourceRoots = @('tests');
+                        localTestPartitions = @(@{ name = 'Fixture'; description = 'fixture'; laneNames = @('Fixture owner') }) }
+                    if ($case -eq 'missing-roots') { $engine.Remove('laneTestSourceRoots') }
+                    $manifest = @{ engine = $engine } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+                    try {
+                        $partition = @(Get-MtpLocalPartitions $manifest -RepositoryRoot '{{root.Replace("'", "''")}}')[0]
+                        @{ name = $case; filters = @($partition.Filters); error = '' }
+                    } catch { @{ name = $case; filters = @(); error = $_.Exception.Message } }
+                })
+                ConvertTo-Json -InputObject $results -Depth 5 -Compress
+                """;
+            var result = RunPowerShellCommand(root, command);
+            Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout.Trim());
+            var present = Assert.Single(document.RootElement.EnumerateArray(), item => item.GetProperty("name").GetString() == "present");
+            Assert.Equal("", present.GetProperty("error").GetString());
+            Assert.Equal("FullyQualifiedName=Synthetic.PresentTests", Assert.Single(present.GetProperty("filters").EnumerateArray()).GetString());
+            foreach (var failure in document.RootElement.EnumerateArray().Where(item => item.GetProperty("name").GetString() != "present"))
+            {
+                Assert.Empty(failure.GetProperty("filters").EnumerateArray());
+                Assert.Contains(failure.GetProperty("name").GetString() == "missing-roots" ? "laneTestSourceRoots" : "Fixture owner",
+                    failure.GetProperty("error").GetString()!, StringComparison.Ordinal);
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("no-trx", 7, "COMPLETED WITH MISSING TRX", "exited 7 without producing TRX", "completed-with-missing-trx")]
     [Xunit.InlineData("zero", 27, "ZERO TESTS", "filter matched no tests", "failed")]
