@@ -1214,11 +1214,11 @@ internal sealed partial class ConductorBatchLoop
                 if (depHoldReason is not null)
                 {
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(depHoldReason)}";
-                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    if (ConductorTickStepLedger.Measure("walk-disposition", () => RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines)))
                     {
                         changedGoalIds.Add(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {depHoldReason}");
-                        kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}");
+                        ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {depHoldReason}"));
                     }
                     // A goal held due to a failed/escalated dependency will never unblock unless
                     // future condition-specific re-entry logic says otherwise.
@@ -1227,8 +1227,8 @@ internal sealed partial class ConductorBatchLoop
                     {
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
-                        ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
-                        SetAsideDependencyEscalated(kernel, driver, goal, depHoldReason, setAsideGoals, selfClearedSetAsideEntries, dependencyEscalatedGoals);
+                        ConductorTickStepLedger.Measure("walk-reap", () => ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines));
+                        ConductorTickStepLedger.Measure("walk-set-aside", () => SetAsideDependencyEscalated(kernel, driver, goal, depHoldReason, setAsideGoals, selfClearedSetAsideEntries, dependencyEscalatedGoals));
                         tickEscalated++;
                     }
                     else
@@ -1260,11 +1260,11 @@ internal sealed partial class ConductorBatchLoop
                         InvalidatedAttemptStop, line => EmitProgress(line, tickLines), out var holdReason))
                 {
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(holdReason)}";
-                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    if (ConductorTickStepLedger.Measure("walk-disposition", () => RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines)))
                     {
                         changedGoalIds.Add(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {holdReason}");
-                        kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {holdReason}");
+                        ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {holdReason}"));
                     }
 
                     tickHeld++;
@@ -1284,7 +1284,7 @@ internal sealed partial class ConductorBatchLoop
                 if (VerifiedAcceptanceEscalationDecision.HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
                 {
                     var progressLine = $"GOAL goal={label} result=escalated state={GoalLifecycleState.Verified}";
-                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    if (ConductorTickStepLedger.Measure("walk-disposition", () => RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines)))
                     {
                         changedGoalIds.Add(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated at Verified — acceptance verification already requires operator action.");
@@ -1292,8 +1292,8 @@ internal sealed partial class ConductorBatchLoop
 
                     escalatedGoals.Add(goal.Id.Value);
                     ClearGoalHold(kernel, goal, changedGoalIds);
-                    ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
-                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries, sweepResult);
+                    ConductorTickStepLedger.Measure("walk-reap", () => ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines));
+                    ConductorTickStepLedger.Measure("walk-set-aside", () => SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries, sweepResult));
                     tickEscalated++;
                     FinishGoalWalk("verified-escalation");
                     continue;
@@ -1347,13 +1347,13 @@ internal sealed partial class ConductorBatchLoop
                                     changedGoalIds.Add(goal.Id);
                                     kernel.ClearGoalHold(goal.Id);
                                     tickHeld++;
-                                    goalProjectionCache.Invalidate(goal.Id);
+                                    ConductorTickStepLedger.Measure("walk-projection-invalidate", () => goalProjectionCache.Invalidate(goal.Id));
                                     FinishGoalWalk("progressive-review-steer");
                                     return null;
                                 }
                             }
 
-                            goalProjectionCache.Invalidate(goal.Id);
+                            ConductorTickStepLedger.Measure("walk-projection-invalidate", () => goalProjectionCache.Invalidate(goal.Id));
                             var afterRefresh = GoalProjectionCache.BuildFingerprint(goal);
                             if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
                             {
@@ -1368,7 +1368,7 @@ internal sealed partial class ConductorBatchLoop
                                     goal,
                                     policy,
                                     BuildAcceptanceEngineHoldReason(engineHealth!))
-                                : driver.AdvanceOnce(goal, policy, runningHoldReason);
+                                : ConductorTickStepLedger.Measure("walk-advance", () => driver.AdvanceOnce(goal, policy, runningHoldReason));
                         },
                         kernel,
                         driver,
@@ -1409,7 +1409,7 @@ internal sealed partial class ConductorBatchLoop
                         if (!TryAdvanceGoal(
                             () =>
                             {
-                                var retryResult = driver.AdvanceOnce(goal, policy);
+                                var retryResult = ConductorTickStepLedger.Measure("walk-retry-advance", () => driver.AdvanceOnce(goal, policy));
                                 serialRetryRan = true;
                                 retries = nextRetry;
                                 retryCounts[goal.Id.Value] = retries;
@@ -1418,8 +1418,8 @@ internal sealed partial class ConductorBatchLoop
                                 lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
                                 changedGoalIds.Add(goal.Id);
                                 Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
-                                kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
-                                goalProjectionCache.Invalidate(goal.Id);
+                                ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})"));
+                                ConductorTickStepLedger.Measure("walk-projection-invalidate", () => goalProjectionCache.Invalidate(goal.Id));
                                 return retryResult;
                             },
                             kernel,
@@ -1461,10 +1461,10 @@ internal sealed partial class ConductorBatchLoop
                 {
                     changedGoalIds.Add(goal.Id);
                     result = result with { Outcome = reconciledOutcome };
-                    goalProjectionCache.Invalidate(goal.Id);
+                    ConductorTickStepLedger.Measure("walk-projection-invalidate", () => goalProjectionCache.Invalidate(goal.Id));
                 }
 
-                if (!AdmissionFactsPendingAdmission.IsPending(result)) TrackGoalOutcomeAndCapacity(
+                if (!AdmissionFactsPendingAdmission.IsPending(result)) ConductorTickStepLedger.Measure("walk-outcome-capacity", () => TrackGoalOutcomeAndCapacity(
                     kernel,
                     driver,
                     goal,
@@ -1472,7 +1472,7 @@ internal sealed partial class ConductorBatchLoop
                     _utcNow(),
                     effectiveGoalStallThreshold,
                     changedGoalIds,
-                    tickLines);
+                    tickLines));
 
                 var goalProgressLine = FormatGoalProgressLine(
                     label,
@@ -1480,30 +1480,30 @@ internal sealed partial class ConductorBatchLoop
                     serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
                 goalProgressFields[goalProgressLine] = GoalProgressEventFields.From(goal.Id.Value,
                     result.Outcome, serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
-                if (!AdmissionFactsPendingAdmission.IsPending(result) && RecordChangedDisposition(
+                if (!AdmissionFactsPendingAdmission.IsPending(result) && ConductorTickStepLedger.Measure("walk-disposition", () => RecordChangedDisposition(
                     goal.Id.Value,
                     goalProgressLine,
                     lastGoalDisposition,
                     changedGoalLines,
                     ShouldAlwaysEmitDisposition(result.Outcome),
-                    emitUnchanged: PassedCohortReceiptApprovalHold.IsReadOnlyReservation(result)))
+                    emitUnchanged: PassedCohortReceiptApprovalHold.IsReadOnlyReservation(result))))
                 {
                     // Changed held advances are already included by the before/after comparison.
                     if (!result.IsHeld)
                         changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
-                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}",
-                        VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome));
+                    ConductorTickStepLedger.Measure("walk-policy-decision", () => kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}",
+                        VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome)));
                 }
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries, sweepResult); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ConductorTickStepLedger.Measure("walk-reap", () => ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines)); ConductorTickStepLedger.Measure("walk-set-aside", () => SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries, sweepResult)); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
-                goalProjectionCache.Invalidate(goal.Id);
+                ConductorTickStepLedger.Measure("walk-projection-invalidate", () => goalProjectionCache.Invalidate(goal.Id));
                 FinishGoalWalk(result.Outcome.GetType().Name);
             }
-            goalWalkClock.Stop(); ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
+            goalWalkClock.Stop(); var goalWalkOwnerCpu = ReadProcessCpu() - goalWalkCpuStart; ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
             ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
             // Admission runs on this thread. A failed gate read must defer the probe like a live gate.
@@ -1520,7 +1520,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             EmitProgress(FormatPhaseTiming(totalTicks, "per-goal-walk", goalWalkClock.Elapsed,
-                $"goals={goalWalkTimings.Count} slowest={FormatSlowestGoalWalks(goalWalkTimings)}", cpuMs: EndCpuPhase(goalWalkCpuStart, ref _tickCpuWalkMs)), tickLines);
+                $"goals={goalWalkTimings.Count} slowest={FormatSlowestGoalWalks(goalWalkTimings)} {FormatWalkSteps(goalWalkClock.Elapsed, goalWalkOwnerCpu)}", cpuMs: EndCpuPhase(goalWalkCpuStart, ref _tickCpuWalkMs)), tickLines);
 
             totalAdvanced  += tickAdvanced;
             totalHeld      += tickHeld;

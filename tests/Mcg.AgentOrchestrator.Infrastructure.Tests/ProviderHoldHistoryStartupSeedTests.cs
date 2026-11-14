@@ -54,7 +54,8 @@ public sealed class ProviderHoldHistoryStartupSeedTests
             Assert.Equal($"PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals=aaaaaaaa elapsedMs=45000 loaded=1 historyMs={(stage == 0 ? 45000 : 0)} evidenceMs={(stage == 1 ? 45000 : 0)} pruneMs=0",
                 await script.NextLine());
             Assert.True(summaryWhileActive);
-            Assert.Equal(5, script.Lines.Count);
+            Assert.Equal("STARTUP_PROGRESS phase=provider-hold-history-seed elapsed_ms=45000", await script.NextLine());
+            Assert.Equal(6, script.Lines.Count);
             Assert.Equal(new[] { Repository.SourceId }, repository.RequestedIds);
             Assert.Equal(Repository.SourceId, Assert.Single(kernel.ProviderHoldHistory.Retained).Id.Value);
         }
@@ -91,7 +92,8 @@ public sealed class ProviderHoldHistoryStartupSeedTests
         Assert.Equal(new[]
         {
             "STARTUP_PROGRESS phase=provider-hold-history-seed elapsed_ms=0",
-            $"PROVIDER_HOLD_HISTORY seed-failed: {failure.GetType().Name}: fixture"
+            $"PROVIDER_HOLD_HISTORY seed-failed: {failure.GetType().Name}: fixture",
+            "STARTUP_PROGRESS phase=provider-hold-history-seed elapsed_ms=0"
         }, script.Lines);
         Assert.Empty(kernel.ProviderHoldHistory.Retained);
         Assert.Empty(repository.RequestedIds);

@@ -65,6 +65,11 @@ public sealed class ConductorBatchLoopTestsTickCpuLedgerWriterFailure(ITestOutpu
             match.Groups["name"].Value.StartsWith("cpu", StringComparison.Ordinal)
                 ? match.Value : match.Groups["name"].Value + "=<clock>");
         line = Regex.Replace(line, @"(?<=slowest=)[a-f0-9]{8,32}:\d+ms:", "<id>:<clock>ms:");
+        // Walk entries use CPU before wall; normalize their wall before the
+        // admission-entry rule below can interpret the fields in the wrong order.
+        line = Regex.Replace(line, @"walk_steps=\S+", match => Regex.Replace(match.Value,
+            @"(?<step>[a-z][a-z0-9-]*):(?<cpu>\d+):\d+:(?<count>\d+)",
+            "${step}:${cpu}:<clock>:${count}"));
         // Step entries read name:wall_ms:cpu_ms:count; the fixture's CPU is fake, the wall clock is real.
         line = Regex.Replace(line, @"(?<=[=,])(?<step>[a-z][a-z0-9-]*):\d+:(?<cpu>\d+):(?<count>\d+)(?=[, ]|$)",
             "${step}:<clock>:${cpu}:${count}");

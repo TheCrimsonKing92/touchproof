@@ -26,8 +26,8 @@ public sealed class ConductorStartupHeartbeatTests
             finishBody.TrySetResult();
             await WaitFor(run, "slow phase return");
             pending.TrySetResult();
-            Assert.Equal(4, script.Lines.Count);
-            Assert.Equal(new long[] { 0, 15000, 30000, 45000 }, script.Lines.Select(line =>
+            Assert.Equal(5, script.Lines.Count);
+            Assert.Equal(new long[] { 0, 15000, 30000, 45000, 45000 }, script.Lines.Select(line =>
                 long.Parse(line[(line.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture)));
         }
         finally
@@ -48,27 +48,61 @@ public sealed class ConductorStartupHeartbeatTests
         script.SetElapsed(TimeSpan.FromSeconds(15));
         pending.TrySetResult(); // This delay deliberately ignores cancellation.
         await WaitFor(phase.Completion, "stopped ticker completion");
-        Assert.Single(script.Lines);
         phase.Dispose(); // Idempotent even after ticker resource cleanup.
+        Assert.Equal(new[] { "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0",
+            "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0" }, script.Lines);
     }
 
     [Xunit.Fact]
-    public void FastPhase_NoReleasedDelay_EmitsOnlyStartAndReturnsValue()
+    public void FastPhase_NoReleasedDelay_EmitsActualCompletionAndReturnsValue()
     {
         var script = new Script();
-        Assert.Equal(42, script.Heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => 42));
-        Assert.Equal(new[] { "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0" }, script.Lines);
+        Assert.Equal(42, script.Heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () =>
+        {
+            script.SetElapsed(TimeSpan.FromMilliseconds(1234));
+            return 42;
+        }));
+        Assert.Equal(new[] { "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0",
+            "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=1234" }, script.Lines);
     }
 
     [Xunit.Fact]
-    public void ThrowingPhase_EmitsStart_RethrowsSameException()
+    public void ThrowingPhase_EmitsCompletion_RethrowsSameException()
     {
         var script = new Script();
         var failure = new InvalidOperationException("phase failure");
         var thrown = Assert.Throws<InvalidOperationException>(() =>
-            script.Heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => { throw failure; }));
+            script.Heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () =>
+            {
+                script.SetElapsed(TimeSpan.FromMilliseconds(321));
+                throw failure;
+            }));
         Assert.Same(failure, thrown);
-        Assert.Equal(new[] { "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0" }, script.Lines);
+        Assert.Equal(new[] { "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0",
+            "STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=321" }, script.Lines);
+    }
+
+    [Xunit.Fact]
+    public async Task Dispose_ClockFault_PreservesBodyExceptionAndStopsTicker()
+    {
+        var failClock = false;
+        var lines = new List<string>();
+        var heartbeat = new ConductorStartupHeartbeat(lines.Add,
+            () => failClock ? throw new InvalidOperationException("clock fault") : DateTimeOffset.UnixEpoch,
+            (_, token) => Task.Delay(Timeout.InfiniteTimeSpan, token));
+        var phase = heartbeat.Begin(ConductorStartupHeartbeat.Phases.TerminalSweep);
+        var failure = new InvalidOperationException("body fault");
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>((Action)(() =>
+        {
+            using (phase)
+            {
+                failClock = true;
+                throw failure;
+            }
+        })));
+        await WaitFor(phase.Completion, "ticker cancellation after clock fault");
+        phase.Dispose();
+        Assert.Equal("STARTUP_PROGRESS phase=terminal-sweep elapsed_ms=0", Assert.Single(lines));
     }
 
     [Xunit.Fact]

@@ -38,7 +38,7 @@ internal sealed partial class ConductorBatchLoop
     {
         public void Dispose() { window?.Dispose(); scope.Dispose(); }
     }
-
+    private string FormatWalkSteps(TimeSpan elapsed, TimeSpan cpu) => _stepLedger!.FormatWalk(elapsed, cpu);
     private void AddLedgerPhaseTimings(List<string> lines, int tick, string phase, TimeSpan elapsed, string detail, long cpuMs)
     {
         var ledger = _stepLedger!;

@@ -8,6 +8,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // but is restored on every exit and cannot keep recording after the tick ends.
 internal sealed class ConductorTickStepLedger
 {
+    internal static readonly IReadOnlyList<string> WalkNames = Array.AsReadOnly(new[]
+    {
+        "walk-advance", "walk-retry-advance", "walk-outcome-capacity", "walk-disposition",
+        "walk-policy-decision", "walk-reap", "walk-set-aside", "walk-projection-invalidate"
+    });
+    internal const string WalkRemainderName = "walk-remainder";
     internal static readonly IReadOnlyList<string> OperatorIntentNames = Array.AsReadOnly(new[]
     {
         "operator-intent-list"
@@ -233,6 +239,28 @@ internal sealed class ConductorTickStepLedger
                 var value = _steps.GetValueOrDefault(name);
                 return FormattableString.Invariant($"{name}:{value.Ticks / TimeSpan.TicksPerMillisecond}:{value.Calls}");
             }));
+    }
+
+    internal string FormatWalk(TimeSpan elapsed, TimeSpan windowCpu)
+    {
+        lock (_gate)
+        {
+            long attributedCpuMs = 0, attributedWallMs = 0;
+            var steps = string.Join(',', WalkNames.Select(name =>
+            {
+                var value = _steps.GetValueOrDefault(name);
+                var cpuMs = value.Ticks / TimeSpan.TicksPerMillisecond;
+                var wallMs = value.WallTicks / TimeSpan.TicksPerMillisecond;
+                attributedCpuMs += cpuMs;
+                attributedWallMs += wallMs;
+                return FormattableString.Invariant($"{name}:{cpuMs}:{wallMs}:{value.Calls}");
+            }));
+            // Use the emitted millisecond values so rounding still reconciles the
+            // complete walk window, including overhead and non-walk child steps.
+            var remainderWallMs = Math.Max(0, elapsed.Ticks / TimeSpan.TicksPerMillisecond - attributedWallMs);
+            var remainderCpuMs = Math.Max(0, windowCpu.Ticks / TimeSpan.TicksPerMillisecond - attributedCpuMs);
+            return FormattableString.Invariant($"walk_steps={steps},{WalkRemainderName}:{remainderCpuMs}:{remainderWallMs}:1 walk_cpu_owner_ms={attributedCpuMs + remainderCpuMs}");
+        }
     }
 
     internal string FormatAdmission(TimeSpan elapsed)

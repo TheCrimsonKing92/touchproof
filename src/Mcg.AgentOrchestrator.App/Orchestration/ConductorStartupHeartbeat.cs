@@ -113,6 +113,8 @@ internal sealed class ConductorStartupHeartbeat
             {
                 if (_stopped) return;
                 _stopped = true;
+                try { Emit(_owner._clock() - _started); }
+                catch (Exception) { /* A clock fault cannot mask the body's outcome. */ }
             }
             try { _stop.Cancel(); }
             catch (Exception) { /* Cancellation callbacks cannot mask the body's exception. */ }
