@@ -10,7 +10,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class SelectedExecutionBackstopCoordinator(
     SelectedExecutionBackstopStore store, ISelectedExecutionBackstopRunner runner,
     ICollaborationItemStore items, string home, Func<DateTimeOffset> clock, Action<string> progress,
-    Func<string, string, bool>? isAncestor = null, string? stateHome = null)
+    Func<string, string, bool>? isAncestor = null, string? stateHome = null,
+    SelectedExecutionBackstopYieldBounds? bounds = null)
 {
     private readonly SemaphoreSlim _transitions = new(1, 1);
     private Task? _running;
@@ -20,6 +21,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
         new Dictionary<string, (DateTimeOffset, GoalPriority)>();
     internal int RunningCount => _running is { IsCompleted: false } ? 1 : 0;
     internal string? ActiveRequestId => RunningCount == 0 ? null : _activeRequestId;
+    internal SelectedExecutionBackstopYieldBounds Bounds { get; } = bounds ?? SelectedExecutionBackstopYieldBounds.Default;
 
     internal static SelectedExecutionBackstopCoordinator? Create(OrchestratorWorkspace? workspace,
         ConductorDriver driver, Func<DateTimeOffset> clock, Action<string> progress) =>
@@ -28,7 +30,8 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             AcceptanceSelectedExecutionSessionSuspension.Home(workspace.ExecutionDirectory, workspace.ProjectHomeDirectoryOrNull),
             clock, progress, (commit, target) => GitCli.Run(workspace.ExecutionDirectory, "merge-base", "--is-ancestor", commit, target).Succeeded,
-            workspace.OrchestratorDirectory);
+            workspace.OrchestratorDirectory, SelectedExecutionBackstopYieldBounds.FromSettings(
+                AcceptanceGateEngineSettings.Load(workspace.ExecutionDirectory, workspace.ProjectHomeDirectoryOrNull)));
 
     internal void NoteLanding(ConductorLandingReceipt landing, string worktree)
     {
@@ -116,7 +119,7 @@ internal sealed class SelectedExecutionBackstopCoordinator(
             }
             if (state.Request is not { } pending || initialTick || suppressed || !capacityAvailable) return;
             var rule = SelectedExecutionBackstopYieldPolicy.Decide(waitingForAcceptance.Count, state.Uncovered.Count,
-                state.OldestUncoveredAt is { } oldest ? clock() - oldest : null);
+                state.OldestUncoveredAt is { } oldest ? clock() - oldest : null, Bounds);
             if (rule is null) return;
             var started = pending with { Attempts = pending.Attempts + 1, RetryPending = false };
             await store.WriteAsync("started", state with { Request = started }, clock()).ConfigureAwait(false);

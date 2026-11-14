@@ -26,6 +26,15 @@ public static partial class ProviderLimitEvidenceParser
     public static bool IsCliRefusalLimitLine(string line) =>
         ContainsLimitText(line) || CliLimitSentenceShape().IsMatch(line);
 
+    // Extract only from an already classified refusal, without broadening positive evidence.
+    public static string? GetCliRefusalModelName(string line)
+    {
+        var match = CliLimitSentenceShape().Match(line);
+        return match.Success
+            ? string.Join(" ", match.Groups["model"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant()
+            : null;
+    }
+
     public static bool TryGetCliCreditExhaustionLine(
         int exitCode,
         IEnumerable<string> standardOutputLines,
@@ -56,7 +65,7 @@ public static partial class ProviderLimitEvidenceParser
     }
 
     private const string CliLimitSentence =
-        @"You['\u2019]ve hit your (?:(?=\S*[\p{L}\p{N}])\S+ ){1,3}limit\b";
+        @"You['\u2019]ve hit your (?<model>(?:(?=\S*[\p{L}\p{N}])\S+ ){1,3})limit\b";
 
     [GeneratedRegex("^(?:" + CliLimitSentence + @"|Failed to authenticate\b|API Error:?\s*[1-5]\d{2}\b)", RegexOptions.CultureInvariant)]
     private static partial Regex CliRefusalShape();

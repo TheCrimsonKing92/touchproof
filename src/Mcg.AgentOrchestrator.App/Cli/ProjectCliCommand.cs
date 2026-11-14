@@ -88,8 +88,11 @@ internal static class ProjectCliCommand
             case "install-manifest":
                 return ProjectInstallManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
+            case "check-manifest":
+                return ProjectCheckManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, crosswalkReaderFactory);
+
             default:
-                throw new ArgumentException("Usage: project list|fleet start|fleet enable <name> [--off]|fleet require <name> <tool> [--env <VAR>]|fleet require <name> --clear|event-sources|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]|answer [name] <fact-key> <value> [--reason <text>]|emit-manifest [name] --out <path>|install-manifest [name] --from <path>");
+                throw new ArgumentException("Usage: project list|fleet start|fleet enable <name> [--off]|fleet require <name> <tool> [--env <VAR>]|fleet require <name> --clear|event-sources|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]|answer [name] <fact-key> <value> [--reason <text>]|emit-manifest [name] --out <path>|install-manifest [name] --from <path>|check-manifest [name|--all]");
         }
     }
 

@@ -1,10 +1,283 @@
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: every fixture owns its repository, worktrees and injected provider probes.
 public sealed class SubscriptionCooldownSubstitutionTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Start_ModelLimit_SelectsFirstUsableSeat(bool bothModelsLimited)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        scenario.Clock.UtcNow = DateTimeOffset.Parse("2030-11-14T12:00:00Z");
+        var seatB = Scenario.Agent("opus-planner", "Anthropic", "claude-cli", "claude-opus-5-5");
+        scenario.Agents = [scenario.Primary, seatB, scenario.Alternate];
+        var goal = scenario.NewGoal();
+        var task = Assert.Single(goal.Tasks);
+        Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
+        scenario.Limit(goal, Scenario.FableLimit, model: "claude-fable-5-2", stdout: true);
+        var reset = DateTimeOffset.Parse("2030-11-18T17:00:00Z");
+        Assert.Equal(reset, task.SubscriptionRetryAfter);
+        TaskSpec? sibling = null;
+        if (bothModelsLimited)
+        {
+            sibling = scenario.Kernel.AddTask(goal.Id, AgentRole.Planner, "Another model request.", [seatB]);
+            scenario.Limit(goal, Scenario.FableLimit.Replace("Fable", "Opus"), task: sibling,
+                model: "claude-opus-5-5", stdout: true);
+        }
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var launches = 0;
+        var started = scenario.Start(goal, requested => { launches++; return worker.Start(requested); },
+            sibling is null ? null : new HashSet<TaskId> { sibling.Id });
+        var expected = bothModelsLimited ? scenario.Alternate : seatB;
+        Assert.Equal(1, launches);
+        Assert.Single(started.Dispatches);
+        Assert.Single(started.Processes.Tasks);
+        Assert.Equal(expected.Id, task.AssignedAgentId);
+        Assert.Equal(expected.Id.Value, task.LastDispatch!.AssignedAgentId);
+        Assert.Equal(expected.Model.ModelName, task.LastDispatch.ModelName);
+        Assert.Null(task.SubscriptionRetryAfter);
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, scenario.Clock.UtcNow, out _));
+        var evt = Assert.Single(goal.Timeline, item => item.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Contains($"held agent={scenario.Primary.Id.Value}", evt.Message, StringComparison.Ordinal);
+        Assert.Contains($"substitute={expected.Id.Value}", evt.Message, StringComparison.Ordinal);
+        Assert.Contains(scenario.Receipt(goal), evt.Message, StringComparison.Ordinal);
+        Assert.Contains($"reset={reset:O}", evt.Message, StringComparison.Ordinal);
+        Assert.Contains(Scenario.FableLimit, evt.Message, StringComparison.Ordinal);
+        Assert.Contains(goal.Timeline, item => item.TaskId == task.Id &&
+            item.Message.StartsWith("Released subscription deferral", StringComparison.Ordinal));
+        if (bothModelsLimited)
+            Assert.Contains(goal.Timeline, item => item.TaskId == task.Id &&
+                item.Message.Contains("passed over", StringComparison.Ordinal) &&
+                item.Message.Contains(seatB.Id.Value, StringComparison.Ordinal) &&
+                item.Message.Contains("provider Anthropic is cooling down", StringComparison.Ordinal));
+        Assert.Throws<InvalidOperationException>(() => scenario.Kernel.SubstituteProviderHeldTaskAgent(
+            goal.Id, task.Id, scenario.Primary, "anthropic::<provider-default>", scenario.Receipt(goal)));
+    }
+
+    [Xunit.Fact]
+    public void Plan_ModelLimit_CanAttemptSameProviderSubstitution()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var seatB = Scenario.Agent("opus-planner", "Anthropic", "claude-cli", "claude-opus-5-5");
+        scenario.Agents = [scenario.Primary, seatB];
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal, Scenario.FableLimit, model: "claude-fable-5-2", stdout: true);
+        var plan = SubscriptionPlanBuilder.Build(goal, scenario.Agents, scenario.Profiles,
+            now: scenario.Clock.UtcNow, sandboxOptions: scenario.Sandbox,
+            commandExists: scenario.CommandExists, claudeAuthProbe: scenario.ProbeAuth);
+        Assert.True(Assert.Single(plan.Items).CanAttemptSubscriptionSubstitution);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Start_RoutedModelLimit_PreservesAssignedTaskCooldown(bool complexModel)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        const string dispatchedModel = "claude-haiku-4-5";
+        var primary = complexModel
+            ? scenario.Primary with
+            {
+                Subscription = scenario.Primary.Subscription! with { ModelAlias = null },
+                ComplexModel = scenario.Primary.Model with { ModelName = dispatchedModel }
+            }
+            : scenario.Primary with { IsProviderRoutingConstrained = null };
+        scenario.Agents = [primary, scenario.Alternate];
+        var goal = scenario.NewGoal(complexModel
+            ? "Design and implement a comprehensive distributed production architecture with concurrent thread-safe worker persistence and integration."
+            : "Plan the scoped change.");
+        var task = Assert.Single(goal.Tasks);
+        var initial = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.True(initial.Allowed, string.Join("; ", initial.Findings));
+        Assert.Contains($"model: Anthropic/{dispatchedModel}", initial.Findings);
+        scenario.Limit(goal, Scenario.FableLimit.Replace("Fable", "Haiku"), model: dispatchedModel, stdout: true);
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out var cooldown));
+        Assert.Equal("haiku", cooldown.ModelName);
+        Assert.False(cooldown.AppliesToModel(ProviderLimitSignals.GetSubscriptionModelName(primary)));
+        Assert.True(ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, primary,
+            scenario.Clock.UtcNow, out var assignedCooldown));
+        Assert.Equal(cooldown, assignedCooldown);
+        // An unrelated seat's lookup still uses its own model rather than the held task's dispatch.
+        Assert.False(ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task,
+            scenario.Primary with { Id = new("other-fable") }, scenario.Clock.UtcNow, out _));
+        Assert.True(ProviderHoldAgentSubstitution.CanAttemptSubscriptionSubstitution(
+            goal, task, scenario.Agents, scenario.Clock.UtcNow));
+        var plan = SubscriptionPlanBuilder.Build(goal, scenario.Agents, scenario.Profiles,
+            now: scenario.Clock.UtcNow, sandboxOptions: scenario.Sandbox,
+            commandExists: scenario.CommandExists, claudeAuthProbe: scenario.ProbeAuth);
+        Assert.True(Assert.Single(plan.Items).CanAttemptSubscriptionSubstitution);
+
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var launches = 0;
+        var started = scenario.Start(goal, requested => { launches++; return worker.Start(requested); });
+        Assert.Equal(1, launches);
+        Assert.Single(started.Dispatches);
+        Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
+        Assert.Null(task.SubscriptionRetryAfter);
+        Assert.Contains("limited model=haiku", Assert.Single(goal.Timeline,
+            item => item.Kind == ProgressKind.ProviderHoldSubstituted).Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Start_InheritedRoutedModelLimit_SelectsAvailableProvider(bool complexModel)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        const string dispatchedModel = "claude-haiku-4-5";
+        var primary = complexModel
+            ? scenario.Primary with
+            {
+                Subscription = scenario.Primary.Subscription! with { ModelAlias = null },
+                ComplexModel = scenario.Primary.Model with { ModelName = dispatchedModel }
+            }
+            : scenario.Primary with { IsProviderRoutingConstrained = null };
+        scenario.Agents = [primary, scenario.Alternate];
+        var goal = scenario.NewGoal(complexModel
+            ? "Design and implement a comprehensive distributed production architecture with concurrent thread-safe worker persistence and integration."
+            : "Plan the scoped change.");
+        var task = Assert.Single(goal.Tasks);
+        var initial = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.True(initial.Allowed, string.Join("; ", initial.Findings));
+        Assert.Contains($"model: Anthropic/{dispatchedModel}", initial.Findings);
+        var sibling = scenario.Kernel.AddTask(goal.Id, AgentRole.Planner, "Another model request.", [primary]);
+        scenario.Limit(goal, Scenario.FableLimit.Replace("Fable", "Haiku"), task: sibling,
+            model: dispatchedModel, stdout: true);
+        Assert.False(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out _));
+        Assert.Null(task.LastDispatch);
+        var blocked = scenario.Preflight(goal, task, scenario.Kernel.Goals);
+        Assert.False(blocked.Allowed);
+        Assert.Contains(blocked.Findings, finding => finding.Contains("provider Anthropic is cooling down", StringComparison.Ordinal));
+        Assert.True(ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, primary,
+            scenario.Clock.UtcNow, out var cooldown));
+        Assert.Equal(sibling.Id, cooldown.SourceTaskId);
+        Assert.Equal("haiku", cooldown.ModelName);
+        Assert.False(cooldown.AppliesToModel(ProviderLimitSignals.GetSubscriptionModelName(primary)));
+        // Looking up an unrelated seat still filters by that seat's configured model.
+        Assert.False(ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task,
+            scenario.Primary with { Id = new("other-fable") }, scenario.Clock.UtcNow, out _));
+        Assert.True(ProviderHoldAgentSubstitution.CanAttemptSubscriptionSubstitution(
+            goal, task, scenario.Agents, scenario.Clock.UtcNow));
+        var plan = SubscriptionPlanBuilder.Build(goal, scenario.Agents, scenario.Profiles,
+            now: scenario.Clock.UtcNow, sandboxOptions: scenario.Sandbox,
+            commandExists: scenario.CommandExists, claudeAuthProbe: scenario.ProbeAuth);
+        Assert.True(Assert.Single(plan.Items, item => item.TaskId == task.Id.Value).CanAttemptSubscriptionSubstitution);
+
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var launches = 0;
+        var started = scenario.Start(goal, requested => { launches++; return worker.Start(requested); },
+            new HashSet<TaskId> { sibling.Id });
+        Assert.Equal(1, launches);
+        Assert.Single(started.Dispatches);
+        Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
+        Assert.Equal(scenario.Alternate.Id.Value, task.LastDispatch!.AssignedAgentId);
+        Assert.Equal(scenario.Alternate.Model.ModelName, task.LastDispatch.ModelName);
+        Assert.Contains(scenario.Preflights, check => check.AgentId == primary.Id && !check.Allowed);
+        Assert.Null(task.SubscriptionRetryAfter);
+        Assert.NotNull(sibling.SubscriptionRetryAfter);
+        Assert.Contains("limited model=haiku", Assert.Single(goal.Timeline,
+            item => item.TaskId == task.Id && item.Kind == ProgressKind.ProviderHoldSubstituted).Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Apply_UnnamedLimit_SkipsSameProviderModel()
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var seatB = Scenario.Agent("opus-planner", "Anthropic", "claude-cli", "claude-opus-5-5");
+        scenario.Agents = [scenario.Primary, seatB, scenario.Alternate];
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal, model: "claude-fable-5-2");
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(
+            goal.Tasks.Single(), scenario.Clock.UtcNow, out var cooldown));
+        Assert.Null(cooldown.ModelName);
+        Assert.True(ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, goal.Tasks.Single(), seatB,
+            scenario.Clock.UtcNow, out _));
+        scenario.Resolver().ApplyBatch(goal, [goal.Tasks.Single().Id]);
+        Assert.Equal(scenario.Alternate.Id, goal.Tasks.Single().AssignedAgentId);
+        Assert.Contains(scenario.Preflights, check => check.AgentId == seatB.Id && !check.Allowed);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Fable", "claude-fable-5-2", "fable", true)]
+    [Xunit.InlineData("Fable", "claude-FABLE-6-1", "fable", true)]
+    [Xunit.InlineData("Fable", "claude-opus-5-5", "fable", false)]
+    [Xunit.InlineData("Fable Claude", "claude-fable-6-1", "fable claude", true)]
+    [Xunit.InlineData("Fable Claude", "claude-opus-5-5", "fable claude", false)]
+    [Xunit.InlineData("Unrecognized", "claude-opus-5-5", null, true)]
+    [Xunit.InlineData("Fable Unknown", "claude-opus-5-5", null, true)]
+    public void Cooldown_FamilyWords_MatchModelSegments(string words, string candidateModel,
+        string? expectedScope, bool blocked)
+    {
+        using var scenario = new Scenario("claude-fable-5-2");
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal, Scenario.FableLimit.Replace("Fable", words), model: "claude-fable-5-2", stdout: true);
+        var task = goal.Tasks.Single();
+        Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out var cooldown));
+        Assert.Equal(expectedScope, cooldown.ModelName);
+        var candidate = Scenario.Agent("candidate", "Anthropic", "claude-cli", candidateModel);
+        Assert.Equal(blocked, ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, candidate,
+            scenario.Clock.UtcNow, out _));
+        Assert.Equal(blocked, ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, TaskId.New(),
+            "Anthropic", candidateModel, scenario.Clock.UtcNow, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, TaskId.New(),
+            "OpenAI", candidateModel, scenario.Clock.UtcNow, out _));
+        if (expectedScope is null)
+        {
+            scenario.Resolver().ApplyBatch(goal, [task.Id]);
+            Assert.Contains("matched no segment", Assert.Single(goal.Timeline,
+                item => item.Kind == ProgressKind.ProviderHoldSubstituted).Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Apply_RejectedCandidates_RecordsFindingsOncePerHoldAcrossReload()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal);
+        var task = goal.Tasks.Single();
+        var rejected = scenario.Alternate with { Id = new("missing-launcher"),
+            Subscription = scenario.Alternate.Subscription! with { WorkerProfileName = "missing-profile" } };
+        var sameProvider = scenario.Primary with { Id = new("same-provider") };
+        scenario.Agents = [scenario.Primary, rejected, sameProvider];
+        var rejectedFindings = scenario.Preflight(goal,
+            AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot(), scenario.Clock)
+                .ReassignTaskAgent(goal.Id, task.Id, rejected), scenario.Kernel.Goals).Findings;
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+        var note = Assert.Single(goal.Timeline, item => item.TaskId == task.Id &&
+            item.Kind == ProgressKind.TaskNote && item.Message.Contains("rejected candidates", StringComparison.Ordinal));
+        Assert.Contains(rejected.Id.Value, note.Message, StringComparison.Ordinal);
+        Assert.Contains(sameProvider.Id.Value, note.Message, StringComparison.Ordinal);
+        Assert.Contains("subscription retry deferred", note.Message, StringComparison.Ordinal);
+        foreach (var finding in rejectedFindings.Where(value => value.StartsWith("blocked:", StringComparison.Ordinal)))
+            Assert.Contains(finding, note.Message, StringComparison.Ordinal);
+        scenario.Kernel = AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot(), scenario.Clock);
+        goal = scenario.Kernel.GetGoal(goal.Id);
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+        Assert.Single(goal.Timeline, item => item.Message == note.Message);
+        Assert.Single(goal.Timeline, item => item.Message.Contains("rejected candidates", StringComparison.Ordinal));
+        scenario.Clock.UtcNow = scenario.Clock.UtcNow.AddMinutes(1);
+        scenario.Limit(goal);
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+        Assert.Equal(2, goal.Timeline.Count(item => item.Message.Contains("rejected candidates", StringComparison.Ordinal)));
+        scenario.Kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id,
+            "Acknowledge repeated limits to isolate candidate diagnostic recording.");
+        scenario.Agents = [..scenario.Agents, scenario.Alternate];
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+        var passed = Assert.Single(goal.Timeline, item => item.Message.Contains("passed over", StringComparison.Ordinal));
+        Assert.Contains(rejected.Id.Value, passed.Message, StringComparison.Ordinal);
+        Assert.Contains(sameProvider.Id.Value, passed.Message, StringComparison.Ordinal);
+        foreach (var finding in rejectedFindings.Where(value => value.StartsWith("blocked:", StringComparison.Ordinal)))
+            Assert.Contains(finding, passed.Message, StringComparison.Ordinal);
+        Assert.Contains("subscription retry deferred", passed.Message, StringComparison.Ordinal);
+        Assert.Equal(scenario.Alternate.Id, scenario.Kernel.GetTask(goal.Id, task.Id).AssignedAgentId);
+    }
+
     [Xunit.Fact]
     public void Resolve_ActiveClassifiedLimit_SelectsAlternateWithoutMutation()
     {
@@ -176,10 +449,11 @@ public sealed class SubscriptionCooldownSubstitutionTests
     internal sealed class Scenario : WorkerDispatchTestSupport, IDisposable
     {
         internal const string LimitText = "ERROR: You've hit your usage limit. Try again in 2 hours.";
+        internal const string FableLimit = "You've hit your Fable limit · resets Nov 18, 11am (America/Chicago). Switch to another model, or manage usage credits to continue.";
         internal readonly string Root = CreateSeededDispatchRepository();
         internal readonly CooldownClock Clock = new();
         internal AgentOrchestratorKernel Kernel;
-        internal readonly AgentDefinition Primary = Agent("claude-planner", "Anthropic", "claude-cli", "claude-opus-4.1");
+        internal readonly AgentDefinition Primary;
         internal readonly AgentDefinition Alternate = Agent("codex-planner", "OpenAI", "codex-cli", "gpt-6.1-sol");
         internal IReadOnlyList<AgentDefinition> Agents;
         internal readonly WorkerProfileCatalog Profiles = WorkerProfileCatalog.Default();
@@ -189,17 +463,18 @@ public sealed class SubscriptionCooldownSubstitutionTests
         internal int AuthProbes;
         internal readonly List<(AgentId? AgentId, bool Allowed)> Preflights = [];
 
-        internal Scenario()
+        internal Scenario(string primaryModel = "claude-opus-4.1")
         {
+            Primary = Agent("claude-planner", "Anthropic", "claude-cli", primaryModel);
             Kernel = new(Clock);
             Agents = [Primary, Alternate];
             Workspace = OrchestratorWorkspace.ForDirectory(Root);
         }
 
-        internal Goal NewGoal()
+        internal Goal NewGoal(string taskDescription = "Plan the scoped change.")
         {
             var goal = InfrastructureTestSupport.MarkGoalRefined(Kernel, Kernel.CreateGoal("Plan a scoped change.",
-                [new TaskSpec(TaskId.New(), "Plan the scoped change.", AgentRole.Planner)]));
+                [new TaskSpec(TaskId.New(), taskDescription, AgentRole.Planner)]));
             Kernel.ActivateGoal(goal.Id, Agents);
             GoalWorktrees.Ensure(Root, goal.Id);
             return goal;
@@ -207,18 +482,20 @@ public sealed class SubscriptionCooldownSubstitutionTests
 
         internal string Receipt(Goal goal) => Path.Combine(Root, goal.Id.Value + ".stderr");
 
-        internal void Limit(Goal goal, string text = LimitText, string? provider = null, TaskSpec? task = null)
+        internal void Limit(Goal goal, string text = LimitText, string? provider = null, TaskSpec? task = null,
+            string? model = null, bool stdout = false)
         {
             task ??= goal.Tasks.Single();
             var agent = Agents.First(agent => agent.Id == task.AssignedAgentId);
             var dispatch = new TaskDispatchRecord(agent.Subscription!.WorkerProfileName, "fixture worker",
                 Workspace.ResolveExecutionDirectory(goal.Id), Clock.UtcNow,
                 ProviderName: provider ?? agent.Model.ProviderName, GoalId: goal.Id,
+                ModelName: model,
                 AssignedAgentId: agent.Id.Value,
                 WorkerProviderKind: WorkerProviderCatalog.Default().ResolveProfile(agent.Subscription.WorkerProfileName).Identity.Kind);
             Kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
             Kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(dispatch.Command,
-                dispatch.WorkingDirectory, 1, "", text, Clock.UtcNow,
+                dispatch.WorkingDirectory, 1, stdout ? text : "", stdout ? "" : text, Clock.UtcNow,
                 DispatchStartedAt: dispatch.DispatchedAt, StandardErrorPath: Receipt(goal)));
             Assert.Equal(WorkTaskStatus.Assigned, task.Status);
             Clock.UtcNow = Clock.UtcNow.AddMinutes(1);
@@ -244,6 +521,18 @@ public sealed class SubscriptionCooldownSubstitutionTests
 
         internal ProviderHoldAgentSubstitution Resolver() => new(Kernel, Agents, Preflight, () => Clock.UtcNow);
         internal ProviderHoldAgentSubstitution.Result Resolve(Goal goal) => Resolver().Resolve(goal, goal.Tasks.Single());
+
+        internal SubscriptionStartResult Start(Goal goal,
+            Func<System.Diagnostics.ProcessStartInfo, System.Diagnostics.Process> launcher,
+            IReadOnlySet<TaskId>? excludedTaskIds = null)
+        {
+            var repository = InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath);
+            return new GoalDispatchOperations().StartSubscriptionReadyTasks(Kernel, Workspace, goal, Agents, Profiles,
+                checkpointBeforeWorkerStart: (kernel, _, _, _) => repository.SaveAsync(kernel).GetAwaiter().GetResult(),
+                runner: new BackgroundDispatchRunner(clock: Clock, disableProcessStart: false, startProcess: launcher),
+                sandboxOptions: Sandbox, commandExists: CommandExists, claudeAuthProbe: ProbeAuth,
+                cascadeTesterCheapFirst: false, utcNow: () => Clock.UtcNow, excludedTaskIds: excludedTaskIds);
+        }
 
         internal static AgentDefinition Agent(string id, string provider, string profile, string model) => new(
             new AgentId(id), id, AgentRole.Planner,

@@ -1148,7 +1148,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("A provider hold substitute must change the assigned agent.");
         var provenance = ProviderHoldSubstitutionProvenance.Create(task.AssignedAgentId, substitute.Id, heldBindingKey, evidenceReceipt, subscriptionCooldown);
         task = ReassignTaskAgent(goalId, taskId, substitute, provenance.ReassignmentReason);
-        Append(goal, taskId, ProgressKind.ProviderHoldSubstituted, provenance.Message);
+        Append(goal, taskId, ProgressKind.ProviderHoldSubstituted, provenance.Message + subscriptionCooldown?.DescribeLimit());
         return task;
     }
 
@@ -1171,24 +1171,24 @@ public sealed partial class AgentOrchestratorKernel
     private void ReleaseCrossProviderSubscriptionDeferral(Goal goal, TaskSpec task, AgentDefinition newAgent)
     {
         if (!ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))
-        {
             return;
-        }
 
-        var dispatch = task.LastDispatch;
-        if (task.SubscriptionRetryAfter is null && task.VerificationHistory.LastOrDefault() is { } verification)
-        {
-            dispatch = verification.DispatchStartedAt is { } startedAt
-                ? task.DispatchHistory.LastOrDefault(record => record.DispatchedAt == startedAt)
-                : null;
-            dispatch ??= task.DispatchHistory.LastOrDefault(record => record.DispatchedAt <= verification.CompletedAt);
-        }
-
-        var releasedProvider = dispatch?.ProviderName;
+        var releasedProvider = ProviderLimitSignals.GetSubscriptionDeferralProvider(task);
         var newProvider = newAgent.Model.ProviderName;
-        if (string.IsNullOrWhiteSpace(releasedProvider) || string.IsNullOrWhiteSpace(newProvider) ||
-            string.Equals(releasedProvider, newProvider, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(releasedProvider) || string.IsNullOrWhiteSpace(newProvider))
+            return;
+
+        if (string.Equals(releasedProvider, newProvider, StringComparison.OrdinalIgnoreCase))
         {
+            var newModel = ProviderLimitSignals.GetSubscriptionModelName(newAgent);
+            if (!ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, _clock.UtcNow, out var cooldown) ||
+                cooldown.ModelName is null || cooldown.AppliesToModel(newModel))
+                return;
+            task.ClearSubscriptionRetryAfter();
+            task.RecordSubscriptionDeferralRelease(_clock.UtcNow);
+            Append(goal, task.Id, ProgressKind.TaskNote,
+                $"Released subscription deferral on provider '{releasedProvider}' until {retryAfter.ToUniversalTime():O} after reassignment to provider '{newProvider}'." +
+                $" Limited model '{cooldown.ModelName}'; reassigned model '{newModel}'.");
             return;
         }
 

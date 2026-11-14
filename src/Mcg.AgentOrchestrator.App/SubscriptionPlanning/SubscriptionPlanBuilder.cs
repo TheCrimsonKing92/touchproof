@@ -323,6 +323,7 @@ public static class SubscriptionPlanBuilder
                 goal,
                 task.Id,
                 dispatchProviderName,
+                subscriptionModelName ?? effectiveModelName,
                 effectiveNow,
                 out var providerCooldown);
             var providerCredentialBinding = ResolveProviderCredentialBinding(
