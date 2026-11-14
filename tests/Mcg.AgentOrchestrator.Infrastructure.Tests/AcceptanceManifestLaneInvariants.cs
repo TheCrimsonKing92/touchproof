@@ -9,8 +9,11 @@ internal static class AcceptanceManifestLaneInvariants
         var violations = new List<string>();
         var collections = classes.Select(item => item.Collection).OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var lane in lanes)
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, classes);
+        for (var index = 0; index < lanes.Count; index++)
         {
+            var lane = AcceptanceLaneMembership.IsFilterlessCollectionOwner(lanes[index])
+                ? resolved[index] : lanes[index];
             var matches = AcceptanceLaneMembership.CreateClassMatcher(lane);
             if (!classes.Any(item => matches(item.FullName)))
                 violations.Add($"Lane '{lane.Name}' selects no scanned class.");

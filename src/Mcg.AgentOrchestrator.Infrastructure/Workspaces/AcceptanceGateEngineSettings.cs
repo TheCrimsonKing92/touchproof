@@ -168,7 +168,8 @@ internal sealed class AcceptanceGateEngineSettings
         var collectionOwners = new HashSet<string>(StringComparer.Ordinal);
         foreach (var lane in InfrastructureTestLanes)
         {
-            if (string.IsNullOrWhiteSpace(lane.Name) || string.IsNullOrWhiteSpace(lane.Filter))
+            if (string.IsNullOrWhiteSpace(lane.Name) ||
+                (string.IsNullOrWhiteSpace(lane.Filter) && !AcceptanceLaneMembership.IsFilterlessCollectionOwner(lane)))
             {
                 throw new InvalidDataException("Acceptance manifest test lanes require non-empty names and filters.");
             }
@@ -200,11 +201,13 @@ internal sealed class AcceptanceGateEngineSettings
             {
                 throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' has an invalid owned collection.");
             }
-            var translatedFilter = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
-            if (lane.OwnedCollections.Count > 0 &&
-                !translatedFilter.Contains("--filter-class"))
+            if (!AcceptanceLaneMembership.IsFilterlessCollectionOwner(lane))
             {
-                throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' must have an inclusion filter to own a collection.");
+                var translatedFilter = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
+                if (lane.OwnedCollections.Count > 0 && !translatedFilter.Contains("--filter-class"))
+                {
+                    throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' must have an inclusion filter to own a collection.");
+                }
             }
             foreach (var collection in lane.OwnedCollections)
             {
@@ -237,6 +240,7 @@ internal sealed record AcceptanceTestLane(
     string Filter,
     double EstimatedSerialSeconds = 0)
 {
+    public string Filter { get; init; } = Filter ?? string.Empty;
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
     public IReadOnlyList<string> OwnedCollections { get; init; } = [];
     public bool RequiresBuildSystemChange { get; init; }

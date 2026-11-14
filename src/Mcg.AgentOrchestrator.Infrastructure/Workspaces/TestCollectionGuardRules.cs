@@ -18,7 +18,7 @@ internal static class TestCollectionGuardRules
     internal static IReadOnlyList<TestCollectionGuardViolation> FindLaneViolations(
         IReadOnlyList<AcceptanceTestLane> lanes, IReadOnlyList<AcceptanceTestClassDescriptor> descriptors)
     {
-        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
+        var baseline = ResolveBaseline(lanes, descriptors);
         var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
         var violations = new List<TestCollectionGuardViolation>();
         foreach (var descriptor in descriptors)
@@ -54,7 +54,7 @@ internal static class TestCollectionGuardRules
         var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
         var lane = resolved.Where(item => item.Name == laneName).ToArray();
         var members = descriptors.Where(item => AcceptanceLaneMembership.LanesIncluding(lane, item.FullName).Count > 0);
-        var baseline = lanes.Select(item => item with { OwnedCollections = [] }).ToArray();
+        var baseline = ResolveBaseline(lanes, descriptors);
         return FindUnisolatedClasses(members, item => item.Collection == isolatedCollection, exemptClassNames)
             .Select(item => new TestCollectionGuardViolation(IsolatedCollectionRule, item.FullName, item.Collection,
                 LaneNames(baseline, item.FullName), LaneNames(resolved, item.FullName),
@@ -99,6 +99,12 @@ internal static class TestCollectionGuardRules
                 "Rebase onto main to pick up the file if it is missing, or repair its class/reason entries.", exception);
         }
     }
+
+    private static IReadOnlyList<AcceptanceTestLane> ResolveBaseline(
+        IReadOnlyList<AcceptanceTestLane> lanes, IReadOnlyList<AcceptanceTestClassDescriptor> descriptors) =>
+        AcceptanceLaneMembership.ResolveOwnedCollections(lanes.Select(lane =>
+            AcceptanceLaneMembership.IsFilterlessCollectionOwner(lane) ? lane : lane with { OwnedCollections = [] })
+            .ToArray(), descriptors);
 
     private static string[] LaneNames(IReadOnlyList<AcceptanceTestLane> lanes, string fullName) =>
         AcceptanceLaneMembership.LanesIncluding(lanes, fullName).Select(lane => lane.Name)

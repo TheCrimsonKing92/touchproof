@@ -2,6 +2,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceLaneMembership
 {
+    private const string EmptyOwnedCollectionFilter =
+        "FullyQualifiedName=Mcg.NoOwnedCollectionClasses&FullyQualifiedName!=Mcg.NoOwnedCollectionClasses";
+
+    internal static bool IsFilterlessCollectionOwner(AcceptanceTestLane lane) =>
+        string.IsNullOrWhiteSpace(lane.Filter) && lane.OwnedCollections is { Count: > 0 };
+
     internal static IReadOnlyList<AcceptanceTestLane> LanesIncluding(
         IReadOnlyList<AcceptanceTestLane> lanes, string classFullName) =>
         lanes.Where(lane => Includes(lane, classFullName)).ToArray();
@@ -29,6 +35,17 @@ internal static class AcceptanceLaneMembership
     {
         if (lanes.All(lane => lane.OwnedCollections.Count == 0)) return lanes;
         var result = lanes.ToArray();
+        for (var index = 0; index < result.Length; index++)
+        {
+            var lane = result[index];
+            if (!IsFilterlessCollectionOwner(lane)) continue;
+            var members = classes.Where(item => item.Collection is not null &&
+                    lane.OwnedCollections.Contains(item.Collection, StringComparer.Ordinal))
+                .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+            var filter = string.Join('|', members.Select(name => "FullyQualifiedName=" + name));
+            // A blank filter would run the whole assembly when the collection has no scanned members.
+            result[index] = lane with { Filter = filter.Length == 0 ? EmptyOwnedCollectionFilter : filter };
+        }
         foreach (var entry in classes.OrderBy(item => item.FullName, StringComparer.Ordinal))
         {
             if (entry.Collection is null) continue;
@@ -72,6 +89,7 @@ internal static class AcceptanceLaneMembership
     // Inventory callers translate each lane once rather than once for every candidate class.
     internal static Func<string, bool> CreateClassMatcher(AcceptanceTestLane lane)
     {
+        if (IsFilterlessCollectionOwner(lane)) return _ => false;
         var args = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
         var included = new List<string>();
         var excluded = new List<string>();

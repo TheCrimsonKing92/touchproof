@@ -49,7 +49,9 @@ public sealed class MtpManagedFilterDiscoveryTests
         var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
         using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
         var engine = manifest.RootElement.GetProperty("engine");
-        var configuredCount = engine.GetProperty("infrastructureTestLanes").GetArrayLength()
+        var configuredCount = engine.GetProperty("infrastructureTestLanes").EnumerateArray()
+            .Count(lane => lane.TryGetProperty("filter", out var filter) &&
+                filter.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(filter.GetString()))
             + engine.GetProperty("localTestPartitions")
                 .EnumerateArray()
                 .Sum(partition => partition.TryGetProperty("additionalFilters", out var filters) ? filters.GetArrayLength() : 0);
