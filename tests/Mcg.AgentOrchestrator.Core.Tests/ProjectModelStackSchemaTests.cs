@@ -44,11 +44,11 @@ public sealed class ProjectModelStackSchemaTests
 
         var restored = ProjectModelJson.Deserialize(legacy);
 
-        Assert.Equal(4, restored.SchemaVersion);
+        Assert.Equal(5, restored.SchemaVersion);
         Assert.Equal(ProjectStack.Dotnet, restored.Stack);
         Assert.Contains("\"stack\": \"dotnet\"", ProjectModelJson.Serialize(restored));
     }
 
     [Fact]
-    public void CurrentSchemaVersion_StackAddition_Remains4() => Assert.Equal(4, ProjectModel.CurrentSchemaVersion);
+    public void CurrentSchemaVersion_StackAddition_Remains4() => Assert.Equal(5, ProjectModel.CurrentSchemaVersion);
 }

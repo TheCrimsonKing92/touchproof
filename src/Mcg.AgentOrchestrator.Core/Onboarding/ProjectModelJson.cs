@@ -16,10 +16,14 @@ public static class ProjectModelJson
     {
         var model = JsonSerializer.Deserialize<ProjectModel>(json, Options)
             ?? throw new JsonException("A project model cannot be null.");
+        if (model.SchemaVersion is 2 or 3 or 4)
+            model = model with { RiskAreas = [], Conventions = [], Verifications = [] };
         if (model.SchemaVersion == 2)
             model = model with { SchemaVersion = ProjectModel.CurrentSchemaVersion, Hazards = [], IntegrationBranch = null };
         else if (model.SchemaVersion == 3)
             model = model with { SchemaVersion = ProjectModel.CurrentSchemaVersion, IntegrationBranch = null };
+        else if (model.SchemaVersion == 4)
+            model = model with { SchemaVersion = ProjectModel.CurrentSchemaVersion };
         if (model.SchemaVersion != ProjectModel.CurrentSchemaVersion || model.Units is null ||
             model.Dependencies is null || model.TestSetups is null || model.OwnerQuestions is null ||
             model.Commands is null || model.EnvironmentNeeds is null || model.Measurements is null || model.Hazards is null)

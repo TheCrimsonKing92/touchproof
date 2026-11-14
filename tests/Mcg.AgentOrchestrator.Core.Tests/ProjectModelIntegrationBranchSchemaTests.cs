@@ -13,8 +13,8 @@ public sealed class ProjectModelIntegrationBranchSchemaTests
         var json = ProjectModelJson.Serialize(model);
         var restored = ProjectModelJson.Deserialize(json);
 
-        Assert.Equal(4, ProjectModel.CurrentSchemaVersion);
-        Assert.Equal(4, restored.SchemaVersion);
+        Assert.Equal(5, ProjectModel.CurrentSchemaVersion);
+        Assert.Equal(5, restored.SchemaVersion);
         Assert.NotNull(restored.IntegrationBranch);
         Assert.Equal("trunk", restored.IntegrationBranch.Value);
         Assert.Equal(model.IntegrationBranch!.Source, restored.IntegrationBranch.Source);
@@ -30,7 +30,7 @@ public sealed class ProjectModelIntegrationBranchSchemaTests
         var legacy = LegacySnapshot(version);
         var restored = ProjectModelJson.Deserialize(legacy.ToJsonString());
 
-        Assert.Equal(4, restored.SchemaVersion);
+        Assert.Equal(5, restored.SchemaVersion);
         Assert.Null(restored.IntegrationBranch);
         if (version == 2) Assert.Empty(restored.Hazards);
         var upgraded = JsonNode.Parse(ProjectModelJson.Serialize(restored))!.AsObject();
@@ -50,7 +50,7 @@ public sealed class ProjectModelIntegrationBranchSchemaTests
             var before = File.ReadAllBytes(path);
             var restored = ProjectModelJson.Deserialize(File.ReadAllText(path));
 
-            Assert.Equal(4, restored.SchemaVersion);
+            Assert.Equal(5, restored.SchemaVersion);
             Assert.Null(restored.IntegrationBranch);
             if (version == 2) Assert.Empty(restored.Hazards);
             Assert.Equal(before, File.ReadAllBytes(path));
@@ -69,7 +69,7 @@ public sealed class ProjectModelIntegrationBranchSchemaTests
 
         var restored = ProjectModelJson.Deserialize(document.ToJsonString());
 
-        Assert.Equal(4, restored.SchemaVersion);
+        Assert.Equal(5, restored.SchemaVersion);
         Assert.Null(restored.IntegrationBranch);
     }
 
@@ -84,7 +84,7 @@ public sealed class ProjectModelIntegrationBranchSchemaTests
 
         var restored = ProjectModelJson.Deserialize(document.ToJsonString());
 
-        Assert.Equal(4, restored.SchemaVersion);
+        Assert.Equal(5, restored.SchemaVersion);
         Assert.Null(restored.IntegrationBranch);
     }
 
