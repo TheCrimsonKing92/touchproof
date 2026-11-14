@@ -416,59 +416,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var heartbeatPath = Path.Combine(root, "cancellation-heartbeat.json");
         var observations = new ConcurrentQueue<AcceptanceProcessCleanupObservation>();
         var dotnetPath = InfrastructureTestSupport.ResolveDotnetHostPath();
-        var acceptanceAssemblyDirectory = Path.GetDirectoryName(typeof(GoalAcceptanceVerifier).Assembly.Location)!;
         const string probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
         const string probeProjectName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
-        var leafDirectory = new DirectoryInfo(acceptanceAssemblyDirectory);
-        var parentDirectory = leafDirectory.Parent;
-        var candidateProbeAssemblyPaths = new List<string>
-        {
-            Path.Combine(acceptanceAssemblyDirectory, probeAssemblyName),
-            Path.Combine(
-                InfrastructureTestSupport.FindRepositoryRoot(),
-                "bin",
-                probeProjectName,
-                "Debug",
-                probeAssemblyName),
-        };
-        // Default SDK layout: <testProject>/bin/<Configuration>/<TargetFramework>.
-        if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
-        {
-            candidateProbeAssemblyPaths.Add(Path.Combine(
-                testProjectDirectory.FullName,
-                "Fixtures",
-                "IsolatedDotnetProbe",
-                "bin",
-                parentDirectory.Name,
-                leafDirectory.Name,
-                probeAssemblyName));
-        }
-
-        // Centralized artifacts layout: <artifacts>/bin/<Project>/<configuration>. The probe is
-        // referenced with ReferenceOutputAssembly="false", so its managed assembly is never copied
-        // beside the test assembly even though its apphost and runtime config are.
-        if (parentDirectory?.Parent is { } projectOutputRoot)
-        {
-            candidateProbeAssemblyPaths.Add(Path.Combine(
-                projectOutputRoot.FullName,
-                probeProjectName,
-                leafDirectory.Name,
-                probeAssemblyName));
-        }
-
-        var probeAssemblyPath = string.Empty;
-        foreach (var candidate in candidateProbeAssemblyPaths)
-        {
-            if (File.Exists(candidate))
-            {
-                probeAssemblyPath = candidate;
-                break;
-            }
-        }
-
+        string[] requiredFiles = [probeAssemblyName, $"{probeProjectName}.exe"];
+        var anchor = typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources);
+        var probeDirectory = FixtureProbeLocator.FindDirectory(anchor, probeProjectName, requiredFiles);
         Assert.True(
-            probeAssemblyPath.Length > 0,
-            $"Missing process-tree probe. Tried: {string.Join("; ", candidateProbeAssemblyPaths)}");
+            probeDirectory is not null,
+            $"Missing process-tree probe. Tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(anchor, probeProjectName, requiredFiles))}");
+        var probeAssemblyPath = Path.Combine(probeDirectory!, probeAssemblyName);
         var arguments = new[] { dotnetPath, probeAssemblyPath, "spawn-descendant", childPidPath };
         using var fixtureTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(fixtureTimeout.Token);
