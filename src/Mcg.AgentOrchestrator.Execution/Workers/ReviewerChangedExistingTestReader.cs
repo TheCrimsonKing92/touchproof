@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -12,6 +13,12 @@ internal static class ReviewerChangedExistingTestReader
     internal static ReviewerChangedExistingTestRead Read(
         string workingDirectory, string? mergeBase, string? headCommit, IReadOnlyList<string>? changedPaths,
         Func<string, string[], GitCli.GitResult>? git = null)
+        => Read(workingDirectory, mergeBase, headCommit, changedPaths, git, GitBlobBatchReader.Read);
+
+    internal static ReviewerChangedExistingTestRead Read(
+        string workingDirectory, string? mergeBase, string? headCommit, IReadOnlyList<string>? changedPaths,
+        Func<string, string[], GitCli.GitResult>? git,
+        Func<string, IReadOnlyList<string>, GitBlobBatchReader.Result> batch)
     {
         try
         {
@@ -20,6 +27,7 @@ internal static class ReviewerChangedExistingTestReader
                     path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (paths.Length == 0) return new([], null);
+            var requested = paths.ToHashSet(StringComparer.Ordinal);
             if (string.IsNullOrWhiteSpace(mergeBase))
                 return new([], "Changed existing tests unavailable because the reviewer merge base is missing.");
             if (string.IsNullOrWhiteSpace(headCommit))
@@ -30,11 +38,20 @@ internal static class ReviewerChangedExistingTestReader
             var candidate = Run("rev-parse", "--verify", headCommit + "^{commit}").Trim();
             if (baseline.Length == 0 || candidate.Length == 0)
                 throw new IOException("git rev-parse returned an empty commit identity.");
+            var beforeBlobs = ListFiles(baseline);
+            var afterBlobs = ListFiles(candidate);
+            var ids = beforeBlobs.Values.Concat(afterBlobs.Values).Distinct(StringComparer.Ordinal).ToArray();
+            var contents = batch(workingDirectory, ids);
+            Check(contents.Git, ["cat-file", "--batch"]);
+            if (contents.Contents.Count != ids.Length)
+                throw new IOException("git cat-file --batch returned an incomplete content inventory.");
+            var text = ids.Select((id, index) => (id, index)).ToDictionary(item => item.id,
+                item => contents.Contents[item.index], StringComparer.Ordinal);
             var entries = new List<ChangedExistingTest>();
             foreach (var path in paths)
             {
-                var before = Methods(ReadFile(baseline, path));
-                var after = Methods(ReadFile(candidate, path));
+                var before = Methods(beforeBlobs.TryGetValue(path, out var beforeId) ? text[beforeId] : string.Empty);
+                var after = Methods(afterBlobs.TryGetValue(path, out var afterId) ? text[afterId] : string.Empty);
                 foreach (var (key, method) in before)
                 {
                     var removed = !after.TryGetValue(key, out var headMethod);
@@ -50,16 +67,37 @@ internal static class ReviewerChangedExistingTestReader
             string Run(params string[] args)
             {
                 var result = git(workingDirectory, args);
-                if (!result.Succeeded || !result.ProcessStarted || result.DrainTimedOut)
-                    throw new IOException($"git {string.Join(" ", args)} failed (exit {result.ExitCode}, started={result.ProcessStarted}, drainTimedOut={result.DrainTimedOut}): {result.Error}");
+                Check(result, args);
                 return result.Output;
             }
 
-            string ReadFile(string commit, string path)
+            static void Check(GitCli.GitResult result, string[] args)
             {
-                // Absence is a normal addition/deletion; failures of ls-tree/show are not absence.
-                if (string.IsNullOrEmpty(Run("ls-tree", "--name-only", "-z", commit, "--", path))) return string.Empty;
-                return Run("show", commit + ":" + path);
+                if (!result.Succeeded || !result.ProcessStarted || result.DrainTimedOut)
+                    throw new IOException($"git {string.Join(" ", args)} failed (exit {result.ExitCode}, started={result.ProcessStarted}, drainTimedOut={result.DrainTimedOut}): {result.Error}");
+            }
+
+            Dictionary<string, string> ListFiles(string commit)
+            {
+                // Quoted output is ASCII even when the runner uses a legacy Windows code page.
+                // NUL output would contain raw UTF-8 paths decoded with that legacy encoding.
+                var listing = Run(["-c", "core.quotePath=true", "ls-tree", commit, "--", .. paths]);
+                var blobs = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (listing.Length == 0) return blobs;
+                if (listing[^1] != '\n') throw new IOException("git ls-tree returned an incomplete listing.");
+                foreach (var record in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var tab = record.IndexOf('\t');
+                    var fields = tab < 0 ? [] : record[..tab].Split(' ');
+                    var path = tab < 0 ? string.Empty : UnquotePath(record[(tab + 1)..]);
+                    if (fields.Length != 3 || !requested.Contains(path) ||
+                        fields[2].Length is not (40 or 64) || !fields[2].All(Uri.IsHexDigit) ||
+                        fields[1] is not ("blob" or "tree"))
+                        throw new IOException("git ls-tree returned an invalid file record.");
+                    // A tree at a candidate file path contains no C# method declarations.
+                    if (fields[1] == "blob") blobs.Add(path, fields[2]);
+                }
+                return blobs;
             }
         }
         catch (Exception exception)
@@ -67,6 +105,37 @@ internal static class ReviewerChangedExistingTestReader
             // Partial results would falsely present a complete inventory to the Reviewer.
             return new([], "Changed existing tests unavailable: " + exception.Message.ReplaceLineEndings(" "));
         }
+    }
+
+    private static string UnquotePath(string path)
+    {
+        if (!path.StartsWith('"')) return path;
+        if (path.Length < 2 || path[^1] != '"') throw new IOException("git ls-tree returned an invalid quoted path.");
+        var bytes = new List<byte>();
+        for (var index = 1; index < path.Length - 1; index++)
+        {
+            var value = path[index];
+            if (value == '\\')
+            {
+                if (++index >= path.Length - 1) throw new IOException("git ls-tree returned an invalid path escape.");
+                value = path[index];
+                if (value is >= '0' and <= '7')
+                {
+                    if (index + 2 >= path.Length - 1 || path[index + 1] is < '0' or > '7' ||
+                        path[index + 2] is < '0' or > '7') throw new IOException("git ls-tree returned an invalid octal escape.");
+                    bytes.Add(checked((byte)((value - '0') * 64 + (path[++index] - '0') * 8 + path[++index] - '0')));
+                    continue;
+                }
+                value = value switch
+                {
+                    'a' => '\a', 'b' => '\b', 't' => '\t', 'n' => '\n', 'v' => '\v', 'f' => '\f', 'r' => '\r',
+                    '\\' => '\\', '"' => '"', _ => throw new IOException("git ls-tree returned an invalid path escape.")
+                };
+            }
+            if (value > 127) throw new IOException("git ls-tree returned a non-ASCII quoted path.");
+            bytes.Add((byte)value);
+        }
+        return new UTF8Encoding(false, true).GetString(bytes.ToArray());
     }
 
     private static Dictionary<string, MethodDeclarationSyntax> Methods(string text) =>
