@@ -702,7 +702,7 @@ public static partial class WorkerProfileDispatcher
             if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
-                roleSelection.Model.ProviderName,
+                roleSelection.Model.ProviderName, effectiveModelName,
                 now,
                 out var providerCooldown))
             {

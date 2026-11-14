@@ -52,6 +52,21 @@ public sealed record ProviderSubscriptionCooldown(
     public string BindingKey { get; init; } = "";
     public string EvidenceReceipt { get; init; } = "";
     public DateTimeOffset DispatchStartedAt { get; init; }
+    // Null retains provider-wide authority, including historical records without a model.
+    public string? ModelName { get; init; }
+    public string? UnmatchedModelName { get; init; }
+    public string LimitEvidence { get; init; } = "";
+
+    public bool AppliesToModel(string? modelName) =>
+        string.IsNullOrWhiteSpace(ModelName) || string.IsNullOrWhiteSpace(modelName) ||
+        ModelName.Split(' ', StringSplitOptions.RemoveEmptyEntries).All(word =>
+            modelName.Split('-').Contains(word, StringComparer.OrdinalIgnoreCase));
+
+    public string DescribeLimit() =>
+        (ModelName is { } modelName ? $"; limited model={modelName}" :
+            "; limit scope=provider-wide" + (UnmatchedModelName is { } unmatched
+                ? $"; refusal model '{unmatched}' matched no segment of the dispatched model" : "")) +
+        $"; limit={LimitEvidence}";
 }
 
 public sealed record ProviderBudgetExhaustionHold(

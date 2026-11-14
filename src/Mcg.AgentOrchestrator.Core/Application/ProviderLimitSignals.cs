@@ -40,6 +40,15 @@ public static class ProviderLimitSignals
         TaskId candidateTaskId,
         string providerName,
         DateTimeOffset now,
+        out ProviderSubscriptionCooldown cooldown) =>
+        TryGetProviderSubscriptionCooldown(goal, candidateTaskId, providerName, null, now, out cooldown);
+
+    public static bool TryGetProviderSubscriptionCooldown(
+        Goal goal,
+        TaskId candidateTaskId,
+        string providerName,
+        string? modelName,
+        DateTimeOffset now,
         out ProviderSubscriptionCooldown cooldown)
     {
         cooldown = default!;
@@ -52,11 +61,28 @@ public static class ProviderLimitSignals
                      task.SubscriptionDeferralReleasedAt is { } releasedAt && verification.CompletedAt <= releasedAt) &&
                     TryGetSubscriptionCooldown(task, verification, now, out var observed) &&
                     observed.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+                    observed.AppliesToModel(modelName) &&
                     (cooldown is null || observed.RetryAfter > cooldown.RetryAfter))
                     cooldown = observed;
         }
 
         return cooldown is not null;
+    }
+
+    public static string GetSubscriptionModelName(AgentDefinition agent) =>
+        string.IsNullOrWhiteSpace(agent.Subscription?.ModelAlias) ? agent.Model.ModelName : agent.Subscription.ModelAlias;
+
+    public static string? GetSubscriptionDeferralProvider(TaskSpec task)
+    {
+        var dispatch = task.LastDispatch;
+        if (task.SubscriptionRetryAfter is null && task.VerificationHistory.LastOrDefault() is { } verification)
+        {
+            dispatch = verification.DispatchStartedAt is { } startedAt
+                ? task.DispatchHistory.LastOrDefault(record => record.DispatchedAt == startedAt)
+                : null;
+            dispatch ??= task.DispatchHistory.LastOrDefault(record => record.DispatchedAt <= verification.CompletedAt);
+        }
+        return dispatch?.ProviderName;
     }
 
     public static bool TryGetTaskSubscriptionCooldown(
@@ -81,12 +107,19 @@ public static class ProviderLimitSignals
             !IsSubscriptionProviderCliDispatch(dispatch) ||
             (verification.DispatchStartedAt is { } startedAt && dispatch.DispatchedAt != startedAt))
             return false;
+        TryGetRecoverableSubscriptionLimitLine(verification, out var limitLine);
+        var modelName = ProviderLimitEvidenceParser.GetCliRefusalModelName(limitLine);
+        var scope = new ProviderSubscriptionCooldown(providerName, task.Id, retryAfter) { ModelName = modelName };
+        var matched = !string.IsNullOrWhiteSpace(dispatch.ModelName) && scope.AppliesToModel(dispatch.ModelName);
         cooldown = new(providerName, task.Id, retryAfter)
         {
             BindingKey = BuildProviderBindingKey(providerName, dispatch.ClaudeCredentialSourceDirectory).Key,
             EvidenceReceipt = !string.IsNullOrWhiteSpace(verification.StandardErrorPath)
                 ? verification.StandardErrorPath : $"verification:{verification.CompletedAt:O}",
-            DispatchStartedAt = dispatch.DispatchedAt
+            DispatchStartedAt = dispatch.DispatchedAt,
+            ModelName = matched ? modelName : null,
+            UnmatchedModelName = matched ? null : modelName,
+            LimitEvidence = limitLine
         };
         return true;
     }
