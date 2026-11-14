@@ -221,7 +221,8 @@ public sealed class ReviewerVerdictEvidenceClosureTestsDescendantTesterCommit
             "codex-cli", "implement", root, Start, BaseCommit: "A"));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, developerCandidate);
         kernel.ReportWorkerTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Candidate ready.");
-        RecordTester(developerCandidate, testerCandidate, 1);
+        // Keep both Tester rounds ordered so dispatch history cannot advance the requested second timestamp.
+        RecordTester(developerCandidate, testerCandidate, Math.Min(1, secondTesterOffset - 1));
         kernel.RetryTask(goal.Id, tester.Id, "Recheck the committed Tester candidate", RetryCause.ContractClarification,
             invalidateDownstream: false);
         Assert.Null(tester.LastDispatch);
@@ -235,6 +236,7 @@ public sealed class ReviewerVerdictEvidenceClosureTestsDescendantTesterCommit
             // The second round stores the unchanged head as both base and result; it creates no new commit.
             kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord(
                 "codex-cli", "verify", root, at, BaseCommit: baseCommit, ResultCommit: result));
+            Assert.Equal(at, tester.LastDispatch!.DispatchedAt);
             kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
                 "verify", root, 0, "", "", at.AddMilliseconds(1), WorkerResultPresent: true));
             kernel.ReportWorkerTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Tester round recorded.");
