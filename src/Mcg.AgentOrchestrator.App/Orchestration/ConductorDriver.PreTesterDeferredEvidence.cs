@@ -39,7 +39,7 @@ internal sealed partial class ConductorDriver
         out ConductorAdvanceResult result)
     {
         result = default!;
-        var prior = PreTesterEvidenceIndexLines.Latest(goal, tester.Id, candidateSha);
+        var (prior, healedTruncatedEntry) = PreTesterStoredEntryRecovery.ReadAndHeal(goal, tester.Id, candidateSha, line => _recordFindingEvidenceRun(goal.Id, tester.Id, line));
         var decline = EvaluatePreTesterDeferredEvidenceGuard(developer, candidateSha, out var testsField);
         if (decline != PreTesterDeferredEvidenceDeclineClause.None)
         {
@@ -156,7 +156,7 @@ internal sealed partial class ConductorDriver
              kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
              decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
         {
-            if (kind == ConductorParallelAcceptanceAttemptDecisionKind.Started && prior is null)
+            if (prior is null && (kind == ConductorParallelAcceptanceAttemptDecisionKind.Started || healedTruncatedEntry))
                 _recordFindingEvidenceRequest(goal.Id, tester.Id,
                     PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                         "started", candidateSha!, receiptId, selectionNames, notRun, null, [])));

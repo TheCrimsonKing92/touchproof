@@ -85,6 +85,24 @@ public sealed class PreTesterStartedSelectionReconciliationTests
             " not_run_missing=<none> not_run_added=<none>", Assert.Single(lines));
     }
 
+    [Fact]
+    public void RecordedNameWithoutColonIsReportedAndLeftOutOfSelections()
+    {
+        const string malformed = "CutSelection[omitted 6815 characters";
+        var prior = Started(["Core.Tests:DeclaredTests", malformed]);
+        var lines = new List<string>();
+
+        var result = PreTesterGuardSelections.ReconcileStarted(prior,
+            [new("Core.Tests", "DeclaredTests")], [], Format, lines.Add);
+
+        Assert.Equal(["Core.Tests:DeclaredTests"], result.Selections.Select(Format));
+        var line = Assert.Single(lines);
+        Assert.StartsWith("PRE_TESTER_STARTED_SELECTION_DRIFT receipt=recorded-receipt ", line, StringComparison.Ordinal);
+        Assert.Contains("missing=" + malformed, line, StringComparison.Ordinal);
+        Assert.EndsWith(" malformed=" + malformed, line, StringComparison.Ordinal);
+        Assert.Equal(["Core.Tests:DeclaredTests", malformed], prior.Selections);
+    }
+
     private static PreTesterEvidenceEntry Started(IReadOnlyList<string> selections, IReadOnlyList<string>? notRun = null) =>
         new("started", "bbb2222", "recorded-receipt", selections, notRun ?? [], null, []);
 

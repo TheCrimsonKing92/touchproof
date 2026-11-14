@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -123,16 +124,18 @@ internal sealed class PreTesterGuardSelections
         var added = names.Except(prior.Selections, StringComparer.OrdinalIgnoreCase).ToArray();
         var notRunMissing = prior.NotRun.Except(notRun, StringComparer.Ordinal).ToArray();
         var notRunAdded = notRun.Except(prior.NotRun, StringComparer.Ordinal).ToArray();
-        if (missing.Length + added.Length + notRunMissing.Length + notRunAdded.Length != 0)
+        var malformed = prior.Selections.Where(name => !name.Contains(':')).ToArray();
+        if (missing.Length + added.Length + notRunMissing.Length + notRunAdded.Length + malformed.Length != 0)
         {
             static string List(string[] items) => items.Length == 0 ? "<none>" : string.Join(",", items);
             var detail = $"missing={List(missing)} added={List(added)} " +
                 $"not_run_missing={List(notRunMissing)} not_run_added={List(notRunAdded)}";
+            if (malformed.Length > 0) detail += $" malformed={List(malformed)}";
             progress($"PRE_TESTER_STARTED_SELECTION_DRIFT receipt={prior.ReceiptId} {detail}");
         }
 
         // Equality ignores order, casing and duplicates; request identity retains the exact recording.
-        var recorded = prior.Selections.Select(name =>
+        var recorded = prior.Selections.Where(name => name.Contains(':')).Select(name =>
         {
             var separator = name.IndexOf(':');
             return new FindingEvidenceSelection(name[..separator], name[(separator + 1)..]);
@@ -167,5 +170,32 @@ internal sealed class PreTesterGuardSelections
             !PreTesterChangedFileGuardClasses.ContainsClass(
                 _reverseDependencySelections, AcceptanceTestSourceResolver.ExtractClassName(test))).ToArray();
         return otherFailures.Length == 0 || otherFailuresAreInsideChanges(otherFailures);
+    }
+}
+
+// Owns recovery of the latest candidate-bound record without rewriting historical messages.
+internal static class PreTesterStoredEntryRecovery
+{
+    internal static (PreTesterEvidenceEntry? Entry, bool Healed) ReadAndHeal(
+        Goal goal, TaskId testerId, string? candidateSha, Action<string> record)
+    {
+        if (string.IsNullOrWhiteSpace(candidateSha)) return (null, false);
+        foreach (var evt in goal.Timeline.Reverse())
+        {
+            if (evt.TaskId != testerId ||
+                evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded)) continue;
+            if (PreTesterEvidenceIndexLines.Parse(evt.Message) is not { } entry ||
+                !string.Equals(entry.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) continue;
+            // The index parser splits on semicolons, so inspect the original record for the full marker.
+            if (entry.Outcome != "started" ||
+                !Regex.IsMatch(evt.Message, @"\[omitted [0-9]+ characters; goal id: ", RegexOptions.CultureInvariant))
+                return (entry, false);
+
+            PreTesterStartedEvidence.TryAbandon(entry, "TruncatedStoredMessage", record);
+            Console.WriteLine($"PRE_TESTER_STARTED_ENTRY_TRUNCATED receipt={entry.ReceiptId} " +
+                $"candidate_sha={candidateSha} abandoned_reason=truncated-stored-message");
+            return (null, true);
+        }
+        return (null, false);
     }
 }

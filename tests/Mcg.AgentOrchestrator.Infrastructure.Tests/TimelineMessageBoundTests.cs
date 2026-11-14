@@ -29,10 +29,12 @@ public sealed class TimelineMessageBoundTests
         var snapshot = kernel.ExportGoalSnapshot(goal.Id);
         var stored = Assert.Single(snapshot.Timeline, item => item.Kind == ProgressKind.TaskNote);
 
-        AssertBound(message, stored.Message, EventTaskId);
-        Assert.DoesNotContain(middle, stored.Message);
-        Assert.StartsWith("BEGIN-", stored.Message);
-        Assert.EndsWith("-END", stored.Message);
+        Assert.Equal(message, stored.Message);
+        var bounded = TimelineMessageBound.Bound(stored.Message, stored.GoalId, stored.TaskId);
+        AssertBound(message, bounded, EventTaskId);
+        Assert.DoesNotContain(middle, bounded);
+        Assert.StartsWith("BEGIN-", bounded);
+        Assert.EndsWith("-END", bounded);
         Assert.Equal(EventGoalId, stored.GoalId);
         Assert.Equal(EventTaskId, stored.TaskId);
         Assert.Equal(OccurredAt, stored.OccurredAt);
@@ -74,7 +76,8 @@ public sealed class TimelineMessageBoundTests
         var stored = Assert.Single(kernel.ExportGoalSnapshot(goal.Id).Timeline,
             item => item.Kind == ProgressKind.TaskNote);
 
-        AssertBound(message, stored.Message, null);
+        Assert.Equal(message, stored.Message);
+        AssertBound(message, TimelineMessageBound.Bound(stored.Message, stored.GoalId, stored.TaskId), null);
         Assert.Null(stored.TaskId);
     }
 
