@@ -303,6 +303,172 @@ public sealed class BriefPlannedTestLaneReadinessTests
     }
 
     [Theory]
+    [InlineData("new test class BuildWidgetTests in collection 'BuildCollection'", false)]
+    [InlineData("new test class BuildWidgetTests with [Collection(\"BuildCollection\")]", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests and cover the retry path", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests, which covers the retry path", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests, covering the retry path", false)]
+    [InlineData("new test class `BuildWidgetTests` beside `BuildSiblingTests`", false)]
+    [InlineData("new test class BuildWidgetTests alongside the existing sibling class BuildSiblingTests.", false)]
+    [InlineData("new test class BuildWidgetTests next to an existing test class `BuildSiblingTests`", false)]
+    [InlineData("new test class BuildWidgetTests beside Example.BuildSiblingTests", false)]
+    [InlineData("new tests/Widget.Tests/BuildWidgetTests.cs beside BuildSiblingTests", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests and BuildConstantSiblingTests", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildConstantSiblingTests", false)]
+    [InlineData("new test class BuildWidgetTests beside BuildConstantSiblingTests", true)]
+    [InlineData("new test class BuildWidgetTests in collection 'BuildCollection' beside BuildUnownedTests", false)]
+    public void OwnedPlacement_PassesIntakeAndCompletion(string declaration, bool projectScoped)
+    {
+        using var fixture = new Fixture(declaration);
+        fixture.WriteSiblingSources();
+        string? projectHome = null;
+        if (projectScoped)
+        {
+            projectHome = Path.Combine(fixture.Root, "project-home");
+            Directory.CreateDirectory(projectHome);
+            File.Copy(fixture.ManifestPath, Path.Combine(projectHome, "acceptance-manifest.json"));
+            fixture.WriteManifest(Manifest); // Only the project manifest declares the sibling source roots.
+        }
+        var before = File.ReadAllBytes(fixture.ManifestPath);
+        var report = fixture.Readiness(projectHome);
+        Assert.True(report.AllowsStart(false));
+        Assert.DoesNotContain(report.Findings, item => item.Kind is LaneSubstringCollisionCheck.Rule or
+            BriefPlannedTestLaneReadiness.PendingKind or BriefPlannedTestLaneReadiness.ConfigurationKind);
+        Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
+        Assert.False(File.Exists(fixture.ProposedPath));
+
+        // Materialize the placement and exercise the existing completion rules on the implemented class.
+        fixture.WriteTestSource(Name, "\"BuildCollection\"");
+        var settings = AcceptanceGateEngineSettings.Load(fixture.Root, projectHome);
+        var descriptors = AcceptanceTestClassSourceScanner.Scan(fixture.Root,
+            LaneTestSourceRootResolver.SourceFiles(fixture.Root, settings.LaneTestSourceRoots));
+        var implemented = Assert.Single(descriptors, item => item.FullName == "Example." + Name);
+        Assert.Equal("BuildCollection", implemented.Collection);
+        var lanes = settings.InfrastructureTestLanes;
+        var diff = "+public sealed " + "class " + Name;
+        Assert.Empty(LaneSubstringCollisionCheck.Find(lanes, lanes, [implemented], diff));
+        Assert.Empty(TestCollectionGuardRules.FindLaneViolations(lanes, [implemented]));
+        Assert.Single(LaneSubstringCollisionCheck.Find(lanes, lanes, [implemented with { Collection = null }], diff));
+    }
+
+    [Theory]
+    [InlineData("beside BuildSiblingTests and cover the retry path", "BuildSiblingTests")]
+    [InlineData("beside BuildSiblingTests, which covers the retry path", "BuildSiblingTests")]
+    [InlineData("beside BuildSiblingTests, covering the retry path", "BuildSiblingTests")]
+    [InlineData("beside BuildSiblingTests and BuildConstantSiblingTests",
+        "BuildSiblingTests", "BuildConstantSiblingTests")]
+    [InlineData("beside BuildSiblingTests and `BuildConstantSiblingTests`",
+        "BuildSiblingTests", "BuildConstantSiblingTests")]
+    public void SiblingList_TrailingProseEndsListAndResolvesCollection(
+        string placement, params string[] expectedSiblings)
+    {
+        using var fixture = new Fixture("new test class " + Name + " " + placement);
+        fixture.WriteSiblingSources();
+        var declarations = BriefPlannedTestLaneReadiness.Declare(
+            ["new test class " + Name + " " + placement], fixture.Root);
+        var declaration = Assert.Single(declarations);
+        Assert.Equal(expectedSiblings, declaration.Siblings);
+        Assert.Null(declaration.Collection);
+
+        var settings = AcceptanceGateEngineSettings.Load(fixture.Root);
+        var resolved = Assert.Single(BriefPlannedTestLaneReadiness.ResolveSiblingCollections(
+            declarations, fixture.Root, settings.LaneTestSourceRoots));
+        Assert.Equal(expectedSiblings, resolved.Siblings);
+        Assert.Equal("BuildCollection", resolved.Collection);
+        Assert.Empty(BriefPlannedTestLaneReadiness.Evaluate(fixture.Goal, fixture.Root, null));
+    }
+
+    [Theory]
+    [InlineData("new test class BuildWidgetTests")]
+    [InlineData("new test class BuildWidgetTests to cover BuildSiblingTests")]
+    [InlineData("new test class BuildWidgetTests\nPlace it beside BuildSiblingTests")]
+    [InlineData("new test class BuildWidgetTests. Place it beside BuildSiblingTests")]
+    [InlineData("new test class BuildWidgetTests. Add new test class QuokkaTests beside BuildSiblingTests")]
+    [InlineData("new test class BuildWidgetTests beside UnknownSiblingTests")]
+    [InlineData("new test class BuildWidgetTests beside BuildNoCollectionTests")]
+    [InlineData("new test class BuildWidgetTests beside BuildUnownedTests")]
+    [InlineData("new test class BuildWidgetTests beside BuildAmbiguousTests")]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests and BuildUnownedTests")]
+    [InlineData("new test class BuildWidgetTests beside BuildSiblingTests and UnknownSiblingTests")]
+    [InlineData("new test class BuildWidgetTests in collection 'OtherCollection' beside BuildSiblingTests")]
+    [InlineData("new test class BuildWidgetTests beside tests/Widget.Tests/BuildSiblingTests.cs")]
+    [InlineData("new test class BuildWidgetTests beside BuildWidgetTests")]
+    [InlineData("new test class BuildWidgetTests, not beside BuildSiblingTests")]
+    public void MissingOrUnownedPlacement_RemainsBlocking(string declaration)
+    {
+        using var fixture = new Fixture(declaration);
+        fixture.WriteSiblingSources();
+        fixture.WriteTestSource("BuildAmbiguousTests", "\"BuildCollection\"", "First");
+        fixture.WriteTestSource("BuildAmbiguousTests", "\"BuildCollection\"", "Second");
+        var report = fixture.Readiness();
+        var finding = Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+        Assert.Equal(GoalReadinessSeverity.Blocker, finding.Severity);
+        Assert.Contains(Name, finding.Message);
+        Assert.False(finding.CanOverride);
+        Assert.False(report.AllowsStart(false));
+        Assert.False(report.AllowsStart(true));
+        Assert.DoesNotContain(report.Findings, item => item.Kind is BriefPlannedTestLaneReadiness.PendingKind or
+            BriefPlannedTestLaneReadiness.ConfigurationKind);
+    }
+
+    [Theory]
+    [InlineData("unresolvable-collection")]
+    [InlineData("unreadable-source")]
+    public void UnavailableSiblingSource_RetainsCollisionBlocker(string kind)
+    {
+        using var fixture = new Fixture("new test class BuildWidgetTests beside BuildSiblingTests");
+        fixture.WriteSiblingSources();
+        var siblingPath = fixture.WriteTestSource("BuildSiblingTests",
+            kind == "unresolvable-collection" ? "Missing.Collection" : "\"BuildCollection\"");
+        using var locked = kind == "unreadable-source"
+            ? new FileStream(siblingPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        var findings = BriefPlannedTestLaneReadiness.Evaluate(fixture.Goal, fixture.Root, null);
+        var finding = Assert.Single(findings);
+        Assert.Equal(LaneSubstringCollisionCheck.Rule, finding.Kind);
+        Assert.Equal(GoalReadinessSeverity.Blocker, finding.Severity);
+    }
+
+    [Theory]
+    [InlineData("new test class BuildWidgetTests", true)]
+    [InlineData("new test class BuildWidgetTests in collection 'BuildCollection' beside BuildSiblingTests", false)]
+    public void NoSiblingInferenceNeeded_LeavesSourceCacheUntouched(string declaration, bool blocks)
+    {
+        using var fixture = new Fixture(declaration);
+        fixture.WriteSiblingSources();
+        fixture.WriteTestSource("BuildSiblingTests", "Missing.Collection");
+        var cache = new AcceptanceTestClassSourceCache(storeDirectory: null);
+        using var cacheScope = AcceptanceTestClassSourceCache.Use(cache);
+        var findings = BriefPlannedTestLaneReadiness.Evaluate(fixture.Goal, fixture.Root, null);
+        if (blocks) Assert.Equal(LaneSubstringCollisionCheck.Rule, Assert.Single(findings).Kind);
+        else Assert.Empty(findings);
+        Assert.Equal(0, cache.ParsedFileCount);
+        var settings = AcceptanceGateEngineSettings.Load(fixture.Root);
+        Assert.Throws<InvalidDataException>(() => AcceptanceTestClassSourceScanner.Scan(fixture.Root,
+            LaneTestSourceRootResolver.SourceFiles(fixture.Root, settings.LaneTestSourceRoots)));
+        Assert.True(cache.ParsedFileCount > 0);
+    }
+
+    [Fact]
+    public void PlacementDiagnostics_DescribeBothOwnedForms()
+    {
+        using var fixture = new Fixture("new test class " + Name);
+        var intake = Assert.Single(BriefPlannedTestLaneReadiness.Evaluate(fixture.Goal, fixture.Root, null));
+        Assert.Equal(LaneSubstringCollisionCheck.Rule, intake.Kind);
+        var lanes = AcceptanceGateEngineSettings.Parse(Manifest).InfrastructureTestLanes;
+        var completion = Assert.Single(TestCollectionGuardRules.FindLaneMembershipViolations(lanes,
+            [new AcceptanceTestClassDescriptor("QuokkaTests", "BuildCollection")]));
+        foreach (var text in new[] { intake.Message, completion.RepairHint })
+        {
+            Assert.Contains("FullyQualifiedName~", text);
+            Assert.Contains("declaration line", text);
+            Assert.Contains("owned collection", text);
+            Assert.Contains("beside a named existing sibling in that collection", text);
+        }
+        Assert.Contains("manifest/filter and pinned membership test", intake.Message);
+    }
+
+    [Theory]
     [InlineData("existing test class BuildWidgetTests")]
     [InlineData("Update tests/Widget.Tests/BuildWidgetTests.cs")]
     [InlineData("Example: new test class BuildWidgetTests")]
@@ -625,6 +791,32 @@ public sealed class BriefPlannedTestLaneReadinessTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ManifestPath)!);
             File.WriteAllText(ManifestPath, text);
+        }
+
+        internal void WriteSiblingSources()
+        {
+            WriteManifest(Manifest.Replace("\"infrastructureTestLanes\":",
+                "\"laneTestSourceRoots\": [\"tests/Widget.Tests\", \"tests/Support\"], \"infrastructureTestLanes\":"));
+            WriteTestSource("BuildSiblingTests", "\"BuildCollection\"");
+            WriteTestSource("BuildConstantSiblingTests", "TestCollections.Build");
+            WriteTestSource("BuildNoCollectionTests", null);
+            WriteTestSource("BuildUnownedTests", "\"OtherCollection\"");
+            var support = Path.Combine(Root, "tests", "Support");
+            Directory.CreateDirectory(support);
+            File.WriteAllText(Path.Combine(support, "TestCollections.cs"),
+                "internal static " + "class TestCollections { public const string Build = \"BuildCollection\"; }");
+        }
+
+        internal string WriteTestSource(string name, string? collection, string ns = "Example")
+        {
+            var directory = Path.Combine(Root, "tests", "Widget.Tests");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, ns + name + ".cs");
+            if (name == Name && ns == "Example") path = ProposedPath;
+            File.WriteAllText(path, "namespace " + ns + ";\n" +
+                (collection is null ? "" : "[Xunit.Collection(" + collection + ")]\n") +
+                "public sealed " + "class " + name + " { [Xunit.Fact] public void Runs() { } }");
+            return path;
         }
 
         internal GoalReadinessPreflightReport Readiness(string? projectHome = null) =>
