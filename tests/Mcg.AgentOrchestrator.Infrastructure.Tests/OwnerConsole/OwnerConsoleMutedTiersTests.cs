@@ -15,12 +15,12 @@ public sealed class OwnerConsoleMutedTiersTests
             OwnerConsoleSettingsTestContext.Highlight(view, "alarm:");
             view.HandleKey(new Key('m'));
             Assert.Equal(["alarm"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
-            Assert.Equal("calm on, attention on, alarm off", context.Controller.BellStatusText);
+            Assert.Equal("calm on, attention on, alarm off, decision on", context.Controller.BellStatusText);
             Assert.Equal(context.Settings.Current, OwnerConsoleNotificationSettings.Load(context.Path));
         }
 
         context.Restart();
-        Assert.Equal("calm on, attention on, alarm off", context.Controller.BellStatusText);
+        Assert.Equal("calm on, attention on, alarm off, decision on", context.Controller.BellStatusText);
         context.Controller.Apply(OwnerConsoleSettingsTestContext.Model(running: true));
         context.Controller.Apply(OwnerConsoleSettingsTestContext.Model());
         context.Clock.Now += context.Settings.Current.UnplannedStopGrace + TimeSpan.FromSeconds(1);
@@ -33,7 +33,7 @@ public sealed class OwnerConsoleMutedTiersTests
         Assert.Contains(restarted.Lines, line => line == "alarm: system sound (muted)");
         await context.Controller.RunCommandAsync("bell attention off");
         Assert.Equal("bell attention off", context.Output.Texts[^1].Trim());
-        Assert.Equal("calm on, attention off, alarm off", context.Controller.BellStatusText);
+        Assert.Equal("calm on, attention off, alarm off, decision on", context.Controller.BellStatusText);
         Assert.Contains(restarted.Lines, line => line == "attention: system sound (muted)");
         Assert.Equal(["attention", "alarm"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
         var expected = context.Original.DeepClone().AsObject();
@@ -46,17 +46,17 @@ public sealed class OwnerConsoleMutedTiersTests
         Assert.False(context.Saved.ContainsKey("mutedTiers"));
         await context.Controller.RunCommandAsync("bell off");
         Assert.Equal("off", context.Controller.BellStatusText);
-        Assert.Equal(["calm", "attention", "alarm"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
+        Assert.Equal(["calm", "attention", "alarm", "decision"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
         await context.Controller.RunCommandAsync("bell alarm on");
         Assert.Contains(restarted.Lines, line => line == "alarm: system sound (on)");
-        Assert.Equal(["calm", "attention"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
+        Assert.Equal(["calm", "attention", "decision"], context.Saved["mutedTiers"]!.AsArray().Select(item => item!.GetValue<string>()));
     }
 
     [Theory]
     [InlineData("null", "on")]
     [InlineData("{}", "on")]
     [InlineData("\"alarm\"", "on")]
-    [InlineData("[1,null,\"unknown\",\"calm\",\"calm\",\"alarm\"]", "calm off, attention on, alarm off")]
+    [InlineData("[1,null,\"unknown\",\"calm\",\"calm\",\"alarm\"]", "calm off, attention on, alarm off, decision on")]
     public void MuteLoader_IgnoresMalformedAndUnknownEntries(string muted, string expected)
     {
         using var context = new OwnerConsoleSettingsTestContext(muted);

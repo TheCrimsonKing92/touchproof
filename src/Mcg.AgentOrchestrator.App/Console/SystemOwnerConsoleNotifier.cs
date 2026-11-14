@@ -3,7 +3,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class SystemOwnerConsoleNotifier(IOwnerConsoleSoundOutput output,
     OwnerConsoleNotificationSettings settings, Func<string, bool> fileExists,
     Func<string, bool>? folderExists = null, Func<string, IEnumerable<string>>? listFiles = null,
-    Func<int, int>? choose = null, Func<OwnerConsoleNotificationSettings>? current = null) : IOwnerConsoleNotifier
+    Func<int, int>? choose = null, Func<OwnerConsoleNotificationSettings>? current = null,
+    Func<OwnerConsoleNotificationSettings, string>? decisionLibraryFolder = null) : IOwnerConsoleNotifier
 {
     private readonly object _playbackLock = new();
     private readonly Dictionary<OwnerConsoleNotificationTier, string?> _lastPlayed = [];
@@ -16,12 +17,15 @@ internal sealed class SystemOwnerConsoleNotifier(IOwnerConsoleSoundOutput output
             OwnerConsoleNotificationTier.Calm => snapshot.CalmSoundFile,
             OwnerConsoleNotificationTier.Attention => snapshot.AttentionSoundFile,
             OwnerConsoleNotificationTier.Alarm => snapshot.AlarmSoundFile,
+            OwnerConsoleNotificationTier.Decision => snapshot.DecisionSoundFile,
             _ => null
         };
         lock (_playbackLock)
         {
             try
             {
+                if (tier == OwnerConsoleNotificationTier.Decision && string.IsNullOrWhiteSpace(path))
+                    path = decisionLibraryFolder?.Invoke(snapshot);
                 if (!string.IsNullOrWhiteSpace(path) && TryPlayCustomSound(tier, path)) return;
             }
             catch { /* Custom audio failure still falls back to the tier's system sound. */ }
@@ -30,6 +34,7 @@ internal sealed class SystemOwnerConsoleNotifier(IOwnerConsoleSoundOutput output
                 OwnerConsoleNotificationTier.Calm => 0x40u,
                 OwnerConsoleNotificationTier.Attention => 0x30u,
                 OwnerConsoleNotificationTier.Alarm => 0x10u,
+                OwnerConsoleNotificationTier.Decision => 0x30u,
                 _ => 0x40u
             });
         }

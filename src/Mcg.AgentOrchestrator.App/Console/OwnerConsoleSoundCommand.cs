@@ -10,8 +10,8 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
     IOwnerConsoleSoundOutput soundOutput, string defaultLibraryRoot,
     Func<string, bool> folderExists, Func<string, IEnumerable<string>> listFiles)
 {
-    private const string Usage = "usage: sound [list] | sound play <calm|attention|alarm> [<n|name>] | sound set <calm|attention|alarm> <n|name|system>";
-    private static readonly string[] Tiers = ["calm", "attention", "alarm"];
+    private const string Usage = "usage: sound [list] | sound play <calm|attention|alarm|decision> [<n|name>] | sound set <calm|attention|alarm|decision> <n|name|system>";
+    private static readonly string[] Tiers = ["calm", "attention", "alarm", "decision"];
     private readonly string _settingsPath = Path.GetFullPath(settingsPath);
     private readonly object _setLock = new();
     private OwnerConsoleAlertSettingsCommand? _alertSettings;
@@ -95,10 +95,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
             var selector = parts[3].Trim();
             if (selector.Length >= 2 && selector[0] is '\'' or '"' && selector[^1] == selector[0])
                 selector = selector[1..^1];
-            if (set)
-            {
-                Select(tier, selector, output);
-            }
+            if (set) Select(tier, selector, output);
             else Preview(tier, selector, output);
         }
         catch (Exception ex)
@@ -129,8 +126,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
         foreach (var field in ReadDocument())
             if (field.Key.Equals("soundLibrary", StringComparison.OrdinalIgnoreCase))
                 root = field.Value is JsonValue value && value.TryGetValue<string>(out var configured) ? configured : null;
-        root = string.IsNullOrWhiteSpace(root) ? defaultLibraryRoot : root;
-        var folder = Path.GetFullPath(Path.Combine(root, TierName(tier)), Path.GetDirectoryName(_settingsPath)!);
+        var folder = LibraryFolder(_settingsPath, root, defaultLibraryRoot, tier);
         if (!folderExists(folder))
         {
             output.WriteLine($"{TierName(tier)} library folder not found: {folder}");
@@ -172,6 +168,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
         {
             OwnerConsoleNotificationTier.Calm => snapshot with { CalmSoundFile = clip },
             OwnerConsoleNotificationTier.Attention => snapshot with { AttentionSoundFile = clip },
+            OwnerConsoleNotificationTier.Decision => snapshot with { DecisionSoundFile = clip },
             _ => snapshot with { AlarmSoundFile = clip }
         });
         output.WriteLine($"sound set {TierName(tier)}: {(clip is null ? "system sound" : Path.GetFileName(clip))}");
@@ -228,8 +225,14 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
     {
         OwnerConsoleNotificationTier.Calm => snapshot.CalmSoundFile,
         OwnerConsoleNotificationTier.Attention => snapshot.AttentionSoundFile,
+        OwnerConsoleNotificationTier.Decision => snapshot.DecisionSoundFile,
         _ => snapshot.AlarmSoundFile
     };
+
+    internal static string LibraryFolder(string settingsPath, string? root, string defaultRoot,
+        OwnerConsoleNotificationTier tier) => Path.GetFullPath(
+            Path.Combine(string.IsNullOrWhiteSpace(root) ? defaultRoot : root, TierName(tier)),
+            Path.GetDirectoryName(Path.GetFullPath(settingsPath))!);
 
     private static string TierName(OwnerConsoleNotificationTier tier) => tier.ToString().ToLowerInvariant();
     private static bool TryTier(string name, out OwnerConsoleNotificationTier tier)
@@ -239,6 +242,7 @@ internal sealed class OwnerConsoleSoundCommand(string settingsPath,
             "calm" => OwnerConsoleNotificationTier.Calm,
             "attention" => OwnerConsoleNotificationTier.Attention,
             "alarm" => OwnerConsoleNotificationTier.Alarm,
+            "decision" => OwnerConsoleNotificationTier.Decision,
             _ => default
         };
         return Tiers.Contains(name, StringComparer.OrdinalIgnoreCase);
