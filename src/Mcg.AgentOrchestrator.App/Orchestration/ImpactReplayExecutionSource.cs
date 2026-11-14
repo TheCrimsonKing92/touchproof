@@ -80,7 +80,8 @@ internal class ImpactReplayExecutionSource
         var productionSources = changedSources.Except(changedTests, StringComparer.OrdinalIgnoreCase).ToArray();
         var selection = productionSources.Length == 0 && changedTests.Length > 0
             ? ReverseDependencyTestSelection.Resolved([])
-            : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true);
+            : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: true,
+                propagateShippingSourceReach: true);
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, testSources, classes, guards,
             out var declaredGuards, augmented.QualifiedClasses, testProjectDirectories);

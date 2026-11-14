@@ -10,7 +10,8 @@ public sealed record RepositoryRecheckTestSelection(bool Resolved, IReadOnlyList
         if (changedSourcePaths.Any(path => !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
             !File.Exists(Path.Combine(repositoryRoot, path))))
             return new(false, [], "non-source-or-missing-path");
-        var selection = ReverseDependencyTestImpactReader.Read(repositoryRoot, changedSourcePaths);
+        var selection = ReverseDependencyTestImpactReader.Read(repositoryRoot, changedSourcePaths,
+            propagateShippingSourceReach: true);
         return new(selection.Outcome == ReverseDependencySelectionOutcome.Resolved,
             selection.TestClassNames, selection.Reason);
     }

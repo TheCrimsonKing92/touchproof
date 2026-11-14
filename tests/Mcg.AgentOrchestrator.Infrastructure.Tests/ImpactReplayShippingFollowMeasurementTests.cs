@@ -5,9 +5,83 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Fixture = PreTesterCoupledClassSelectionsTests.Fixture;
 
-// Parallel-safe: sources and duration receipts live in a private fixture tree; no runners or git.
+// Parallel-safe: each case owns its sources, receipts and any replay repository and checkouts.
 public sealed class ImpactReplayShippingFollowMeasurementTests
 {
+    [Fact]
+    public void GateRead_ChangedConstant_FollowsConsumerWithinTwoHops()
+    {
+        using var fixture = new Fixture();
+        ArrangeGateFixture(fixture);
+
+        var gate = AcceptanceImpactSelectionReader.ReadLive(fixture.Root, [Fixture.Source]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, gate.Selection.Outcome);
+        Assert.Contains(gate.Classes, item => item.FullName == "ConsumerOnlyTests");
+        Assert.Contains(gate.Classes, item => item.FullName == "ThirdHopTests");
+        Assert.Equal(["ConsumerOnlyTests", "DirectTests", "ShippingConsumerTests"],
+            gate.Selection.TestClassNames.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("ThirdHopTests", gate.Selection.TestClassNames);
+        Assert.DoesNotContain("OtherTests", gate.Selection.TestClassNames);
+
+        var disabled = ReverseDependencyTestImpactReader.Read(fixture.Root, [Fixture.Source],
+            propagateShippingSourceReach: false);
+        var defaultRead = ReverseDependencyTestImpactReader.Read(fixture.Root, [Fixture.Source]);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, disabled.Outcome);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, defaultRead.Outcome);
+        Assert.Equal(["DirectTests", "ShippingConsumerTests"], disabled.TestClassNames);
+        Assert.DoesNotContain("ConsumerOnlyTests", disabled.TestClassNames);
+        Assert.Equal(disabled.TestClassNames, defaultRead.TestClassNames);
+    }
+
+    [Fact]
+    public void TrainRemoval_ChangedConstant_MatchesGateClassSet()
+    {
+        using var fixture = new Fixture();
+        ArrangeGateFixture(fixture);
+
+        var gate = AcceptanceImpactSelectionReader.ReadLive(fixture.Root, [Fixture.Source]);
+        var recheck = RepositoryRecheckTestSelection.Read(fixture.Root, [Fixture.Source]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, gate.Selection.Outcome);
+        Assert.True(recheck.Resolved, recheck.Reason);
+        Assert.Contains("ConsumerOnlyTests", recheck.TestClasses);
+        Assert.Equal(gate.Selection.TestClassNames.Order(StringComparer.Ordinal),
+            recheck.TestClasses.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Replay_ConsumerOnlyClass_SelectedThroughBothSources(bool useBaseSource)
+    {
+        using var fixture = new ImpactReplayFixture(initialRepositoryFiles: new Dictionary<string, string>
+        {
+            ["src/Sample/ShippingConsumer.cs"] =
+                "namespace Sample; public class ShippingConsumer { public int Value => new Alpha().Value; }"
+        }, initialTestFiles: new Dictionary<string, string>
+        {
+            ["BetaTests.cs"] = """
+                namespace SampleTests;
+                public class BetaTests { [Xunit.Fact] public void Works() { _ = new Sample.ShippingConsumer(); } }
+                """
+        });
+        fixture.AddAttempt("shipping-consumer");
+        var source = useBaseSource ? new BaseExecutionSource() : null;
+
+        var (report, _) = fixture.Run(source: source);
+
+        if (source is not null) Assert.Equal(1, source.Executed);
+        var record = Assert.Single(report.Attempts);
+        Assert.Equal("Resolved", record.SelectionOutcome);
+        Assert.Null(record.DegradationKind);
+        Assert.Contains("BetaTests", record.SelectedTestClasses);
+        Assert.Contains("Beta lane", record.WouldRunLanes);
+        Assert.Empty(record.SkippedLanes);
+        Assert.NotNull(record.ShippingFollowAddedClasses);
+        Assert.Empty(record.ShippingFollowAddedClasses);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -223,6 +297,38 @@ public sealed class ImpactReplayShippingFollowMeasurementTests
             [attempt, attempt with { AttemptId = "second" }], [], [], []));
         Assert.Contains("| SharedType | 2 |", markdown);
         Assert.Contains("- Remaining saving: minimum unavailable; median unavailable; 90th percentile unavailable; maximum unavailable; unavailable: 2", markdown);
+    }
+
+    private static void ArrangeGateFixture(Fixture fixture)
+    {
+        Arrange(fixture);
+        fixture.Write("config/acceptance-manifest.json", """
+            {
+              "engine": { "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"] },
+              "checks": [
+                { "name": "infra", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj" },
+                { "name": "core", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" }
+              ]
+            }
+            """);
+        fixture.Write("src/Mcg.AgentOrchestrator.Core/LaterConsumer.cs",
+            "public class LaterConsumer { public string Text => new ShippingConsumer().Text; }");
+        fixture.Test("ThirdHopTests", "LaterConsumer");
+    }
+
+    private sealed class BaseExecutionSource : ImpactReplayExecutionSource
+    {
+        internal int Executed { get; private set; }
+
+        internal override ImpactReplayCaseResult ExecuteCase(ImpactReplayStoredAttempt attempt,
+            ImpactReplayRunConfiguration configuration, ImpactReplayCaseContext context,
+            IReadOnlyList<AcceptanceLaneFlakeRow> flakeRows,
+            IReadOnlyDictionary<string, GateStatsReport.FlakeRow> history, IImpactReplaySink sink,
+            CancellationToken cancellationToken)
+        {
+            Executed++;
+            return base.ExecuteCase(attempt, configuration, context, flakeRows, history, sink, cancellationToken);
+        }
     }
 
     private static Input Arrange(Fixture fixture)
