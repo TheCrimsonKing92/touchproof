@@ -85,10 +85,15 @@ public sealed class StorageRetentionTestsProjectIsolationTests
         foreach (var required in new[] { "--report-trx", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests" })
             Assert.Contains(required, arguments);
         Assert.DoesNotContain(arguments, argument => argument.StartsWith("--filter", StringComparison.OrdinalIgnoreCase));
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(
+            AcceptanceGateEngineSettings.Load(Root).InfrastructureTestLanes, AcceptanceTestClassSourceScanner.Scan(Root));
         foreach (var lane in engine.GetProperty("infrastructureTestLanes").EnumerateArray())
         {
             Assert.NotEqual("Storage retention", lane.GetProperty("name").GetString());
-            Assert.DoesNotContain("StorageRetention", lane.GetProperty("filter").GetString()!, StringComparison.Ordinal);
+            var filter = lane.TryGetProperty("filter", out var raw) ? raw.GetString() :
+                Assert.Single(resolved, item => item.Name == lane.GetProperty("name").GetString()).Filter;
+            Assert.False(string.IsNullOrWhiteSpace(filter));
+            Assert.DoesNotContain("StorageRetention", filter!, StringComparison.Ordinal);
         }
         foreach (var partition in engine.GetProperty("localTestPartitions").EnumerateArray())
             Assert.DoesNotContain("Storage retention", Strings(partition.GetProperty("laneNames")));

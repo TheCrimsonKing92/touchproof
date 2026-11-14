@@ -95,8 +95,15 @@ public sealed class OwnerConsoleTestsProjectIsolationTests
         foreach (var required in new[] { "--report-trx", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests" })
             Assert.Contains(required, arguments);
         Assert.DoesNotContain(arguments, argument => argument.StartsWith("--filter", StringComparison.OrdinalIgnoreCase));
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(
+            AcceptanceGateEngineSettings.Load(Root).InfrastructureTestLanes, AcceptanceTestClassSourceScanner.Scan(Root));
         foreach (var lane in engine.GetProperty("infrastructureTestLanes").EnumerateArray())
-            Assert.DoesNotContain("OwnerConsole", lane.GetProperty("filter").GetString()!, StringComparison.Ordinal);
+        {
+            var filter = lane.TryGetProperty("filter", out var raw) ? raw.GetString() :
+                Assert.Single(resolved, item => item.Name == lane.GetProperty("name").GetString()).Filter;
+            Assert.False(string.IsNullOrWhiteSpace(filter));
+            Assert.DoesNotContain("OwnerConsole", filter!, StringComparison.Ordinal);
+        }
         var inventory = DeclaredTestProjectInventory.DeclaredProjects(AcceptanceGateEngineSettings.Load(Root));
         Assert.Contains(NewProject, inventory);
         Assert.Contains(AcceptancePolicyShardPlanner.StorageRetentionTestsProject, inventory);

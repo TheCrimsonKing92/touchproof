@@ -43,7 +43,8 @@ public sealed class AcceptanceLaneMembershipTestsProcessSpawningSplit
         // Reconstruct the pre-split selection from the original lane and the two known moved classes.
         var baseline = lanes.Where(lane => lane.Name != NewLaneName)
             .Select(lane => lane.Name == OriginalLaneName
-                ? originalLane with { Filter = originalLane.Filter + "|" + newLane.Filter }
+                ? originalLane with { Filter = originalLane.Filter + "|" +
+                    Xunit.Assert.Single(resolved, item => item.Name == NewLaneName).Filter }
                 : lane)
             .ToArray();
         var baselineDescriptors = descriptors.Select(descriptor => descriptor.Collection == NewCollection

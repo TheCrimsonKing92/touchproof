@@ -206,7 +206,7 @@ public sealed class AcceptanceLaneMembershipTests
             File.WriteAllText(Path.Combine(testDirectory, "QuokkaHarborSerializedFixture.cs"),
                 $"[Xunit.Collection(\"{collection}\")] public class QuokkaHarborSerializedFixture {{ [Xunit.Fact] public void Example() {{ }} }}");
             var className = "QuokkaHarborSerializedFixture";
-            var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
+            var baseline = ResolveBaseline(lanes);
             Xunit.Assert.Equal("Remainder", Xunit.Assert.Single(
                 AcceptanceLaneMembership.LanesIncluding(baseline, className)).Name);
 
@@ -242,7 +242,7 @@ public sealed class AcceptanceLaneMembershipTests
     {
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
         var descriptor = new AcceptanceTestClassDescriptor("WorkerShellTestsQuokka", "ProcessSpawning");
-        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
+        var baseline = ResolveBaseline(lanes);
         Xunit.Assert.DoesNotContain(AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName),
             lane => lane.Name == "Process spawning");
 
@@ -271,7 +271,7 @@ public sealed class AcceptanceLaneMembershipTests
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
         var descriptors = RunnableClasses();
         var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
-        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
+        var baseline = ResolveBaseline(lanes);
         var owned = lanes.SelectMany(lane => lane.OwnedCollections).ToHashSet(StringComparer.Ordinal);
         var mismatches = new List<AcceptanceLaneMembershipMismatch>();
         foreach (var descriptor in descriptors.Where(item => item.Collection is not null && owned.Contains(item.Collection)))
@@ -377,6 +377,11 @@ public sealed class AcceptanceLaneMembershipTests
         Xunit.Assert.Equal("remote-slower", preCarve.Reason);
         Xunit.Assert.Equal(1167.0, preCarve.RemoteSeconds);
     }
+
+    private static IReadOnlyList<AcceptanceTestLane> ResolveBaseline(IReadOnlyList<AcceptanceTestLane> lanes) =>
+        AcceptanceLaneMembership.ResolveOwnedCollections(lanes.Select(lane =>
+            AcceptanceLaneMembership.IsFilterlessCollectionOwner(lane)
+                ? lane : lane with { OwnedCollections = [] }).ToArray(), RunnableClasses());
 
     private static AcceptanceTestClassDescriptor[] RunnableClasses() =>
         typeof(AcceptanceLaneMembershipTests).Assembly.GetTypes()

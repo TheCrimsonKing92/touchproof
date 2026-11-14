@@ -155,8 +155,11 @@ public sealed class FocusedEvidenceRemoteEligibilityTests : GoalAcceptanceVerifi
     public void SharedRuleAgreesWithCoordinatorForEveryShippedLane()
     {
         using var fixture = new ScreeningFixture();
-        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var lanes = AcceptanceLaneMembership.ResolveOwnedCollections(
+            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes, AcceptanceTestClassSourceScanner.Scan(root));
         Assert.NotEmpty(lanes);
+        Assert.All(lanes, lane => Assert.False(string.IsNullOrWhiteSpace(lane.Filter)));
         var config = (fixture.Configuration with { MachineLocalResourceKeys = ShippedMachineLocalKeys })
             .ResolveLanes(lanes.Select(lane => "infrastructure tests: " + lane.Name));
         using var coordinator = new RemoteLaneCoordinator(config, new RemoteLaneCandidateIdentity("attempt", "goal", "commit", "tree", "main", "manifest"),
