@@ -50,6 +50,37 @@ public sealed class ReviewFindingSeverityValidationTests
     }
 
     [Theory]
+    [InlineData("2")]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData("\"2\"")]
+    [InlineData("\"bogus\"")]
+    public void InvalidStateOnBlockingFindingIsFatal(string state)
+    {
+        var result = ReviewFindingConvergence.ParseJson(FindingJsonWithState(state), "[]");
+
+        Assert.NotNull(result.FatalDiagnostic);
+        Assert.Equal(0, result.FatalDiagnostic.ItemIndex);
+        Assert.Equal("state-validation", result.FatalDiagnostic.StableId);
+        Assert.Empty(result.Round.Findings);
+    }
+
+    [Theory]
+    [InlineData("\"open\"", ReviewFindingState.Open)]
+    [InlineData("\"resolved\"", ReviewFindingState.Resolved)]
+    public void RecognizedStateStringPreservesValidFinding(string state, ReviewFindingState expected)
+    {
+        var result = ReviewFindingConvergence.ParseJson(FindingJsonWithState(state), "[]");
+
+        Assert.Null(result.FatalDiagnostic);
+        Assert.Empty(result.AdvisoryRejections);
+        var finding = Assert.Single(result.Round.Findings);
+        Assert.Equal("state-validation", finding.StableId);
+        Assert.Equal(FindingSeverity.Blocking, finding.Severity);
+        Assert.Equal(expected, finding.State);
+    }
+
+    [Theory]
     [InlineData("999")]
     [InlineData("\"999\"")]
     [InlineData("-1")]
@@ -351,6 +382,14 @@ public sealed class ReviewFindingSeverityValidationTests
     private static void Record(AgentOrchestratorKernel kernel, Goal goal, TaskSpec reviewer,
         IReadOnlyList<ReviewFinding> findings, string verdict, bool dispatchCompletion = true)
         => RecordJson(kernel, goal, reviewer, JsonSerializer.Serialize(findings), verdict, dispatchCompletion);
+
+    private static string FindingJsonWithState(string state)
+    {
+        var finding = JsonSerializer.SerializeToElement(Finding("state-validation", FindingSeverity.Blocking));
+        return "[{" + string.Join(",", finding.EnumerateObject().Select(property =>
+            JsonSerializer.Serialize(property.Name) + ":" +
+            (property.Name == "state" ? state : property.Value.GetRawText()))) + "}]";
+    }
 
     private static string FindingJsonWithSeverity(string severity, bool malformed = false)
     {
