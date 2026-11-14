@@ -1494,7 +1494,7 @@ public sealed class Goal
                 evt.GoalId.Value,
                 evt.TaskId?.Value,
                 evt.Kind,
-                evt.Message,
+                TimelineMessageBound.Bound(evt.Message, evt.GoalId.Value, evt.TaskId?.Value),
                 evt.OccurredAt,
                 evt.RequeueSkipped,
                 evt.OperatorGates,
