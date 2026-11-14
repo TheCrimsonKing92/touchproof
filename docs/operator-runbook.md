@@ -440,6 +440,16 @@ Listen to the stable conduct event stream first, starting at the current end so 
 tail -n 0 -F .orchestrator/logs/conduct-events.log
 ```
 
+For a persistent Claude Monitor, bind the tail to the Monitor shell so the tail exits when that shell exits; tearing down a Monitor without `--pid` orphans the tail child, leaving it alive after teardown:
+
+```bash
+tail --pid=$$ -n 0 -F .orchestrator/logs/conduct-events.log | grep --line-buffered -E "<event patterns>"
+```
+
+To find leaked tails, list candidates with `.\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Name tail -CommandContains conduct-events`, verify that each candidate's Monitor shell has exited, then stop each verified pid with `repo-process-stop --id <pid>`, never by image name.
+
+The PowerShell listener runs in-process and has no tail child:
+
 ```powershell
 Get-Content -LiteralPath .orchestrator\logs\conduct-events.log -Tail 0 -Wait
 ```
