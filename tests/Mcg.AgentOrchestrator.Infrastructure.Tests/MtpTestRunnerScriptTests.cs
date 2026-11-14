@@ -841,6 +841,49 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     [Xunit.Fact]
+    public void LocalPartitions_MetadataOnly_ListsDeclarationsWithoutSourceAccess()
+    {
+        var root = RepositoryRoot();
+        var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var command = $$"""
+            $ErrorActionPreference = 'Stop'; Import-Module '{{module}}' -Force
+            $manifest = @{
+                engine = @{
+                    infrastructureTestLanes = @(
+                        @{ name = 'First owner'; ownedCollections = @('First') },
+                        @{ name = 'Second owner'; ownedCollections = @('Second') },
+                        @{ name = 'Literal'; filter = 'FullyQualifiedName=LiteralTests' }
+                    )
+                    localTestPartitions = @(@{ name = 'Fixture'; description = 'fixture';
+                        laneNames = @('First owner', 'Second owner', 'Literal');
+                        additionalFilters = @('FullyQualifiedName=CompatibilityTests') })
+                }
+            } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+            # No source roots exist: metadata must remain available without resolving test classes.
+            $partition = @(Get-MtpLocalPartitions $manifest -RepositoryRoot '' -MetadataOnly)[0]
+            ConvertTo-Json -InputObject $partition -Depth 6 -Compress
+            """;
+
+        var result = RunPowerShellCommand(root, command);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var partition = document.RootElement;
+        Assert.Equal("Fixture", partition.GetProperty("Name").GetString());
+        Assert.Equal(JsonValueKind.Null, partition.GetProperty("Filters").ValueKind);
+        var lanes = partition.GetProperty("Lanes").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "First owner", "Second owner", "Literal" },
+            lanes.Select(lane => lane.GetProperty("name").GetString()));
+        Assert.Equal("First", Assert.Single(lanes[0].GetProperty("ownedCollections").EnumerateArray()).GetString());
+        Assert.Equal("Second", Assert.Single(lanes[1].GetProperty("ownedCollections").EnumerateArray()).GetString());
+        Assert.False(lanes[0].TryGetProperty("filter", out _));
+        Assert.False(lanes[1].TryGetProperty("filter", out _));
+        Assert.Equal("FullyQualifiedName=LiteralTests", lanes[2].GetProperty("filter").GetString());
+        Assert.Equal("FullyQualifiedName=CompatibilityTests",
+            Assert.Single(partition.GetProperty("AdditionalFilters").EnumerateArray()).GetString());
+    }
+
+    [Xunit.Fact]
     public void LocalPartitions_FilterlessOwner_ResolvesMembersOrReportsManifestError()
     {
         var root = SharedTestSupport.CreateTempDirectory();

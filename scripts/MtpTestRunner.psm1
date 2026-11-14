@@ -413,7 +413,9 @@ function Read-MtpTestManifest {
 function Get-MtpLocalPartitions {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
-        [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
+        [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+        # Listing needs lane declarations only. Filters remain unresolved and must not be run.
+        [switch]$MetadataOnly
     )
 
     if ($null -eq $Manifest.engine.localTestPartitions) {
@@ -435,7 +437,7 @@ function Get-MtpLocalPartitions {
             }
         }
     }
-    if ($collectionMembers.Count -gt 0) {
+    if (-not $MetadataOnly -and $collectionMembers.Count -gt 0) {
         $rootsProperty = $Manifest.engine.PSObject.Properties['laneTestSourceRoots']
         if ($null -eq $rootsProperty -or @($rootsProperty.Value).Count -eq 0) {
             $ownerNames = ($declaredLanes | Where-Object {
@@ -480,6 +482,7 @@ function Get-MtpLocalPartitions {
         }
     }
     $lanes = @(foreach ($lane in $declaredLanes) {
+        if ($MetadataOnly) { $lane; continue }
         $copy = $lane.PSObject.Copy()
         $filterProperty = $copy.PSObject.Properties['filter']
         if ($null -eq $filterProperty -or [string]::IsNullOrWhiteSpace([string]$filterProperty.Value)) {
@@ -519,10 +522,12 @@ function Get-MtpLocalPartitions {
             Description = [string]$partition.description
             Lanes = @($resolvedLanes)
             AdditionalFilters = @($additionalFilters)
-            Filters = @(
-                @($resolvedLanes | ForEach-Object { [string]$_.filter })
-                $additionalFilters
-            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            Filters = if ($MetadataOnly) { $null } else {
+                @(
+                    @($resolvedLanes | ForEach-Object { [string]$_.filter })
+                    $additionalFilters
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            }
         }
     }
 
