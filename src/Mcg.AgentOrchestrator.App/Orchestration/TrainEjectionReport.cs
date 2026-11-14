@@ -36,9 +36,9 @@ internal static class TrainEjectionReport
         }
     }
 
-    internal static bool TryGetCohortMemberHold(ConductorDriver driver, GoalId goalId, out string detail)
+    internal static bool TryGetCohortMemberHold(ConductorDriver driver, GoalId goalId, out string detail, bool sweep = true)
     {
-        if (!driver.TryGetCohortGateHold(goalId, out detail)) return false;
+        if (!driver.TryGetCohortGateHold(goalId, out detail, sweep)) return false;
         if (driver.ExecutionDirectory is not { } executionDirectory ||
             Token(detail, "fingerprint=")?.StartsWith("train:", StringComparison.Ordinal) != true) return true;
         try
@@ -87,7 +87,7 @@ internal static class TrainEjectionReport
             var state = OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory;
             var store = Open(state);
             if (store is null) return reason;
-            var receipts = store.ReadReceiptsSince(DateTimeOffset.MinValue);
+            var receipts = store.ReadReceiptsForGoal(goalId);
             var latest = receipts.LastOrDefault(receipt =>
                 receipt.Identity.Members.Any(member => member.GoalId == goalId));
             if (latest?.GateAttemptId is not { } attemptId ||

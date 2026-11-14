@@ -237,6 +237,30 @@ public sealed class MergeTrainAcceptanceStore
             .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
     }
 
+    public IReadOnlyList<MergeTrainReceipt> ReadReceiptsForGoal(GoalId goalId) =>
+        ReadReceiptsForGoal(goalId, payloadDeserialized: null);
+
+    internal IReadOnlyList<MergeTrainReceipt> ReadReceiptsForGoal(GoalId goalId, Action? payloadDeserialized)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT r.payload_json FROM merge_train_receipt_members m
+            JOIN merge_train_receipts r ON r.train_id=m.train_id
+            WHERE m.goal_id=$goal;
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        using var reader = command.ExecuteReader();
+        var receipts = new List<MergeTrainReceipt>();
+        while (reader.Read())
+        {
+            receipts.Add(FromDto(JsonSerializer.Deserialize<ReceiptDto>(reader.GetString(0), JsonOptions)!));
+            payloadDeserialized?.Invoke();
+        }
+        return receipts.OrderBy(receipt => receipt.CompletedAt)
+            .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
+    }
+
     public IReadOnlySet<string> ReadFinalizedLandingTrainIds()
     {
         using var connection = Open();
