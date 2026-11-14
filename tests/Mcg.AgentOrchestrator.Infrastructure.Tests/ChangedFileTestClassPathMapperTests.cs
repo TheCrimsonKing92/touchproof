@@ -55,15 +55,101 @@ public sealed class ChangedFileTestClassPathMapperTests
     [InlineData("scripts/run.sh", true)]
     [InlineData("tests/Example/Fixtures/data.json", true)]
     [InlineData("tests/Example/Fixtures/code.cs", false)]
+    [InlineData("src/Example.cs", false)]
     [InlineData("docs/readme.md", false)]
-    [InlineData("config/settings.json", false)]
-    public void OnlyExplicitScriptAndFixtureFamilyRequiresMapping(string changed, bool abandons)
+    [InlineData("Directory.Build.props", false)]
+    [InlineData("tests/Example/Example.csproj", false)]
+    [InlineData("config/settings.json", true)]
+    [InlineData("config/settings.JsOn", true)]
+    public void ScriptsFixturesAndExternalJsonRequireMapping(string changed, bool abandons)
     {
         using var fixture = new ImpactReplaySelectionFixture();
         fixture.Add("Tests.cs", "public class OrdinaryTests { [Fact] public void Works() {} }");
         var selection = ChangedFileTestClassPathMapper.Read([changed], fixture.Sources, fixture.Classes, []);
         Assert.Equal(abandons ? ReverseDependencySelectionOutcome.Abandoned : ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
-        if (abandons) Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        if (abandons)
+        {
+            Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+            Assert.Contains(changed, selection.Reason);
+        }
+    }
+
+    [Theory]
+    [InlineData("config/acceptance-manifest.json", null)]
+    [InlineData("./CONFIG\\Acceptance-Manifest.JSON", null)]
+    [InlineData("config/acceptance-manifest.json", "scripts/mapped.ps1")]
+    [InlineData("config/acceptance-manifest.json", "scripts/unmapped.ps1")]
+    public void ManifestChange_AbandonsBeforeLiteralMapping(string manifest, string? companion)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            public class ManifestTests { [Fact] public void Works() { var path = "config/acceptance-manifest.json"; } }
+            public class ScriptTests { [Fact] public void Works() { var path = "scripts/mapped.ps1"; } }
+            """);
+        string[] changed = companion is null ? [manifest] : [companion, manifest];
+
+        var selection = ChangedFileTestClassPathMapper.Read(changed, fixture.Sources, fixture.Classes, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Contains("config/acceptance-manifest.json", selection.Reason);
+    }
+
+    [Fact]
+    public void ExternalJson_MapsExactlyClassesNamingPathOrFileName()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            public class PathTests { [Fact] public void Works() { var path = "./CONFIG/settings.JsOn"; } }
+            public class NameTests { [Fact] public void Works() { var name = "settings.json"; } }
+            public class OtherTests { [Fact] public void Works() { var text = "prefix settings.json"; } }
+            """);
+
+        var selection = ChangedFileTestClassPathMapper.Read(["config/settings.json"], fixture.Sources, fixture.Classes, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(new[] { "NameTests", "PathTests" }, selection.TestClassNames);
+    }
+
+    [Theory]
+    [InlineData("tests/Example.Tests/settings.json", false)]
+    [InlineData("tests/Example.Tests/Fixtures/settings.json", true)]
+    [InlineData("tests/canary-fixture/config/acceptance-manifest.json", true)]
+    public void JsonDirectoryExceptions_PreserveLiteralMapping(string changed, bool maps)
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            public class DataTests { [Fact] public void Works() { var name = "settings.json"; var manifest = "acceptance-manifest.json"; } }
+            """);
+
+        var selection = ChangedFileTestClassPathMapper.Read([changed], fixture.Sources, fixture.Classes,
+            ["./TESTS\\Example.Tests\\"]);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(maps ? new[] { "DataTests" } : Array.Empty<string>(), selection.TestClassNames);
+    }
+
+    [Fact]
+    public void ManifestOnlyReplay_AbandonsNarrowPlanWithShardClassKnown()
+    {
+        using var fixture = new ImpactReplaySelectionFixture();
+        fixture.Add("Tests.cs", """
+            public class IsolatedProcessSpawningShardCollectionTests { [Fact] public void Works() {} }
+            public class OrdinaryTests { [Fact] public void Works() {} }
+            """);
+        var classes = fixture.Classes;
+        Assert.Contains(classes, item => item.FullName == "IsolatedProcessSpawningShardCollectionTests");
+
+        var selection = ImpactReplaySelectionAugmentation.Apply(
+            ReverseDependencyTestSelection.Resolved(["OrdinaryTests"]),
+            ["config/acceptance-manifest.json"], fixture.Sources, classes, null, []);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.ChangedFileUnmapped, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
+        Assert.Contains("config/acceptance-manifest.json", selection.Reason);
     }
 
     [Fact]
@@ -81,9 +167,13 @@ public sealed class ChangedFileTestClassPathMapperTests
     [InlineData("./TESTS\\Example.Tests\\TestData\\Fixtures\\new.json", true)]
     [InlineData("tests/Example.Tests/tools/new.ps1", true)]
     [InlineData("tests/Checked.Tests/Fixtures/new.json", true)]
+    [InlineData("./TESTS\\Example.Tests\\TestData\\new.JSON", true)]
+    [InlineData("tests/Checked.Tests/new.json", true)]
     [InlineData("scripts/new.ps1", false)]
     [InlineData("tests/Example.Tests.Sibling/Fixtures/new.json", false)]
     [InlineData("tests/Undeclared.Tests/Fixtures/new.json", false)]
+    [InlineData("tests/Example.Tests.Sibling/new.json", false)]
+    [InlineData("tests/Undeclared.Tests/new.json", false)]
     public void UnnamedFile_ExemptionUsesOnlyManifestDeclaredProjectDirectories(string changed, bool resolved)
     {
         using var fixture = new ImpactReplaySelectionFixture();

@@ -1767,15 +1767,12 @@ public static partial class WorkerProfileDispatcher
             throw new InvalidOperationException($"Task '{task.Id}' is not assigned to an agent.");
         }
 
-        var assignedAgent = agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId);
-        if (assignedAgent is not null)
-        {
-            return assignedAgent;
-        }
-
-        throw new KeyNotFoundException(
-            $"Assigned agent '{task.AssignedAgentId}' for {task.RequiredRole} task '{task.Id}' is absent from the agent catalog; restore it or run reassign-agent.");
+        return agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId)
+            ?? throw new KeyNotFoundException(AssignedAgentNotFoundMessage(task));
     }
+
+    internal static string AssignedAgentNotFoundMessage(TaskSpec task) =>
+        $"Assigned agent '{task.AssignedAgentId}' for {task.RequiredRole} task '{task.Id}' is absent from the agent catalog; restore it or run reassign-agent.";
 
     private static void EnsureRealSubscriptionProfile(WorkerProfile profile)
     {

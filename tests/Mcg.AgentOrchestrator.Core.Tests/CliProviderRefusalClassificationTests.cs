@@ -154,6 +154,77 @@ public sealed class CliProviderRefusalClassificationTests
         Assert.Equal(ParseUtc("2026-10-05T16:58:00Z"), reset);
     }
 
+    [Theory]
+    [InlineData("You've hit your Fable limit \u00B7 resets Nov 18, 11am (America/Chicago). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.")]
+    [InlineData("You\u2019ve hit your Silver Comet limit \u00B7 resets Nov 18, 11am (America/Chicago)")]
+    [InlineData("You've hit your Extra Large Comet limit \u00B7 resets Nov 18, 11am (America/Chicago)")]
+    [InlineData("You've hit your claude-fable-5-2 limit \u00B7 resets Nov 18, 11am (America/Chicago)")]
+    public void NamedLimitSentenceHoldsWithResetDetail(string stdout)
+    {
+        var verification = Verification(stdout, completedAt: "2026-11-13T20:56:00Z");
+
+        var outcome = DispatchFailureClassifier.Classify(CliTask(), verification);
+
+        Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
+        Assert.Equal(ParseUtc("2026-11-18T17:00:00Z"), reset);
+        Assert.Contains("resets Nov 18, 11am (America/Chicago)", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NamedLimitSentenceWithoutResetStillHolds()
+    {
+        var verification = Verification("You\u2019ve hit your Silver Comet limit");
+
+        Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
+            DispatchFailureClassifier.Classify(CliTask(), verification).Kind);
+        Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
+    }
+
+    [Fact]
+    public void NamedLimitSentenceHoldsPlannerDispatch()
+    {
+        var verification = Verification(
+            "You've hit your Fable limit \u00B7 resets Nov 18, 11am (America/Chicago). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+            completedAt: "2026-11-13T20:56:00Z");
+
+        var outcome = DispatchFailureClassifier.Classify(CliTask(role: AgentRole.Planner), verification);
+
+        Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Assert.Contains("resets Nov 18, 11am (America/Chicago)", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void NamedLimitSentenceInsideSuccessfulWorkerOutputIsNotRefusal(int exitCode)
+    {
+        Assert.Single(ProviderLimitEvidenceParser.GetCliRefusalLines(1, ["You've hit your Fable limit"]));
+        const string stdout = "Inspected the fixture.\n" +
+            "You've hit your Fable limit \u00B7 resets Nov 18, 11am (America/Chicago). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.\n" +
+            "Completed the requested work.";
+        var verification = Verification(stdout, exitCode: exitCode);
+
+        Assert.Empty(ProviderLimitEvidenceParser.GetCliRefusalLines(exitCode, stdout.Split('\n')));
+        Assert.False(SubscriptionLimitEvidence.HasRecoverableSubscriptionLimitEvidence(verification));
+        AssertNotProviderOutcome(DispatchFailureClassifier.Classify(CliTask(), verification));
+    }
+
+    [Theory]
+    [InlineData("The limit is 42.")]
+    [InlineData("You've hit your Extra Large Silver Comet limit \u00B7 resets Nov 18, 11am (America/Chicago)")]
+    [InlineData("You've hit your Very Extra Large Silver Comet limit")]
+    [InlineData("You've hit your Fable limits")]
+    [InlineData("You've hit your Silver \u00B7 Comet limit")]
+    [InlineData("You've hit your Silver  Comet limit")]
+    [InlineData("you've hit your Fable limit")]
+    public void UnshapedOrOverlongLimitLinesAreNotRefusals(string stdout)
+    {
+        Assert.Single(ProviderLimitEvidenceParser.GetCliRefusalLines(1, ["You've hit your Fable limit"]));
+        Assert.Empty(ProviderLimitEvidenceParser.GetCliRefusalLines(1, [stdout]));
+        AssertNotProviderOutcome(DispatchFailureClassifier.Classify(CliTask(), Verification(stdout)));
+    }
+
     private static TaskSpec CliTask(
         string workerName = "claude-cli",
         ProviderKind providerKind = ProviderKind.AnthropicClaudeCli,

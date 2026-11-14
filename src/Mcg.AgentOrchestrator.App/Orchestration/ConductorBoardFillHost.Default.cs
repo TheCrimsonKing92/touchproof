@@ -53,7 +53,9 @@ internal sealed partial class ConductorBoardFillHost
                 },
                 goal => LandingState(workspace, goal));
             };
-        }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
+        }, policy, new(workspace.ConductEventsLogPath),
+        items => BoardFillEpicMissingQuestion.ReadMemberships(workspace.PortfolioStorePath, items),
+        verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
         filing: CreateFilingSeams(workspace, changedFiles), mainHead: mainHead,
@@ -64,7 +66,8 @@ internal sealed partial class ConductorBoardFillHost
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), new(workspace.ConductEventsLogPath)),
         revise: CreateRevisionSeam(workspace),
         appendBacklogNote: (id, text) => new BacklogStore(workspace.BacklogStorePath)
-            .AppendNoteAsync(id, text).GetAwaiter().GetResult(), changedFiles: changedFiles);
+            .AppendNoteAsync(id, text).GetAwaiter().GetResult(), changedFiles: changedFiles,
+        epicAttention: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     private static Func<BoardFillVerdictRevisionRequest, CancellationToken, Task<BoardFillVerdictRevisionResult>>

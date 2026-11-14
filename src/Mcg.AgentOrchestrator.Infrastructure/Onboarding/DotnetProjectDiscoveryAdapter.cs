@@ -127,6 +127,9 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var environment = DotnetEnvironmentNeedReader.Read(root, commands, questions);
         var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
         var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions, tracked);
+        var riskAreas = DotnetRiskAreaReader.Read(root, units, questions, tracked);
+        var verifications = DotnetVerificationKindReader.Read(root, units, setups, questions);
+        var conventions = GuidanceConventionReader.Read(root, questions, tracked);
         var learned = IntegrationBranchReader.Read(root);
         if (learned.Branch is null)
             Ask(LearnedIntegrationBranch.OwnerQuestionKey, $"What is the integration branch? {learned.Reason}",
@@ -142,7 +145,8 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 .Select(group => group.OrderByDescending(edge => edge.Confidence).First())
                 .OrderBy(edge => edge.FromUnit, StringComparer.Ordinal).ThenBy(edge => edge.ToUnit, StringComparer.Ordinal).ToArray(),
             setups, questions.DistinctBy(question => question.FactKey)
-                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards, learned.Branch, ProjectStack.Dotnet);
+                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards, learned.Branch, ProjectStack.Dotnet,
+            RiskAreas: riskAreas, Conventions: conventions, Verifications: verifications);
     }
 
     private static ProjectFact<bool?> DiscoverTestStatus(string id, Declaration[] properties,

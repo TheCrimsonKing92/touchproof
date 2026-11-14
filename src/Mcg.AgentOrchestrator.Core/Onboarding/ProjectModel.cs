@@ -15,7 +15,14 @@ public sealed record ProjectModel(
     IReadOnlyList<SharedStateHazard> Hazards,
     ProjectFact<string>? IntegrationBranch = null,
     ProjectStack Stack = ProjectStack.Dotnet,
-    DeliveryProbeRecord? DeliveryProbe = null)
+    DeliveryProbeRecord? DeliveryProbe = null,
+    IReadOnlyList<ProjectRiskArea>? RiskAreas = null,
+    IReadOnlyList<ProjectConvention>? Conventions = null,
+    IReadOnlyList<ProjectVerificationKind>? Verifications = null)
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
+
+    public IReadOnlyList<ProjectRiskArea> RiskAreas { get; init; } = RiskAreas ?? [];
+    public IReadOnlyList<ProjectConvention> Conventions { get; init; } = Conventions ?? [];
+    public IReadOnlyList<ProjectVerificationKind> Verifications { get; init; } = Verifications ?? [];
 }

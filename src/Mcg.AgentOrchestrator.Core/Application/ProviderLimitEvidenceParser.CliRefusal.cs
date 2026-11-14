@@ -23,7 +23,8 @@ public static partial class ProviderLimitEvidenceParser
     }
 
     // The caller must first establish refusal-only stdout via GetCliRefusalLines.
-    public static bool IsCliRefusalLimitLine(string line) => ContainsLimitText(line);
+    public static bool IsCliRefusalLimitLine(string line) =>
+        ContainsLimitText(line) || CliLimitSentenceShape().IsMatch(line);
 
     public static bool TryGetCliCreditExhaustionLine(
         int exitCode,
@@ -54,6 +55,12 @@ public static partial class ProviderLimitEvidenceParser
         return true;
     }
 
-    [GeneratedRegex(@"^(?:You['\u2019]ve hit your (?:weekly|session|daily|usage) limit\b|Failed to authenticate\b|API Error:?\s*[1-5]\d{2}\b)", RegexOptions.CultureInvariant)]
+    private const string CliLimitSentence =
+        @"You['\u2019]ve hit your (?:(?=\S*[\p{L}\p{N}])\S+ ){1,3}limit\b";
+
+    [GeneratedRegex("^(?:" + CliLimitSentence + @"|Failed to authenticate\b|API Error:?\s*[1-5]\d{2}\b)", RegexOptions.CultureInvariant)]
     private static partial Regex CliRefusalShape();
+
+    [GeneratedRegex("^" + CliLimitSentence, RegexOptions.CultureInvariant)]
+    private static partial Regex CliLimitSentenceShape();
 }

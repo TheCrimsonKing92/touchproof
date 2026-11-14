@@ -56,7 +56,8 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
                 (_, _) => candidate => BacklogDependencyReadiness.Evaluate(candidate,
                     _ => null, _ => null, _ => new(null), _ => "Running"),
                 () => ConductorAutonomyPolicy.Permissive with { BoardFillMaxDraftsPerDay = 1 },
-                new(events, utcNow: () => clock.UtcNow), () => clock.UtcNow);
+                new(events, utcNow: () => clock.UtcNow), items => items.Select(candidate => candidate.Id).ToHashSet(StringComparer.Ordinal),
+                () => clock.UtcNow);
             host.ServiceTick(kernel);
             await Signal(host.CurrentRound!, "read-only draft finished");
             Assert.Null(Assert.Single(drafts.ReadAll()).Outcome);

@@ -181,6 +181,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoTestJsonGateReceipt",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceBuildLockRemediation",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.CandidateIdentity.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HeavyFixtureGitLaunchBoundCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandAcceptanceCheck",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/JunitCommandEnvironmentInputs",

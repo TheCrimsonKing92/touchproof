@@ -57,6 +57,7 @@ public sealed class BoardFillReselectionHostTests
             workspace, seams, TextWriter.Null, TextWriter.Null, token, includeBoardFillMetadata: true),
             () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath), defaults._readiness,
             () => policy, new(workspace.ConductEventsLogPath),
+            items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal),
             verifier: new BoardFillAssessmentTestFixture.Verifier((premise, head, _) =>
             {
                 Assert.Equal(Repository.Head, head);

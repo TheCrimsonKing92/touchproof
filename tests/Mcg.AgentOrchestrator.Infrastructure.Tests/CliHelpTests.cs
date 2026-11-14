@@ -318,12 +318,12 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("scripts\\Get-OrchestratorSnapshot.ps1", output);
         Xunit.Assert.Contains("scripts\\Wait-ForDispatch.ps1 -ExitFile <path>", output);
         Xunit.Assert.Contains("scripts\\Invoke-Git.ps1", output);
-        Xunit.Assert.Contains("scripts\\Invoke-OrchestratorCommand.ps1 backlog-list", output);
+        Xunit.Assert.Contains("Backlog/orchestrator: .\\mcg-orchestrator.cmd backlog-list --limit <n>", output);
         Xunit.Assert.Contains("scripts\\Get-RepoProcessInfo.ps1", output);
         Xunit.Assert.Contains("scripts\\Stop-RepoProcess.ps1", output);
         Xunit.Assert.Contains("scripts\\Invoke-OrchestratorSqliteTool.ps1", output);
         Xunit.Assert.Contains("Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]", output);
-        Xunit.Assert.Contains("Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>", output);
+        Xunit.Assert.Contains("Acceptance: .\\mcg-orchestrator.cmd acceptance <goal>", output);
         Xunit.Assert.DoesNotContain("Get-Process codex", output, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
         Xunit.Assert.Empty(kernel.Goals);

@@ -75,13 +75,13 @@ On a new Windows host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once
 
 Repository scripts, diagnostic probes, and evidence utilities use PowerShell and .NET. Do not use Python for this work or introduce a Python installation requirement for repository users.
 
-The foreground `Invoke-OrchestratorCommand.ps1` helper publishes verified runtimes under its own repository's `.orchestrator/operator-run-cache/v2/<digest>`. It validates canonical repository containment, then passes `--runtime-cache-root <absolute-path>` to the launcher before the native command. Source/build freshness checks and complete closure verification still precede execution; cold calls publish atomically and warm calls reuse the verified digest. Filesystem or publication failures return nonzero with the selected path and never fall back to another runtime. The helper does not override parent `TEMP`/`TMP`.
+The `scripts/Invoke-OrchestratorCommand.ps1` helper requires an explicit prebuilt `-AppDll`. Foreground commands without `-AppDll` exit nonzero with one line directing the operator to `mcg-orchestrator.cmd`.
 
-Direct launcher and conductor calls that omit cache selection retain the existing default cache. Direct launcher callers may supply `--runtime-cache-root <absolute-path>` only before the native command; the resolver accepts `-CacheRoot <absolute-path>`. Relative, drive-relative, empty and malformed roots, missing values and duplicate prefix options are refused. Explicit roots may live outside the repository for direct callers. Existing explicit `-AppDll` execution is unchanged; workspace-bound helper calls still require a prepared explicit `-AppDll` before any launcher activity.
+Launcher calls that omit cache selection retain the existing default cache. Launcher callers may supply `--runtime-cache-root <absolute-path>` once, before the native command; the resolver accepts `-CacheRoot <absolute-path>`. Relative, drive-relative, empty and malformed roots, missing values and duplicate prefix options are refused. Explicit roots may live outside the repository.
 
 **If you are a new AI instance about to operate this orchestrator, read this first.** It is the canonical guide for *driving, observing, and recovering* goals. At session start, read the [operator lessons](cli-reference.md#operator-lessons) for the applicable scope; record new situation-to-rule lessons with evidence in that store. It supersedes the older "Core Loop" in `docs/cli-reference.md` (manual verbs) and the manual sequence in `.agents/skills/orchestrator-dogfood/SKILL.md` — those are fallbacks, not the default path.
 
-Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For Codex/operator foreground CLI calls, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>`; it runs the built app through the repo-bounded helper prefix and avoids repeated permission prompts from ad-hoc `dotnet` commands. For other checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; for source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of PowerShell pipelines. For compact monitoring, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; for SQLite store reads/repairs, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 ...`. In human-facing status boards and transition updates, lead with a short meaningful goal description and put the goal prefix in parentheses; never make the operator decode a stream of bare hashes. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
+Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For Codex/operator foreground CLI calls, use `.\mcg-orchestrator.cmd <orchestrator-args...>`; `scripts/Invoke-OrchestratorCommand.ps1` requires an explicit prebuilt `-AppDll`. For other checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; for source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of PowerShell pipelines. For compact monitoring, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; for SQLite store reads/repairs, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 ...`. In human-facing status boards and transition updates, lead with a short meaningful goal description and put the goal prefix in parentheses; never make the operator decode a stream of bare hashes. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
 
 For attention monitoring, use `attention list --summary --json` (or `attention list --json --summary`). Its `mcg.attention-summary` version 1 envelope retains every selected wait, collaboration item, provider hold, and owner-question hold, while omitting `gateEvidence` and declaring top-level `omittedSections:["gateEvidence"]`. Omission does not mean there is no gate evidence; use ordinary `attention list --json` for that section. The supported SQLite projection skips gate-obligation deserialization and projection, reducing gate work and payload. Provider policy still needs history/archive reads, and selected actionable owners still load through the existing path. Legacy repositories may load their existing kernel before skipping gate-row projection; they do not provide the SQLite optimization. This view introduces no row cap and guarantees neither elimination of historical scans nor a wall-clock speedup.
 
@@ -622,7 +622,7 @@ New-Item -ItemType File .conduct-stop
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalTaskSummary.ps1 <goal>
 # let one next tick prove the goal is still stuck or now dispatchable
 Remove-Item -LiteralPath .conduct-stop
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
+.\mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 ```
 
 For lifecycle repairs, use `set-goal-status` only with Core-valid `GoalStatus` values: `Draft`, `Active`, `WaitingForHuman`, `Parked`, `Verified`, `Completed`, `Failed`, `Cancelled`, `Superseded`. Invalid values poison snapshot loads; malformed goal rows are quarantined on load (landed in `1d2223c2`), which preserves the rest of the store but hides the damaged goal until repaired.
@@ -645,13 +645,13 @@ ignore the goal worktree. `recover` reports these paths and deliberately does no
 If no dirty-worktree diagnostic is present, identify the assigned-but-not-starting verification task:
 
 ```
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 status <goal-prefix>
+.\mcg-orchestrator.cmd status <goal-prefix>
 ```
 
 Then run the explicit dispatch preflight for that task. This must fail before any paid worker starts if the pinned `claude-cli` entry cannot authenticate from the Windows Low Integrity Level sandbox:
 
 ```
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 subscription-dispatch <goal-prefix> <task-number>
+.\mcg-orchestrator.cmd subscription-dispatch <goal-prefix> <task-number>
 ```
 
 If the output includes `ERR_CLAUDE_AUTH_UNAVAILABLE`, the "no ready batch" is masking a Claude auth preflight failure, not a real scheduling gap. Low IL is the Windows Low Integrity Level sandbox; it can block subprocess credential/OAuth token access needed by `claude-cli`.
@@ -659,12 +659,12 @@ If the output includes `ERR_CLAUDE_AUTH_UNAVAILABLE`, the "no ready batch" is ma
 **Recovery.** Switch the affected role to any non-`claude-cli` subscription provider, then rebind the stalled tasks to the new catalog entry. `gpt-5.5` was the OpenAI example used in the 2026-06-27 recovery; use the current valid non-Claude subscription model when that rotates.
 
 ```
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agent Tester OpenAI gpt-5.5
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agent Reviewer OpenAI gpt-5.5
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 agents
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 reassign-agent <goal-prefix> <tester-task-number> <new-tester-agent-id>
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 reassign-agent <goal-prefix> <reviewer-task-number> <new-reviewer-agent-id>
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 conduct <goal-prefix> --policy Permissive
+.\mcg-orchestrator.cmd agent Tester OpenAI gpt-5.5
+.\mcg-orchestrator.cmd agent Reviewer OpenAI gpt-5.5
+.\mcg-orchestrator.cmd agents
+.\mcg-orchestrator.cmd reassign-agent <goal-prefix> <tester-task-number> <new-tester-agent-id>
+.\mcg-orchestrator.cmd reassign-agent <goal-prefix> <reviewer-task-number> <new-reviewer-agent-id>
+.\mcg-orchestrator.cmd conduct <goal-prefix> --policy Permissive
 ```
 
 If a `conduct --loop --watch ...` is already running, the reassigned tasks are dispatchable on the next tick; otherwise run `conduct <goal-prefix>` or restart the loop.
@@ -856,7 +856,7 @@ git merge --no-ff goal/<goal-prefix>
 # run the goal's own new test classes here, on the scratch branch
 git switch main
 git merge --no-ff goal/<goal-prefix>
-.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 goal-mark-landed <goal-prefix> --confirm-goal-mark-landed
+.\mcg-orchestrator.cmd goal-mark-landed <goal-prefix> --confirm-goal-mark-landed
 ```
 
 Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. Pre-landing verification merges happen on a scratch branch such as `verify/<prefix>`, never on `main`; `main` moves only at the actual landing step. Until the c0624af9 verification fix lands, a goal can reach `Verified` without executed self-tests, so before any hand-landing run the goal's own new/changed test classes and keep the receipts. `goal-mark-landed` records the out-of-band merge, writes a durable retired terminal disposition, and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
@@ -896,7 +896,7 @@ For an operator retry after resolving the hold, run `push-adopted <commit> [--re
 
 ### 6.2.5 Multi-repository goals
 
-1. **Declare repositories.** Use plain `goal` mode with one `--repositories default,<key>[,<key>...]` flag. Include `default` for the home repository and use registered project names for the other keys; choose this mode when creating a multi-repository goal instead of the simple, run or backlog intake modes. For a prepared brief, run `goal --brief-file <path> --repositories default,<key>` through `scripts/Invoke-OrchestratorCommand.ps1`.
+1. **Declare repositories.** Use plain `goal` mode with one `--repositories default,<key>[,<key>...]` flag. Include `default` for the home repository and use registered project names for the other keys; choose this mode when creating a multi-repository goal instead of the simple, run or backlog intake modes. For a prepared brief, run `.\mcg-orchestrator.cmd goal --brief-file <path> --repositories default,<key>`.
 
 2. **Scope each repository.** In the brief's `## Scope` section, put paths relative to their own repository under a label on its own line. Use `In scope:` for home and `In scope, <description> (key <key>):` for another declared key. For example, replace `companion` with the registered key:
 
@@ -914,7 +914,7 @@ For an operator retry after resolving the hold, run `push-adopted <commit> [--re
 
 4. **Inspect tuple landing.** Treat landing as an ordered sequence of repository landings. If it fails, inspect the `multi-repository-landing-failed` hold: it names the failing repository, the landing error, compensating commits as `key:sha`, and keys requiring manual repair. Use those receipts to inspect compensation and determine which repositories need operator repair.
 
-5. **Repair the hold.** First inspect `Manual repair required`. If it lists keys, keep the goal held and escalate those keys and the failure receipts to the operator: the repair verb refuses with `manual-repair-required` while the failure record lists any key, even after checkout repairs. If the list is empty, resolve the reported landing cause, then invoke `repair-multi-repository-landing <goal-prefix>` through `scripts/Invoke-OrchestratorCommand.ps1`. This queues repair for the next conductor tick. After successful repair, re-gate every declared repository before landing again. The registered usage is:
+5. **Repair the hold.** First inspect `Manual repair required`. If it lists keys, keep the goal held and escalate those keys and the failure receipts to the operator: the repair verb refuses with `manual-repair-required` while the failure record lists any key, even after checkout repairs. If the list is empty, resolve the reported landing cause, then invoke `.\mcg-orchestrator.cmd repair-multi-repository-landing <goal-prefix>`. This queues repair for the next conductor tick. After successful repair, re-gate every declared repository before landing again. The registered usage is:
 
    ```text
    Usage: repair-multi-repository-landing <goal-prefix> [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]

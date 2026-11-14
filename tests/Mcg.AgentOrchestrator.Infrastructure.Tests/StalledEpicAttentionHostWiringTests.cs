@@ -145,6 +145,7 @@ public sealed class StalledEpicAttentionHostWiringTests
             drafted.Add(id);
             return new("draft", 0, new string('c', 40), null, null, []);
         }, () => h.Items, (_, _) => _ => new(true, true, ""), () => h.Policy, new(h.EventsPath),
+        items => items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal),
         () => h.Clock.UtcNow, mainHead: () => h.MainHead, trackedEdits: () => (true, null), stalledEpics: stalled);
 
     private static StalledEpicCandidate Stalled()

@@ -35,7 +35,8 @@ internal static class BoardFillReadyItemSelector
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
         IReadOnlyList<BoardFillDraftRound>? rounds = null, IReadOnlyList<string>? preferredOrder = null,
-        string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null)
+        string? currentMainHead = null, Func<string, string, IReadOnlyList<string>?>? changedFiles = null,
+        IReadOnlySet<string>? epicMembers = null, Action<BacklogItem>? epicMissing = null)
     {
         var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
         if (preferredOrder is not null)
@@ -51,6 +52,12 @@ internal static class BoardFillReadyItemSelector
             !BoardFillContradictionHold.Blocks(item, currentMainHead, changedFiles))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)
+        .Where(candidate =>
+        {
+            if (epicMembers is null || epicMembers.Contains(candidate.Item.Id)) return true;
+            epicMissing?.Invoke(candidate.Item);
+            return false;
+        })
         .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
         .ThenByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)

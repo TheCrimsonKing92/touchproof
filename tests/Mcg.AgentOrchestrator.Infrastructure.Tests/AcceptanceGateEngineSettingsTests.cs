@@ -18,10 +18,10 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(10, startupContract.ManifestCheckCount);
+        Xunit.Assert.NotEmpty(settings.InfrastructureTestLanes);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
+        Xunit.Assert.Equal(manifestDocument.RootElement.GetProperty("checks").GetArrayLength(), startupContract.ManifestCheckCount);
         var manifestLanes = manifestDocument.RootElement
             .GetProperty("engine")
             .GetProperty("infrastructureTestLanes")
@@ -41,6 +41,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             lane => Xunit.Assert.True(
                 lane.EstimatedSerialSeconds > 0 && double.IsFinite(lane.EstimatedSerialSeconds),
                 $"Checked-in lane '{lane.Name}' must carry a positive finite serial-duration estimate."));
+        var scannedClasses = AcceptanceTestClassSourceScanner.Scan(repositoryRoot);
+        Xunit.Assert.NotEmpty(scannedClasses);
+        Xunit.Assert.Empty(AcceptanceManifestLaneInvariants.FindViolations(settings.InfrastructureTestLanes, scannedClasses));
         var partitionLaneNames = manifestDocument.RootElement.GetProperty("engine")
             .GetProperty("localTestPartitions").EnumerateArray()
             .SelectMany(partition => partition.GetProperty("laneNames").EnumerateArray())

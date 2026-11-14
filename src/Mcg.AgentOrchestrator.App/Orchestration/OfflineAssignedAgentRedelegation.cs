@@ -35,13 +35,20 @@ internal static class OfflineAssignedAgentRedelegation
             if (task.Status != WorkTaskStatus.Assigned || task.AssignedAgentId is not { } assignedId)
                 continue;
             var assigned = agents.FirstOrDefault(agent => agent.Id == assignedId);
-            if (assigned?.Status == AgentStatus.Available)
+            if (assigned is null)
+            {
+                excluded.Add(task.Id);
+                blocked.Add(DispatchReadinessRules.BuildReadyBlockedDiagnostic(goal, task, agents,
+                    "assigned-agent-not-found", [WorkerProfileDispatcher.AssignedAgentNotFoundMessage(task)]));
+                continue;
+            }
+            if (assigned.Status == AgentStatus.Available)
                 continue;
             var replacement = agents.FirstOrDefault(agent => agent.Status == AgentStatus.Available &&
                 agent.Role == task.RequiredRole && AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy));
             if (replacement is null)
                 continue;
-            if (assigned is not null && IsOperatorPin(goal, task.Id))
+            if (IsOperatorPin(goal, task.Id))
             {
                 excluded.Add(task.Id);
                 blocked.Add(DispatchReadinessRules.BuildReadyBlockedDiagnostic(goal, task, agents,
@@ -49,7 +56,7 @@ internal static class OfflineAssignedAgentRedelegation
                 continue;
             }
             kernel.ReassignTaskAgent(goal.Id, task.Id, replacement,
-                $"{Marker} from={assignedId.Value} from_status={assigned?.Status.ToString() ?? "absent"} to={replacement.Id.Value} role={task.RequiredRole}");
+                $"{Marker} from={assignedId.Value} from_status={assigned.Status} to={replacement.Id.Value} role={task.RequiredRole}");
         }
         return new Result(excluded, blocked);
     }

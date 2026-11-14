@@ -9,6 +9,32 @@ public sealed class BoardFillReadyItemSelectorTests
         BacklogItemStatus.Open, Now, Now, null);
     private static readonly IReadOnlySet<string> None = new HashSet<string>();
 
+    [Fact]
+    public void Missing_epic_skips_item_until_membership_appears()
+    {
+        var item = Item();
+        var skipped = new List<BacklogItem>();
+        Assert.Null(BoardFillReadyItemSelector.Select([item], [], None, Ready,
+            epicMembers: None, epicMissing: skipped.Add));
+        Assert.Same(item, Assert.Single(skipped));
+        skipped.Clear();
+        Assert.Same(item, BoardFillReadyItemSelector.Select([item], [], None, Ready,
+            epicMembers: new HashSet<string> { item.Id }, epicMissing: skipped.Add));
+        Assert.Empty(skipped);
+    }
+
+    [Fact]
+    public void Epic_question_only_covers_otherwise_eligible_items()
+    {
+        var ready = Item();
+        var gated = Item('b') with { Tags = "owner-gated" };
+        var blocked = Item('c');
+        var skipped = new List<BacklogItem>();
+        Assert.Null(BoardFillReadyItemSelector.Select([ready, gated, blocked], [], None,
+            item => new(item.Id != blocked.Id, false, ""), epicMembers: None, epicMissing: skipped.Add));
+        Assert.Same(ready, Assert.Single(skipped));
+    }
+
     [Theory]
     [InlineData(BacklogItemStatus.Open, true)]
     [InlineData(BacklogItemStatus.Done, false)]
