@@ -10,6 +10,17 @@ internal sealed partial class ConductorDriver
     internal Func<string, string>? PreTesterMainRevision { get; set; }
     private readonly PreTesterChangedFileGuardClasses _preTesterChangedFileGuards = new();
 
+    private void RecordPreTesterDeferredEvidenceExit(
+        Goal goal, TaskSpec developer, string testsField, PreTesterDeferredEvidenceExit exit,
+        string? priorOutcome, IReadOnlyList<string> notRun) =>
+        _recordTaskNote(goal.Id, developer.Id,
+            PreTesterDeferredEvidenceExitNote.FormatSkipped(testsField, exit, priorOutcome, notRun));
+
+    private void RecordPreTesterDeferredEvidenceContinuation(
+        Goal goal, TaskSpec developer, string candidateSha, string supersededReceiptId, string freshReceiptId) =>
+        _recordTaskNote(goal.Id, developer.Id,
+            PreTesterDeferredEvidenceExitNote.FormatContinuation(candidateSha, supersededReceiptId, freshReceiptId));
+
     private PreTesterOutOfDiffRerun OutOfDiffRerun(string worktree) => new(worktree, _executionDirectory,
         _getLandingFileScopes, PreTesterFailureHistory ?? ((goal, identities) => CrossGoalTestFailureHistory.Read(
             _cohortWorkspace, (_cohortKernel ?? _conductorTickKernel)?.Goals ?? [], goal, identities, _utcNow())),
@@ -177,10 +188,10 @@ internal sealed partial class ConductorDriver
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                 outcome, candidateSha!, receiptId, selectionNames, notRun,
                 attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths)));
-        if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.EscalateRepeat)
+        if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.ContinueAfterUnusableRefresh)
         {
-            result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
-            return true;
+            RecordPreTesterDeferredEvidenceContinuation(goal, developer, candidateSha!, refresh!.SupersededReceiptId, receiptId);
+            return false;
         }
         if (outcome == "unusable" && PreTesterApparatusReceiptClassifier.IsBuildPhaseOnly(evidence) &&
             PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!) == 0)

@@ -76,10 +76,10 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         Assert.Empty(scenario.Recoveries);
     }
 
-    // The bound detects a hang; assertions measure the persisted refresh budget and terminal outcome.
+    // The bound detects a hang; assertions measure the persisted refresh budget and Tester dispatch.
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
-    public void BuildOnlyFreshUnusableEscalatesWithoutTesterDispatch()
+    public void BuildOnlyFreshUnusableContinuesToTesterWithoutEscalation()
     {
         using var scenario = new Scenario(secondUnusable: true, buildPhaseOnly: true);
         Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
@@ -87,27 +87,35 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         Assert.Equal(1, scenario.Runs);
         Assert.Equal(0, scenario.Dispatches);
 
-        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Advance().Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
 
         var fresh = scenario.Latest();
         Assert.Equal("unusable", fresh.Outcome);
         Assert.NotEqual(old.ReceiptId, fresh.ReceiptId);
-        Assert.Equal(escalated.Reason, Assert.Single(scenario.Escalations));
-        Assert.Contains("PRE_TESTER_APPARATUS_REFRESH_UNUSABLE", escalated.Reason, StringComparison.Ordinal);
-        Assert.Contains(CandidateSha, escalated.Reason, StringComparison.Ordinal);
-        Assert.Contains(old.ReceiptId, escalated.Reason, StringComparison.Ordinal);
-        Assert.Contains(fresh.ReceiptId, escalated.Reason, StringComparison.Ordinal);
+        Assert.Empty(scenario.Escalations);
+        var note = Assert.Single(scenario.ContinuationNotes());
+        Assert.Contains("candidate_sha=" + CandidateSha, note, StringComparison.Ordinal);
+        Assert.Contains("superseded_receipt_id=" + old.ReceiptId, note, StringComparison.Ordinal);
+        Assert.Contains("fresh_receipt_id=" + fresh.ReceiptId, note, StringComparison.Ordinal);
         var marker = Assert.Single(scenario.RefreshMarkers());
         Assert.Equal(old.ReceiptId, marker.SupersededReceiptId);
         Assert.Equal(fresh.ReceiptId, marker.FreshReceiptId);
-        Assert.Equal(0, scenario.Dispatches);
-        Assert.Empty(scenario.DeliveredIndex);
+        Assert.Equal(1, scenario.Dispatches);
+        Assert.Contains(Assert.Single(scenario.DeliveredIndex), line =>
+            line.Contains("verdict=unusable", StringComparison.Ordinal) &&
+            line.Contains("receipt=" + fresh.ReceiptId, StringComparison.Ordinal));
         Assert.Equal(2, scenario.Runs);
         Assert.Equal(1, PreTesterEvidenceRefreshRule.CountForCandidate(scenario.Goal, scenario.Tester.Id, CandidateSha));
 
-        scenario.Advance();
+        scenario.CompleteTester();
+        scenario.Kernel.RetryTaskWithAuthoritativeFeedback(scenario.Goal.Id, scenario.Tester.Id,
+            "Retry same apparatus", RetryCause.EnvironmentApparatusFailure);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
         Assert.Equal(2, scenario.Runs);
+        Assert.Equal(2, scenario.Dispatches);
         Assert.Single(scenario.RefreshMarkers());
+        Assert.Single(scenario.ContinuationNotes());
+        Assert.Empty(scenario.Escalations);
     }
 
     [Fact]
@@ -179,7 +187,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
     }
 
     [Fact]
-    public void SecondUnusableEscalatesAndNeverRunsAgainForCandidate()
+    public void SecondUnusableContinuesToTesterAndNeverRunsAgainForCandidate()
     {
         using var scenario = new Scenario(secondUnusable: true);
         var old = scenario.FirstUnusable();
@@ -187,26 +195,31 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
 
         var result = scenario.Advance();
 
-        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
         var fresh = scenario.Latest();
         Assert.Equal("unusable", fresh.Outcome);
         Assert.NotEqual(old.ReceiptId, fresh.ReceiptId);
-        var reason = Assert.Single(scenario.Escalations);
-        Assert.Contains(CandidateSha, reason, StringComparison.Ordinal);
-        Assert.Contains(old.ReceiptId, reason, StringComparison.Ordinal);
-        Assert.Contains(fresh.ReceiptId, reason, StringComparison.Ordinal);
-        Assert.Equal(1, scenario.Dispatches);
+        Assert.Empty(scenario.Escalations);
+        var note = Assert.Single(scenario.ContinuationNotes());
+        Assert.Contains("candidate_sha=" + CandidateSha, note, StringComparison.Ordinal);
+        Assert.Contains("superseded_receipt_id=" + old.ReceiptId, note, StringComparison.Ordinal);
+        Assert.Contains("fresh_receipt_id=" + fresh.ReceiptId, note, StringComparison.Ordinal);
+        Assert.Equal(2, scenario.Dispatches);
+        Assert.Contains(scenario.DeliveredIndex[^1], line =>
+            line.Contains("verdict=unusable", StringComparison.Ordinal) &&
+            line.Contains("receipt=" + fresh.ReceiptId, StringComparison.Ordinal));
         Assert.Equal(2, scenario.Runs);
         Assert.Equal(1, PreTesterEvidenceRefreshRule.CountForCandidate(scenario.Goal, scenario.Tester.Id, CandidateSha));
 
-        scenario.Advance();
-        Assert.Equal(2, scenario.Runs);
         scenario.CompleteTester();
         scenario.Kernel.RetryTaskWithAuthoritativeFeedback(scenario.Goal.Id, scenario.Tester.Id,
             "Retry same apparatus", RetryCause.EnvironmentApparatusFailure);
-        scenario.Advance();
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
         Assert.Equal(2, scenario.Runs);
+        Assert.Equal(3, scenario.Dispatches);
         Assert.Single(scenario.RefreshMarkers());
+        Assert.Single(scenario.ContinuationNotes());
+        Assert.Empty(scenario.Escalations);
     }
 
     [Theory]
@@ -355,6 +368,12 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         public PreTesterEvidenceRefreshMarker[] RefreshMarkers() => Goal.Timeline
             .Select(evt => PreTesterEvidenceRefreshRule.TryParse(evt.Message, out var marker) ? marker : null)
             .OfType<PreTesterEvidenceRefreshMarker>().ToArray();
+
+        public string[] ContinuationNotes() => Goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.TaskId == Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer).Id &&
+                evt.Message.Contains("exit=refresh-unusable-continues", StringComparison.Ordinal))
+            .Select(evt => evt.Message).ToArray();
 
         public void CompleteTester()
         {
