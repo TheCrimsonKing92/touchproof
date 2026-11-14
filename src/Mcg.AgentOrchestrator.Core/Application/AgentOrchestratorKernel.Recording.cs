@@ -77,7 +77,7 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         TaskId taskId,
         TaskVerificationRecord verification,
-        ProviderFailureKind providerFailureKind = ProviderFailureKind.Unknown)
+        ProviderFailureKind providerFailureKind = ProviderFailureKind.Unknown, Func<string, string, bool>? reviewerEvidenceAncestry = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -595,7 +595,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.RequiredRole == AgentRole.Reviewer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
-            new ReviewerVerdictEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m)).Close(goal, task, verification, HumanInputRequests);
+            new ReviewerVerdictEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m)).Close(goal, task, verification, HumanInputRequests, ReviewerEvidenceAncestry.Bind(task.LastDispatch.WorkingDirectory, reviewerEvidenceAncestry));
         ProgressFailurePayload? failure = null;
         ReportWorkerTaskProgress(goalId, taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,

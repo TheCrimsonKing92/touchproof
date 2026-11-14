@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>Bounded process-lifetime answers about ordered immutable commit pairs.</summary>
@@ -26,6 +29,31 @@ internal sealed class GitAncestryMemo
 
     internal long Hits => Interlocked.Read(ref _hits);
     internal long Misses => Interlocked.Read(ref _misses);
+
+    [ModuleInitializer]
+    internal static void RegisterReviewerEvidenceAncestry() =>
+        ReviewerEvidenceAncestry.Register(
+            static (root, ancestor, descendant) => Shared.IsReviewerEvidenceAncestor(root, ancestor, descendant));
+
+    internal bool IsReviewerEvidenceAncestor(string workingDirectory, string ancestorId, string descendantId)
+    {
+        try
+        {
+            ancestorId = ancestorId.Trim();
+            descendantId = descendantId.Trim();
+            if (!IsObjectId(ancestorId) || !IsObjectId(descendantId)) return false;
+            // Without a proven common directory, use the memo's uncached git path.
+            var result = IsAncestor(string.Empty, ancestorId, descendantId, workingDirectory);
+            return result.ProcessStarted && !result.DrainTimedOut && result.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsObjectId(string id) => id.Length is >= 7 and <= 64 &&
+        id.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
 
     internal GitCli.GitResult IsAncestor(string repositoryCommonDirectory, string ancestorId,
         string descendantId, string workingDirectory)

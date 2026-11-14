@@ -1,5 +1,35 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+// Owns the once-registered repository capability and binds it to a single dispatch's directory.
+public static class ReviewerEvidenceAncestry
+{
+    private static Func<string, string, string, bool>? _isAncestor;
+
+    public static void Register(Func<string, string, string, bool> isAncestor)
+    {
+        ArgumentNullException.ThrowIfNull(isAncestor);
+        if (Interlocked.CompareExchange(ref _isAncestor, isAncestor, null) is not null)
+            throw new InvalidOperationException("Reviewer evidence ancestry is already registered.");
+    }
+
+    internal static Func<string, string, bool> Bind(string workingDirectory, Func<string, string, bool>? perCall = null)
+    {
+        var registered = _isAncestor;
+        return (ancestor, descendant) =>
+        {
+            try
+            {
+                return perCall is not null ? perCall(ancestor, descendant) :
+                    registered?.Invoke(workingDirectory, ancestor, descendant) == true;
+            }
+            catch
+            {
+                return false;
+            }
+        };
+    }
+}
+
 // Owns closure of worker-owned Planner waits from current-candidate Reviewer verdicts.
 internal sealed class ReviewerVerdictEvidenceClosure(
     object requestLock,
@@ -7,8 +37,12 @@ internal sealed class ReviewerVerdictEvidenceClosure(
     Action<Goal, TaskId?, ProgressKind, string> append)
 {
     internal void Close(Goal goal, TaskSpec reviewer, TaskVerificationRecord verification,
-        IEnumerable<HumanInputRequest> requests)
+        IEnumerable<HumanInputRequest> requests, Func<string, string, bool>? isAncestor = null)
     {
+        // All waits in this call concern the same candidate pair.
+        bool? ancestryAnswer = null;
+        bool ResolveAncestry(string ancestor, string descendant) =>
+            ancestryAnswer ??= isAncestor?.Invoke(ancestor, descendant) == true;
         lock (requestLock)
         {
             var pending = requests.Where(request =>
@@ -25,7 +59,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             {
                 var owner = request.EvidenceOwner!.Trim().ToLowerInvariant();
                 var reason = GetSkipReason(goal, reviewer, verification, request, out var verdict, out var developer,
-                    out var developerCandidate);
+                    out var developerCandidate, ResolveAncestry, out var descendantCandidate);
                 string? reportTests = null;
                 if (reason == "verdict-not-met" && owner == "developer" &&
                     !UnnamedDeveloperReportEvidence.IsNotMet(verification, request.PlannerIdentity!.CriterionIndex - 1) &&
@@ -38,7 +72,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
                 }
                 var ownerTask = developer;
                 if (reason is null && owner == "tester")
-                    reason = GetTesterSkipReason(goal, developer!.LastDispatch!.ResultCommit!, out ownerTask);
+                    reason = GetTesterSkipReason(goal, developer!.LastDispatch!.ResultCommit!, descendantCandidate, out ownerTask);
                 if (reason is not null)
                 {
                     var prefix = request.Id.Value[..Math.Min(8, request.Id.Value.Length)];
@@ -89,11 +123,13 @@ internal sealed class ReviewerVerdictEvidenceClosure(
     }
 
     private static string? GetSkipReason(Goal goal, TaskSpec reviewer, TaskVerificationRecord verification,
-        HumanInputRequest request, out CriterionVerdict? verdict, out TaskSpec? developer, out string? developerCandidate)
+        HumanInputRequest request, out CriterionVerdict? verdict, out TaskSpec? developer, out string? developerCandidate,
+        Func<string, string, bool> isAncestor, out string? descendantCandidate)
     {
         verdict = null;
         developer = null;
         developerCandidate = null;
+        descendantCandidate = null;
         if (request.PlannerIdentity is not { } identity)
             return "untyped";
         if (identity.BriefVersion != goal.AuthoritativeBrief.Version ||
@@ -119,6 +155,17 @@ internal sealed class ReviewerVerdictEvidenceClosure(
         {
             developerCandidate = candidate;
             candidate = dispatch.ResultCommit.Trim();
+        }
+        if (developerCandidate is null &&
+            !string.Equals(verification.ReviewedCommit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase) &&
+            tester?.LastDispatch is { } descendantDispatch &&
+            descendantDispatch.DispatchedAt > developer.LastDispatch!.DispatchedAt &&
+            !string.IsNullOrWhiteSpace(descendantDispatch.ResultCommit) &&
+            string.Equals(verification.ReviewedCommit?.Trim(), descendantDispatch.ResultCommit.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            isAncestor(candidate, descendantDispatch.ResultCommit.Trim()))
+        {
+            developerCandidate = candidate;
+            candidate = descendantCandidate = descendantDispatch.ResultCommit.Trim();
         }
         if (!string.Equals(verification.ReviewedCommit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase))
         {
@@ -153,7 +200,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
         return null;
     }
 
-    private static string? GetTesterSkipReason(Goal goal, string candidate, out TaskSpec? tester)
+    private static string? GetTesterSkipReason(Goal goal, string candidate, string? descendantCandidate, out TaskSpec? tester)
     {
         tester = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Tester && task.LastDispatch is not null)
             .MaxBy(task => task.LastDispatch!.DispatchedAt);
@@ -161,7 +208,9 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             return "owner-round-missing";
         if (tester.Status != WorkTaskStatus.Completed)
             return "owner-round-incomplete";
-        return string.Equals(tester.LastVerification?.ReviewedCommit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase)
+        var reviewed = tester.LastVerification?.ReviewedCommit?.Trim();
+        return string.Equals(reviewed, candidate, StringComparison.OrdinalIgnoreCase) ||
+            descendantCandidate is not null && string.Equals(reviewed, descendantCandidate, StringComparison.OrdinalIgnoreCase)
             ? null : "owner-candidate-differs";
     }
 }
