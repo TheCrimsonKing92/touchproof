@@ -1170,7 +1170,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
             admissionClock.Stop();
             EmitProgress(FormatPhaseTiming(totalTicks, "acceptance-admission", admissionClock.Elapsed,
-                _stepLedger!.FormatAdmission(admissionClock.Elapsed), CpuDeltaMs(admissionCpuStart, ReadProcessCpu())), tickLines);
+                _stepLedger!.FormatAdmission(admissionClock.Elapsed), EndCpuPhase(admissionCpuStart, ref _tickCpuAdmissionMs)), tickLines);
             var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null

@@ -99,4 +99,59 @@ public sealed class ConductorBatchLoopTestsTickCpuLedger(ITestOutputHelper outpu
         }
         finally { Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void AdmissionCpuMatchesPhaseTimingSummaryAndLedger()
+    {
+        var root = CreateTempDirectory("tick-cpu-admission");
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var (kernel, _) = SimpleGoal("Admission CPU ledger agreement");
+            var cpu = TimeSpan.Zero;
+            var dispatchCalls = 0;
+            var probeCalls = 0;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                dispatchAndStart: goal =>
+                {
+                    dispatchCalls++;
+                    cpu += TimeSpan.FromMilliseconds(25);
+                    return DispatchStartOutcome.Started([Assert.Single(goal.Tasks)]);
+                });
+            var loop = new ConductorBatchLoop(
+                workspace: workspace,
+                loadTrxCoherenceVerdicts: _ => { },
+                measuredSweep: _ => { cpu += TimeSpan.FromMilliseconds(40); return null; },
+                processCpuTime: () => cpu, janitorialTimestamp: () => 0)
+                .WithStepProbe(name =>
+                {
+                    if (name != "attempt-census") return;
+                    probeCalls++;
+                    cpu += TimeSpan.FromMilliseconds(30);
+                });
+            BatchTickSummary? tick = null;
+            loop.Run(kernel, driver, ConductorAutonomyPolicy.Conservative, Path.Combine(root, "stop"),
+                maxIterations: 1, onTick: value => tick = value);
+
+            Assert.NotNull(tick);
+            Assert.Equal(1, dispatchCalls);
+            Assert.Equal(1, probeCalls);
+            var phase = Assert.Single(tick.ProgressLines!, line => line.StartsWith(
+                "PHASE_TIMING tick=1 phase=acceptance-admission ", StringComparison.Ordinal));
+            var phaseCpu = long.Parse(Regex.Match(phase, @"\bcpu_ms=(\d+)").Groups[1].Value,
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(30, phaseCpu);
+            var summary = Assert.Single(tick.ProgressLines!, line => line.StartsWith("TICK_END ", StringComparison.Ordinal));
+            Assert.Contains($" cpu_walk_ms=25 cpu_admission_ms={phaseCpu}", summary);
+            var ledgerPath = Path.Combine(root, ".orchestrator", "tick-cpu.jsonl");
+            var record = JsonSerializer.Deserialize<TickCpuLedgerRecord>(
+                Assert.Single(File.ReadAllLines(ledgerPath)), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(record);
+            Assert.Equal(tick.Tick, record.Tick);
+            Assert.Equal(30, record.CpuAdmissionMs);
+            Assert.Equal(phaseCpu, record.CpuAdmissionMs);
+        }
+        finally { Directory.Delete(root, true); }
+    }
 }

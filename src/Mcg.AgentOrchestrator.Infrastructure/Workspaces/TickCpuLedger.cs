@@ -8,7 +8,7 @@ internal sealed record TickCpuLedgerRecord(
     DateTimeOffset ObservedAt, int Tick, long CpuMs, long CpuSweepMs, long CpuPrewalkMs,
     long CpuWalkMs, bool HadGoalChanges, int Version = 1,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyDictionary<string, string>? ExperimentArms = null);
+    IReadOnlyDictionary<string, string>? ExperimentArms = null, long CpuAdmissionMs = 0);
 
 internal static class TickCpuLedger
 {
@@ -23,7 +23,7 @@ internal static class TickCpuLedger
         HostLedgerStateDirectory.Resolve(worktreePath, route), FileName);
 
     internal static void TryAppend(string? executionDirectory, int tick, long cpuMs,
-        long cpuSweepMs, long cpuPrewalkMs, long cpuWalkMs, bool hadGoalChanges)
+        long cpuSweepMs, long cpuPrewalkMs, long cpuWalkMs, bool hadGoalChanges, long cpuAdmissionMs = 0)
     {
         if (executionDirectory is null) return;
         try
@@ -32,7 +32,7 @@ internal static class TickCpuLedger
             var arms = ExperimentArmStamp.Resolve(executionDirectory);
             var record = new TickCpuLedgerRecord(DateTimeOffset.UtcNow, tick, cpuMs,
                 cpuSweepMs, cpuPrewalkMs, cpuWalkMs, hadGoalChanges,
-                Version: arms is { Count: > 0 } ? 2 : 1, ExperimentArms: arms);
+                Version: arms is { Count: > 0 } ? 2 : 1, ExperimentArms: arms, CpuAdmissionMs: cpuAdmissionMs);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             (AppenderOverride.Value ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(record, JsonOptions));
         }
