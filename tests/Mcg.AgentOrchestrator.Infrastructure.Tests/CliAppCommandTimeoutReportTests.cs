@@ -163,11 +163,13 @@ public sealed class CliAppCommandTimeoutReportTests
     {
         if (OperatingSystem.IsWindows())
         {
-            // Loopback ping waits one second between replies, before either stream emits output.
+            // Child-owned delays work with redirected input and need no network access.
+            const string sleep = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds";
+            // Isolate IF so a successful delay still executes the following flood.
             var delay = delayFirstOutput
-                ? $"ping -n {FirstOutputDelaySeconds + 1} 127.0.0.1 >nul 2>&1 & if errorlevel 1 exit /b 97 & "
+                ? $"{sleep} {FirstOutputDelaySeconds} & (if errorlevel 1 exit /b 97) & "
                 : "";
-            var finish = wait ? "ping -n 31 127.0.0.1 >nul" : "exit /b 3";
+            var finish = wait ? $"{sleep} 30" : "exit /b 3";
             return delay + $"(for /L %i in (1,1,{FloodLines}) do @echo {FloodLine}) & echo {OutputSentinel}& " +
                 $"(for /L %i in (1,1,{FloodLines}) do @echo {FloodLine}) 1>&2 & 1>&2 echo {ErrorSentinel}& {finish}";
         }
