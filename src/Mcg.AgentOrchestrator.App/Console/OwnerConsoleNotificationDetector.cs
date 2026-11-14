@@ -12,6 +12,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
     private bool _initialized;
     private bool _stopSuppressed;
     private DateTimeOffset? _pendingStopAt;
+    private bool? _lastKnownRunning;
 
     internal IReadOnlyList<OwnerConsoleNotificationTier> Detect(OwnerConsoleViewModel? previous,
         OwnerConsoleViewModel current, DateTimeOffset now, OwnerConsoleBellTiers enabled)
@@ -24,12 +25,15 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         }
         if (!_initialized) Baseline(previous, now, settings);
 
-        var started = !previous.Status.ConductorRunning && current.Status.ConductorRunning;
+        var before = KnownRunning(previous.Status.ConductorRunning) ?? _lastKnownRunning;
+        var after = KnownRunning(current.Status.ConductorRunning) ?? before;
+        _lastKnownRunning = after;
+        var started = before == false && after == true;
         if (started) _restartAt = now;
-        var calm = current.Status.LandedToday > previous.Status.LandedToday || started;
+        var calm = current.Status.LandedToday > previous.Status.LandedToday;
         var attention = ObserveDecisions(current, now, settings, baseline: false);
-        var alarm = ObserveStop(previous.Status, current.Status, now, settings);
-        alarm |= ObserveTick(current, now, settings, baseline: false);
+        var alarm = ObserveStop(before, after, current.Status, now, settings);
+        alarm |= ObserveTick(current, after, now, settings, baseline: false);
 
         var result = new List<OwnerConsoleNotificationTier>(3);
         if (calm && enabled.Calm && (_lastCalm is null || now - _lastCalm >= settings.CalmCoalesce))
@@ -42,16 +46,17 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         return result;
     }
 
-    private bool ObserveStop(OwnerConsoleStatus previous, OwnerConsoleStatus current, DateTimeOffset now,
+    private bool ObserveStop(bool? before, bool? after, OwnerConsoleStatus current, DateTimeOffset now,
         OwnerConsoleNotificationSettings settings)
     {
-        if (current.ConductorRunning)
+        if (after is null) return false;
+        if (after == true)
         {
             _stopSuppressed = false;
             _pendingStopAt = null;
             return false;
         }
-        if (previous.ConductorRunning)
+        if (before == true)
         {
             _stopSuppressed = current.PlannedStopReason is not null;
             _pendingStopAt = _stopSuppressed ? null : now;
@@ -87,9 +92,10 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
     private void Baseline(OwnerConsoleViewModel model, DateTimeOffset now, OwnerConsoleNotificationSettings settings)
     {
         _initialized = true;
+        _lastKnownRunning = KnownRunning(model.Status.ConductorRunning) ?? _lastKnownRunning;
         _decisions.Clear();
         ObserveDecisions(model, now, settings, baseline: true);
-        ObserveTick(model, now, settings, baseline: true);
+        ObserveTick(model, _lastKnownRunning, now, settings, baseline: true);
     }
 
     private bool ObserveDecisions(OwnerConsoleViewModel model, DateTimeOffset now,
@@ -116,10 +122,10 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         return ring;
     }
 
-    private bool ObserveTick(OwnerConsoleViewModel model, DateTimeOffset now,
+    private bool ObserveTick(OwnerConsoleViewModel model, bool? running, DateTimeOffset now,
         OwnerConsoleNotificationSettings settings, bool baseline)
     {
-        if (!model.Status.ConductorRunning || model.Status.LatestTickAt is not { } tick) return false;
+        if (running != true || model.Status.LatestTickAt is not { } tick) return false;
         var reference = _restartAt is { } restart && restart > tick ? restart : tick;
         var stale = now - reference > settings.StaleTickThreshold;
         // Older or temporarily unavailable ticks cannot re-arm a consumed reference.
@@ -138,6 +144,14 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         _tickConsumed = true;
         return true;
     }
+
+    private static bool? KnownRunning(ConductorLiveness reading) => reading switch
+    {
+        ConductorLiveness.Running => true,
+        ConductorLiveness.NotRunning => false,
+        ConductorLiveness.Unknown => null,
+        _ => throw new ArgumentOutOfRangeException(nameof(reading), reading, null)
+    };
 
     private static bool Unready(OwnerConsoleViewModel model) =>
         model.DecisionsState is { Loading: true } or { Error: not null } ||

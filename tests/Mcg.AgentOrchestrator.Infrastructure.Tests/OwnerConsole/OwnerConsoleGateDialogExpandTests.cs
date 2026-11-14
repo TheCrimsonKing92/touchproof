@@ -18,7 +18,7 @@ public sealed class OwnerConsoleGateDialogExpandTests
             new("Passed lane", OwnerConsoleGateLaneState.Done, "passed", "local", TimeSpan.FromSeconds(10), 20, false),
             new("cli [trusted main baseline]", OwnerConsoleGateLaneState.Done, "passed", "local", TimeSpan.FromSeconds(10), 20, false, IsManifestLane: false)
         ], 1, 0, 1, 1);
-        var model = new OwnerConsoleViewModel(new(true, 0, 0, 0, null, 0), [], [], [], Gate: gate);
+        var model = new OwnerConsoleViewModel(new(ConductorLiveness.Running, 0, 0, 0, null, 0), [], [], [], Gate: gate);
         view.Render(model);
         view.FocusDecisions();
         await view.HandleKeyAsync(Key.Tab);

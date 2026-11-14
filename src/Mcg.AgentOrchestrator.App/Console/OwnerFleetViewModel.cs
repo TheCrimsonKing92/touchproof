@@ -105,7 +105,7 @@ internal static class OwnerFleetViewModelBuilder
     internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness, TimeProvider? clock = null,
         OwnerConsoleHostRowOwner? owners = null) =>
         Build(RemoteExecutorReportReader.Read(workspace, null, 10, (clock ?? TimeProvider.System).GetUtcNow().AddHours(-24)),
-            liveness.IsRunning(), TimeZoneInfo.Local, RemoteExecutorSlotsSyncLedger.ReadLatestByExecutor(
+            liveness.IsRunning() == ConductorLiveness.Running, TimeZoneInfo.Local, RemoteExecutorSlotsSyncLedger.ReadLatestByExecutor(
                 Path.Combine(Path.GetDirectoryName(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory))!,
                     RemoteExecutorSlotsSyncLedger.FileName)),
             ProviderUsageHoldReader.ReadWorkspace(workspace, (clock ?? TimeProvider.System).GetUtcNow()), owners,

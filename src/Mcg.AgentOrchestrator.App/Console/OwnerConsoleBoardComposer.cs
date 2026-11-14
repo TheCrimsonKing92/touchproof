@@ -119,8 +119,8 @@ internal static class OwnerConsoleBoardComposer
                 DateTimeOffset? landed = null;
                 if (OwnerConsoleBoardSource.Exists(project.StatePath))
                     landed = (await reads(project).MetadataAsync(token, force)).Select(goal => goal.PromotionFact?.PromotedAt).Max();
-                var live = new ConductorLeaseLiveness(project.OrchestratorDirectory ??
-                    Path.GetDirectoryName(project.PortfolioPath)!).IsRunning();
+                var live = ConductorLoopLease.IsActive(project.OrchestratorDirectory ??
+                    Path.GetDirectoryName(project.PortfolioPath)!);
                 sections.Add(OwnerConsoleBoardSection.Create(name, projectRows.OrderBy(row => row.SortKey)
                     .ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(), live, landed, now,
                     onboarding.GetValueOrDefault(name)));

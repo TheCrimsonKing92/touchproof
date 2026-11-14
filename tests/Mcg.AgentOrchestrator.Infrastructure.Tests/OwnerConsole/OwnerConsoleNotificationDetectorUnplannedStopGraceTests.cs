@@ -26,7 +26,7 @@ public sealed class OwnerConsoleNotificationDetectorUnplannedStopGraceTests
         var stopped = Model(false);
         Assert.Empty(detector.Detect(null, running, Now, OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Calm],
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(),
             detector.Detect(stopped, running, Now.AddSeconds(30), OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, running, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
     }
@@ -76,7 +76,7 @@ public sealed class OwnerConsoleNotificationDetectorUnplannedStopGraceTests
         var resolved = recovered ? running : Model(false, "stop-file", Now);
         Assert.Empty(detector.Detect(null, running, Now, OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
-        Assert.Equal(recovered ? [OwnerConsoleNotificationTier.Calm] : Array.Empty<OwnerConsoleNotificationTier>(),
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(),
             detector.Detect(stopped, resolved, Now.AddSeconds(seconds), OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(resolved, resolved, Now.AddMinutes(3), OwnerConsoleBellTiers.All));
     }
@@ -105,7 +105,7 @@ public sealed class OwnerConsoleNotificationDetectorUnplannedStopGraceTests
         Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(1), OwnerConsoleBellTiers.All with { Alarm = false }));
         Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(2), OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Calm],
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(),
             detector.Detect(stopped, running, Now.AddMinutes(3), OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, stopped, Now.AddMinutes(4), OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(stopped, stopped, Now.AddMinutes(4).AddSeconds(59), OwnerConsoleBellTiers.All));
@@ -155,7 +155,7 @@ public sealed class OwnerConsoleNotificationDetectorUnplannedStopGraceTests
     }
 
     private static OwnerConsoleViewModel Model(bool running, string? reason = null, DateTimeOffset? at = null) =>
-        new(new(running, 0, 0, 0, null, 0, PlannedStopReason: reason, PlannedStopAt: at), [], [], []);
+        new(new(running ? ConductorLiveness.Running : ConductorLiveness.NotRunning, 0, 0, 0, null, 0, PlannedStopReason: reason, PlannedStopAt: at), [], [], []);
 
     private static void WithFile(string text, Action<string> assertion)
     {

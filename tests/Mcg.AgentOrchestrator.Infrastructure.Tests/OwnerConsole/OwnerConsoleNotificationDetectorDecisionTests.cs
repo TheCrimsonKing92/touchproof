@@ -50,5 +50,5 @@ public sealed class OwnerConsoleNotificationDetectorDecisionTests
     private static OwnerConsoleDecision Decision(string id, DateTimeOffset? raised) =>
         new(id, 1, "goal", "goal", OwnerQuestionKind.HumanInput, "Answer?", "Answer?", null, null, null, raised);
     private static OwnerConsoleViewModel Model(params OwnerConsoleDecision[] decisions) =>
-        new(new(false, 0, decisions.Length, 0, null, 0), [.. decisions], [], []);
+        new(new(ConductorLiveness.NotRunning, 0, decisions.Length, 0, null, 0), [.. decisions], [], []);
 }

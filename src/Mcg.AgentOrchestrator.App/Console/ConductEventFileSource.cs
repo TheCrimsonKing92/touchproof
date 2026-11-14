@@ -107,5 +107,5 @@ internal sealed class ConductEventFileSource(string path, TimeProvider clock) : 
 
 internal sealed class ConductorLeaseLiveness(string orchestratorDirectory) : IConductorLiveness
 {
-    public bool IsRunning() => ConductorLoopLease.IsActive(orchestratorDirectory);
+    public ConductorLiveness IsRunning() => ConductorLoopLease.ProbeLiveness(orchestratorDirectory);
 }

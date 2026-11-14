@@ -870,7 +870,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
     private static OwnerGoalChangeSummary Summary(string id) => new(id, 1, "criteria", null,
         new("pending", [], "brief"), new("unavailable", [], "Git"), new("unavailable", [], "worker"),
         new("pending", [], "receipts"), "landing not recorded");
-    private static OwnerConsoleViewModel Model(Goal goal) => new(new(false, 1, 0, 0, null, 0), [],
+    private static OwnerConsoleViewModel Model(Goal goal) => new(new(ConductorLiveness.NotRunning, 1, 0, 0, null, 0), [],
         [new("11111111", "Readable epic", "Readable goal", "Active", "Developer", null, goal.Id.Value)], []);
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs, OwnerGoalDetailQuery query) =>
         OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail,

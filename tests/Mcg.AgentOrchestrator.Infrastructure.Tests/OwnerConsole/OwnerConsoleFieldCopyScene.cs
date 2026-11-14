@@ -24,7 +24,7 @@ internal sealed class OwnerConsoleFieldCopyScene : IDisposable
         Controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Harness.Answers, Dialog,
             Harness.State, Harness.Tail, Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock, epics);
         View = new(App, Controller, () => Task.CompletedTask, clipboard: Dialog.Clipboard);
-        Model = new(new(false, 2, 0, 0, null, 0), [], [
+        Model = new(new(ConductorLiveness.NotRunning, 2, 0, 0, null, 0), [], [
             new("11111111", "Epic sentinel", "  Unicode 日本語 🦊\nsecond line  " + new string('x', 100), "Active", "Developer", TimeSpan.FromMinutes(3), FirstId, Priority: "Critical"),
             new("22222222", "Other epic", "Second title", "Active", "Tester", null, SecondId)], []);
         View.BoardPane.Frame = new Rectangle(0, 0, 180, 15);

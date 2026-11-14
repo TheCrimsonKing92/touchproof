@@ -6,7 +6,7 @@ using Terminal.Gui.Views;
 public sealed class OwnerStatusLineWidthTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 5, 13, 31, 0, TimeSpan.Zero);
-    private static readonly OwnerConsoleStatus Status = new(true, 12, 0, 2, TimeSpan.FromSeconds(5), 5, 1);
+    private static readonly OwnerConsoleStatus Status = new(ConductorLiveness.Running, 12, 0, 2, TimeSpan.FromSeconds(5), 5, 1);
 
     [Theory]
     [InlineData(80)]

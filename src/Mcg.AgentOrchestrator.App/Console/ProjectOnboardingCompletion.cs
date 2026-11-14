@@ -48,7 +48,7 @@ internal static class ProjectOnboardingCompletion
     }
 
     internal static bool ConductorRan(string directory, string? conductEventsLogPath) =>
-        new ConductorLeaseLiveness(directory).IsRunning() || HasConductorHistory(conductEventsLogPath);
+        ConductorLoopLease.IsActive(directory) || HasConductorHistory(conductEventsLogPath);
 
     private static bool HasConductorHistory(string? path)
     {

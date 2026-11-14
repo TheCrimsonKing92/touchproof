@@ -13,7 +13,7 @@ public sealed class OwnerConsoleNotificationDetectorStopReasonTests
         var stopped = Model(false, "self-relaunch-handoff", Now);
         Assert.Empty(detector.Detect(null, running, Now, OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, stopped, Now, OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Calm],
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(),
             detector.Detect(stopped, running, Now.AddMinutes(1), OwnerConsoleBellTiers.All));
         // A successful restart must discard the deferred stop alarm.
         Assert.Empty(detector.Detect(running, running, Now.AddHours(1), OwnerConsoleBellTiers.All));
@@ -175,7 +175,7 @@ public sealed class OwnerConsoleNotificationDetectorStopReasonTests
         var muted = OwnerConsoleBellTiers.All with { Alarm = false };
         Assert.Empty(detector.Detect(stopped, failed, Now.AddMinutes(6), muted));
         Assert.Empty(detector.Detect(failed, failed, Now.AddMinutes(7), OwnerConsoleBellTiers.All));
-        Assert.Equal([OwnerConsoleNotificationTier.Calm],
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(),
             detector.Detect(failed, running, Now.AddMinutes(8), OwnerConsoleBellTiers.All));
         var nextStop = Model(false, "self-relaunch-handoff", Now.AddMinutes(9));
         Assert.Empty(detector.Detect(running, nextStop, Now.AddMinutes(9), OwnerConsoleBellTiers.All));
@@ -187,7 +187,7 @@ public sealed class OwnerConsoleNotificationDetectorStopReasonTests
         new(Now, "loop-stop", null, $"LOOP_STOP tick=1 rechecks=0 reason={reason}");
 
     private static OwnerConsoleViewModel Model(bool running, string? reason = null, DateTimeOffset? at = null) =>
-        new(new(running, 0, 0, 0, null, 0, PlannedStopReason: reason, PlannedStopAt: at), [], [], []);
+        new(new(running ? ConductorLiveness.Running : ConductorLiveness.NotRunning, 0, 0, 0, null, 0, PlannedStopReason: reason, PlannedStopAt: at), [], [], []);
 
     private sealed class Epics : IOwnerGoalEpicLookup
     {

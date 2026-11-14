@@ -91,7 +91,7 @@ public sealed class OwnerConsoleBellTierCommandTests
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs,
         TimeProvider clock, IOwnerConsoleNotifier? notifier = null) => OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers,
         dialogs, harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, clock, notifier: notifier);
-    private static OwnerConsoleViewModel Model(int landed) => new(new(false, 0, 0, 0, null, landed), [], [], []);
+    private static OwnerConsoleViewModel Model(int landed) => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
 
     private sealed class ManualClock : TimeProvider
     {

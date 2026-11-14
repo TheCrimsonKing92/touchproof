@@ -39,7 +39,7 @@ public sealed class OwnerConsoleStatusFreshnessTests
         var clock = new OwnerConsoleTestClock();
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = View(app, harness, clock);
-        var model = new OwnerConsoleViewModel(new(true, 0, 0, 0, null, 0, 1), [], [], []);
+        var model = new OwnerConsoleViewModel(new(ConductorLiveness.Running, 0, 0, 0, null, 0, 1), [], [], []);
         view.Render(model);
         clock.Now += TimeSpan.FromMinutes(6);
         view.ShowNotice("state store unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
@@ -61,7 +61,7 @@ public sealed class OwnerConsoleStatusFreshnessTests
         { Zone = TimeZoneInfo.CreateCustomTimeZone("test-zone", TimeSpan.FromHours(2), "test-zone", "test-zone") };
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = View(app, harness, clock);
-        view.Render(new(new(true, 0, 0, 0, null, 0), [], [], []));
+        view.Render(new(new(ConductorLiveness.Running, 0, 0, 0, null, 0), [], [], []));
 
         Assert.Contains("refreshed 02:05:00", view.StatusText);
     }

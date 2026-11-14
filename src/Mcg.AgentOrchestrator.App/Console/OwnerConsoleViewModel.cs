@@ -11,7 +11,7 @@ internal sealed record OwnerConsoleViewModel(
     OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null,
     OwnerConsoleGateProgress? Gate = null, OwnerConsoleBoardScope? BoardScope = null);
 
-internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
+internal sealed record OwnerConsoleStatus(ConductorLiveness ConductorRunning, int ActiveGoals, int LiveDecisions,
     int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0, DateTimeOffset? LatestTickAt = null,
     string? PlannedStopReason = null, DateTimeOffset? PlannedStopAt = null);
 

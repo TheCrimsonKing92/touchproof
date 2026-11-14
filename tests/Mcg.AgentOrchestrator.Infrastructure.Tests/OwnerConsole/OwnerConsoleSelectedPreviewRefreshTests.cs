@@ -135,7 +135,7 @@ public sealed class OwnerConsoleSelectedPreviewRefreshTests
             goalDetail: new OwnerGoalDetailQuery(harness.State, harness.Tail, summary: summary));
     }
 
-    private static OwnerConsoleViewModel Model() => new(new(false, 1, 0, 0, null, 0), [],
+    private static OwnerConsoleViewModel Model() => new(new(ConductorLiveness.NotRunning, 1, 0, 0, null, 0), [],
         [new("11111111", "Console", Title, "Active", Stage, null, Id)], []);
 
     private static string Expected(string stage) => string.Join('\n', Title, "No committed changes yet", stage);

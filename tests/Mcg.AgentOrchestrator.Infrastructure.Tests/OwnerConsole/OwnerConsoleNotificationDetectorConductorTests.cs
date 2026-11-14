@@ -72,7 +72,7 @@ public sealed class OwnerConsoleNotificationDetectorConductorTests
         var stopped = Model(false, Now.AddHours(-1));
         var running = Model(true, Now.AddHours(-1));
         detector.Detect(null, stopped, Now, OwnerConsoleBellTiers.All);
-        Assert.Equal([OwnerConsoleNotificationTier.Calm], detector.Detect(stopped, running, Now, OwnerConsoleBellTiers.All));
+        Assert.Equal(Array.Empty<OwnerConsoleNotificationTier>(), detector.Detect(stopped, running, Now, OwnerConsoleBellTiers.All));
         Assert.Empty(detector.Detect(running, running, Now.AddMinutes(5), OwnerConsoleBellTiers.All));
         Assert.Equal([OwnerConsoleNotificationTier.Alarm], detector.Detect(running, running, Now.AddMinutes(6), OwnerConsoleBellTiers.All));
     }
@@ -92,7 +92,7 @@ public sealed class OwnerConsoleNotificationDetectorConductorTests
     }
 
     private static OwnerConsoleViewModel Model(bool running, DateTimeOffset? tick = null) =>
-        new(new(running, 0, 0, 0, null, 0, LatestTickAt: tick), [], [], []);
+        new(new(running ? ConductorLiveness.Running : ConductorLiveness.NotRunning, 0, 0, 0, null, 0, LatestTickAt: tick), [], [], []);
 
     private sealed class Epics : IOwnerGoalEpicLookup
     {

@@ -23,22 +23,22 @@ public sealed class OwnerConsoleNotificationDetectorLandingTests
     }
 
     [Fact]
-    public void StartSharesTheLandingCoalesceWindow()
+    public void StartsStaySilentAndLeaveTheLandingCoalesceWindowAlone()
     {
         var detector = new OwnerConsoleNotificationDetector(new());
         var stopped = Model(3);
         detector.Detect(null, stopped, Now, OwnerConsoleBellTiers.All);
         var running = Model(3, true);
-        Assert.Equal([OwnerConsoleNotificationTier.Calm], detector.Detect(stopped, running, Now, OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, running, Now, OwnerConsoleBellTiers.All));
         var landed = Model(4, true);
-        Assert.Empty(detector.Detect(running, landed, Now.AddSeconds(30), OwnerConsoleBellTiers.All));
+        Assert.Equal([OwnerConsoleNotificationTier.Calm], detector.Detect(running, landed, Now.AddSeconds(30), OwnerConsoleBellTiers.All));
         detector.Detect(landed, stopped, Now.AddSeconds(40), OwnerConsoleBellTiers.All);
-        Assert.DoesNotContain(OwnerConsoleNotificationTier.Calm,
-            detector.Detect(stopped, running, Now.AddSeconds(50), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, running, Now.AddSeconds(50), OwnerConsoleBellTiers.All));
         detector.Detect(running, stopped, Now.AddSeconds(60), OwnerConsoleBellTiers.All);
-        Assert.Equal([OwnerConsoleNotificationTier.Calm], detector.Detect(stopped, running, Now.AddSeconds(61), OwnerConsoleBellTiers.All));
+        Assert.Empty(detector.Detect(stopped, running, Now.AddSeconds(61), OwnerConsoleBellTiers.All));
+        Assert.Equal([OwnerConsoleNotificationTier.Calm], detector.Detect(running, Model(5, true), Now.AddSeconds(91), OwnerConsoleBellTiers.All));
     }
 
     private static OwnerConsoleViewModel Model(int landed, bool running = false) =>
-        new(new(running, 0, 0, 0, null, landed), [], [], []);
+        new(new(running ? ConductorLiveness.Running : ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
 }

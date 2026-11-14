@@ -76,7 +76,7 @@ public sealed class OwnerConsolePreviewCompletionTests
         Task layout = Task.CompletedTask;
         try
         {
-            view.Render(new(new(false, 1, 0, 0, null, 0), [],
+            view.Render(new(new(ConductorLiveness.NotRunning, 1, 0, 0, null, 0), [],
                 [new("preview", "Epic", "Preview completion", "Active", "Developer", null, goal.Id.Value)], []));
             await Wait(queries.Entered.Task, "selected goal query entered");
             var completion = view.PreviewLoad;

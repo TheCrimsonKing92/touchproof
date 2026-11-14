@@ -19,6 +19,8 @@ internal sealed class OwnerConsoleSessionPrinter(
     Func<IReadOnlyList<GoalSummary>?, CancellationToken, Task<IReadOnlyList<OwnerGoalCard>>> loadActive,
     Action<string> announce)
 {
+    private ConductorLiveness _lastStableLiveness = ConductorLiveness.NotRunning;
+
     internal void PrintQuestion(int number, OwnerQuestion question)
     {
         if (bell()) output.Write("\a");
@@ -41,8 +43,10 @@ internal sealed class OwnerConsoleSessionPrinter(
         var age = lastEvent is null ? "unknown" : Age(lastEvent.Value);
         var count = hiddenCount();
         var hidden = count > 0 ? $" | hidden: {count}" : string.Empty;
+        var reading = liveness.IsRunning();
+        if (reading != ConductorLiveness.Unknown) _lastStableLiveness = reading;
         announce((projectLabel is null ? "" : $"project: {projectLabel} | ") +
-            $"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {open.Count}{hidden} | last event: {age}");
+            $"conductor: {(_lastStableLiveness == ConductorLiveness.Running ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {open.Count}{hidden} | last event: {age}");
     }
 
     internal async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)

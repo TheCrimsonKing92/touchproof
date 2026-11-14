@@ -138,7 +138,7 @@ public sealed class OwnerConsoleDecisionsActivityPaneTests
         Assert.Null(pane.SelectedRow(null));
     }
 
-    private static OwnerConsoleViewModel Model() => new(new(false, 0, 0, 0, null, 0), [], [], []);
+    private static OwnerConsoleViewModel Model() => new(new(ConductorLiveness.NotRunning, 0, 0, 0, null, 0), [], [], []);
 
     private static OwnerConsoleDecision Decision(int number, string summary) =>
         new("q" + number, number, "11111111-goal", "11111111", OwnerQuestionKind.HumanInput,

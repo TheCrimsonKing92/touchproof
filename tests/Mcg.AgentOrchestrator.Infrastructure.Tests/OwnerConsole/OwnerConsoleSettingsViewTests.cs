@@ -38,7 +38,7 @@ public sealed class OwnerConsoleSettingsViewTests
 
         if (tier == "attention") context.Clock.Now += TimeSpan.FromMinutes(2);
         var next = tier == "calm" ? OwnerConsoleSettingsTestContext.Model(1) :
-            tier == "alarm" ? baseline with { Status = baseline.Status with { ConductorRunning = false } } : baseline;
+            tier == "alarm" ? baseline with { Status = baseline.Status with { ConductorRunning = ConductorLiveness.NotRunning } } : baseline;
         context.Controller.Apply(next);
         if (tier == "alarm")
         {

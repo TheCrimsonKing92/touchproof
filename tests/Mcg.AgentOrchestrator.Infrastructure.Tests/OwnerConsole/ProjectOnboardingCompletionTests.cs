@@ -34,7 +34,7 @@ public sealed class ProjectOnboardingCompletionTests
         Assert.Equal(2, (await builder.ReadDecisionsAsync(token)).Decisions.Length);
 
         // Persist a past run; no live conductor lease or landed goal can satisfy completion.
-        Assert.False(new ConductorLeaseLiveness(project.OrchestratorDirectory).IsRunning());
+        Assert.True(new ConductorLeaseLiveness(project.OrchestratorDirectory).IsRunning() == ConductorLiveness.NotRunning);
         new ConductEventLogWriter(project.ConductEventsLogPath).Append("loop-start", null, "started");
         var state = OnboardingConsoleFixture.Read(project);
         Assert.False(state.IsOnboarding);

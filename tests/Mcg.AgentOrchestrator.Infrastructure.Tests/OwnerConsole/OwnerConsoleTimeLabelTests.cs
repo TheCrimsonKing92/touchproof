@@ -148,7 +148,7 @@ public sealed class OwnerConsoleTimeLabelTests
     private sealed class FakeLiveness : IConductorLiveness
     {
         internal bool Running { get; set; } = true;
-        public bool IsRunning() => Running;
+        public ConductorLiveness IsRunning() => Running ? ConductorLiveness.Running : ConductorLiveness.NotRunning;
     }
 
     private sealed class FakeDigest : IOwnerDigestSummary

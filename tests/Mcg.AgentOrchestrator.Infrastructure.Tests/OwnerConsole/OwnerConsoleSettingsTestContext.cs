@@ -72,7 +72,7 @@ internal sealed class OwnerConsoleSettingsTestContext : IDisposable
     }
 
     internal static OwnerConsoleViewModel Model(int landed = 0, bool running = false) =>
-        new(new(running, 0, 0, 0, null, landed), [], [], []);
+        new(new(running ? ConductorLiveness.Running : ConductorLiveness.NotRunning, 0, 0, 0, null, landed), [], [], []);
 
     internal static OwnerConsoleDecision Decision(DateTimeOffset raised) =>
         new("question", 1, "goal", "goal", OwnerQuestionKind.HumanInput, "Answer?", "Answer?", null, null, null, raised);

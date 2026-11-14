@@ -1,4 +1,5 @@
 using WindowsCreationFlags = Mcg.AgentOrchestrator.App.Orchestration.WindowsHandleListProcessLauncher.WindowsCreationFlags;
+using ConductorLiveness = Mcg.AgentOrchestrator.App.OwnerConsole.ConductorLiveness;
 using System.Diagnostics;
 using System.Globalization;
 using System.ComponentModel;
@@ -147,6 +148,42 @@ internal sealed class ConductorLoopLease : IDisposable
         catch (UnauthorizedAccessException)
         {
             return false;
+        }
+    }
+
+    internal static ConductorLiveness ProbeLiveness(
+        string orchestratorDirectory,
+        IConductLockPidProbe? pidProbe = null)
+    {
+        var path = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+        try
+        {
+            // File.Exists also returns false when observation fails.
+            File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return ConductorLiveness.NotRunning;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ConductorLiveness.Unknown;
+        }
+
+        try
+        {
+            (int ProcessId, DateTimeOffset WrittenAt, DateTimeOffset? ProcessStartedAt) owner;
+            try { owner = ReadOwner(path); }
+            catch (InvalidOperationException) { return ConductorLiveness.Unknown; }
+            var probe = pidProbe ?? new ConductLockPidProbe();
+            var running = owner.ProcessStartedAt is null
+                ? probe.IsRunning(owner.ProcessId)
+                : probe.IsSameProcess(owner.ProcessId, owner.ProcessStartedAt.Value);
+            return running ? ConductorLiveness.Running : ConductorLiveness.NotRunning;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ConductorLiveness.Unknown;
         }
     }
 
