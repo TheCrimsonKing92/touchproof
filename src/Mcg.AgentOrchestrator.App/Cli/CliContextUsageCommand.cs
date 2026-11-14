@@ -19,7 +19,12 @@ internal static class CliContextUsageCommand
     {
         try
         {
-            var (since, role, json) = Parse(args);
+            var (since, role, json, sections) = Parse(args);
+            if (sections)
+            {
+                WriteSections(ContextSectionOutcomeReport.Build(loadGoals(), since, role), json, output);
+                return 0;
+            }
             var report = ContextUsageReport.Build(loadGoals(), since, role);
             if (json)
             {
@@ -61,14 +66,46 @@ internal static class CliContextUsageCommand
     private static string Format(ContextUsageStat stat) =>
         $"median={stat.Median?.ToString(CultureInfo.InvariantCulture) ?? "unknown"},p90={stat.P90?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}";
 
-    private static (DateTimeOffset? Since, string? Role, bool Json) Parse(IReadOnlyList<string> args)
+    private static void WriteSections(ContextSectionOutcomeResult report, bool json, TextWriter output)
+    {
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }));
+            return;
+        }
+        output.WriteLine($"Context sections: dispatches={report.DispatchCount} rows={report.Rows.Count} unresolved={report.UnresolvedDispatchCount}");
+        foreach (var row in report.Rows)
+        {
+            output.WriteLine($"{row.Role} | {row.Section} | dispatches={row.DispatchCount} landed={row.LandedCount} failed={row.FailedCount} retried={row.RetriedCount} | " +
+                $"landed-with={Share(row.LandedShareWithSection)} ({row.LandedCount}/{row.DispatchCount}) " +
+                $"landed-without={Share(row.LandedShareWithoutSection)} ({row.WithoutSectionLandedCount}/{row.WithoutSectionDispatchCount}) | " +
+                $"reported-input={row.ReportedInputCount} input={Format(row.InputUsage)} bytes={Format(row.SectionBytes)} | " +
+                $"missing-usage={row.MissingUsageCount} reasons=" +
+                (row.MissingUsageReasons.Count == 0 ? "none" :
+                    string.Join(",", row.MissingUsageReasons.Select(reason => $"{reason.Key}={reason.Value}"))) +
+                $" unresolved={row.UnresolvedCount}");
+        }
+    }
+
+    private static string Share(double? share) => share?.ToString("P1", CultureInfo.InvariantCulture) ?? "n/a";
+
+    private static (DateTimeOffset? Since, string? Role, bool Json, bool Sections) Parse(IReadOnlyList<string> args)
     {
         DateTimeOffset? since = null;
         string? role = null;
         var json = false;
+        var sections = false;
         for (var i = 1; i < args.Count; i++)
         {
             var flag = args[i];
+            if (flag.Equals("--sections", StringComparison.OrdinalIgnoreCase))
+            {
+                sections = true;
+                continue;
+            }
             if (flag.Equals("--json", StringComparison.OrdinalIgnoreCase))
             {
                 json = true;
@@ -92,6 +129,6 @@ internal static class CliContextUsageCommand
             }
             throw new ArgumentException(CliCommandHelp.ContextUsageUsage);
         }
-        return (since, role, json);
+        return (since, role, json, sections);
     }
 }

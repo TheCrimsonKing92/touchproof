@@ -81,10 +81,10 @@ public sealed class FocusedEvidenceSiblingFamilyPrefilterTests
     [Xunit.Theory]
     [Xunit.InlineData("GoalWorktreeReducedFixtureTests")]
     [Xunit.InlineData("GoalWorktreeTestsAcceptanceRetry")]
-    [Xunit.InlineData("GoalWorktreeIsolatedDotnetTests")]
     [Xunit.InlineData("GoalWorktreeAcceptanceContentionTests")]
     [Xunit.InlineData("GoalAcceptanceVerifierTests")]
     [Xunit.InlineData("ConductorDriverTests")]
+    [Xunit.InlineData("GoalWorktreeIsolatedDotnetTests")]
     public void RealRepository_PrefilterPreservesOrderedSelections(string requestedClass)
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
@@ -115,7 +115,7 @@ public sealed class FocusedEvidenceSiblingFamilyPrefilterTests
         Assert.True(defaultReads > 0);
         Assert.True(defaultParses > 0);
         Assert.True(parses > 0);
-        if (requestedClass == "ConductorDriverTests")
+        if (requestedClass is "ConductorDriverTests" or "GoalWorktreeIsolatedDotnetTests")
         {
             Assert.Empty(reference);
         }

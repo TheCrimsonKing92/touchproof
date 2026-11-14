@@ -11,6 +11,21 @@ internal readonly record struct ContextUsageFigure(long? Value, string? UnknownR
 
 internal static class ContextUsageFigures
 {
+    internal static ContextUsageStat Stat(IEnumerable<long?> values)
+    {
+        var sample = values.Where(value => value.HasValue)
+            .Select(value => value!.Value).Order().ToArray();
+        if (sample.Length == 0)
+            return new(null, null);
+
+        var middle = sample.Length / 2;
+        var median = sample.Length % 2 == 1
+            ? sample[middle]
+            : ((double)sample[middle - 1] + sample[middle]) / 2;
+        var p90Index = Math.Clamp((int)Math.Ceiling(0.9 * sample.Length) - 1, 0, sample.Length - 1);
+        return new(median, sample[p90Index]);
+    }
+
     internal static DispatchProviderUsage? RecordedUsage(TaskDispatchRecord dispatch) =>
         dispatch.ContextPackageReceipt is { } receipt
             ? new(receipt.InputTokens, receipt.CachedInputTokens, receipt.OutputTokens)
