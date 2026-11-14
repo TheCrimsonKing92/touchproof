@@ -154,4 +154,81 @@ public sealed class ConductorBatchLoopTestsTickCpuLedger(ITestOutputHelper outpu
         }
         finally { Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void SweepAdmissionAndWalkCpuAreRecordedSeparately()
+    {
+        var root = CreateTempDirectory("tick-cpu-separate-phases");
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var (kernel, _) = SimpleGoal("Separate phase CPU accounting");
+            var cpu = TimeSpan.Zero;
+            var dispatchCalls = 0;
+            var probeCalls = 0;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                dispatchAndStart: goal =>
+                {
+                    dispatchCalls++;
+                    cpu += TimeSpan.FromMilliseconds(25);
+                    return DispatchStartOutcome.Started([Assert.Single(goal.Tasks)]);
+                });
+            var loop = new ConductorBatchLoop(
+                workspace: workspace,
+                loadTrxCoherenceVerdicts: _ => { },
+                measuredSweep: _ => { cpu += TimeSpan.FromMilliseconds(40); return null; },
+                processCpuTime: () => cpu, janitorialTimestamp: () => 0)
+                .WithStepProbe(name =>
+                {
+                    if (name != "attempt-census") return;
+                    probeCalls++;
+                    cpu += TimeSpan.FromMilliseconds(30);
+                });
+            BatchTickSummary? tick = null;
+            loop.Run(kernel, driver, ConductorAutonomyPolicy.Conservative, Path.Combine(root, "stop"),
+                maxIterations: 1, onTick: value => tick = value);
+
+            Assert.NotNull(tick);
+            Assert.Equal(1, dispatchCalls);
+            Assert.Equal(1, probeCalls);
+            var record = JsonSerializer.Deserialize<TickCpuLedgerRecord>(
+                Assert.Single(File.ReadAllLines(Path.Combine(root, ".orchestrator", "tick-cpu.jsonl"))),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(record);
+            Assert.Equal(tick.Tick, record.Tick);
+            Assert.Equal(40, record.CpuSweepMs);
+            Assert.Equal(30, record.CpuAdmissionMs);
+            Assert.Equal(25, record.CpuWalkMs);
+            Assert.Equal(0, record.CpuPrewalkMs);
+            Assert.Equal(95, record.CpuMs);
+            var summary = Assert.Single(tick.ProgressLines!, line => line.StartsWith("TICK_END ", StringComparison.Ordinal));
+            var printedCpu = long.Parse(Regex.Match(summary, @"\bcpu_ms=(\d+)").Groups[1].Value,
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(record.CpuMs, printedCpu);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void LegacyLineWithoutAdmissionPropertyParsesWithZeroAdmission()
+    {
+        const string legacyLine = """
+            {"observedAt":"2026-10-02T00:00:00Z","tick":1,"cpuMs":100,"cpuSweepMs":30,"cpuPrewalkMs":20,"cpuWalkMs":50,"hadGoalChanges":false,"version":1}
+            """;
+        var record = JsonSerializer.Deserialize<TickCpuLedgerRecord>(
+            legacyLine, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.NotNull(record);
+        Assert.Equal(new DateTimeOffset(2026, 10, 2, 0, 0, 0, TimeSpan.Zero), record.ObservedAt);
+        Assert.Equal(1, record.Tick);
+        Assert.Equal(100, record.CpuMs);
+        Assert.Equal(30, record.CpuSweepMs);
+        Assert.Equal(20, record.CpuPrewalkMs);
+        Assert.Equal(50, record.CpuWalkMs);
+        Assert.False(record.HadGoalChanges);
+        Assert.Equal(1, record.Version);
+        Assert.Null(record.ExperimentArms);
+        Assert.Equal(0, record.CpuAdmissionMs);
+    }
 }
