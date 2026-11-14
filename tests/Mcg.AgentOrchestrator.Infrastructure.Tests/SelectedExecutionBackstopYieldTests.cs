@@ -18,7 +18,7 @@ public sealed class SelectedExecutionBackstopYieldTests
         await fixture.Service(suppressed: true);
         var queued = (await fixture.Store.ReadAsync())!.Request!;
         var waiting = GoalAt(queued.QueuedAt.AddMinutes(1), priority);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         Assert.Equal(0, (await fixture.Store.ReadAsync())!.Request!.Attempts);
@@ -34,17 +34,17 @@ public sealed class SelectedExecutionBackstopYieldTests
         var waiting = GoalAt(fixture.Now.AddMinutes(-1));
         for (var ordinal = 1; ordinal < SelectedExecutionBackstopYieldPolicy.MaximumUncoveredLandings; ordinal++)
             await fixture.Land("same-goal", "main-" + ordinal);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         // A readable full-gate landing does not contribute to the uncovered count.
         await fixture.Land("full-gate", "full-gate-commit", AcceptanceSelectedExecutionRecord.Disabled);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         fixture.Head = "unreadable-commit";
         await fixture.Coordinator.NoteLandingAsync("unreadable", fixture.Head, null, "main-0");
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Equal(fixture.Head, Assert.Single(fixture.Calls).ToCommit);
         AssertDecision(fixture, "started", "bound-landings", SelectedExecutionBackstopYieldPolicy.MaximumUncoveredLandings);
@@ -60,11 +60,11 @@ public sealed class SelectedExecutionBackstopYieldTests
         await fixture.Land();
         var waiting = GoalAt(landedAt.AddMinutes(-1));
         fixture.Now = landedAt + AgeBound - TimeSpan.FromTicks(1);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         fixture.Now = landedAt + AgeBound + TimeSpan.FromTicks(extraTicks);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Single(fixture.Calls);
         AssertDecision(fixture, "started", "bound-age", 1);
@@ -91,11 +91,11 @@ public sealed class SelectedExecutionBackstopYieldTests
         var resumed = fixture.CreateCoordinator();
         var waiting = GoalAt(landedAt);
         fixture.Now = landedAt + AgeBound - TimeSpan.FromTicks(1);
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Single(fixture.Calls);
         fixture.Now = landedAt + AgeBound;
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Equal(2, fixture.Calls.Count);
         Assert.Equal(retry.Id, fixture.Calls.Last().Id);
@@ -113,7 +113,7 @@ public sealed class SelectedExecutionBackstopYieldTests
         {
             fixture.Head = "main-" + ordinal;
             await fixture.Land("same-goal", fixture.Head);
-            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+            await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
             await fixture.Coordinator.DrainAsync();
             Assert.Empty(fixture.Calls);
             queued ??= (await fixture.Store.ReadAsync())!.Request;
@@ -145,12 +145,12 @@ public sealed class SelectedExecutionBackstopYieldTests
             await fixture.Land("goal-" + ordinal, "main-" + ordinal);
         // Both bounds hold in the count case, exercising deterministic rule precedence.
         fixture.Now += AgeBound;
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], false, false);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, true);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], false, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, true);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         Assert.Equal(0, (await fixture.Store.ReadAsync())!.Request!.Attempts);
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Single(fixture.Calls);
         AssertDecision(fixture, "started", useAge ? "bound-age" : "bound-landings", count);
@@ -168,20 +168,21 @@ public sealed class SelectedExecutionBackstopYieldTests
             payload, fixture.Now - AgeBound));
         var observedAt = fixture.Now;
         var waiting = GoalAt(observedAt.AddMinutes(-1));
-        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await fixture.Coordinator.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await fixture.Coordinator.DrainAsync();
         Assert.Empty(fixture.Calls);
         Assert.Equal(observedAt, (await fixture.Store.ReadAsync())!.OldestUncoveredAt);
         var store = new SelectedExecutionBackstopStore(new SqliteRunEventStore(Path.Combine(fixture.Home, "run-events.db")));
         var resumed = new SelectedExecutionBackstopCoordinator(store, fixture, fixture.Items, fixture.Home,
             () => fixture.Now, fixture.Lines.Enqueue);
+        await resumed.ServiceAsync(() => fixture.Head, [], [], false, false);
         fixture.Now = observedAt + AgeBound - TimeSpan.FromTicks(1);
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Empty(fixture.Calls);
         Assert.Equal(observedAt, (await store.ReadAsync())!.OldestUncoveredAt);
         fixture.Now = observedAt + AgeBound;
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Single(fixture.Calls);
         AssertDecision(fixture, "started", "bound-age", 1);
@@ -203,11 +204,11 @@ public sealed class SelectedExecutionBackstopYieldTests
         await fixture.Land("goal-2", fixture.Head);
         var resumed = fixture.CreateCoordinator();
         var waiting = GoalAt(oldestAt.AddMinutes(1));
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Empty(fixture.Calls);
         fixture.Now = oldestAt + AgeBound;
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         var call = Assert.Single(fixture.Calls);
         Assert.Equal("main-1", call.ToCommit);
@@ -216,7 +217,7 @@ public sealed class SelectedExecutionBackstopYieldTests
         state = (await fixture.Store.ReadAsync())!;
         Assert.Equal("goal-2", Assert.Single(state.Uncovered).GoalId);
         Assert.Equal(newerAt, state.OldestUncoveredAt);
-        await resumed.ServiceAsync(() => fixture.Head, [waiting], true, false);
+        await resumed.ServiceAsync(() => fixture.Head, [waiting], [waiting], true, false);
         await resumed.DrainAsync();
         Assert.Single(fixture.Calls);
     }

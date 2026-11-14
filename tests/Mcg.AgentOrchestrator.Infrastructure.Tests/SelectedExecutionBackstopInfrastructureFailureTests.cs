@@ -31,7 +31,8 @@ public sealed class SelectedExecutionBackstopInfrastructureFailureTests
         // Advance on every read: separate reads for queue time and event time must disagree.
         var coordinator = new SelectedExecutionBackstopCoordinator(fixture.Store, fixture, fixture.Items, fixture.Home,
             () => { var now = fixture.Now; fixture.Now = now.AddTicks(1); return now; }, fixture.Lines.Enqueue);
-        await coordinator.ServiceAsync(() => fixture.Head, [], true, false);
+        await coordinator.ServiceAsync(() => fixture.Head, [], [], false, false);
+        await coordinator.ServiceAsync(() => fixture.Head, [], [], true, false);
         await coordinator.DrainAsync();
         var started = Assert.Single(fixture.Calls);
         Assert.Equal(2, started.Overtakes);
