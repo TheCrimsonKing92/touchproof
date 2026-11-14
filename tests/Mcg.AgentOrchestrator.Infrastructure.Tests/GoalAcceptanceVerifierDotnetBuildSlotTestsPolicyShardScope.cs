@@ -15,6 +15,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
     {
         var calls = new List<string[]>();
         var root = CreatePartitionedInfrastructureManifestWorkspace();
+        var splitCollectionMembers = AddProcessSpawningSplitCollectionMembers(root);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
@@ -42,6 +43,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             .ToArray();
         var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
+        Assert.All(splitCollectionMembers, name =>
+            Assert.Single(infrastructureCalls, call => HasArgumentPair(call, "--filter-class", name)));
         Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
         foreach (var call in infrastructureCalls)
         {
@@ -794,6 +797,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
     public async Task GoalAcceptanceVerifierSubstitutesSolutionCheckWithPartitionedInfrastructureChecksForInfraScope()
     {
         var root = CreateStandardManifestWorkspace();
+        var splitCollectionMembers = AddProcessSpawningSplitCollectionMembers(root);
         var calls = new List<string[]>();
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
@@ -822,6 +826,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             .ToArray();
         var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
+        Assert.All(splitCollectionMembers, name =>
+            Assert.Single(infrastructureCalls, call => HasArgumentPair(call, "--filter-class", name)));
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         foreach (var call in infrastructureCalls)
             Assert.True(
@@ -841,6 +847,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
     public async Task GoalAcceptanceVerifierSubstitutesSolutionCheckWithUnionForCoreAndInfraScope()
     {
         var root = CreateStandardManifestWorkspace();
+        var splitCollectionMembers = AddProcessSpawningSplitCollectionMembers(root);
         var calls = new List<string[]>();
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
@@ -885,6 +892,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             .ToArray();
         var laneCount = CountChangeScopedInfrastructureTestLanes(root);
         Assert.Equal(laneCount, infrastructureCalls.Length);
+        Assert.All(splitCollectionMembers, name =>
+            Assert.Single(infrastructureCalls, call => HasArgumentPair(call, "--filter-class", name)));
         // The substituted infrastructure shards are MTP, so every shard carries a translated class filter.
         foreach (var call in infrastructureCalls)
             Assert.True(

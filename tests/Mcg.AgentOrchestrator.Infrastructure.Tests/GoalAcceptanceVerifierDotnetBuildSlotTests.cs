@@ -298,6 +298,20 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
     private protected static int CountInfrastructurePartitionTestCalls(IEnumerable<string[]> calls) =>
         calls.Count(IsInfrastructurePartitionTestCall);
 
+    private protected static string[] AddProcessSpawningSplitCollectionMembers(string root)
+    {
+        // Default engines inherit collection-owned lanes from the manifest. Give each
+        // owner a member so these scheduling fixtures exercise distinct, non-empty lanes.
+        var source = Directory.CreateDirectory(Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        File.WriteAllText(Path.Combine(source.FullName, "CollectionMembers.cs"), """
+            [Xunit.Collection("ProcessSpawningHostBound")]
+            public class DisposableTrialRootTests { [Xunit.Fact] public void Executes() { } }
+            [Xunit.Collection("ProcessSpawningProcessLocal")]
+            public class PipeDrainThreadPoolSaturationTests { [Xunit.Fact] public void Executes() { } }
+            """);
+        return ["DisposableTrialRootTests", "PipeDrainThreadPoolSaturationTests"];
+    }
+
     private protected static int CountChangeScopedInfrastructureTestLanes(string root) =>
         AcceptanceInfrastructureLaneResolver.ResolveExecution(AcceptanceGateEngineSettings.Load(root), root).Lanes.Count(
             lane => !lane.RequiresBuildSystemChange);

@@ -622,6 +622,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
     {
         var calls = new List<string[]>();
         var root = CreatePartitionedInfrastructureManifestWorkspace();
+        var splitCollectionMembers = AddProcessSpawningSplitCollectionMembers(root);
         var lanes = AcceptanceBalancedLaneTestWorkspace.EnableShippedPool(root)
             .Where(lane => !lane.RequiresBuildSystemChange).ToArray();
 
@@ -659,6 +660,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
             result.Checks!.Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
                 .Select(check => check.Name).Order(StringComparer.Ordinal));
         Assert.Equal(laneCount, infrastructureCalls.Length);
+        Assert.All(splitCollectionMembers, name =>
+            Assert.Single(infrastructureCalls, call => HasArgumentPair(call, "--filter-class", name)));
         foreach (var call in infrastructureCalls)
             Assert.True(
                 call.Contains("--filter-class") || call.Contains("--filter-not-class"),
