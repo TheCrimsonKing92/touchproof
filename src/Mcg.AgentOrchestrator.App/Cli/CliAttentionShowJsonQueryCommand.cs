@@ -17,25 +17,44 @@ internal static class CliAttentionShowJsonQueryCommand
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
     internal static void Execute(IReadOnlyList<string> args, IOrchestratorStateQueries stateQueries,
-        OrchestratorWorkspace workspace, TimeProvider? time = null)
+        OrchestratorWorkspace workspace, TimeProvider? time = null, ICollaborationItemStore? collaboration = null)
     {
         var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
-        var ids = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
+        var prefix = args.Count == 3 ? null : args[^2];
+        var matches = prefix is null ? metadata : metadata
+            .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (prefix is not null)
+        {
+            if (matches.Count == 0)
+                throw new KeyNotFoundException($"No goal found matching prefix '{prefix}'.");
+            if (matches.Count > 1)
+                throw new InvalidOperationException($"Goal prefix '{prefix}' is ambiguous ({matches.Count} matches).");
+        }
+        var ids = matches.Select(goal => new GoalId(goal.Id)).ToArray();
         var kernel = ids.Length == 0
             ? new AgentOrchestratorKernel()
             : stateQueries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
-        var prefix = args.Count == 3 ? null : args[^2];
         var goal = prefix is null ? null : CliCommandHandlers.ResolveAttentionGoal(kernel, prefix);
         var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
         IReadOnlyList<CollaborationItem> items = [];
         IReadOnlyList<CollaborationItem> identityUniverse = [];
-        if (File.Exists(itemsDb))
+        var store = collaboration ?? (File.Exists(itemsDb)
+            ? CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory) : null);
+        if (store is not null)
         {
-            var store = CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory);
-            items = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
-            identityUniverse = goal is null
-                ? CliCommandHandlers.AllClarifications(store)
-                : CliCommandHandlers.AllClarificationsForGoal(store, goal);
+            if (goal is null)
+            {
+                items = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+                identityUniverse = store.ListAsync().GetAwaiter().GetResult()
+                    .Where(CliCommandHandlers.IsSpecClarification).ToArray();
+            }
+            else
+            {
+                var rows = store.ListAsync(goal.Id.Value).GetAwaiter().GetResult();
+                items = CollaborationItemLifecycle.BuildAttentionQueue(rows);
+                // Resolved clarifications still participate in stable clarification identities.
+                identityUniverse = rows.Where(CliCommandHandlers.IsSpecClarification).ToArray();
+            }
         }
         var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, goal?.Id, includeHistory: false);
         items = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, goal?.Id, includeHistory: false);
