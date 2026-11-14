@@ -829,8 +829,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
         var dbPath = Path.Combine(root, "state.db");
-        var marker = Path.Combine(root, "child.pid");
-        var startSignal = Path.Combine(root, "start-child");
         Directory.CreateDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? wrapper = null;
@@ -843,17 +841,43 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 FileName = WorkerShell.Executable,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             }.WithArguments(
                 WorkerShell.BaseArguments().Concat([
-                    $"while (-not (Test-Path -LiteralPath '{startSignal}')) {{ Start-Sleep -Milliseconds 25 }}; " +
-                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden; " +
-                    $"Set-Content -LiteralPath '{marker}' -Value $p.Id; " +
-                    "Start-Sleep -Seconds 9999"
+                    "$ErrorActionPreference = 'Stop'; " +
+                    "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); " +
+                    "if ([Console]::In.ReadLine() -ne 'go') { throw 'Missing child start signal.' }; " +
+                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden " +
+                    $"-RedirectStandardOutput '{Path.Combine(root, "child.stdout")}' " +
+                    $"-RedirectStandardError '{Path.Combine(root, "child.stderr")}'; " +
+                    "[Console]::Out.WriteLine($p.Id); [Console]::Out.Flush(); " +
+                    "[void][Console]::In.ReadLine()"
                 ])))
                 ?? throw new InvalidOperationException("Failed to start wrapper process.");
 
+            var stderr = wrapper.StandardError.ReadToEndAsync();
+            string ReadWrapperMessage(string eventName)
+            {
+                string? message;
+                try
+                {
+                    message = wrapper.StandardOutput.ReadLineAsync()
+                        .WaitAsync(TestHangGuard.Bound).GetAwaiter().GetResult();
+                }
+                catch (TimeoutException exception)
+                {
+                    throw new TimeoutException($"Waiting for {eventName}; stderr: " +
+                        (stderr.IsCompletedSuccessfully ? stderr.Result : "wrapper is still running"), exception);
+                }
+
+                Assert.True(message is not null, $"Wrapper exited before {eventName}; stderr: " +
+                    (stderr.IsCompletedSuccessfully ? stderr.Result : "stderr drain pending"));
+                return message!;
+            }
+
+            Assert.Equal("ready", ReadWrapperMessage("wrapper readiness"));
             using var ownerProcess = Process.GetCurrentProcess();
             Assert.True(SpawnProcessIdentityReader.TryRead(ownerProcess, out var ownerIdentity));
             var victimAttempts = 0;
@@ -864,8 +888,14 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 _ =>
                 {
                     victimAttempts++;
-                    File.WriteAllText(startSignal, "go");
-                    childPid = WaitForPidFile(marker);
+                    if (victimAttempts == 1)
+                    {
+                        // The reader runs after job attachment, so the child inherits containment.
+                        wrapper.StandardInput.WriteLine("go");
+                        wrapper.StandardInput.Flush();
+                        Assert.True(int.TryParse(ReadWrapperMessage("contained child PID"), out var pid) && pid > 0);
+                        childPid = pid;
+                    }
                     return null;
                 },
                 _ => ownerIdentity,

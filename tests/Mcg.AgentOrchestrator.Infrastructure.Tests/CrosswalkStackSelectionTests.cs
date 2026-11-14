@@ -79,6 +79,23 @@ public sealed class CrosswalkStackSelectionTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("go 1.22\n")]
+    public void Select_GoWithoutModulePath_ThrowsExactRefusal(string? goMod)
+    {
+        using var fixture = new Fixture();
+        if (goMod is not null) fixture.Write("go.mod", goMod);
+        using var crosswalk = new FakeCrosswalkProcess("go");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
+
+        Assert.Equal("No discovery adapter is available for stack 'go' (marker go.mod).", error.Message);
+        Assert.Equal(new[] { "detect", fixture.Root }, Assert.Single(crosswalk.Calls).Arguments);
+    }
+
+    [Theory]
     [InlineData("unknown", "not-run")]
     [InlineData("empty", "no-tests")]
     [InlineData("exit", "exit-nonzero: exit=1")]

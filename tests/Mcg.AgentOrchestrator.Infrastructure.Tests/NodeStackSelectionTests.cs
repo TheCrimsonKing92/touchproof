@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -17,7 +18,7 @@ public sealed class NodeStackSelectionTests
         Assert.Equal(ProjectStack.Node, detection.Stack);
         Assert.Equal("package.json", detection.Marker);
         Assert.Null(detection.Refusal);
-        using var crosswalk = new FakeCrosswalkProcess();
+        using var crosswalk = new FakeCrosswalkProcess("node");
         Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
     }
 
@@ -50,6 +51,7 @@ public sealed class NodeStackSelectionTests
         Assert.Contains("package.json", detection.Refusal, StringComparison.Ordinal);
         Assert.Contains(marker, detection.Refusal, StringComparison.Ordinal);
         using var crosswalk = new FakeCrosswalkProcess();
+        crosswalk.DetectException = new Win32Exception("injected process-start failure");
         var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
         Assert.Contains(detection.Refusal, refusal.Message, StringComparison.Ordinal);
     }

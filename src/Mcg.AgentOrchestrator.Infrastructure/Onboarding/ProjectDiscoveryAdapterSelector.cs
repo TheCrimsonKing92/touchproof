@@ -1,8 +1,9 @@
+using System.ComponentModel;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Prefers root declarations, then asks crosswalk for discovery support.</summary>
+/// <summary>Uses crosswalk discovery, with root declarations as a fallback when the tool cannot launch.</summary>
 public static class ProjectDiscoveryAdapterSelector
 {
     internal const string NoMarkerRefusal = "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.";
@@ -48,22 +49,39 @@ public static class ProjectDiscoveryAdapterSelector
     public static IProjectDiscoveryAdapter Select(string repositoryRoot, CrosswalkStackReader crosswalk,
         IReadOnlyCollection<string>? excludedDirectoryNames = null)
     {
-        var detection = Detect(repositoryRoot, excludedDirectoryNames);
-        return detection.Stack switch
+        CrosswalkStackReport report;
+        try
         {
-            ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
-            ProjectStack.Node => new NodeProjectDiscoveryAdapter(),
-            null when detection.Refusal == NoMarkerRefusal => SelectCrosswalk(repositoryRoot, crosswalk),
-            ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
-            ProjectStack.Go => throw new InvalidOperationException(
-                $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),
-            _ => throw new InvalidOperationException($"No discovery adapter is available for this repository: {detection.Refusal}")
+            report = crosswalk.Detect(repositoryRoot);
+        }
+        catch (InvalidOperationException exception) when (exception.InnerException is null or Win32Exception)
+        {
+            var detection = Detect(repositoryRoot, excludedDirectoryNames);
+            if (detection.Stack is null && detection.Refusal == NoMarkerRefusal)
+                throw;
+            return detection.Stack switch
+            {
+                ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
+                ProjectStack.Node => new NodeProjectDiscoveryAdapter(),
+                ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
+                ProjectStack.Go => throw new InvalidOperationException(
+                    $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),
+                _ => throw new InvalidOperationException($"No discovery adapter is available for this repository: {detection.Refusal}")
+            };
+        }
+        return report.Stack switch
+        {
+            "go" when File.Exists(Path.Combine(repositoryRoot, "go.mod")) &&
+                GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
+            "go" => throw new InvalidOperationException("No discovery adapter is available for stack 'go' (marker go.mod)."),
+            "node" => new NodeProjectDiscoveryAdapter(),
+            "dotnet" => new DotnetProjectDiscoveryAdapter(),
+            _ => SelectCrosswalk(repositoryRoot, crosswalk, report)
         };
     }
 
-    private static IProjectDiscoveryAdapter SelectCrosswalk(string root, CrosswalkStackReader crosswalk)
+    private static IProjectDiscoveryAdapter SelectCrosswalk(string root, CrosswalkStackReader crosswalk, CrosswalkStackReport report)
     {
-        var report = crosswalk.Detect(root);
         if (report.Stack == "lua")
             return new LuaProjectDiscoveryAdapter();
         var outcome = "not-run";
