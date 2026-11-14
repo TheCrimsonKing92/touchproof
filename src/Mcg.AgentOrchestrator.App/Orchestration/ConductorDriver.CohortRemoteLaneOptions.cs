@@ -10,12 +10,12 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
         string? projectHomeDirectory = null, IReadOnlyList<MemberDeclaredTestRemoval>? memberTestRemovals = null,
-        string? outerAttemptId = null) => new(
+        string? outerAttemptId = null, IReadOnlyList<string>? gateTestObligationSelectors = null) => new(
             ProgressSink: progress => AppendCohortGateProgressEvents(writer, identity, bindings, progress, outerAttemptId),
             RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, bindings.Count == 1 ? bindings[0].GoalId.Value[..8] : null, detail),
             OwnerProtectedCohortMembers: bindings.Select(binding =>
                 new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray(),
             GateRunIdentity: CohortGateRunIdentity(bindings.Select(binding => binding.GoalId.Value)),
-            CohortRemoteLanes: true,
+            CohortRemoteLanes: true, GateTestObligationSelectors: gateTestObligationSelectors,
             ProjectHomeDirectory: projectHomeDirectory, MemberTestRemovals: memberTestRemovals, AttemptMemberGoalIds: bindings.Select(binding => binding.GoalId).ToArray());
 }

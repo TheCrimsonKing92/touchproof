@@ -182,7 +182,7 @@ internal sealed partial class ConductorDriver
                     null,
                     null,
                     CancellationToken.None,
-                    SoloLandingGateExecutionOptions.Create(goal)));
+                    SoloLandingGateExecutionOptions.Create(goal, (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests)));
         if (gateStart.DeferralKind is null)
         {
             return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, gateStart.Summary!);
@@ -217,7 +217,7 @@ internal sealed partial class ConductorDriver
         if (lease is null) return ReplacementEvidenceMutationHeld(goal, prefix, policy);
         if (EnvironmentGate?.Check(goal, policy, state, forGate: true) is { } environmentHold) return environmentHold;
         var result = MultiRepositoryAcceptanceExecution.Run(goal, state, RepositoryAcceptanceGate, RepositoryTupleLanding,
-            () => RunInlineLandingSourceSizePreflight(goal) ?? _runAcceptanceVerification(goal, null, null, CancellationToken.None, SoloLandingGateExecutionOptions.Create(goal)),
+            () => RunInlineLandingSourceSizePreflight(goal) ?? _runAcceptanceVerification(goal, null, null, CancellationToken.None, SoloLandingGateExecutionOptions.Create(goal, (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests)),
             () => _land(goal, policy), () => HomeLandingAdmissibility.Evaluate(_cohortKernel ?? _conductorTickKernel, goal, _cohortWorkspace),
             () => LandingMutationBlocker?.Invoke() is { Length: > 0 } blocked ? blocked : InFlightTrainLandingHold.Describe(goal.Id, GetActiveAcceptanceCohortCapacity()), () => _clearAcceptanceFailure(goal),
             home =>
@@ -556,6 +556,6 @@ internal sealed partial class ConductorDriver
             () => RefreshParallelAcceptanceCandidate(candidate),
             effective => _runAcceptanceVerification(effective.Goal,
                 omitStableSlotIndexWithoutLease && stableSlotLease is null ? null : effective.SlotIndex,
-                stableSlotLease, cancellationToken, executionOptions));
+                stableSlotLease, cancellationToken, executionOptions with { GateTestObligationSelectors = GateTestObligationEffectiveSelectors.ForMembers([effective.Goal], [effective.Goal.Id], (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests) }));
     }
 }

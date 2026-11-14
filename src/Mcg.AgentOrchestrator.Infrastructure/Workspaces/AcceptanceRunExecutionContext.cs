@@ -80,7 +80,8 @@ public sealed record AcceptanceRunExecutionOptions(
     AcceptanceAttributionLaneScope? AttributionLaneScope = null,
     IReadOnlyList<GoalId>? AttemptMemberGoalIds = null,
     AcceptanceFocusedRunBinding? FocusedRunBinding = null,
-    Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null);
+    Action<IReadOnlyList<AcceptanceLaneWaitOccurrence>>? LaneWaitSink = null,
+    IReadOnlyList<string>? GateTestObligationSelectors = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -145,6 +146,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     public IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers =>
         _options.OwnerProtectedCohortMembers;
     public IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals => _options.MemberTestRemovals;
+    public IReadOnlyList<string>? GateTestObligationSelectors => _options.GateTestObligationSelectors;
     public AcceptanceAttributionLaneScope? AttributionLaneScope => _options.AttributionLaneScope;
     internal IReadOnlyList<GoalId>? AttemptMemberGoalIds => _options.AttemptMemberGoalIds;
     public CancellationToken CancellationToken => _lifetime.Token;

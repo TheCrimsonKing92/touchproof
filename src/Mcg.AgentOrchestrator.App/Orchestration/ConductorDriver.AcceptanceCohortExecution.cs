@@ -387,7 +387,7 @@ internal sealed partial class ConductorDriver
             workspace.ConductEventsLogPath);
         var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings,
             workspace.ProjectHomeDirectoryOrNull, CohortMemberTestRemovalSelection.FromBatch(_cohortKernel?.Goals ?? [], bindings),
-            outerAttemptId: outerAttemptId);
+            outerAttemptId: outerAttemptId, gateTestObligationSelectors: GateTestObligationEffectiveSelectors.ForMembers(_cohortKernel?.Goals ?? [], bindings.Select(binding => binding.GoalId), _cohortKernel?.HumanInputRequests));
         string? parentExecutionId = null;
         var progressSink = executionOptions.ProgressSink;
         executionOptions = executionOptions with { ProgressSink = progress =>

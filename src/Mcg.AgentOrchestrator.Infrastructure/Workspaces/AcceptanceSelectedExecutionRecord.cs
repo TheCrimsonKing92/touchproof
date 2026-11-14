@@ -8,6 +8,7 @@ internal sealed record AcceptanceSelectedExecutionLane(string Name, string Dispo
 internal sealed record AcceptanceSelectedExecutionRecord(
     string Mode, string Decision, string? Outcome, string? FullGateReason,
     IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses,
+    IReadOnlyList<string> ObligationClasses,
     IReadOnlyList<AcceptanceSelectedExecutionLane> Lanes,
     int? ExecutedClassCount, int? SkippedClassCount,
     int? ProposedExecutedClassCount, int? ProposedSkippedClassCount,
@@ -17,5 +18,5 @@ internal sealed record AcceptanceSelectedExecutionRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? BackstopMissId = null)
 {
     internal static AcceptanceSelectedExecutionRecord Disabled { get; } =
-        new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], null, null, null, null, 0, false);
+        new("Off", "disabled", null, "Selected execution is disabled.", [], [], [], [], null, null, null, null, 0, false);
 }

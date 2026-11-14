@@ -72,7 +72,7 @@ internal sealed partial class ConductorDriver
                 AppendRemoteLaneEvent(writer, members.Count == 1 ? members[0].GoalId.Value[..8] : null, detail);
             }
             catch (Exception) { /* Event-log setup is observational. */ }
-        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch,
+        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch, GateTestObligationSelectors: GateTestObligationEffectiveSelectors.ForMembers(goalsById.Values, members.Select(member => member.GoalId), (_cohortKernel ?? _conductorTickKernel)?.HumanInputRequests),
             MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers(members.Select(member =>
                 (member.GoalId, goalsById.TryGetValue(member.GoalId, out var goal) ? goal.Objective : null))), AttemptMemberGoalIds: members.Select(member => member.GoalId).ToArray());
     }

@@ -53,8 +53,7 @@ internal static class GateTestObligationEvaluator
         IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null,
         Func<string?>? currentRepositoryTuple = null)
     {
-        var obligations = goal.GateTestObligations
-            .Where(obligation => obligation.BriefVersion == goal.AuthoritativeBrief.Version).ToArray();
+        var obligations = GateTestObligationEffectiveSelectors.Current(goal);
         if (obligations.Length == 0) return [];
 
         var carried = journalDirectory is not null && !string.IsNullOrWhiteSpace(candidateSha)
@@ -74,8 +73,7 @@ internal static class GateTestObligationEvaluator
         {
             if (GateTestObligationWaivers.FindWaiver(goal, obligation) is { } waiver)
                 return new Result(obligation, Outcome.Waived, obligation.Selectors, null, waiver.WaiverReason);
-            var effective = answeredRequests is null ? obligation :
-                AnsweredSelectorRebinding.ApplySelectorEdits(goal, obligation, answeredRequests);
+            var effective = GateTestObligationEffectiveSelectors.Effective(goal, obligation, answeredRequests);
             if (!GateTestObligationRepositoryKey.IsHome(obligation.RepositoryKey))
             {
                 var keyed = RepositoryGateTestObligationSources.Read(goal,

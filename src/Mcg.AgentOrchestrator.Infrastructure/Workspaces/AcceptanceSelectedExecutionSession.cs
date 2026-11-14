@@ -9,7 +9,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
     bool attributionScoped = false,
     Func<string, IReadOnlyList<string>, AcceptanceSelectedExecutionInput>? read = null,
     AcceptanceGateEngineSettings? engineSettings = null,
-    AcceptanceSelectedExecutionSessionSuspension? suspension = null)
+    AcceptanceSelectedExecutionSessionSuspension? suspension = null,
+    IReadOnlyList<string>? obligationSelectors = null)
 {
     private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
         ? AcceptanceSelectedExecutionMode.Shadow : mode;
@@ -21,13 +22,13 @@ internal sealed class AcceptanceSelectedExecutionSession(
     internal static async Task<AcceptanceSelectedExecutionSession> CreateAsync(
         AcceptanceGateEngineSettings settings, string worktreePath, IReadOnlyList<string>? changedFiles,
         bool attributionScoped, GoalAcceptanceVerifierTestOverrides testOverrides,
-        string? projectHomeDirectory)
+        string? projectHomeDirectory, IReadOnlyList<string>? obligationSelectors = null)
     {
         var suspension = settings.SelectedExecutionMode == AcceptanceSelectedExecutionMode.Enforce
             ? await AcceptanceSelectedExecutionSessionSuspension.ReadAsync(worktreePath, projectHomeDirectory).ConfigureAwait(false)
             : null;
         return new(settings.SelectedExecutionMode, worktreePath, changedFiles, attributionScoped,
-            testOverrides.ReadSelectedExecutionForTests, settings, suspension);
+            testOverrides.ReadSelectedExecutionForTests, settings, suspension, obligationSelectors);
     }
 
     internal bool Applied => _effectiveMode == AcceptanceSelectedExecutionMode.Enforce && _plan?.HasPlan == true;
@@ -43,7 +44,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
         {
             if (attributionScoped || changedFiles is null || !changedFiles.Any())
                 _plan = new(ReverseDependencySelectionOutcome.Unavailable,
-                    attributionScoped ? "Attribution-scoped attempt." : "Candidate changes are unavailable.", lanes, [], [], []);
+                    attributionScoped ? "Attribution-scoped attempt." : "Candidate changes are unavailable.", lanes, [], [], [], []);
             else
             {
                 var input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changedFiles, engineSettings)
@@ -51,13 +52,14 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 _classes = input.Classes;
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
-                        .Select(lane => lane.Name).ToArray(), input.GuardClasses);
+                        .Select(lane => lane.Name).ToArray(), input.GuardClasses,
+                    obligationSelectors ?? input.ObligationSelectors);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _plan = new(ReverseDependencySelectionOutcome.Unreadable,
-                $"{ex.GetType().Name}: {ex.Message}", lanes, [], [], []);
+                $"{ex.GetType().Name}: {ex.Message}", lanes, [], [], [], []);
             _classes = []; // An incomplete inventory cannot certify counts.
         }
         finally { _milliseconds = timer.Elapsed.TotalMilliseconds; }
@@ -81,6 +83,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
         var skipped = original.Except(kept, StringComparer.Ordinal).Count();
         var record = new AcceptanceSelectedExecutionRecord(_effectiveMode.ToString(), _plan?.HasPlan == true ? "plan" : "full-gate",
             _plan?.Outcome.ToString(), _plan?.FullGateReason, _plan?.FloorLanes ?? [], _plan?.GuardClasses ?? [],
+            _plan?.ObligationClasses ?? [],
             proposed.Select(lane => lane with
             {
                 LaneSkipReason = lane.Disposition == "skipped" ? shadow

@@ -8,17 +8,19 @@ internal sealed record AcceptanceSelectedExecutionPlan(
     ReverseDependencySelectionOutcome Outcome, string? FullGateReason,
     IReadOnlyList<AcceptanceTestLane> ExecutionLanes,
     IReadOnlyList<AcceptanceSelectedExecutionLane> Lanes,
-    IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses)
+    IReadOnlyList<string> FloorLanes, IReadOnlyList<string> GuardClasses, IReadOnlyList<string> ObligationClasses)
 {
     internal bool HasPlan => Outcome == ReverseDependencySelectionOutcome.Resolved;
 
     internal static AcceptanceSelectedExecutionPlan Create(IReadOnlyList<string>? changedFiles,
         ReverseDependencyTestSelection selection, IReadOnlyList<AcceptanceTestLane> lanes,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes, IReadOnlyList<string> floorLanes,
-        IReadOnlyList<string> guardClasses)
+        IReadOnlyList<string> guardClasses, IReadOnlyList<string>? obligationSelectors = null)
     {
+        var obligations = new HashSet<string>(StringComparer.Ordinal);
         AcceptanceSelectedExecutionPlan Full(ReverseDependencySelectionOutcome outcome, string? reason) =>
-            new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses);
+            new(outcome, reason ?? outcome.ToString(), lanes, [], floorLanes, guardClasses,
+                obligations.Order(StringComparer.Ordinal).ToArray());
         if (changedFiles is null || !changedFiles.Any())
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate changes are unavailable.");
         if (selection.Outcome != ReverseDependencySelectionOutcome.Resolved)
@@ -27,18 +29,33 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             return Full(ReverseDependencySelectionOutcome.Unavailable, "Candidate test-class inventory is unavailable.");
 
         var membership = lanes.ToDictionary(lane => lane.Name, AcceptanceLaneMembership.CreateClassMatcher, StringComparer.Ordinal);
+        AcceptanceTestClassDescriptor[] Resolve(string selector) => classes.Where(item => selector.Contains('.') || selector.Contains('+')
+            ? item.FullName == selector : item.FullName.Split('.', '+').Last() == selector).ToArray();
+        string? unresolved = null;
+        foreach (var selector in obligationSelectors ?? [])
+        {
+            // Validate shape before matching: filters and paths must never certify a partial gate.
+            var matches = Regex.IsMatch(selector,
+                @"\A[_\p{L}\p{Nl}][_\p{L}\p{Nl}\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*(?:[.+][_\p{L}\p{Nl}][_\p{L}\p{Nl}\p{Nd}\p{Pc}\p{Mn}\p{Mc}\p{Cf}]*)*\z",
+                RegexOptions.CultureInvariant) ? Resolve(selector) : [];
+            if (matches.Length == 0 || matches.Any(item => !membership.Values.Any(includes => includes(item.FullName))))
+                unresolved ??= selector;
+            else obligations.UnionWith(matches.Select(item => item.FullName));
+        }
         var names = new HashSet<string>(StringComparer.Ordinal);
         var guards = new HashSet<string>(StringComparer.Ordinal);
         foreach (var selector in selection.TestClassNames.Concat(guardClasses).Distinct(StringComparer.Ordinal))
         {
-            var matches = classes.Where(item => selector.Contains('.') || selector.Contains('+')
-                ? item.FullName == selector : item.FullName.Split('.', '+').Last() == selector).ToArray();
+            var matches = Resolve(selector);
             if (matches.Length == 0 || matches.Any(item => !membership.Values.Any(includes => includes(item.FullName))))
                 return Full(ReverseDependencySelectionOutcome.Abandoned, "UnmappedTestClass: " + selector);
             names.UnionWith(matches.Select(item => item.FullName));
             if (guardClasses.Contains(selector, StringComparer.Ordinal))
                 guards.UnionWith(matches.Select(item => item.FullName));
         }
+        if (unresolved is not null)
+            return Full(ReverseDependencySelectionOutcome.Abandoned, "UnresolvedObligationSelector: " + unresolved);
+        names.UnionWith(obligations);
 
         var execution = new List<AcceptanceTestLane>();
         var records = new List<AcceptanceSelectedExecutionLane>();
@@ -67,7 +84,7 @@ internal sealed record AcceptanceSelectedExecutionPlan(
             records.Add(new(lane.Name, disposition, retained, skipped, filter ?? (whole ? lane.Filter : null)));
         }
         return new(ReverseDependencySelectionOutcome.Resolved, null, execution, records, floorLanes,
-            guards.Order(StringComparer.Ordinal).ToArray());
+            guards.Order(StringComparer.Ordinal).ToArray(), obligations.Order(StringComparer.Ordinal).ToArray());
     }
 
     internal static bool IsDefaultFloor(string name) =>
