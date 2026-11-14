@@ -18,11 +18,11 @@ internal static class PreTesterStartedEvidence
         if (DriftNotices.TryAdd(receiptId, 0)) Console.WriteLine(line);
     };
 
-    internal static bool TryAbandon(PreTesterEvidenceEntry? prior, string reason, Action<string> record)
+    internal static bool TryAbandon(PreTesterEvidenceEntry? prior, string reason, Action<PreTesterEvidenceEntry, string> record)
     {
         if (prior?.Outcome != "started") return false;
-        var abandoned = prior with { Outcome = "abandoned", ResultPath = null, FailingTests = [] };
-        record(PreTesterEvidenceIndexLines.FormatMarker(abandoned) + AbandonmentSuffix(reason));
+        var abandoned = prior with { Outcome = "abandoned", ResultPath = null, FailingTests = [], AbandonmentReason = ReasonToken(reason) };
+        record(abandoned, PreTesterEvidenceIndexLines.FormatMarker(abandoned));
         return true;
     }
 
@@ -30,10 +30,25 @@ internal static class PreTesterStartedEvidence
         message.EndsWith(AbandonmentSuffix(reason), StringComparison.Ordinal);
 
     internal static void RecordStarted(string candidateSha, string receiptId, IReadOnlyList<string> selections,
-        IReadOnlyList<string> notRun, Action<string> record) =>
-        record(PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
-            "started", candidateSha, receiptId, selections, notRun, null, [])));
+        IReadOnlyList<string> notRun, Action<PreTesterEvidenceEntry, string> record)
+    {
+        var entry = new PreTesterEvidenceEntry("started", candidateSha, receiptId, selections, notRun, null, []);
+        record(entry, PreTesterEvidenceIndexLines.FormatMarker(entry));
+    }
 
     private static string AbandonmentSuffix(string reason) =>
-        "; abandoned_reason=" + Regex.Replace(reason, "(?<!^)([A-Z])", "-$1").ToLowerInvariant();
+        "; abandoned_reason=" + ReasonToken(reason);
+
+    internal static string ReasonToken(string reason) =>
+        Regex.Replace(reason, "(?<!^)([A-Z])", "-$1").ToLowerInvariant();
+}
+
+internal sealed record PreTesterEvidenceRecorder(
+    Action<GoalId, TaskId, PreTesterEvidenceEntry, string> Request,
+    Action<GoalId, TaskId, PreTesterEvidenceEntry, string> Run)
+{
+    internal static PreTesterEvidenceRecorder FromLegacy(Action<GoalId, TaskId, string> request,
+        Action<GoalId, TaskId, string> run) => new(
+            (gid, tid, _, message) => request(gid, tid, message),
+            (gid, tid, _, message) => run(gid, tid, message));
 }

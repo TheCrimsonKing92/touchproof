@@ -356,31 +356,30 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
-    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, string message)
+    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRequestRecorded, "request");
+
+    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, PreTesterEvidenceEntry entry, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRequestRecorded, "request");
+
+    public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRunRecorded, "run");
+
+    public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, PreTesterEvidenceEntry entry, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRunRecorded, "run");
+
+    private TaskSpec RecordFindingEvidence(GoalId goalId, TaskId taskId, string message,
+        PreTesterEvidenceEntry? entry, ProgressKind kind, string description)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
         var trimmed = message.Trim();
         if (string.IsNullOrWhiteSpace(trimmed))
         {
-            throw new ArgumentException("Finding evidence request message cannot be empty.", nameof(message));
+            throw new ArgumentException($"Finding evidence {description} message cannot be empty.", nameof(message));
         }
 
-        Append(goal, taskId, ProgressKind.FindingEvidenceRequestRecorded, trimmed);
-        return task;
-    }
-
-    public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, string message)
-    {
-        var goal = GetGoal(goalId);
-        var task = goal.FindTask(taskId);
-        var trimmed = message.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            throw new ArgumentException("Finding evidence run message cannot be empty.", nameof(message));
-        }
-
-        Append(goal, taskId, ProgressKind.FindingEvidenceRunRecorded, trimmed);
+        Append(goal, taskId, kind, trimmed, preTesterEvidence: entry);
         return task;
     }
 

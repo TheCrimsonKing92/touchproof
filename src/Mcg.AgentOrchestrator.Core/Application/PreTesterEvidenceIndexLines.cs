@@ -8,7 +8,26 @@ public sealed record PreTesterEvidenceEntry(
     IReadOnlyList<string> Selections,
     IReadOnlyList<string> NotRun,
     string? ResultPath,
-    IReadOnlyList<string> FailingTests);
+    IReadOnlyList<string> FailingTests,
+    string? AbandonmentReason = null)
+{
+    public bool Equals(PreTesterEvidenceEntry? other) => other is not null &&
+        Outcome == other.Outcome && CandidateSha == other.CandidateSha && ReceiptId == other.ReceiptId &&
+        ResultPath == other.ResultPath && AbandonmentReason == other.AbandonmentReason &&
+        Selections.SequenceEqual(other.Selections) && NotRun.SequenceEqual(other.NotRun) &&
+        FailingTests.SequenceEqual(other.FailingTests);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Outcome); hash.Add(CandidateSha); hash.Add(ReceiptId);
+        hash.Add(ResultPath); hash.Add(AbandonmentReason);
+        foreach (var value in Selections) hash.Add(value);
+        foreach (var value in NotRun) hash.Add(value);
+        foreach (var value in FailingTests) hash.Add(value);
+        return hash.ToHashCode();
+    }
+}
 
 public static class PreTesterEvidenceIndexLines
 {
@@ -20,7 +39,8 @@ public static class PreTesterEvidenceIndexLines
         Prefix + $"outcome={entry.Outcome}; candidate_sha={entry.CandidateSha}; " +
         $"receipt_id={entry.ReceiptId}; selections={EncodeList(entry.Selections)}; " +
         $"not_run={EncodeList(entry.NotRun)}; result_path={Uri.EscapeDataString(entry.ResultPath ?? "none")}; " +
-        $"failing_tests={EncodeList(entry.FailingTests)}";
+        $"failing_tests={EncodeList(entry.FailingTests)}" +
+        (entry.AbandonmentReason is null ? "" : "; abandoned_reason=" + entry.AbandonmentReason);
 
     public static PreTesterEvidenceEntry? Parse(string message)
     {
@@ -51,7 +71,7 @@ public static class PreTesterEvidenceIndexLines
         {
             if (evt.TaskId != testerTaskId ||
                 evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded)) continue;
-            if (Parse(evt.Message) is not { } entry ||
+            if (PreTesterEvidenceEntryReader.Read(evt) is not { } entry ||
                 !string.Equals(entry.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) continue;
             return entry;
         }

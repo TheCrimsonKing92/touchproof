@@ -52,7 +52,7 @@ internal sealed class CrossGoalTestFailureHistory(
                          evt.Kind == ProgressKind.FindingEvidenceRunRecorded && evt.OccurredAt >= now.AddDays(-14) && evt.OccurredAt <= now))
             {
                 PreTesterEvidenceEntry? entry;
-                try { entry = PreTesterEvidenceIndexLines.Parse(evt.Message); }
+                try { entry = PreTesterEvidenceEntryReader.Read(evt); }
                 catch (Exception ex) when (ex is ArgumentException or UriFormatException) { continue; }
                 if (entry is not { Outcome: "red" }) continue;
                 foreach (var identity in entry.FailingTests) Add(goal.Id.Value, evt.OccurredAt, identity);
