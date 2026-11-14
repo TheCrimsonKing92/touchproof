@@ -345,6 +345,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                 "goal_replacement_audit",
                 "goal_replacement_lineage",
                 "goal_snapshot_archive",
+                "goal_task_history",
                 "goals",
                 "human_input_requests",
                 "meta",

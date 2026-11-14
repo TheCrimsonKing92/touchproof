@@ -101,7 +101,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                     cancellationToken.ThrowIfCancellationRequested();
                     var taskId = ReadAttentionField<string>(task, "Id")!;
                     if (needsQuestion) taskIds.Add(taskId);
-                    var dispatches = AttentionElements(task, "DispatchHistory").Select(ReadAttentionDispatch).ToArray();
+                    var history = await TaskHistoryStore.ReadAsync(connection, id, task, cancellationToken);
+                    var dispatches = history.Dispatch.Entries.Select(ReadAttentionDispatch).ToArray();
                     var lastDispatch = task.TryGetProperty("LastDispatch", out var last) && last.ValueKind != JsonValueKind.Null
                         ? ReadAttentionDispatch(last) : null;
                     // Undispatched tasks matter only as the target of a reserved probe. They carry
@@ -112,7 +113,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                         (taskStatus != WorkTaskStatus.Assigned || agentId is null)) continue;
                     tasks.Add(new(taskId, ReadAttentionField<AgentRole>(task, "RequiredRole"), taskStatus, agentId, lastDispatch, dispatches,
                         ReadAttentionVerificationField(task, "LastVerification"),
-                        AttentionElements(task, "VerificationHistory").Select(ReadAttentionVerification).ToArray(),
+                        history.Verification.Entries.Select(ReadAttentionVerification).ToArray(),
                         ReadAttentionField<DateTimeOffset?>(task, "LatestProviderBudgetRecoveryAt")));
                 }
                 if (needsQuestion) questions.Add(new(id, hold!, taskIds));

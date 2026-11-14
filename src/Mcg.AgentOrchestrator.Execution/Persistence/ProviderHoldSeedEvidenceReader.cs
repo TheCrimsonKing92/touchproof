@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -38,7 +39,7 @@ internal static class ProviderHoldSeedEvidenceReader
             var payload = reader.IsDBNull(2) ? reader.GetValue(1) : reader.GetValue(2);
             var id = reader.GetString(0);
             observer?.Invoke(new("provider-seed-snapshot-decode", id));
-            var evidence = await ProjectAsync(id, payload, options, cancellationToken);
+            var evidence = await ProjectAsync(id, payload, options, cancellationToken, connection);
             result.Add(evidence);
             projected?.Invoke(evidence, reader.GetString(3));
         }
@@ -46,17 +47,25 @@ internal static class ProviderHoldSeedEvidenceReader
     }
 
     internal static async Task<ProviderUsageGoalEvidence> ProjectAsync(string id, object payload,
-        JsonSerializerOptions options, CancellationToken cancellationToken = default)
+        JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null)
     {
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
         var row = await JsonSerializer.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
             ?? throw new InvalidDataException("Missing provider seed goal evidence.");
         if (row.Id != id) throw new InvalidDataException("Provider seed evidence goal identity mismatch.");
-        return new(id, row.Status,
-            row.IsMetadataOnly ? [] : (row.Tasks ?? []).Select(task => new ProviderUsageTaskEvidence(
+        var tasks = new List<ProviderUsageTaskEvidence>();
+        var store = new GoalTaskHistoryStore(options);
+        foreach (var task in row.IsMetadataOnly ? [] : row.Tasks ?? [])
+        {
+            var history = await store.ReadAsync(connection, id, task.Id, task.VerificationEntries,
+                task.DispatchEntries, cancellationToken);
+            tasks.Add(new ProviderUsageTaskEvidence(
                 task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
-                task.LastDispatch?.Snapshot(), (task.DispatchHistory ?? []).Select(dispatch => dispatch.Snapshot()).ToArray(),
-                task.LastVerification, task.VerificationHistory ?? [], task.LatestProviderBudgetRecoveryAt)).ToArray(),
+                task.LastDispatch?.Snapshot(), history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
+                task.LastVerification, history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
+                task.LatestProviderBudgetRecoveryAt));
+        }
+        return new(id, row.Status, tasks,
             row.IsMetadataOnly ? [] : (row.Timeline ?? []).Select(evt => new ProgressEvent(new GoalId(id),
                 evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
                 OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
@@ -77,8 +86,10 @@ internal static class ProviderHoldSeedEvidenceReader
     // Verification records remain intact: TaskSpec owns bounded history retention and same-round
     // enrichment. Stripping their identity/enrichment fields could merge different observations.
     private sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
-        DispatchFields? LastDispatch, IReadOnlyList<DispatchFields>? DispatchHistory,
-        TaskVerificationSnapshot? LastVerification, IReadOnlyList<TaskVerificationSnapshot>? VerificationHistory,
+        DispatchFields? LastDispatch,
+        [property: JsonPropertyName(GoalTaskHistoryStore.DispatchProperty)] JsonElement DispatchEntries,
+        TaskVerificationSnapshot? LastVerification,
+        [property: JsonPropertyName(GoalTaskHistoryStore.VerificationProperty)] JsonElement VerificationEntries,
         DateTimeOffset? LatestProviderBudgetRecoveryAt);
 
     private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,

@@ -35,6 +35,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     ];
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private static readonly GoalSnapshotArchive SnapshotArchive = new(SerializerOptions);
+    private static readonly GoalTaskHistoryStore TaskHistoryStore = new(SerializerOptions);
+    internal static JsonSerializerOptions HistorySerializerOptions => SerializerOptions;
     private const string GoalSnapshotArchiveSchemaSql = """
         CREATE TABLE IF NOT EXISTS goal_snapshot_archive (
             goal_id TEXT PRIMARY KEY,
@@ -348,6 +350,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     internal void ApplyCoreSchemaMigration(SqliteConnection conn)
     {
         RunNonQuery(conn, GoalSnapshotArchiveSchemaSql);
+        GoalTaskHistoryStore.CreateSchema(conn);
         if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
@@ -2316,9 +2319,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     out var snap))
                 {
                     readObserver?.Invoke(new("hot-deserialized", reader.GetString(0), json.Length));
-                    goalSnapshots.Add(goalIds is null
+                    var complete = goalIds is null
                         ? snap
-                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken, readObserver))!);
+                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken, readObserver))!;
+                    goalSnapshots.Add((await TaskHistoryStore.HydrateAsync(conn, complete, cancellationToken))!);
                 }
             }
         }
@@ -2976,8 +2980,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             cmd.Parameters.AddWithValue("$id", goalId.Value);
             var json = (string?)await cmd.ExecuteScalarAsync(cancellationToken);
             if (json is null) return (GoalSnapshot?)null;
-            return await SnapshotArchive.HydrateAsync(
+            var snapshot = await SnapshotArchive.HydrateAsync(
                 conn, JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions), cancellationToken);
+            return await TaskHistoryStore.HydrateAsync(conn, snapshot, cancellationToken);
         }, cancellationToken);
     }
 
@@ -3000,7 +3005,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {
                 var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
                     ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
-                matches.Add((await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken))!);
+                snapshot = (await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken))!;
+                matches.Add((await TaskHistoryStore.HydrateAsync(conn, snapshot, cancellationToken))!);
             }
 
             return (IReadOnlyList<GoalSnapshot>)matches;
@@ -3036,6 +3042,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {
                 var goal = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
                     ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
+                goal = (await SnapshotArchive.HydrateAsync(conn, goal, cancellationToken))!;
+                goal = (await TaskHistoryStore.HydrateAsync(conn, goal, cancellationToken))!;
                 foreach (var task in goal.Tasks.Where(task => task.Id.StartsWith(idPrefix, StringComparison.OrdinalIgnoreCase)))
                 {
                     matches.Add(new CitedPriorTaskMatch(goal, task));
@@ -3258,6 +3266,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             var version = reader.GetInt32(1);
             var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
             snapshot = await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken);
+            snapshot = await TaskHistoryStore.HydrateAsync(conn, snapshot, cancellationToken);
             return (snapshot, version);
         }, cancellationToken);
     }
@@ -3283,6 +3292,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 version = reader.GetInt32(1);
             }
             goalSnapshot = await SnapshotArchive.HydrateAsync(conn, goalSnapshot, cancellationToken);
+            goalSnapshot = await TaskHistoryStore.HydrateAsync(conn, goalSnapshot, cancellationToken);
 
             var humanInputRequests = new List<HumanInputRequestSnapshot>();
             await using (var inputCommand = conn.CreateCommand())
@@ -3420,6 +3430,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        await TaskHistoryStore.WriteAsync(conn, goal.Id, json, cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }
 

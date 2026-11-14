@@ -52,7 +52,7 @@ internal static class ProviderHoldSeedEvidenceStore
                     var evidence = JsonSerializer.Deserialize<ProviderUsageGoalEvidence>(json, options);
                     if (evidence is not null && evidence.GoalId == id && evidence.Tasks is not null &&
                         evidence.Timeline is not null && evidence.Tasks.All(task => task is not null &&
-                            task.DispatchHistory is not null && task.VerificationHistory is not null) &&
+                            GoalTaskHistoryStore.HasUsableCachedHistories(task)) &&
                         evidence.Timeline.All(evt => evt is not null && evt.GoalId?.Value == id))
                         result[id] = evidence;
                 }

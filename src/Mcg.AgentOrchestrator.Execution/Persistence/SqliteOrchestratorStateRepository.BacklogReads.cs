@@ -80,6 +80,14 @@ public sealed partial class SqliteOrchestratorStateRepository
             }
             // Match selected loading: validate hot serialization first, then hydrate before
             // Core domain validation. A missing archive leaves the hot stub authoritative.
+            if (fields?.Tasks is not null && await TaskHistoryStore.HasRowsAsync(connection, id, cancellationToken))
+            {
+                using var historyStream = reopenStream();
+                var requiresReconstruction = await TaskHistoryStore.RequiresReconstructionAsync(
+                    connection, id, historyStream, HasInvalidSimilarityVerification, cancellationToken);
+                fields = fields with { Tasks = fields.Tasks with
+                    { RequiresReconstruction = fields.Tasks.RequiresReconstruction || requiresReconstruction } };
+            }
             var status = ValidateSimilarityDomain(fields, reopenStream);
             if (fields is null || status != GoalStatus.Completed) continue;
             var objective = fields.Objective.Trim();
@@ -543,19 +551,19 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (task.TokenType == JsonTokenType.StartObject)
                         while (task.Read() && task.TokenType != JsonTokenType.EndObject)
                         {
+                            if (GoalTaskHistoryStore.TryReadInlineShape(ref task, HasInvalidSimilarityVerification, out var invalidHistory))
+                            {
+                                requiresReconstruction |= invalidHistory;
+                                continue;
+                            }
                             var description = task.ValueTextEquals("Description"u8);
-                            var history = task.ValueTextEquals("DispatchHistory"u8) ||
-                                task.ValueTextEquals("RetryAdmissionHistory"u8) || task.ValueTextEquals("CriterionRetryFeedback"u8);
-                            var verification = task.ValueTextEquals("VerificationHistory"u8);
+                            var history = task.ValueTextEquals("RetryAdmissionHistory"u8) || task.ValueTextEquals("CriterionRetryFeedback"u8);
                             var lastVerification = task.ValueTextEquals("LastVerification"u8);
                             task.Read();
                             if (description && task.TokenType is JsonTokenType.String or JsonTokenType.Null)
                                 blankDescription = IsBlankSimilarityText(ref task);
                             if (history && task.TokenType == JsonTokenType.StartArray)
                                 requiresReconstruction |= HasNullSimilarityEntry(ref task);
-                            if (verification && task.TokenType == JsonTokenType.StartArray)
-                                while (task.Read() && task.TokenType != JsonTokenType.EndArray)
-                                    requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
                             if (lastVerification && task.TokenType != JsonTokenType.Null)
                                 requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
                             SkipSimilarityValue(ref task);
