@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -140,7 +141,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         if (setup == "ambiguous")
             root.Write("Root.sln");
 
-        using var crosswalk = new FakeCrosswalkProcess();
+        using var crosswalk = new FakeCrosswalkProcess("go");
+        if (setup == "ambiguous") crosswalk.DetectException = new Win32Exception("injected process-start failure");
         var exception = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
 
         Assert.Contains("No discovery adapter is available", exception.Message);
@@ -165,7 +167,7 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         using var fixture = new ProjectOnboardingFixture(fixtureName);
         var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
 
-        using var crosswalk = new FakeCrosswalkProcess();
+        using var crosswalk = new FakeCrosswalkProcess("dotnet");
         var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
         var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
         var direct = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
@@ -173,6 +175,40 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         Assert.IsType<DotnetProjectDiscoveryAdapter>(adapter);
         Assert.Equal(ProjectStack.Dotnet, selected.Stack);
         Assert.Equal(ProjectModelJson.Serialize(direct), ProjectModelJson.Serialize(selected));
+    }
+
+    [Fact]
+    public void Select_GoFixture_PreservesDirectAdapterModel()
+    {
+        using var fixture = new ProjectOnboardingFixture("go-module");
+        var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
+        using var crosswalk = new FakeCrosswalkProcess("go");
+
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
+        var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
+        var direct = new GoProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
+
+        Assert.IsType<GoProjectDiscoveryAdapter>(adapter);
+        Assert.Equal(ProjectStack.Go, selected.Stack);
+        Assert.Equal(ProjectModelJson.Serialize(direct), ProjectModelJson.Serialize(selected));
+        Assert.Equal(new[] { "detect", fixture.Root }, Assert.Single(crosswalk.Calls).Arguments);
+    }
+
+    [Fact]
+    public void Select_NodeFixture_PreservesDirectAdapterModel()
+    {
+        using var fixture = new NodeProjectDiscoveryAdapterTests.Fixture();
+        var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
+        using var crosswalk = new FakeCrosswalkProcess("node");
+
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
+        var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
+        var direct = new NodeProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
+
+        Assert.IsType<NodeProjectDiscoveryAdapter>(adapter);
+        Assert.Equal(ProjectStack.Node, selected.Stack);
+        Assert.Equal(ProjectModelJson.Serialize(direct), ProjectModelJson.Serialize(selected));
+        Assert.Equal(new[] { "detect", fixture.Root }, Assert.Single(crosswalk.Calls).Arguments);
     }
 
     private static void AssertNoMarker(ProjectDiscoveryAdapterSelector.Detection detection)

@@ -6,7 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: pure text checks and a private fixture root/SQLite store; model and Git are fakes.
 public sealed class AuthorBriefDraftStackCriteriaTests
 {
-    private const string HouseCriterion = "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+    private const string HouseCriterion = "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+    private const string FormerTesterSentence = "The Tester's evidence_request runs them.";
     private const string GoCriterion = "The acceptance manifest checks pass: go build -buildvcs=false ./..., go vet ./... and go test -count=1 ./.... Developer owns; Acceptance executes. TEST-VERIFIABLE.";
     private const string NeutralCriterion = "The acceptance manifest checks pass using the project's own build and test commands. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
     private const string GoNote = "Workers run go build, go vet and go test themselves and never report test classes.";
@@ -25,6 +26,7 @@ public sealed class AuthorBriefDraftStackCriteriaTests
 
         Assert.Contains("The last two acceptance criteria are the following house Developer deferred-tests criterion, copied character for character, followed by one single-sentence Reviewer criterion:\n" +
             HouseCriterion + "\nKeep What to build", prompt);
+        Assert.DoesNotContain(FormerTesterSentence, prompt);
         Assert.DoesNotContain("The acceptance manifest checks pass", prompt);
         Assert.DoesNotContain(GoNote, prompt);
         Assert.DoesNotContain(NeutralNote, prompt);
@@ -159,7 +161,9 @@ public sealed class AuthorBriefDraftStackCriteriaTests
         File.Delete(solution);
         File.WriteAllText(module, "module example.test/draft\n");
         Assert.Equal(Toolchain.Go, GoalIntakeTargetStack.For(fixture.Workspace));
-        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(HouseCriterion, GoCriterion);
+        var fixtureHouseCriterion = HouseCriterion.Replace(" Developer owns;", $" {FormerTesterSentence} Developer owns;");
+        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(fixtureHouseCriterion, GoCriterion);
+        Assert.Contains(GoCriterion, markdown);
         WorkerProcessRunRequest? captured = null;
         var seams = new AuthorBriefDraftSeams((request, _) =>
         {

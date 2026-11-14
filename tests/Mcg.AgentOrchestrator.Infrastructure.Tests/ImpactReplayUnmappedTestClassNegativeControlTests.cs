@@ -92,7 +92,10 @@ public sealed class ImpactReplayUnmappedTestClassNegativeControlTests
             "## Unmapped test classes", "", "- not-scanned: 0", "- no-lane: 0", "- ambiguous: 0", "",
             "No unmapped test classes were found."
         }) + Environment.NewLine;
-        Assert.Equal(unmappedSection, markdown[sectionStart..]);
+        var shippingStart = markdown.IndexOf(Environment.NewLine +
+            "## Hop-1 shipping consumers followed in all-referencing mode", StringComparison.Ordinal);
+        Assert.True(shippingStart > sectionStart, "Shipping-follow section was not written after unmapped classes.");
+        Assert.Equal(unmappedSection, markdown[sectionStart..shippingStart]);
 
         var diagnostics = Assert.IsType<ImpactReplayUnmappedTestClasses>(report.UnmappedTestClasses);
         Assert.Equal(3, diagnostics.CountsByReason.Count);

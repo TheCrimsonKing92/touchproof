@@ -30,7 +30,9 @@ internal static class TestCollectionGuardRules
                 violations.Add(new TestCollectionGuardViolation(LaneMembershipRule,
                     descriptor.FullName, descriptor.Collection, baselineNames, resolvedNames,
                     "Rename the class so its name contains one of its owning lane's FullyQualifiedName~ " +
-                    "substrings in config/acceptance-manifest.json, or remove the owned collection; do not edit the manifest."));
+                    "substrings in config/acceptance-manifest.json. On the brief's declaration line, state its owned " +
+                    "collection or place it beside a named existing sibling in that collection. Alternatively, remove " +
+                    "the owned collection; do not edit the manifest."));
             }
             if (resolvedNames.Length != 1)
             {

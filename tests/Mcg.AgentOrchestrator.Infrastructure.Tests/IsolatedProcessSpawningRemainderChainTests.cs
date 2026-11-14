@@ -102,8 +102,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         [nameof(WorkerBuildScopeToolCacheTests)] = 14.0,
         // Provisional estimate, 1bdf4ee5 correction; replace with the Tester's measured summed seconds.
         [nameof(WorkerBuildScopeToolCacheDigestTests)] = 12.0,
-        // Provisional operator estimate, f1519407 correction; replace after the first gate measurement.
-        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 8.0
+        // Gate attempt f1519407-gate-20261114100746341, lane infrastructure-tests-balanced-8:
+        // the two tests measured 7.65 s + 7.93 s = 15.58 s summed, rounded to 15.6 s; a single gate sample.
+        [nameof(WorkerBuildCheckGoalLeaseOwnerTests)] = 15.6
     };
 
     // Operator-supplied samples for candidate 822ad7fbc9bd0e3020afecfb850fff6bdb7468c5.

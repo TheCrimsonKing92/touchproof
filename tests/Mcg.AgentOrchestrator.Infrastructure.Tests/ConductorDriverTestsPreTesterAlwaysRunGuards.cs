@@ -197,33 +197,33 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
     }
 
     [Fact]
-    public void StartedReceiptMissingRecordedClassThrowsNamingIt()
+    public void StartedReceiptMissingRecordedClassRunsRecordedSelection()
     {
         using var scenario = new Scenario();
         const string missing = "Core.Tests:RemovedCoreTests";
         var recorded = new[] { CoreSelection, missing };
         scenario.RecordStarted(recorded);
-        var runs = 0;
+        var requests = new List<string>();
         var driver = scenario.Driver(request =>
         {
-            runs++;
+            requests.Add(request);
             return scenario.Green(request);
         }, _ => { });
 
-        var exception = Assert.Throws<InvalidDataException>(() =>
+        var exception = Record.Exception(() =>
             driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
-        Assert.Contains("missing=" + missing + " added=<none>", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(0, runs);
-        Assert.Equal("started", scenario.Latest().Outcome);
+        Assert.Null(exception);
+        Assert.Equal(recorded, Selections(Assert.Single(requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
         Assert.Equal(recorded, scenario.Latest().Selections);
+        Assert.Empty(scenario.Latest().NotRun);
     }
 
     [Theory]
     [InlineData("selection")]
     [InlineData("not-run")]
-    public void StartedReceiptStillRejectsUnrelatedDrift(string drift)
+    public void StartedReceiptKeepsRecordingDespiteUnrelatedDrift(string drift)
     {
         using var scenario = new Scenario();
         var selections = drift switch
@@ -231,22 +231,23 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
             "selection" => new[] { "Core.Tests:OtherCoreTests" },
             _ => new[] { CoreSelection }
         };
-        scenario.RecordStarted(selections, drift == "not-run" ? ["MissingTests"] : []);
-        var runs = 0;
+        string[] notRun = drift == "not-run" ? ["MissingTests"] : [];
+        scenario.RecordStarted(selections, notRun);
+        var requests = new List<string>();
         var driver = scenario.Driver(request =>
         {
-            runs++;
+            requests.Add(request);
             return scenario.Green(request);
         }, _ => { });
 
-        var exception = Assert.Throws<InvalidDataException>(() =>
+        var exception = Record.Exception(() =>
             driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
 
-        Assert.StartsWith("Started pre-Tester evidence selection changed before reconciliation.", exception.Message);
-        if (drift == "not-run")
-            Assert.Contains("not_run_missing=MissingTests not_run_added=<none>", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(0, runs);
-        Assert.Equal("started", scenario.Latest().Outcome);
+        Assert.Null(exception);
+        Assert.Equal(selections, Selections(Assert.Single(requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
+        Assert.Equal(selections, scenario.Latest().Selections);
+        Assert.Equal(notRun, scenario.Latest().NotRun);
     }
 
     [Fact]
@@ -399,6 +400,145 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         Assert.Equal([AgentRole.Tester], roles);
     }
 
+    [Fact]
+    public void ChangedMainRevisionWithDriftContinuesUnderRecordedReceipt()
+    {
+        using var scenario = new Scenario();
+        var launches = 0;
+        var initial = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run."),
+            _ => { }, coordinator: scenario.Background(() => launches++));
+        initial.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        var recorded = scenario.Latest();
+        Assert.Equal("started", recorded.Outcome);
+        Assert.Equal(1, launches);
+        var removed = GuardNames[0];
+        Assert.Contains("Infrastructure.Tests:" + removed, recorded.Selections);
+        File.Delete(Path.Combine(scenario.Worktree, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", removed + ".cs"));
+
+        const string changedMain = "ccc3333";
+        var settings = new AcceptanceGateEngineSettings();
+        var guards = PreTesterGuardSelections.Create(new(), scenario.Worktree, [ChangedCorePath],
+            changedMain, settings: settings, priorSelections: recorded.Selections);
+        var recomputed = guards.Augment(new([new("Core.Tests", "DeclaredCoreTests")], []),
+            settings, recorded, ConductorDriver.FormatFindingEvidenceSelection);
+        Assert.DoesNotContain("Infrastructure.Tests:" + removed,
+            recomputed.Selections.Select(ConductorDriver.FormatFindingEvidenceSelection));
+
+        var requests = new List<string>();
+        var inline = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "inline-attempts"), TrunkBranchName.Default,
+            runInline: true, acquireStableSlotLease: (_, _) => null);
+        var resumed = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return scenario.Green(request);
+        }, _ => { }, coordinator: inline);
+        var mainReads = 0;
+        resumed.PreTesterMainRevision = _ => { mainReads++; return changedMain; };
+
+        var exception = Record.Exception(() => resumed.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Null(exception);
+        Assert.Equal(1, mainReads);
+        Assert.Equal(recorded.Selections, Selections(Assert.Single(requests)));
+        Assert.Equal("green", scenario.Latest().Outcome);
+        Assert.Equal(recorded.ReceiptId, scenario.Latest().ReceiptId);
+        Assert.Equal(recorded.Selections, scenario.Latest().Selections);
+        Assert.Equal(recorded.NotRun, scenario.Latest().NotRun);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DriftNoticeAppearsOnceAcrossTicksAndDriverInstances(bool equalFirst)
+    {
+        using var scenario = new Scenario();
+        var receipt = "drift-" + Guid.NewGuid().ToString("N");
+        var launches = 0;
+        var coordinator = scenario.Background(() => launches++);
+        var driver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run."),
+            _ => { }, coordinator: coordinator);
+        var prefix = "PRE_TESTER_STARTED_SELECTION_DRIFT receipt=" + receipt + " ";
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            if (equalFirst)
+            {
+                scenario.RecordStarted([CoreSelection], receiptId: receipt);
+                driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+            }
+            scenario.RecordStarted([CoreSelection, "Core.Tests:RemovedCoreTests"], receiptId: receipt);
+            for (var tick = 0; tick < 3; tick++)
+            {
+                if (tick == 1)
+                    driver = scenario.Driver(_ => throw new Xunit.Sdk.XunitException("Unexpected inline run."),
+                        _ => { }, coordinator: coordinator);
+                var result = driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+                Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+                Assert.Equal("started", scenario.Latest().Outcome);
+                Assert.Equal(receipt, scenario.Latest().ReceiptId);
+            }
+        });
+
+        var notice = Assert.Single(output.Split(Environment.NewLine)
+            .Where(line => line.StartsWith(prefix, StringComparison.Ordinal)));
+        Assert.Contains("missing=Core.Tests:RemovedCoreTests added=<none>", notice, StringComparison.Ordinal);
+        Assert.True(launches > 0, "Background evidence must have been launched.");
+    }
+
+    [Theory]
+    [InlineData("base-equals-candidate")]
+    [InlineData("tests-status-not-deferred")]
+    [InlineData("no-resolved-classes")]
+    [InlineData("no-normalized-classes")]
+    public void LostDeclarationOrClassesAbandonsStartedEntryAndContinues(string reason)
+    {
+        var tests = reason switch
+        {
+            "tests-status-not-deferred" => "not-run - DeclaredCoreTests",
+            "no-resolved-classes" => "deferred - MissingClass",
+            "no-normalized-classes" => "deferred - UnconfiguredClass",
+            _ => "deferred - DeclaredCoreTests"
+        };
+        using var scenario = new Scenario(tests: tests,
+            baseCommit: reason == "base-equals-candidate" ? CandidateSha : BaseSha);
+        if (reason == "no-normalized-classes") scenario.Declare("UnconfiguredClass", "Unconfigured.Tests");
+        scenario.RecordStarted(["Core.Tests:RemovedCoreTests", CoreSelection, CoreSelection],
+            ["SecondMissingTests", "FirstMissingTests", "SecondMissingTests"]);
+        var prior = scenario.Latest();
+        var runs = 0;
+        var roles = new List<AgentRole>();
+        var driver = scenario.Driver(_ =>
+        {
+            runs++;
+            throw new Xunit.Sdk.XunitException("Abandoned evidence must not run.");
+        }, roles.Add);
+
+        var exception = Record.Exception(() => driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Null(exception);
+        Assert.Equal(0, runs);
+        Assert.Equal([AgentRole.Tester], roles);
+        var abandoned = scenario.Latest();
+        Assert.Equal("abandoned", abandoned.Outcome);
+        Assert.Equal(prior.CandidateSha, abandoned.CandidateSha);
+        Assert.Equal(prior.ReceiptId, abandoned.ReceiptId);
+        Assert.Equal(prior.Selections, abandoned.Selections);
+        Assert.Equal(prior.NotRun, abandoned.NotRun);
+        Assert.Null(abandoned.ResultPath);
+        Assert.Empty(abandoned.FailingTests);
+        string[] AbandonLines() => scenario.Goal.Timeline
+            .Where(evt => evt.TaskId == scenario.Tester.Id && evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+                PreTesterEvidenceIndexLines.Parse(evt.Message)?.Outcome == "abandoned")
+            .Select(evt => evt.Message).ToArray();
+        Assert.EndsWith("; abandoned_reason=" + reason, Assert.Single(AbandonLines()), StringComparison.Ordinal);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal("abandoned", scenario.Latest().Outcome);
+        Assert.Single(AbandonLines());
+        Assert.Equal(0, runs);
+    }
+
     private static string[] Selections(string request) =>
         request.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -422,16 +562,16 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         public Goal Goal { get; }
         public TaskSpec Developer { get; }
         public TaskSpec Tester { get; }
-        private string Worktree => GoalWorktrees.WorktreePath(Root, Goal.Id);
+        public string Worktree => GoalWorktrees.WorktreePath(Root, Goal.Id);
 
-        public Scenario(string? missingGuard = null, string tests = "deferred - DeclaredCoreTests")
+        public Scenario(string? missingGuard = null, string tests = "deferred - DeclaredCoreTests", string baseCommit = BaseSha)
         {
             (Kernel, Goal) = SoftwareGoal("Pre-Tester focused source evidence");
             Developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             Tester = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
             foreach (var task in Goal.Tasks.TakeWhile(task => task.Id != Developer.Id))
                 PassVerification(Kernel, Goal, task);
-            DispatchTask(Kernel, Goal, Developer, baseCommit: BaseSha);
+            DispatchTask(Kernel, Goal, Developer, baseCommit: baseCommit);
             var output = string.Join(Environment.NewLine,
                 "WORKER_RESULT:", "files: " + ChangedCorePath, "commands: none",
                 "tests: " + tests, "commit: none", "blockers: none",
@@ -457,10 +597,21 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         public PreTesterEvidenceEntry Latest() =>
             Assert.IsType<PreTesterEvidenceEntry>(PreTesterEvidenceIndexLines.Latest(Goal, Tester.Id, CandidateSha));
 
-        public void RecordStarted(IReadOnlyList<string> selections, IReadOnlyList<string>? notRun = null) =>
+        public void RecordStarted(IReadOnlyList<string> selections, IReadOnlyList<string>? notRun = null,
+            string receiptId = "pre-change-receipt") =>
             Kernel.RecordFindingEvidenceRequest(Goal.Id, Tester.Id,
                 PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
-                    "started", CandidateSha, "pre-change-receipt", selections, notRun ?? [], null, [])));
+                    "started", CandidateSha, receiptId, selections, notRun ?? [], null, [])));
+
+        public ConductorParallelAcceptanceAttemptCoordinator Background(Action launched) => new(
+            Path.Combine(Root, "background-attempts"), TrunkBranchName.Default,
+            isProcessAlive: id => id == 7103,
+            launchOwnedProcess: _ =>
+            {
+                launched();
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103);
+            },
+            acquireStableSlotLease: (_, _) => null);
 
         public FocusedEvidenceRunResult Green(string request) =>
             ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(Root, request, CandidateSha);

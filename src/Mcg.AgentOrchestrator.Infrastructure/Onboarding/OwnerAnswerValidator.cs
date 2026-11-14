@@ -22,7 +22,7 @@ public static class OwnerAnswerValidator
     {
         var rule = FindRule(factKey);
         if (rule is not null) return rule(value ?? "");
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}, {NodeVerificationChecks.RegistryQuestion}.");
     }
 
     // Recognition and validation select the same rule, so the console cannot offer an unsupported key.
@@ -69,7 +69,8 @@ public static class OwnerAnswerValidator
                 throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
             };
 
-        if (factKey is LuaProjectDiscoveryAdapter.FrameworkQuestion or LuaProjectDiscoveryAdapter.InstallQuestion)
+        if (factKey is LuaProjectDiscoveryAdapter.FrameworkQuestion or LuaProjectDiscoveryAdapter.InstallQuestion
+            or NodeVerificationChecks.RegistryQuestion)
             return value =>
             {
                 if (value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return "yes";

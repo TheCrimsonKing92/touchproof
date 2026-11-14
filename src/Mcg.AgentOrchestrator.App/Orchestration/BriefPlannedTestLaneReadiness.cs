@@ -14,7 +14,7 @@ internal static class BriefPlannedTestLaneReadiness
     private const string Identifier = @"[A-Za-z_]\w*(?:[.+][A-Za-z_]\w*)*";
     private const string NewClass = @"\bnew\s+(?:test\s+class|class)\s+[`'""]?(?<name>" + Identifier + @")\b";
     private const string TestSourcePath = @"(?<![\w./\\])tests[/\\][\w./\\-]+\.cs\b";
-    private sealed record Declaration(string Name, string? Collection);
+    internal sealed record Declaration(string Name, string? Collection, IReadOnlyList<string> Siblings);
 
     internal static IReadOnlyList<GoalReadinessFinding> Evaluate(
         Goal goal, string repositoryRoot, string? projectHomeDirectory)
@@ -33,7 +33,9 @@ internal static class BriefPlannedTestLaneReadiness
             if (!File.Exists(manifestPath))
                 throw new MissingAcceptanceManifestException(
                     AcceptanceManifestLocator.SearchedLocations(repositoryRoot, projectHomeDirectory));
-            var lanes = AcceptanceGateEngineSettings.Load(repositoryRoot, projectHomeDirectory).InfrastructureTestLanes;
+            var settings = AcceptanceGateEngineSettings.Load(repositoryRoot, projectHomeDirectory);
+            declarations = ResolveSiblingCollections(declarations, repositoryRoot, settings.LaneTestSourceRoots);
+            var lanes = settings.InfrastructureTestLanes;
             var descriptors = declarations.Select(item => new AcceptanceTestClassDescriptor(item.Name, item.Collection)).ToArray();
             lanes = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
             // Validate filters even with no declarations; an empty extraction is not configuration evidence.
@@ -52,7 +54,9 @@ internal static class BriefPlannedTestLaneReadiness
                     $"New test class '{declaration.Name}' is selected by lane '{lane.Name}' through {selectors}. " +
                     (pending
                         ? "Pending planned placement: manifest/filter and pinned membership test work must still be implemented, owner-approved where required, and validated by completion and acceptance gates."
-                        : "Rename the class to avoid accidental selection, or explicitly plan consistent owned placement naming this lane and its manifest/filter and pinned membership test work."),
+                        : "For owned placement, use a class name containing a FullyQualifiedName~ substring this lane already selects, " +
+                          "and on the declaration line state its owned collection or place it beside a named existing sibling in that collection. " +
+                          "Rename the class to avoid accidental selection, or explicitly plan consistent owned placement naming this lane and its manifest/filter and pinned membership test work."),
                     CanOverride: false));
             }
             return findings;
@@ -65,7 +69,7 @@ internal static class BriefPlannedTestLaneReadiness
         }
     }
 
-    private static IReadOnlyList<Declaration> Declare(IReadOnlyList<string> lines, string root)
+    internal static IReadOnlyList<Declaration> Declare(IReadOnlyList<string> lines, string root)
     {
         var result = new Dictionary<string, Declaration>(StringComparer.Ordinal);
         foreach (var line in lines)
@@ -83,27 +87,69 @@ internal static class BriefPlannedTestLaneReadiness
                     File.Exists(Path.Combine(root, path))) continue;
                 var name = Path.GetFileNameWithoutExtension(path);
                 if (Regex.IsMatch(name, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant))
-                    result.TryAdd(name, new Declaration(name, CollectionFor(match)));
+                    result.TryAdd(name, PlacementFor(match, name));
             }
             foreach (Match match in Regex.Matches(line, NewClass, Options))
             {
                 var name = match.Groups["name"].Value;
                 if (IsDeclarationContext(line, match.Index) &&
                     (match.Value.Contains("test class", StringComparison.OrdinalIgnoreCase) || name.Contains("Tests", StringComparison.Ordinal)) &&
-                    !ExistingClass(root, name)) result.TryAdd(name, new Declaration(name, CollectionFor(match)));
+                    !ExistingClass(root, name)) result.TryAdd(name, PlacementFor(match, name));
             }
 
-            string? CollectionFor(Match declaration)
+            Declaration PlacementFor(Match declaration, string name)
             {
                 var end = declarations.FirstOrDefault(next => next.Index > declaration.Index)?.Index ?? line.Length;
                 // Ownership belongs to this declaration, not to another class or sentence on the same line.
                 var tail = Regex.Split(line[(declaration.Index + declaration.Length)..end], @"[.!?;]\s+", Options)[0];
                 var collection = Regex.Match(tail,
                     "\\bcollection\\s*(?:\\(\\s*|[:=]\\s*)?[`'\"](?<name>[^`'\"]+)[`'\"]", Options);
-                return collection.Success ? collection.Groups["name"].Value : null;
+                const string filler = @"(?:(?:the|an?|existing|sibling|test|class)\s+)*";
+                var sibling = "(?:`(?<sibling>" + Identifier + ")`|(?<sibling>" + Identifier + @")(?![\w+/\\]|\.[A-Za-z_]))";
+                // Lowercase prose after a conjunction or comma ends the sibling list.
+                var continuationSibling = @"(?-i:(?=[`A-Z]))" + sibling;
+                var placements = Regex.Matches(tail, @"\b(?:beside|alongside|next\s+to)\s+" + filler + sibling +
+                    @"(?:(?:\s*,\s*(?:and\s+)?|\s+(?:and|or)\s+)" + filler + continuationSibling + ")*", Options);
+                var siblings = placements.Cast<Match>().Where(placement => !Regex.IsMatch(tail[..placement.Index],
+                        @"\b(?:not|never|without|avoid|instead\s+of)\b[^,;.!?]*$", Options))
+                    .SelectMany(placement => placement.Groups["sibling"].Captures.Cast<Capture>())
+                    .Select(capture => capture.Value).Where(value => value != name).Distinct(StringComparer.Ordinal).ToArray();
+                return new Declaration(name, collection.Success ? collection.Groups["name"].Value : null, siblings);
             }
         }
         return result.Values.ToArray();
+    }
+
+    internal static IReadOnlyList<Declaration> ResolveSiblingCollections(
+        IReadOnlyList<Declaration> declarations, string root, IReadOnlyList<string> sourceRoots)
+    {
+        if (!declarations.Any(item => item.Collection is null && item.Siblings.Count > 0)) return declarations;
+        IReadOnlyList<AcceptanceTestClassDescriptor> sources;
+        try
+        {
+            sources = AcceptanceTestClassSourceScanner.Scan(root,
+                LaneTestSourceRootResolver.SourceFiles(root, sourceRoots.Select(LaneTestSourceRootResolver.Normalize).ToArray()));
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or
+                                          InvalidOperationException or ArgumentException)
+        {
+            // Unreadable or unresolved source cannot establish ownership; retain the ordinary collision check.
+            return declarations;
+        }
+        return declarations.Select(item =>
+        {
+            if (item.Collection is not null || item.Siblings.Count == 0) return item;
+            string? collection = null;
+            foreach (var sibling in item.Siblings)
+            {
+                var matches = sources.Where(source => source.FullName == sibling ||
+                    (!sibling.Contains('.') && !sibling.Contains('+') && source.FullName.Split('.', '+').Last() == sibling)).ToArray();
+                if (matches.Length != 1 || matches[0].Collection is not { } resolved ||
+                    (collection is not null && collection != resolved)) return item;
+                collection = resolved;
+            }
+            return item with { Collection = collection };
+        }).ToArray();
     }
 
     private static bool IsDeclarationContext(string line, int index)

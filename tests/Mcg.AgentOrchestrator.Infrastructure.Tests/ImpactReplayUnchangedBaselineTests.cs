@@ -86,6 +86,10 @@ public sealed class ImpactReplayUnchangedBaselineTests
             "",
             "No unmapped test classes were found."
         });
-        Assert.Equal("# Impact replay\n\n" + string.Join(Environment.NewLine, expectedLines) + Environment.NewLine, markdown);
+        var shippingStart = markdown.IndexOf(Environment.NewLine +
+            "## Hop-1 shipping consumers followed in all-referencing mode", StringComparison.Ordinal);
+        Assert.True(shippingStart >= 0, "Shipping-follow section was not written.");
+        Assert.Equal("# Impact replay\n\n" + string.Join(Environment.NewLine, expectedLines) + Environment.NewLine,
+            markdown[..shippingStart]);
     }
 }

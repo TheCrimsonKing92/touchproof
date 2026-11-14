@@ -8,7 +8,7 @@ using Xunit;
 
 internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
 {
-    internal GoalRepositoriesTestFixture Repositories { get; } = new();
+    internal GoalRepositoriesTestFixture Repositories { get; } = new(useAcceptanceGateSeed: true);
     internal Goal Goal { get; }
     internal string HomeWorktree { get; }
     internal string SecondaryWorktree { get; }
@@ -25,17 +25,6 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
 
     internal MultiRepositoryAcceptanceGateFixture()
     {
-        foreach (var repository in new[] { Repositories.Home, Repositories.Crosswalk })
-        {
-            File.WriteAllText(Path.Combine(repository.CheckoutPath, ".gitignore"), ".orchestrator/\n");
-            repository.Git("add", ".gitignore");
-            repository.Git("commit", "-m", "Ignore case-owned runtime state");
-        }
-        var config = Path.Combine(Repositories.Home.CheckoutPath, "config");
-        Directory.CreateDirectory(config);
-        File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), Manifest("home check", "--info"));
-        Repositories.Home.Git("add", "config/acceptance-manifest.json");
-        Repositories.Home.Git("commit", "-m", "Seed home manifest");
         var projectHome = MultiRepositoryProjectVerifier.ProjectHome(Repositories.Registry, "crosswalk");
         Directory.CreateDirectory(projectHome);
         SecondaryManifest = Path.Combine(projectHome, "acceptance-manifest.json");

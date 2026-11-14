@@ -158,6 +158,8 @@ internal class ImpactReplayExecutionSource
             DeclaredGuards: declaredGuards);
         record = ImpactReplayUnboundedSelectionMeasurement.Apply(record, checkout, productionSources,
             testSources, classes, guards, augmented.QualifiedClasses, testProjectDirectories);
+        record = ImpactReplayShippingFollowMeasurement.Apply(record, checkout, productionSources,
+            testSources, classes, guards, augmented.QualifiedClasses, testProjectDirectories, selectedFullNames, lanes);
         return new(ImpactReplayCaseKind.Replayable, record, UnmappedClasses: attemptUnmappedClasses,
             Gained: augmented.Gained, GuardClasses: guards?.Classes.ToArray());
     }
