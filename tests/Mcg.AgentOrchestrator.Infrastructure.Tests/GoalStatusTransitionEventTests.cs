@@ -148,6 +148,8 @@ public sealed class GoalStatusTransitionEventTests
             ["src/Mcg.AgentOrchestrator.Core/Application/ProviderUsageHoldView.cs"] =
                 ["goal.SetStatus(row.Status);"],
             ["src/Mcg.AgentOrchestrator.Core/Application/ProviderHoldSeedPruning.cs"] =
+                ["goal.SetStatus(row.Status);"],
+            ["src/Mcg.AgentOrchestrator.App/Cli/ProviderUsageHoldReader.cs"] =
                 ["goal.SetStatus(row.Status);"]
         };
         var calls = new List<(string Location, string? Site)>();

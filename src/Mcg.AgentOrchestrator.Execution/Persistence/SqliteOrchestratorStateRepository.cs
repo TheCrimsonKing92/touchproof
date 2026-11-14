@@ -578,13 +578,61 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return await WithBusyRetryAsync(async () =>
         {
             await using var connection = OpenConnection();
-            return await ProviderHoldSeedEvidenceStore.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken, _readObserver);
+            if (_readObserver is null || goalIds.Count == 0)
+                return await ProviderHoldSeedEvidenceStore.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken, _readObserver);
+
+            // Pin the marker/length query and the canonical evidence read to one SQLite snapshot.
+            // This is observation only: no payload is copied into the measurement query.
+            using var transaction = connection.BeginTransaction(deferred: true);
+            var lengths = await ReadProviderEvidenceLengthsAsync(connection, goalIds, cancellationToken);
+            foreach (var row in lengths.Where(row => row.Value.Stored is not null))
+                _readObserver(new("provider-evidence-stored", row.Key, row.Value.Stored!.Value));
+            return await ProviderHoldSeedEvidenceStore.ReadAsync(connection, goalIds, SerializerOptions, cancellationToken,
+                observation =>
+                {
+                    if (observation.Operation == "provider-seed-snapshot-decode" && observation.GoalId is { } id &&
+                        lengths.TryGetValue(id, out var length))
+                        _readObserver(new("provider-evidence-decoded", id, length.Snapshot));
+                    _readObserver(observation);
+                });
         }, cancellationToken);
     }
 
-    public async Task<AgentOrchestratorKernel> LoadGoalsAsync(
+    private static async Task<Dictionary<string, (long Snapshot, long? Stored)>> ReadProviderEvidenceLengthsAsync(
+        SqliteConnection connection, IReadOnlyCollection<GoalId> ids, CancellationToken token)
+    {
+        var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
+        using var schema = connection.CreateCommand();
+        schema.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'provider_hold_seed_evidence'";
+        var hasEvidence = (long)(await schema.ExecuteScalarAsync(token))! != 0;
+        using var command = connection.CreateCommand();
+        var payload = hasArchive
+            ? "CASE WHEN json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 AND a.snapshot_json IS NOT NULL THEN a.snapshot_json ELSE g.snapshot_json END"
+            : "g.snapshot_json";
+        command.CommandText = $"""
+            SELECT g.id, length({payload}), {(hasEvidence ? "length(e.evidence_json)" : "NULL")}
+            FROM goals g
+            {(hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "")}
+            {(hasEvidence ? $"LEFT JOIN provider_hold_seed_evidence e ON e.goal_id = g.id AND e.format_version = {ProviderHoldSeedEvidenceStore.FormatVersion} AND e.marker = {ProviderHoldSeedEvidenceStore.MarkerSql(hasArchive)}" : "")}
+            WHERE g.id IN (SELECT value FROM json_each($ids))
+            """;
+        command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids.Select(id => id.Value)));
+        var result = new Dictionary<string, (long, long?)>(StringComparer.Ordinal);
+        using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+            result[reader.GetString(0)] = (reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
+        return result;
+    }
+
+    public Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => LoadSelectedGoalsAsync(goalIds, includePractices: true, cancellationToken);
+
+    public Task<AgentOrchestratorKernel> LoadStatusGoalsAsync(IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default) => LoadSelectedGoalsAsync(goalIds, includePractices: false, cancellationToken);
+
+    private async Task<AgentOrchestratorKernel> LoadSelectedGoalsAsync(IReadOnlyCollection<GoalId> goalIds,
+        bool includePractices, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(goalIds);
         foreach (var id in goalIds)
@@ -592,7 +640,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            return await LoadFromConnectionAsync(conn, goalIds, cancellationToken, _readObserver);
+            return await LoadFromConnectionAsync(conn, goalIds, cancellationToken, _readObserver, includePractices);
         }, cancellationToken);
     }
 
@@ -1660,10 +1708,59 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(includeTerminalCreatedAt: false, cancellationToken);
 
+    // Status discovers goals by identity and lifecycle only. In particular this must not parse
+    // snapshot timelines or materialize objectives/promotion details for every terminal goal.
+    public async Task<IReadOnlyList<(string Id, string Status)>> ListStatusGoalIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id, status FROM goals";
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<(string, string)>();
+        long characters = 0;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetString(0);
+            var status = reader.GetString(1);
+            characters += id.Length + status.Length;
+            result.Add((id, status));
+        }
+        _readObserver?.Invoke(new("metadata", null, characters));
+        return result;
+    }
+
+    public async Task<(string GoalId, DateTimeOffset PromotedAt)?> ReadLatestStatusLandingAsync(
+        CancellationToken cancellationToken = default)
+    {
+        long characters = 0;
+        try
+        {
+            using var connection = OpenConnection();
+            using var schema = connection.CreateCommand();
+            schema.CommandText = "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'goal_promotion_facts'";
+            if (await schema.ExecuteScalarAsync(cancellationToken) is null) return null;
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT goal_id, promoted_at FROM goal_promotion_facts ORDER BY promoted_at DESC, rowid DESC";
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.IsDBNull(0) || reader.IsDBNull(1)) continue;
+                var at = reader.GetString(1);
+                characters += at.Length;
+                if (!DateTimeOffset.TryParseExact(at, "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)) continue;
+                var id = reader.GetString(0);
+                characters += id.Length;
+                return (id, parsed);
+            }
+            return null;
+        }
+        finally { _readObserver?.Invoke(new("latest-landing", null, characters)); }
+    }
+
     public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
         bool includeTerminalCreatedAt, CancellationToken cancellationToken = default)
     {
-        _readObserver?.Invoke(new("metadata", null));
         await using var conn = OpenConnection();
         var results = new List<GoalSummary>();
         var hasPromotionFacts = HasPromotionFactsTable(conn);
@@ -1698,8 +1795,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         cmd.Parameters.AddWithValue("$include_terminal_created_at", includeTerminalCreatedAt ? 1 : 0);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
+        long characters = 0;
         while (await reader.ReadAsync(cancellationToken))
         {
+            if (_readObserver is not null)
+                for (var column = 0; column < reader.FieldCount; column++)
+                    if (reader.GetValue(column) is string text) characters += text.Length;
             results.Add(new GoalSummary(
                 reader.GetString(0),
                 reader.GetString(1),
@@ -1712,6 +1813,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 PromotionFact: ReadPromotionFact(reader, 6)));
         }
 
+        _readObserver?.Invoke(new("metadata", null, characters));
         return results;
     }
 
@@ -2089,24 +2191,58 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return results;
     }
 
-    public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+        ReadModelFitHistoryAsync(providerHoldRule: null, cancellationToken);
+
+    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(string exhaustionRule,
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(exhaustionRule, cancellationToken);
+
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(string? providerHoldRule,
+        CancellationToken cancellationToken)
     {
         await using var conn = OpenConnection();
         var results = new List<ModelFitHistoryRow>();
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        // SQLite NOCASE only folds ASCII. For a non-ASCII provider retain the full read,
+        // leaving canonical OrdinalIgnoreCase matching to SeedCandidates. For ASCII names
+        // the SQL is a conservative superset (julianday rounds sub-millisecond instants).
+        var prefix = providerHoldRule is not null ? """
+            WITH exhausted AS MATERIALIZED (
+                SELECT provider_name, CASE WHEN count(*) != count(julianday(timestamp)) THEN NULL
+                    ELSE min(julianday(timestamp)) END AS first_at
+                FROM model_fit_history WHERE outcome_rule = $exhausted
+                GROUP BY provider_name COLLATE NOCASE)
+            """ : string.Empty;
+        var restriction = providerHoldRule is not null ? """
+            WHERE outcome_rule = $exhausted OR EXISTS (
+                SELECT 1 FROM model_fit_history e
+                WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
+                SELECT 1 FROM exhausted e
+                WHERE e.provider_name = model_fit_history.provider_name COLLATE NOCASE
+                    AND (e.first_at IS NULL OR julianday(model_fit_history.timestamp) IS NULL
+                        OR julianday(model_fit_history.timestamp) >= e.first_at))
+            """ : string.Empty;
+        cmd.CommandText = $"""
+            {prefix}
             SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class, dispatch_lane
             FROM model_fit_history
+            {restriction}
             ORDER BY timestamp DESC
             """;
+        if (providerHoldRule is not null) cmd.Parameters.AddWithValue("$exhausted", providerHoldRule);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
+        long characters = 0;
         while (await reader.ReadAsync(cancellationToken))
         {
+            if (_readObserver is not null)
+                for (var column = 0; column < reader.FieldCount; column++)
+                    if (reader.GetValue(column) is string text) characters += text.Length;
             results.Add(ReadModelFitHistoryRow(reader));
         }
 
+        _readObserver?.Invoke(new("model-fit-history", null, characters));
         return results;
     }
 
@@ -2143,7 +2279,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         SqliteConnection conn,
         IReadOnlyCollection<GoalId>? goalIds,
         CancellationToken cancellationToken,
-        Action<GoalSnapshotReadObservation>? readObserver = null)
+        Action<GoalSnapshotReadObservation>? readObserver = null, bool includePractices = true)
     {
         var goalSnapshots = new List<GoalSnapshot>();
         var humanInputSnapshots = new List<HumanInputRequestSnapshot>();
@@ -2207,16 +2343,20 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             }
 
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            long characters = 0;
             while (await reader.ReadAsync(cancellationToken))
             {
-                var snap = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(reader.GetString(0), SerializerOptions);
+                var json = reader.GetString(0);
+                characters += json.Length;
+                var snap = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(json, SerializerOptions);
                 if (snap != null) humanInputSnapshots.Add(snap);
             }
+            readObserver?.Invoke(new("human-input", null, characters));
         }
 
         var kernel = AgentOrchestratorKernel.FromSnapshot(
             new OrchestratorSnapshot(goalSnapshots, humanInputSnapshots));
-        kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
+        if (includePractices) kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
         return kernel;
     }
 

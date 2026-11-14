@@ -22,7 +22,7 @@ internal static class CliConductorCommand
         Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null,
         Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null,
         IProcessJobProbe? jobProbe = null, Action<ConductorStatusSnapshot>? observeStatus = null,
-        ConductorGitResolution? gitResolution = null)
+        ConductorGitResolution? gitResolution = null, Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -82,7 +82,8 @@ internal static class CliConductorCommand
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
-                        mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership, now: (time ?? TimeProvider.System).GetUtcNow());
+                        mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership,
+                        now: (time ?? TimeProvider.System).GetUtcNow(), readObserver: readObserver);
                     observeStatus?.Invoke(snapshot);
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
